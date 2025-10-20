@@ -51,7 +51,7 @@ It automatically advertises itself and tunnels incoming streams to your local TC
 
 Install the module:
 ```bash
-go get github.com/gosuda/relaydns/pkg
+go get github.com/gosuda/relaydns
 ```
 
 Example usage:
@@ -64,7 +64,7 @@ import (
     "time"
 
     "github.com/libp2p/go-libp2p"
-    "github.com/gosuda/relaydns/pkg/relaydns"
+    "github.com/gosuda/relaydns/relaydns"
 )
 
 func main() {
