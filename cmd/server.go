@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/pkg"
+	"github.com/gosuda/relaydns/relaydns"
 	"github.com/spf13/cobra"
 )
 
@@ -46,13 +46,13 @@ func main() {
 func runServer(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	h, err := pkg.MakeHost(ctx, flagRelay)
+	h, err := relaydns.MakeHost(ctx, flagRelay)
 	if err != nil {
 		return err
 	}
-	pkg.ConnectBootstraps(ctx, h, flagBootstraps)
+	relaydns.ConnectBootstraps(ctx, h, flagBootstraps)
 
-	d, err := pkg.NewDirector(ctx, h, protocol, topic)
+	d, err := relaydns.NewDirector(ctx, h, protocol, topic)
 	if err != nil {
 		return err
 	}
