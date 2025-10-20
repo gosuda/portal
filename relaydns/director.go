@@ -8,117 +8,13 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 )
-
-type Advertise struct {
-	Peer  string    `json:"peer"`
-	Name  string    `json:"name,omitempty"`
-	DNS   string    `json:"dns,omitempty"`
-	Addrs []string  `json:"addrs"`
-	Ready bool      `json:"ready"`
-	Load  float64   `json:"load"`
-	TS    time.Time `json:"ts"`
-}
-
-type HostEntry struct {
-	Info     Advertise
-	AddrInfo *peer.AddrInfo
-	LastSeen time.Time
-}
-
-type Picker struct {
-	mu     sync.RWMutex
-	rr     uint64
-	list   []HostEntry
-	pinTo  string
-	pinTil time.Time
-}
-
-func (p *Picker) update(list []HostEntry) {
-	p.mu.Lock()
-	p.list = list
-	p.mu.Unlock()
-}
-func (p *Picker) choose() (HostEntry, bool) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if len(p.list) == 0 {
-		return HostEntry{}, false
-	}
-	if p.pinTo != "" && time.Now().Before(p.pinTil) {
-		for _, e := range p.list {
-			if e.Info.Peer == p.pinTo {
-				return e, true
-			}
-		}
-	}
-	i := atomic.AddUint64(&p.rr, 1)
-	return p.list[i%uint64(len(p.list))], true
-}
-func (p *Picker) pin(peerID string, dur time.Duration) {
-	p.mu.Lock()
-	p.pinTo = peerID
-	p.pinTil = time.Now().Add(dur)
-	p.mu.Unlock()
-}
-func (p *Picker) unpin() {
-	p.mu.Lock()
-	p.pinTo = ""
-	p.pinTil = time.Time{}
-	p.mu.Unlock()
-}
-
-// ---- libp2p host boot ----
-
-func MakeHost(ctx context.Context, enableRelay bool) (host.Host, error) {
-	opts := []libp2p.Option{
-		libp2p.DefaultTransports,    // TCP+QUIC
-		libp2p.EnableNATService(),   // AutoNAT helper
-		libp2p.EnableHolePunching(), // DCUtR
-		libp2p.DefaultSecurity,
-		libp2p.DefaultMuxers,
-		libp2p.EnableAutoRelay(), // ← 추가
-	}
-	if enableRelay {
-		opts = append(opts, libp2p.EnableRelay()) // circuit relay (useful both as client & svc)
-	}
-	h, err := libp2p.New(opts...)
-	if err != nil {
-		return nil, err
-	}
-	return h, nil
-}
-
-func ConnectBootstraps(ctx context.Context, h host.Host, addrs []string) {
-	for _, s := range addrs {
-		m, err := ma.NewMultiaddr(s)
-		if err != nil {
-			log.Printf("bootstrap bad multiaddr %q: %v", s, err)
-			continue
-		}
-		ai, err := peer.AddrInfoFromP2pAddr(m)
-		if err != nil {
-			log.Printf("bootstrap missing /p2p/ in %q: %v", s, err)
-			continue
-		}
-		if err := h.Connect(ctx, *ai); err != nil {
-			log.Printf("bootstrap connect %s: %v", ai.ID, err)
-		} else {
-			log.Printf("connected bootstrap %s", ai.ID)
-		}
-	}
-}
-
-// ---- director ----
 
 type Director struct {
 	ctx       context.Context
@@ -301,8 +197,4 @@ func (d *Director) ServeHTTP(addr string) error {
 	})
 	log.Printf("director HTTP API on %s", addr)
 	return http.ListenAndServe(addr, mux)
-}
-
-func protocolID(s string) protocol.ID {
-	return protocol.ID(s)
 }
