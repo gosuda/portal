@@ -79,8 +79,8 @@ import (
 func main() {
     ctx := context.Background()
     client, _ := relaydns.NewClient(ctx, relaydns.ClientConfig{
-        Protocol:       "/relaydns/http/1.0",
-        Topic:          "relaydns.backends",
+        Protocol: relaydns.DefaultProtocol,
+        Topic:    relaydns.DefaultTopic,
         AdvertiseEvery: 5 * time.Second,
         TargetTCP:      "127.0.0.1:8081",
         Name:           "demo-http",
