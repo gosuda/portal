@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type Director struct {
 	storeMu sync.Mutex
 	store   map[string]HostEntry
 	ttl     time.Duration
+	deadTTL time.Duration
 }
 
 func NewDirector(ctx context.Context, h host.Host, protocol, topic string) (*Director, error) {
@@ -49,7 +51,8 @@ func NewDirector(ctx context.Context, h host.Host, protocol, topic string) (*Dir
 		topicName: topic,
 		sub:       sub,
 		store:     map[string]HostEntry{},
-		ttl:       45 * time.Second,
+		ttl:       15 * time.Second,
+		deadTTL:   10 * time.Minute,
 	}
 	go d.collect()
 	go d.gc()
@@ -89,7 +92,7 @@ func (d *Director) collect() {
 		now := time.Now()
 		d.storeMu.Lock()
 		_, existed := d.store[ad.Peer]
-		d.store[ad.Peer] = HostEntry{Info: ad, AddrInfo: ai, LastSeen: now}
+		d.store[ad.Peer] = HostEntry{Info: ad, AddrInfo: ai, LastSeen: now, Connected: true}
 		// refresh picker snapshot
 		snap := make([]HostEntry, 0, len(d.store))
 		for _, v := range d.store {
@@ -117,7 +120,25 @@ func (d *Director) gc() {
 			removed := make([]HostEntry, 0)
 			d.storeMu.Lock()
 			for k, v := range d.store {
-				if now.Sub(v.LastSeen) > d.ttl {
+				// Prefer client-provided TTL if present; fallback to default d.ttl
+				ttl := d.ttl
+				if v.Info.TTL > 0 {
+					ttl = time.Duration(v.Info.TTL) * time.Second
+				}
+				// mark disconnected after ttl
+				if now.Sub(v.LastSeen) > ttl && v.Connected {
+					v.Connected = false
+					d.store[k] = v
+				}
+				// remove only after extended dead TTL
+				deadAfter := d.deadTTL
+				if v.Info.TTL > 0 {
+					da := time.Duration(v.Info.TTL) * time.Second * 5
+					if da > deadAfter {
+						deadAfter = da
+					}
+				}
+				if now.Sub(v.LastSeen) > deadAfter {
 					removed = append(removed, v)
 					delete(d.store, k)
 				}
@@ -143,6 +164,10 @@ func (d *Director) Hosts() []HostEntry {
 	for _, v := range d.store {
 		list = append(list, v)
 	}
+	// Sort by last-seen (most recent first)
+	sort.SliceStable(list, func(i, j int) bool {
+		return list[i].LastSeen.After(list[j].LastSeen)
+	})
 	return list
 }
 

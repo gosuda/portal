@@ -5,11 +5,9 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"text/template"
 	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
@@ -28,6 +26,8 @@ var (
 	flagBootstraps []string
 	flagAddr       string
 	flagClientName string
+	flagProtocol   string
+	flagTopic      string
 )
 
 func init() {
@@ -36,6 +36,8 @@ func init() {
 	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
 	flags.StringVar(&flagAddr, "addr", ":8081", "local backend HTTP listen address")
 	flags.StringVar(&flagClientName, "name", "", "backend display name shown on server UI")
+	flags.StringVar(&flagProtocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match server)")
+	flags.StringVar(&flagTopic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
 }
 
 func main() {
@@ -57,49 +59,32 @@ func runClient(cmd *cobra.Command, args []string) error {
 	}
 
 	// 1) HTTP backend
+	var clientRef *relaydns.RelayClient
 	ln, err := net.Listen("tcp", flagAddr)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
 	}
 	log.Info().Msgf("[client] local backend http listening on %s", ln.Addr().String())
 
-	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			data := struct {
-				Now  string
-				Host string
-				Addr string
-			}{
-				Now:  time.Now().Format(time.RFC1123),
-				Host: r.Host,
-				Addr: flagAddr,
-			}
-			_ = pageTmpl.Execute(w, data)
-		})
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
-
-		log.Info().Msgf("[client] local backend http %s", flagAddr)
-		if err := http.Serve(ln, mux); err != nil {
-			log.Error().Err(err).Msg("[client] http backend error")
-			cancel()
+	// Serve local backend view in a goroutine
+	go serveClientHTTP(ctx, ln, flagClientName, func() string {
+		if clientRef == nil {
+			return "Starting..."
 		}
-	}()
+		return clientRef.ServerStatus()
+	}, cancel)
 
 	// 2) libp2p host
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
-		Protocol:       "/relaydns/http/1.0",
-		Topic:          "relaydns.backends",
-		AdvertiseEvery: 3 * time.Second,
-		Name:           flagClientName,
-		TargetTCP:      addrToTarget(flagAddr),
+		Protocol:  flagProtocol,
+		Topic:     flagTopic,
+		Advertise: 3 * time.Second,
+		Name:      flagClientName,
+		TargetTCP: addrToTarget(flagAddr),
 
 		ServerURL:   flagServerURL,
 		Bootstraps:  flagBootstraps,
-		HTTPTimeout: 3 * time.Second,
+		HTTPTimeout: 5 * time.Second,
 		PreferQUIC:  true,
 		PreferLocal: true,
 	})
@@ -109,6 +94,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
+	clientRef = client
 	defer client.Close()
 
 	// wait for termination
@@ -126,26 +112,3 @@ func addrToTarget(listen string) string {
 	}
 	return listen
 }
-
-var pageTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<title>RelayDNS Backend</title>
-	<style>
-		body { font-family: sans-serif; background: #f9f9f9; padding: 40px; }
-		h1 { color: #333; }
-		footer { margin-top: 40px; color: #666; font-size: 0.9em; }
-		.card { background: white; border-radius: 12px; padding: 24px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
-	</style>
-</head>
-<body>
-	<div class="card">
-		<h1>🚀 RelayDNS Backend</h1>
-		<p>This page is served from the backend node.</p>
-		<p>Current time: <b>{{.Now}}</b></p>
-		<p>Hostname: <b>{{.Host}}</b></p>
-	</div>
-	<footer>relaydns demo client — served locally at {{.Addr}}</footer>
-</body>
-</html>`))

@@ -33,7 +33,11 @@ type ClientConfig struct {
 	// pubsub topic for backend adverts (e.g. "relaydns.backends")
 	Topic string
 	// advertise interval
-	AdvertiseEvery time.Duration
+	Advertise time.Duration
+	// advertise TTL (how long server should keep this entry alive)
+	AdvertiseTTL time.Duration
+	// how often to refresh server health/bootstraps (if ServerURL set)
+	RefreshBootstrapsEvery time.Duration
 	// optional metadata
 	Name string
 	DNS  string
@@ -54,16 +58,25 @@ type RelayClient struct {
 	t    *pubsub.Topic
 	wg   sync.WaitGroup
 	stop context.CancelFunc
+
+	statusMu      sync.RWMutex
+	serverHealthy bool
 }
 
 // NewClient constructs a client with defaults applied and an initialized libp2p host.
 // It does not start networking. Call Start(ctx) to begin handlers, pubsub, and advertising.
 func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
-	if cfg.AdvertiseEvery <= 0 {
-		cfg.AdvertiseEvery = 5 * time.Second
+	if cfg.Advertise <= 0 {
+		cfg.Advertise = 5 * time.Second
+	}
+	if cfg.AdvertiseTTL <= 0 {
+		cfg.AdvertiseTTL = 10 * cfg.Advertise
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 3 * time.Second
+	}
+	if cfg.RefreshBootstrapsEvery <= 0 {
+		cfg.RefreshBootstrapsEvery = 20 * time.Second
 	}
 	if cfg.Protocol == "" {
 		cfg.Protocol = "/relaydns/http/1.0"
@@ -96,8 +109,10 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	}
 	if b.cfg.ServerURL != "" {
 		if addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
+			b.setServerHealthy(false)
 			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", b.cfg.ServerURL)
 		} else {
+			b.setServerHealthy(true)
 			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 			boot = append(boot, addrs...)
 		}
@@ -147,7 +162,7 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		ticker := time.NewTicker(b.cfg.AdvertiseEvery)
+		ticker := time.NewTicker(b.cfg.Advertise)
 		defer ticker.Stop()
 		for {
 			select {
@@ -167,12 +182,42 @@ func (b *RelayClient) Start(ctx context.Context) error {
 					Ready: true,
 					Load:  0.0,
 					TS:    time.Now().UTC(),
+					TTL:   int(b.cfg.AdvertiseTTL.Seconds()),
 				}
 				payload, _ := json.Marshal(ad)
 				_ = b.t.Publish(advCtx, payload)
 			}
 		}
 	}()
+
+	// background: periodically re-fetch bootstraps from server and reconnect
+	if b.cfg.ServerURL != "" {
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			t := time.NewTicker(b.cfg.RefreshBootstrapsEvery)
+			defer t.Stop()
+			for {
+				select {
+				case <-advCtx.Done():
+					return
+				case <-t.C:
+					addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout)
+					if err != nil {
+						b.setServerHealthy(false)
+						log.Warn().Err(err).Msgf("refresh /health from %s failed", b.cfg.ServerURL)
+						continue
+					}
+					b.setServerHealthy(true)
+					sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
+					addrs = uniq(addrs)
+					if len(addrs) > 0 {
+						ConnectBootstraps(ctx, b.h, addrs)
+					}
+				}
+			}
+		}()
+	}
 
 	if addrs := b.Host().Addrs(); len(addrs) > 0 {
 		for _, a := range addrs {
@@ -196,6 +241,27 @@ func (b *RelayClient) Close() error {
 	b.wg.Wait()
 	// leaving topic is optional; libp2p will clean up on host close
 	return nil
+}
+
+func (b *RelayClient) setServerHealthy(ok bool) {
+	b.statusMu.Lock()
+	b.serverHealthy = ok
+	b.statusMu.Unlock()
+}
+
+// ServerStatus returns a human-friendly status regarding connection to ServerURL.
+// If no ServerURL is configured, returns "N/A".
+func (b *RelayClient) ServerStatus() string {
+	if b.cfg.ServerURL == "" {
+		return "N/A"
+	}
+	b.statusMu.RLock()
+	ok := b.serverHealthy
+	b.statusMu.RUnlock()
+	if ok {
+		return "Connected"
+	}
+	return "Connecting..."
 }
 
 func fetchMultiaddrsFromHealth(base string, timeout time.Duration) ([]string, error) {

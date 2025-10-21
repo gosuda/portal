@@ -1,10 +1,10 @@
 package relaydns
 
 import (
-    "time"
+	"time"
 
-    "github.com/libp2p/go-libp2p/core/peer"
-    "github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
 type Advertise struct {
@@ -15,12 +15,14 @@ type Advertise struct {
 	Ready bool      `json:"ready"`
 	Load  float64   `json:"load"`
 	TS    time.Time `json:"ts"`
+	TTL   int       `json:"ttl,omitempty"` // seconds
 }
 
 type HostEntry struct {
-	Info     Advertise
-	AddrInfo *peer.AddrInfo
-	LastSeen time.Time
+    Info     Advertise
+    AddrInfo *peer.AddrInfo
+    LastSeen time.Time
+    Connected bool
 }
 
 // Removed Picker: selection is explicit via /peer/{peerID}/...
