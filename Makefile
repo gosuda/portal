@@ -51,13 +51,13 @@ tidy:
 	go mod tidy
 
 help:
-    @echo "Server:"
-    @echo "  make server-up        # build and start relayserver (docker compose)"
-    @echo "  make server-down      # stop and remove containers"
-    @echo "\nClients (optional):"
-    @echo "  make client-run       # run example_http_client locally"
-    @echo "  make client-build     # build example_http_client to ./bin/relaydns-client"
-    @echo "  make chat-run         # run example_chat locally (WS UI + advertiser)"
-    @echo "  make chat-build       # build example_chat to ./bin/relaydns-chat"
-    @echo "\nFlags (override with make VAR=value):"
+	@echo "Server:"
+	@echo "  make server-up        # build and start relayserver (docker compose)"
+	@echo "  make server-down      # stop and remove containers"
+	@echo "\nClients (optional):"
+	@echo "  make client-run       # run example_http_client locally"
+	@echo "  make client-build     # build example_http_client to ./bin/relaydns-client"
+	@echo "  make chat-run         # run example_chat locally (WS UI + advertiser)"
+	@echo "  make chat-build       # build example_chat to ./bin/relaydns-chat"
+	@echo "\nFlags (override with make VAR=value):"
 	@echo "  SERVER_URL BACKEND_PORT CHAT_PORT CHAT_NAME"
