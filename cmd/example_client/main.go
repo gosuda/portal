@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +48,7 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
@@ -76,9 +76,9 @@ func runClient(cmd *cobra.Command, args []string) error {
 			_, _ = w.Write([]byte("ok"))
 		})
 
-		log.Println("[client] local backend http", flagBackendHTTP)
+		log.Info().Msgf("[client] local backend http %s", flagBackendHTTP)
 		if err := http.ListenAndServe(flagBackendHTTP, mux); err != nil {
-			log.Println("[client] http backend error:", err)
+			log.Error().Err(err).Msg("[client] http backend error")
 			cancel()
 		}
 	}()
@@ -111,17 +111,17 @@ func runClient(cmd *cobra.Command, args []string) error {
 	// 자기 주소/피어ID 로그로 찍어서 디버깅 편하게
 	if addrs := h.Addrs(); len(addrs) > 0 {
 		for _, a := range addrs {
-			log.Printf("[client] host addr: %s/p2p/%s", a.String(), h.ID().String())
+			log.Info().Msgf("[client] host addr: %s/p2p/%s", a.String(), h.ID().String())
 		}
 	} else {
-		log.Printf("[client] host peer: %s (no listen addrs yet)", h.ID().String())
+		log.Info().Msgf("[client] host peer: %s (no listen addrs yet)", h.ID().String())
 	}
 
 	// 종료 대기
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Println("[client] shutting down")
+	log.Info().Msg("[client] shutting down")
 	time.Sleep(200 * time.Millisecond)
 	return nil
 }

@@ -1,14 +1,14 @@
 package relaydns
 
 import (
-	"context"
-	"fmt"
-	"log"
+    "context"
+    "fmt"
 
-	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
+    "github.com/libp2p/go-libp2p"
+    "github.com/libp2p/go-libp2p/core/host"
+    "github.com/libp2p/go-libp2p/core/peer"
+    ma "github.com/multiformats/go-multiaddr"
+    "github.com/rs/zerolog/log"
 )
 
 func MakeHost(ctx context.Context, port int, enableRelay bool) (host.Host, error) {
@@ -41,19 +41,19 @@ func MakeHost(ctx context.Context, port int, enableRelay bool) (host.Host, error
 func ConnectBootstraps(ctx context.Context, h host.Host, addrs []string) {
 	for _, s := range addrs {
 		m, err := ma.NewMultiaddr(s)
-		if err != nil {
-			log.Printf("bootstrap bad multiaddr %q: %v", s, err)
-			continue
-		}
-		ai, err := peer.AddrInfoFromP2pAddr(m)
-		if err != nil {
-			log.Printf("bootstrap missing /p2p/ in %q: %v", s, err)
-			continue
-		}
-		if err := h.Connect(ctx, *ai); err != nil {
-			log.Printf("bootstrap connect %s: %v", ai.ID, err)
-		} else {
-			log.Printf("connected bootstrap %s", ai.ID)
-		}
-	}
+        if err != nil {
+            log.Warn().Err(err).Msgf("bootstrap bad multiaddr %q", s)
+            continue
+        }
+        ai, err := peer.AddrInfoFromP2pAddr(m)
+        if err != nil {
+            log.Warn().Err(err).Msgf("bootstrap missing /p2p/ in %q", s)
+            continue
+        }
+        if err := h.Connect(ctx, *ai); err != nil {
+            log.Warn().Err(err).Msgf("bootstrap connect %s", ai.ID)
+        } else {
+            log.Info().Msgf("connected bootstrap %s", ai.ID)
+        }
+    }
 }

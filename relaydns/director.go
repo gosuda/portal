@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/rs/zerolog/log"
 )
 
 type Director struct {
@@ -130,7 +130,8 @@ func (d *Director) ServeTCP(addr string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("director TCP listening on %s (protocol %s)", addr, d.protocol)
+
+	log.Info().Msgf("director TCP listening on %s (protocol %s)", addr, d.protocol)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -144,17 +145,17 @@ func (d *Director) handleConn(c net.Conn) {
 	defer c.Close()
 	entry, ok := d.pick.choose()
 	if !ok {
-		log.Println("no backend peers available")
+		log.Warn().Msg("no backend peers available")
 		return
 	}
 	// ensure we're connected (AddrInfo contains addrs)
 	if err := d.h.Connect(d.ctx, *entry.AddrInfo); err != nil {
-		log.Printf("connect %s failed: %v", entry.AddrInfo.ID, err)
+		log.Error().Err(err).Msgf("connect %s failed", entry.AddrInfo.ID)
 		return
 	}
 	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocolID(d.protocol))
 	if err != nil {
-		log.Printf("new stream: %v", err)
+		log.Error().Err(err).Msg("new stream")
 		return
 	}
 	defer s.Close()
@@ -209,6 +210,6 @@ func (d *Director) ServeHTTP(addr string) error {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
-	log.Printf("director HTTP API on %s", addr)
+	log.Info().Msgf("director HTTP API on %s", addr)
 	return http.ListenAndServe(addr, mux)
 }

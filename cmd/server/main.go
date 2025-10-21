@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +46,7 @@ func init() {
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
@@ -70,9 +70,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if adminHTTP == "" {
 			return
 		}
-		log.Println("[server] admin http:", adminHTTP)
+		log.Info().Msgf("[server] admin http: %s", adminHTTP)
 		if err := d.ServeHTTP(adminHTTP); err != nil {
-			log.Println("[server] admin http error:", err)
+			log.Error().Err(err).Msg("[server] admin http error")
 			cancel()
 		}
 	}()
@@ -82,9 +82,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if ingressTCP == "" {
 			return
 		}
-		log.Println("[server] tcp ingress:", ingressTCP)
+		log.Info().Msgf("[server] tcp ingress: %s", ingressTCP)
 		if err := d.ServeTCP(ingressTCP); err != nil {
-			log.Println("[server] tcp ingress error:", err)
+			log.Error().Err(err).Msg("[server] tcp ingress error")
 			cancel()
 		}
 	}()
@@ -94,9 +94,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if ingressHTTP == "" {
 			return
 		}
-		log.Println("[server] http ingress (tcp-level):", ingressHTTP)
+		log.Info().Msgf("[server] http ingress (tcp-level): %s", ingressHTTP)
 		if err := d.ServeTCP(ingressHTTP); err != nil {
-			log.Println("[server] http ingress error:", err)
+			log.Error().Err(err).Msg("[server] http ingress error")
 			cancel()
 		}
 	}()
