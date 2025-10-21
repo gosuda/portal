@@ -1,18 +1,18 @@
 package main
 
 import (
-    "context"
-    "fmt"
-    "net/http"
-    "os"
-    "os/signal"
-    "syscall"
-    "text/template"
-    "time"
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"text/template"
+	"time"
 
-    "github.com/gosuda/relaydns/relaydns"
-    "github.com/rs/zerolog/log"
-    "github.com/spf13/cobra"
+	"github.com/gosuda/relaydns/relaydns"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
@@ -22,16 +22,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-    flagServerURL   string
-    flagBootstraps  []string
-    flagBackendHTTP string
+	flagServerURL   string
+	flagBootstraps  []string
+	flagBackendHTTP string
 )
 
 func init() {
-    flags := rootCmd.PersistentFlags()
-    flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
-    flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-    flags.StringVar(&flagBackendHTTP, "backend-http", ":8081", "local backend HTTP listen address")
+	flags := rootCmd.PersistentFlags()
+	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
+	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
+	flags.StringVar(&flagBackendHTTP, "backend-http", ":8081", "local backend HTTP listen address")
 }
 
 func main() {
@@ -71,24 +71,24 @@ func runClient(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-    // 2) libp2p host
-    h, err := relaydns.MakeHost(ctx, 0, true)
+	// 2) libp2p host
+	h, err := relaydns.MakeHost(ctx, 0, true)
 	if err != nil {
 		return fmt.Errorf("make host: %w", err)
 	}
 
-    client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
-        Protocol:       "/relaydns/http/1.0",
-        Topic:          "relaydns.backends",
-        AdvertiseEvery: 3 * time.Second,
-        TargetTCP:      addrToTarget(flagBackendHTTP),
+	client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
+		Protocol:       "/relaydns/http/1.0",
+		Topic:          "relaydns.backends",
+		AdvertiseEvery: 3 * time.Second,
+		TargetTCP:      addrToTarget(flagBackendHTTP),
 
-        ServerURL:   flagServerURL,
-        Bootstraps:  flagBootstraps,
-        HTTPTimeout: 3 * time.Second,
-        PreferQUIC:  true,
-        PreferLocal: true,
-    })
+		ServerURL:   flagServerURL,
+		Bootstraps:  flagBootstraps,
+		HTTPTimeout: 3 * time.Second,
+		PreferQUIC:  true,
+		PreferLocal: true,
+	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
