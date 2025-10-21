@@ -180,16 +180,16 @@ func (b *RelayClient) resolveBootstraps() []string {
 		boot = append(boot, b.cfg.Bootstraps...)
 	}
 	if b.cfg.ServerURL != "" {
-		if addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
+		if addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
 			b.setServerHealthy(false)
-			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", b.cfg.ServerURL)
+			log.Warn().Err(err).Msgf("relaydns: fetch /hosts from %s failed", b.cfg.ServerURL)
 		} else {
 			b.setServerHealthy(true)
 			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 			boot = append(boot, addrs...)
 		}
 	}
-	return uniq(boot)
+	return RemoveDuplicate(boot)
 }
 
 // setupStreamHandler installs the appropriate libp2p stream handler.
@@ -273,15 +273,15 @@ func (b *RelayClient) startRefreshLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout)
+				addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout)
 				if err != nil {
 					b.setServerHealthy(false)
-					log.Warn().Err(err).Msgf("refresh /health from %s failed", b.cfg.ServerURL)
+					log.Warn().Err(err).Msgf("refresh /hosts from %s failed", b.cfg.ServerURL)
 					continue
 				}
 				b.setServerHealthy(true)
 				sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
-				addrs = uniq(addrs)
+				addrs = RemoveDuplicate(addrs)
 				if len(addrs) > 0 {
 					// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
 					ConnectBootstraps(ctx, b.h, addrs)

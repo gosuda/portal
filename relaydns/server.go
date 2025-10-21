@@ -103,10 +103,8 @@ func (s *RelayServer) collect() {
 			snap = append(snap, v)
 		}
 		s.storeMu.Unlock()
-		if existed {
-			log.Debug().Str("peer", ad.Peer).Str("name", ad.Name).Msg("server: updated client advert")
-		} else {
-			log.Info().Str("peer", ad.Peer).Str("name", ad.Name).Msg("server: added client")
+		if !existed {
+			log.Info().Str("peer", ad.Peer).Str("name", ad.Name).Msg("server: add new client")
 		}
 		_ = snap // snapshot kept local; selection handled explicitly via /peer
 	}
@@ -153,7 +151,7 @@ func (s *RelayServer) gc() {
 			}
 			s.storeMu.Unlock()
 			for _, r := range removed {
-				log.Info().Str("peer", r.Info.Peer).Str("name", r.Info.Name).Dur("idle", now.Sub(r.LastSeen)).Msg("director: removed stale client")
+				log.Info().Str("peer", r.Info.Peer).Str("name", r.Info.Name).Dur("idle", now.Sub(r.LastSeen)).Msg("server: removed stale client")
 			}
 			_ = snap
 		}

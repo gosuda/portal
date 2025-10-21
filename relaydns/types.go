@@ -12,6 +12,12 @@ const (
 	DefaultTopic    = "relaydns.backends"
 )
 
+type Hosts struct {
+	ServerPeer  string   `json:"serverPeer"`
+	ServerAddrs []string `json:"serverAddrs"`
+	Peers       []string `json:"peers"` // connected peer IDs
+}
+
 type Advertise struct {
 	Peer  string    `json:"peer"`
 	Name  string    `json:"name,omitempty"`
@@ -29,4 +35,24 @@ type HostEntry struct {
 	AddrInfo  *peer.AddrInfo
 	LastSeen  time.Time
 	Connected bool
+}
+
+// AdminPage is a simple view model used by the server admin UI template.
+// It intentionally lives here so other binaries can share the same model if needed.
+type AdminPage struct {
+	NodeID string
+	Addrs  []string
+	Rows   []AdminRow
+}
+
+// AdminRow represents a single backend entry as shown on the admin index.
+type AdminRow struct {
+	Peer      string
+	Name      string
+	DNS       string
+	LastSeen  string
+	Link      string
+	TTL       string
+	Connected bool
+	Kind      string
 }

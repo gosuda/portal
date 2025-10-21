@@ -2,7 +2,6 @@ package relaydns
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -42,7 +41,7 @@ func sortMultiaddrs(addrs []string, preferQUIC, preferLocal bool) {
 	sort.SliceStable(addrs, func(i, j int) bool { return score(addrs[i]) > score(addrs[j]) })
 }
 
-func uniq(ss []string) []string {
+func RemoveDuplicate(ss []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(ss))
 	for _, s := range ss {
@@ -55,17 +54,17 @@ func uniq(ss []string) []string {
 	return out
 }
 
-func fetchMultiaddrsFromHealth(base string, timeout time.Duration) ([]string, error) {
+func fetchMultiaddrsFromHosts(base string, timeout time.Duration) ([]string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return nil, fmt.Errorf("parse server-url: %w", err)
 	}
-	// ensure path ends with /health
-	if !strings.HasSuffix(u.Path, "/health") {
+	// ensure path ends with /hosts
+	if !strings.HasSuffix(u.Path, "/hosts") {
 		if u.Path == "" || u.Path == "/" {
-			u.Path = "/health"
+			u.Path = "/hosts"
 		} else {
-			u.Path = strings.TrimSuffix(u.Path, "/") + "/health"
+			u.Path = strings.TrimSuffix(u.Path, "/") + "/hosts"
 		}
 	}
 	client := &http.Client{Timeout: timeout}
@@ -76,19 +75,12 @@ func fetchMultiaddrsFromHealth(base string, timeout time.Duration) ([]string, er
 	}
 	defer resp.Body.Close()
 
-	var payload struct {
-		Status     string   `json:"status"`
-		PeerID     string   `json:"peerId"`
-		Multiaddrs []string `json:"multiaddrs"`
-	}
+	var payload Hosts
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, err
 	}
-	if payload.Status != "ok" {
-		return nil, errors.New("health not ok")
-	}
-	addrs := make([]string, 0, len(payload.Multiaddrs))
-	for _, s := range payload.Multiaddrs {
+	addrs := make([]string, 0, len(payload.ServerAddrs))
+	for _, s := range payload.ServerAddrs {
 		// sanity check
 		if strings.Contains(s, "/p2p/") && (strings.Contains(s, "/ip4/") || strings.Contains(s, "/ip6/")) {
 			addrs = append(addrs, s)

@@ -27,7 +27,7 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 			http.NotFound(w, r)
 			return
 		}
-		rows := make([]row, 0)
+		rows := make([]relaydns.AdminRow, 0)
 		for _, v := range d.Hosts() {
 			ttl := ""
 			if v.Info.TTL > 0 {
@@ -41,7 +41,7 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 			} else if strings.Contains(p, "http") {
 				kind = "HTTP"
 			}
-			rows = append(rows, row{
+			rows = append(rows, relaydns.AdminRow{
 				Peer:      v.Info.Peer,
 				Name:      v.Info.Name,
 				DNS:       v.Info.DNS,
@@ -54,7 +54,7 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Int("clients", len(rows)).Msg("render admin index")
-		_ = adminIndexTmpl.Execute(w, page{
+		_ = adminIndexTmpl.Execute(w, relaydns.AdminPage{
 			NodeID: h.ID().String(),
 			Addrs:  relaydns.BuildAddrs(h),
 			Rows:   rows,
@@ -77,12 +77,24 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 		d.ProxyHTTP(w, r, peerID, pathSuffix)
 	})
 
-	// JSON hosts
+	// JSON hosts (namespaced snapshot with server peer and connected peers only)
 	mux.HandleFunc("/hosts", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(d.Hosts())
+		list := d.Hosts()
+		peers := make([]string, 0, len(list))
+		for _, v := range list {
+			if v.Connected {
+				peers = append(peers, v.Info.Peer)
+			}
+		}
+		snap := relaydns.Hosts{
+			ServerPeer:  h.ID().String(),
+			ServerAddrs: relaydns.BuildAddrs(h),
+			Peers:       peers,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(snap)
 	})
 
-	// Health
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		type info struct {
 			Status string   `json:"status"`
@@ -98,24 +110,6 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 		log.Error().Err(err).Msg("[server] http error")
 		cancel()
 	}
-}
-
-// view model types used by template rendering
-type row struct {
-	Peer      string
-	Name      string
-	DNS       string
-	LastSeen  string
-	Link      string
-	TTL       string
-	Connected bool
-	Kind      string
-}
-
-type page struct {
-	NodeID string
-	Addrs  []string
-	Rows   []row
 }
 
 var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html>
