@@ -11,7 +11,6 @@ without depending on centralized reverse-proxy services.
 - 🧩 **DNS-driven entrypoint** (server acts as a lightweight coordinator)
 - 🔄 **Automatic peer advertisement** via GossipSub
 - 🔌 **Pluggable client SDK** — embed the relaydns client directly into your Go applications
-- 🪶 **Lightweight** and dependency-minimal (Cobra CLI + Go libp2p only)
 
 ## Architecture Overview
 
@@ -39,18 +38,29 @@ Published ports:
 - Admin/UI + HTTP proxy: `8080`
 - libp2p TCP/QUIC: `4001/tcp`, `4001/udp`
 
-### 2️⃣ Run the Example Client (Makefile)
+### 2️⃣ (Optional) Run Example Clients
 
-The example client runs a tiny local HTTP backend and advertises it over libp2p.
+Clients are NOT required to run the server. They are provided for testing/demo.
 
-```bash
-make client-run
-# Optional (override on demand):
-# make client-run BACKEND_HTTP=:8081 SERVER_URL=http://localhost:8080 \
-#   BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
-```
+- HTTP client (optional): exposes a tiny local HTTP backend and advertises it.
+  ```bash
+  make client-run
+  # Optional overrides:
+  # make client-run BACKEND_HTTP=:8081 SERVER_URL=http://localhost:8080 \
+  #   BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
+  ```
 
-The client exposes a tiny local HTTP server and tunnels traffic to it via libp2p streams.
+- Chat client (optional): WebSocket chat UI (local) + advertiser (libp2p). Uses coder/websocket.
+  ```bash
+  make chat-run
+  # Optional overrides:
+  # make chat-run CHAT_ADDR=:8091 CHAT_NAME=demo-chat SERVER_URL=http://localhost:8080 \
+  #   BOOTSTRAPS="/ip4/1.2.3.4/tcp/4001/p2p/12D3Koo..."
+  ```
+
+If you run the chat client:
+- Open locally: `http://localhost:8091`
+- Open via server proxy: Admin → your peer → Open (routes to `/peer/<peerID>/` then `/peer/<peerID>/ws`).
 
 ### 3️⃣ Embed the Client SDK in Your App
 
@@ -90,7 +100,23 @@ Server flags (see `docker-compose.yml`):
 - `--http` Unified admin UI + HTTP proxy listen address (default `:8080`)
 - `--bootstrap` Repeatable multiaddr with `/p2p/`
 
-Example client flags (see `make client-run`):
+HTTP client flags (see `make client-run`):
 - `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
 - `--bootstrap` Repeatable multiaddr with `/p2p/`
 - `--backend-http` Local backend HTTP listen address (default `:8081`)
+
+Chat client flags (see `make chat-run`):
+- `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
+- `--bootstrap` Repeatable multiaddr with `/p2p/`
+- `--addr` Local chat HTTP listen address (default `:8091`)
+- `--name` Display name (shown on server UI)
+
+## Deploying the Server (public)
+
+- Expose ports:
+  - `8080/tcp` Admin UI + HTTP/WS proxy (`/peer/<peerID>/`)
+  - `4001/tcp` and `4001/udp` libp2p (GossipSub/streams)
+- Cloudflare DNS:
+  - Web UI/proxy (8080): can be proxied (orange cloud) if using HTTP/HTTPS
+  - libp2p (4001 tcp/udp): must be DNS only (gray cloud). Cloudflare proxy doesn’t support arbitrary TCP/UDP ports.
+- WebSocket: server proxies 101 and tunnels bytes; the chat backend allows any HTTP(S) Origin for demo. Restrict in production.
