@@ -7,10 +7,10 @@ without depending on centralized reverse-proxy services.
 
 ## Features
 
-- 🛰 **Peer-to-peer routing** over libp2p (supports hole punching, relay, pubsub)
-- 🧩 **DNS-driven entrypoint** (server acts as a lightweight coordinator)
-- 🔄 **Automatic peer advertisement** via GossipSub
-- 🔌 **Pluggable client SDK** — embed the relaydns client directly into your Go applications
+- **Peer-to-peer routing** over libp2p (supports hole punching, relay, pubsub)
+- **DNS-driven entrypoint** (server acts as a lightweight coordinator)
+- **Automatic peer advertisement** via GossipSub
+- **Pluggable client SDK** — embed the relaydns client directly into your Go applications
 
 ## Architecture Overview
 
@@ -27,7 +27,7 @@ without depending on centralized reverse-proxy services.
 
 ## Getting Started
 
-### 1️⃣ Run the Server (Docker Compose)
+### 1. Run the Server (Docker Compose)
 
 ```bash
 docker compose up --build -d
@@ -37,7 +37,7 @@ Published ports:
 - Admin/UI + HTTP proxy: `8080`
 - libp2p TCP/QUIC: `4001/tcp`, `4001/udp`
 
-### 2️⃣ (Optional) Run Example Clients
+### 2. (Optional) Run Example Clients
 
 Clients are NOT required to run the server. They are provided for testing/demo.
 
@@ -59,7 +59,7 @@ If you run the chat client:
 - Open locally: `http://localhost:8091`
 - Open via server proxy: Admin → your peer → Open (routes to `/peer/<peerID>/` then `/peer/<peerID>/ws`).
 
-### 3️⃣ Embed the Client SDK in Your App
+### 3. Embed the Client SDK in Your App
 
 Install the module:
 ```bash
