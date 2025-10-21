@@ -1,18 +1,18 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"text/template"
-	"time"
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+    "text/template"
+    "time"
 
-	"github.com/gosuda/relaydns/relaydns"
-	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
+    "github.com/gosuda/relaydns/relaydns"
+    "github.com/rs/zerolog/log"
+    "github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
@@ -22,34 +22,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagServerURL      string
-	flagBootstraps     []string
-	flagRelay          bool
-	flagBackendHTTP    string
-	flagProtocol       string
-	flagTopic          string
-	flagAdvertiseEvery time.Duration
-	flagName           string
-	flagDNS            string
-	flagPreferQUIC     bool
-	flagPreferLocal    bool
-	flagHTTPTimeout    time.Duration
+    flagServerURL   string
+    flagBootstraps  []string
+    flagBackendHTTP string
 )
 
 func init() {
-	flags := rootCmd.PersistentFlags()
-	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL (e.g. http://127.0.0.1:9090) to auto-fetch multiaddrs from /health")
-	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-	flags.BoolVar(&flagRelay, "relay", true, "enable libp2p relay/hole-punch support")
-	flags.StringVar(&flagBackendHTTP, "backend-http", ":8081", "local backend HTTP listen address")
-	flags.StringVar(&flagProtocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match server)")
-	flags.StringVar(&flagTopic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
-	flags.DurationVar(&flagAdvertiseEvery, "advertise-every", 3*time.Second, "interval for backend adverts")
-	flags.StringVar(&flagName, "name", "demo-http", "backend display name")
-	flags.StringVar(&flagDNS, "dns", "demo-http.example", "backend DNS metadata (optional)")
-	flags.BoolVar(&flagPreferQUIC, "prefer-quic", true, "prefer QUIC multiaddrs when available")
-	flags.BoolVar(&flagPreferLocal, "prefer-local", true, "prefer loopback/local multiaddrs when available")
-	flags.DurationVar(&flagHTTPTimeout, "http-timeout", 3*time.Second, "timeout for server /health fetch")
+    flags := rootCmd.PersistentFlags()
+    flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
+    flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
+    flags.StringVar(&flagBackendHTTP, "backend-http", ":8081", "local backend HTTP listen address")
 }
 
 func main() {
@@ -89,26 +71,24 @@ func runClient(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// 2) libp2p host
-	h, err := relaydns.MakeHost(ctx, 0, flagRelay)
+    // 2) libp2p host
+    h, err := relaydns.MakeHost(ctx, 0, true)
 	if err != nil {
 		return fmt.Errorf("make host: %w", err)
 	}
 
-	client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
-		Protocol:       flagProtocol,
-		Topic:          flagTopic,
-		AdvertiseEvery: flagAdvertiseEvery,
-		Name:           flagName,
-		DNS:            flagDNS,
-		TargetTCP:      addrToTarget(flagBackendHTTP),
+    client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
+        Protocol:       "/relaydns/http/1.0",
+        Topic:          "relaydns.backends",
+        AdvertiseEvery: 3 * time.Second,
+        TargetTCP:      addrToTarget(flagBackendHTTP),
 
-		ServerURL:   flagServerURL,
-		Bootstraps:  flagBootstraps,
-		HTTPTimeout: flagHTTPTimeout,
-		PreferQUIC:  flagPreferQUIC,
-		PreferLocal: flagPreferLocal,
-	})
+        ServerURL:   flagServerURL,
+        Bootstraps:  flagBootstraps,
+        HTTPTimeout: 3 * time.Second,
+        PreferQUIC:  true,
+        PreferLocal: true,
+    })
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}

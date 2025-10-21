@@ -20,28 +20,17 @@ var rootCmd = &cobra.Command{
 
 var (
 	flagBootstraps []string
-	flagRelay      bool
 
-	ingressTCP   string // e.g. :22 (raw TCP ingress, SSH)
-	ingressHTTP  string // e.g. :8082 (HTTP ingress, Browser)
-	adminHTTP    string // e.g. :8080 (admin API)
-	outBoundPort int    // e.g. :4001 (outbound connections)
-	protocol     string // e.g. /relaydns/http/1.0
-	topic        string // e.g. relaydns.backends
+	ingressHTTP string // e.g. :8082 (HTTP ingress, Browser)
+	adminHTTP   string // e.g. :8080 (admin API)
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-	flags.BoolVar(&flagRelay, "relay", true, "enable libp2p relay support")
 
-	flags.StringVar(&ingressTCP, "ingress-tcp", ":22", "L4 TCP ingress (e.g. :22 for SSH/raw TCP)")
 	flags.StringVar(&ingressHTTP, "ingress-http", ":8082", "HTTP ingress (browser-friendly TCP port for HTTP backends)")
 	flags.StringVar(&adminHTTP, "admin-http", ":8080", "Admin HTTP API (status/control)")
-	flags.IntVar(&outBoundPort, "outbound-port", 4001, "Outbound connections")
-
-	flags.StringVar(&protocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match clients)")
-	flags.StringVar(&topic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
 }
 
 func main() {
@@ -54,13 +43,14 @@ func runServer(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h, err := relaydns.MakeHost(ctx, outBoundPort, flagRelay)
+	const outBoundPort = 4001
+	h, err := relaydns.MakeHost(ctx, outBoundPort, true)
 	if err != nil {
 		return err
 	}
 	relaydns.ConnectBootstraps(ctx, h, flagBootstraps)
 
-	d, err := relaydns.NewDirector(ctx, h, protocol, topic)
+	d, err := relaydns.NewDirector(ctx, h, "/relaydns/http/1.0", "relaydns.backends")
 	if err != nil {
 		return err
 	}
@@ -77,19 +67,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// 2) L4 TCP ingress (SSH/raw TCP)
-	go func() {
-		if ingressTCP == "" {
-			return
-		}
-		log.Info().Msgf("[server] tcp ingress: %s", ingressTCP)
-		if err := d.ServeTCP(ingressTCP); err != nil {
-			log.Error().Err(err).Msg("[server] tcp ingress error")
-			cancel()
-		}
-	}()
-
-	// 3) HTTP ingress (browser/HTTP traffic)
+	// 2) HTTP ingress (browser/HTTP traffic)
 	go func() {
 		if ingressHTTP == "" {
 			return

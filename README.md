@@ -29,66 +29,108 @@ without depending on centralized reverse-proxy services.
 
 ## Getting Started
 
-### 1️⃣ Run the RelayDNS Server
+### 1️⃣ Run the Server (Docker Compose)
 
-The **server** acts as a public entrypoint that accepts incoming TCP connections  
-and forwards them over libp2p to available clients.
+The server accepts incoming TCP connections and forwards them over libp2p to available clients.
 
+Option A — using Makefile:
 ```bash
-go build -o relaydns ./cmd/relaydns
-
-./relaydns \
-  --listen-tcp :22 \
-  --listen-http :8080 \
-  --protocol /relaydns/ssh/1.0 \
-  --topic relaydns.backends
+make server-up           # build + start
+make server-down         # stop
 ```
 
-### 2️⃣ Embed the RelayDNS Client in Your App
+Option B — raw docker compose:
+```bash
+docker compose up --build -d
+docker compose logs -f relayserver
+```
 
-The client is a small Go library that you can embed in any Go program.
-It automatically advertises itself and tunnels incoming streams to your local TCP service.
+Published ports:
+- Admin HTTP: `8080`
+- HTTP ingress (tcp-level): `8082`
+- libp2p TCP/QUIC: `4001/tcp`, `4001/udp`
+
+To add bootstraps, edit `docker-compose.yml` and append repeated `--bootstrap` flags under `relayserver.command`.
+
+### 2️⃣ Run the Example Client (Local Go)
+
+The example client runs a local HTTP backend and advertises it via libp2p.
+
+Option A — using Makefile (recommended):
+```bash
+make client-run \
+  BACKEND_HTTP=:8081 \
+  SERVER_URL=http://localhost:8080 \
+  BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
+```
+
+Option B — go run directly:
+```bash
+go run ./cmd/example_client \
+  --backend-http :8081 \
+  --server-url http://localhost:8080 \
+  --bootstrap /dnsaddr/your.bootstrap/p2p/12D3Koo... \
+  
+```
+
+The client exposes a tiny local HTTP server at `--backend-http` and tunnels traffic from the server to this address via libp2p streams.
+
+### 3️⃣ Embed the Client SDK in Your App
 
 Install the module:
 ```bash
 go get github.com/gosuda/relaydns
 ```
 
-Example usage:
+Minimal snippet:
 ```go
 package main
 
 import (
     "context"
-    "log"
     "time"
-
-    "github.com/libp2p/go-libp2p"
     "github.com/gosuda/relaydns/relaydns"
+    "github.com/libp2p/go-libp2p"
 )
 
 func main() {
     ctx := context.Background()
-    h, err := libp2p.New(
-        libp2p.EnableHolePunching(),
-        libp2p.EnableNATService(),
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
-        Protocol:       "/relaydns/ssh/1.0",
+    h, _ := libp2p.New(libp2p.EnableHolePunching(), libp2p.EnableNATService())
+    client, _ := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
+        Protocol:       "/relaydns/http/1.0",
         Topic:          "relaydns.backends",
         AdvertiseEvery: 5 * time.Second,
-        TargetTCP:      "127.0.0.1:22", // your local SSH or app port
-        Name:           "seoul-node",
+        TargetTCP:      "127.0.0.1:8081",
+        Name:           "demo-http",
     })
-    if err != nil {
-        log.Fatal(err)
-    }
     defer client.Close()
-
-    select {} // keep running
+    select {}
 }
+```
+
+## Configuration Reference
+
+Server flags (see `docker-compose.yml`):
+- `--admin-http` Admin API listen address (default `:8080`)
+- `--ingress-http` HTTP ingress listen address (default `:8082`)
+- `--bootstrap` Repeatable multiaddr with `/p2p/`
+
+Example client flags (see `make client-run`):
+- `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
+- `--bootstrap` Repeatable multiaddr with `/p2p/`
+- `--backend-http` Local backend HTTP listen address (default `:8081`)
+
+## Logging
+
+This project uses `zerolog` for structured logging. Binaries initialize a human-friendly console logger by default.
+
+## Development
+
+Useful commands:
+```bash
+make server-up      # build and start the server via docker compose
+make server-down    # stop the compose stack
+
+make client-run     # run the example client locally
+make client-build   # build the example client to ./bin/relaydns-client
 ```
