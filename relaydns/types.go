@@ -1,15 +1,21 @@
 package relaydns
 
 import (
-	"time"
+    "time"
 
-	"github.com/libp2p/go-libp2p/core/peer"
+    "github.com/libp2p/go-libp2p/core/peer"
+)
+
+// Defaults shared by server and client.
+const (
+    DefaultProtocol = "/relaydns/http/1.0"
+    DefaultTopic    = "relaydns.backends"
 )
 
 type Advertise struct {
-	Peer  string    `json:"peer"`
-	Name  string    `json:"name,omitempty"`
-	DNS   string    `json:"dns,omitempty"`
+    Peer  string    `json:"peer"`
+    Name  string    `json:"name,omitempty"`
+    DNS   string    `json:"dns,omitempty"`
 	Addrs []string  `json:"addrs"`
 	Ready bool      `json:"ready"`
 	Load  float64   `json:"load"`

@@ -45,16 +45,14 @@ Clients are NOT required to run the server. They are provided for testing/demo.
   ```bash
   make client-run
   # Optional overrides:
-  # make client-run BACKEND_HTTP=:8081 SERVER_URL=http://localhost:8080 \
-  #   BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
+  # make client-run BACKEND_PORT=8081 SERVER_URL=http://localhost:8080
   ```
 
 - Chat client (optional): WebSocket chat UI (local) + advertiser (libp2p). Uses coder/websocket.
   ```bash
   make chat-run
   # Optional overrides:
-  # make chat-run CHAT_ADDR=:8091 CHAT_NAME=demo-chat SERVER_URL=http://localhost:8080 \
-  #   BOOTSTRAPS="/ip4/1.2.3.4/tcp/4001/p2p/12D3Koo..."
+  # make chat-run CHAT_PORT=8091 CHAT_NAME=demo-chat SERVER_URL=http://localhost:8080
   ```
 
 If you run the chat client:
@@ -101,20 +99,18 @@ Server flags (see `docker-compose.yml`):
 
 HTTP client flags (see `make client-run`):
 - `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
-- `--bootstrap` Repeatable multiaddr with `/p2p/`
-- `--backend-http` Local backend HTTP listen address (default `:8081`)
+- `--port` Local backend HTTP port (default `8081`)
 
 Chat client flags (see `make chat-run`):
 - `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
-- `--bootstrap` Repeatable multiaddr with `/p2p/`
-- `--addr` Local chat HTTP listen address (default `:8091`)
+- `--port` Local chat HTTP port (default `8091`)
 - `--name` Display name (shown on server UI)
 
 ## Deploying the Server (public)
 
 - Expose ports:
-  - `8080/tcp` Admin UI + HTTP/WS proxy (`/peer/<peerID>/`)
-  - `4001/tcp` and `4001/udp` libp2p (GossipSub/streams)
+  - `8080/tcp` Admin UI + HTTP/WS proxy (`/peer/<peerID>/`) — flag: `--http-port`
+  - `4001/tcp` and `4001/udp` libp2p (GossipSub/streams) — flag: `--p2p-port`
 - Cloudflare DNS:
   - Web UI/proxy (8080): can be proxied (orange cloud) if using HTTP/HTTPS
   - libp2p (4001 tcp/udp): must be DNS only (gray cloud). Cloudflare proxy doesn’t support arbitrary TCP/UDP ports.

@@ -17,15 +17,10 @@ server-build:
 # ---------- Client (local go) ----------
 # Default flags (override via `make VAR=value`)
 SERVER_URL ?= http://localhost:8080
-BACKEND_HTTP ?= :8081
-# Optional repeated flags: BOOTSTRAPS="/dnsaddr/example/p2p/12D3... /ip4/1.2.3.4/tcp/4001/p2p/12D3..."
-BOOTSTRAPS ?=
-CLIENT_BOOTSTRAPS_FLAGS := $(foreach b,$(BOOTSTRAPS),--bootstrap $(b))
-
+BACKEND_PORT ?= 8081
 CLIENT_FLAGS := \
 	--server-url $(SERVER_URL) \
-	--backend-http $(BACKEND_HTTP) \
-	$(CLIENT_BOOTSTRAPS_FLAGS)
+	--port $(BACKEND_PORT)
 
 client-run:
 	go run ./cmd/example_http_client $(CLIENT_FLAGS)
@@ -34,14 +29,13 @@ client-build:
 	go build -trimpath -o bin/relaydns-client ./cmd/example_http_client
 
 # ---------- Chat (local go) ----------
-CHAT_ADDR ?= :8091
+CHAT_PORT ?= 8091
 CHAT_NAME ?= demo-chat
 
 CHAT_FLAGS := \
 	--server-url $(SERVER_URL) \
-	--addr $(CHAT_ADDR) \
-	--name $(CHAT_NAME) \
-	$(CLIENT_BOOTSTRAPS_FLAGS)
+	--port $(CHAT_PORT) \
+	--name $(CHAT_NAME)
 
 chat-run:
 	go run ./cmd/example_chat $(CHAT_FLAGS)
@@ -66,4 +60,4 @@ help:
     @echo "  make chat-run         # run example_chat locally (WS UI + advertiser)"
     @echo "  make chat-build       # build example_chat to ./bin/relaydns-chat"
     @echo "\nFlags (override with make VAR=value):"
-    @echo "  SERVER_URL BACKEND_HTTP BOOTSTRAPS CHAT_ADDR CHAT_NAME"
+	@echo "  SERVER_URL BACKEND_PORT CHAT_PORT CHAT_NAME"

@@ -58,27 +58,43 @@ type RelayClient struct {
 	serverHealthy bool
 }
 
-// NewClient constructs a client with defaults applied and an initialized libp2p host.
-// It does not start networking. Call Start(ctx) to begin handlers, pubsub, and advertising.
-func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
+// sensible defaults for optional client config
+const (
+	defaultAdvertiseEvery    = 5 * time.Second
+	defaultHTTPTimeout       = 3 * time.Second
+	defaultRefreshBootstraps = 20 * time.Second
+)
+
+// applyDefaults fills zero-values in cfg with sane defaults.
+func applyDefaults(cfg ClientConfig) ClientConfig {
 	if cfg.AdvertiseEvery <= 0 {
-		cfg.AdvertiseEvery = 5 * time.Second
+		cfg.AdvertiseEvery = defaultAdvertiseEvery
 	}
 	if cfg.AdvertiseTTL <= 0 {
 		cfg.AdvertiseTTL = 10 * cfg.AdvertiseEvery
 	}
 	if cfg.HTTPTimeout <= 0 {
-		cfg.HTTPTimeout = 3 * time.Second
+		cfg.HTTPTimeout = defaultHTTPTimeout
 	}
-	if cfg.RefreshBootstrapsEvery <= 0 {
-		cfg.RefreshBootstrapsEvery = 20 * time.Second
-	}
-	if cfg.Protocol == "" {
-		cfg.Protocol = "/relaydns/http/1.0"
-	}
+    if cfg.RefreshBootstrapsEvery <= 0 {
+        cfg.RefreshBootstrapsEvery = defaultRefreshBootstraps
+    }
+    // Always prefer QUIC and local addresses for better performance and locality.
+    cfg.PreferQUIC = true
+    cfg.PreferLocal = true
+    if cfg.Protocol == "" {
+        cfg.Protocol = DefaultProtocol
+    }
 	if cfg.Topic == "" {
-		cfg.Topic = "relaydns.backends"
+		cfg.Topic = DefaultTopic
 	}
+	return cfg
+}
+
+// NewClient constructs a client with defaults applied and an initialized libp2p host.
+// It does not start networking. Call Start(ctx) to begin handlers, pubsub, and advertising.
+func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
+	cfg = applyDefaults(cfg)
 
 	h, err := MakeHost(ctx, 0, true)
 	if err != nil {
@@ -97,119 +113,33 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	if b.stop != nil {
 		return fmt.Errorf("client already started")
 	}
-	// resolve bootstraps (from flags and optional server health)
-	boot := make([]string, 0, len(b.cfg.Bootstraps)+4)
-	if len(b.cfg.Bootstraps) > 0 {
-		boot = append(boot, b.cfg.Bootstraps...)
-	}
-	if b.cfg.ServerURL != "" {
-		if addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
-			b.setServerHealthy(false)
-			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", b.cfg.ServerURL)
-		} else {
-			b.setServerHealthy(true)
-			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
-			boot = append(boot, addrs...)
-		}
-	}
-	boot = uniq(boot)
+	// 1) resolve bootstraps (flags + optional server health)
+	boot := b.resolveBootstraps()
 	if len(boot) > 0 {
 		ConnectBootstraps(ctx, b.h, boot)
 	} else {
 		log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
 	}
 
-	// stream handler
-	switch {
-	case b.cfg.Handler != nil:
-		b.h.SetStreamHandler(b.protoID, b.cfg.Handler)
-	case b.cfg.TargetTCP != "":
-		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
-			defer s.Close()
-			c, err := net.Dial("tcp", b.cfg.TargetTCP)
-			if err != nil {
-				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
-				return
-			}
-			defer c.Close()
-			// raw byte pipe
-			go io.Copy(c, s)
-			io.Copy(s, c)
-		})
-	default:
-		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
-	}
-
-	// pubsub join
-	ps, err := pubsub.NewGossipSub(ctx, b.h, pubsub.WithMessageSigning(true))
-	if err != nil {
+	// 2) stream handler for inbound libp2p streams
+	if err := b.setupStreamHandler(); err != nil {
 		return err
 	}
-	t, err := ps.Join(b.cfg.Topic)
-	if err != nil {
+
+	// 3) pubsub join (for adverts)
+	if err := b.joinPubSub(ctx); err != nil {
 		return err
 	}
-	b.ps, b.t = ps, t
 
-	// advertiser loop
+	// 4) advertiser loop
 	advCtx, cancel := context.WithCancel(ctx)
 	b.stop = cancel
 	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		ticker := time.NewTicker(b.cfg.AdvertiseEvery)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-advCtx.Done():
-				return
-			case <-ticker.C:
-				enc := BuildAddrs(b.h)
-				ad := Advertise{
-					Peer:  b.h.ID().String(),
-					Name:  b.cfg.Name,
-					DNS:   b.cfg.DNS,
-					Addrs: enc,
-					Ready: true,
-					Load:  0.0,
-					TS:    time.Now().UTC(),
-					TTL:   int(b.cfg.AdvertiseTTL.Seconds()),
-					Proto: string(b.protoID),
-				}
-				payload, _ := json.Marshal(ad)
-				_ = b.t.Publish(advCtx, payload)
-			}
-		}
-	}()
+	b.startAdvertiser(advCtx)
 
-	// background: periodically re-fetch bootstraps from server and reconnect
+	// 5) background: periodically re-fetch bootstraps from server and reconnect
 	if b.cfg.ServerURL != "" {
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
-			t := time.NewTicker(b.cfg.RefreshBootstrapsEvery)
-			defer t.Stop()
-			for {
-				select {
-				case <-advCtx.Done():
-					return
-				case <-t.C:
-					addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout)
-					if err != nil {
-						b.setServerHealthy(false)
-						log.Warn().Err(err).Msgf("refresh /health from %s failed", b.cfg.ServerURL)
-						continue
-					}
-					b.setServerHealthy(true)
-					sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
-					addrs = uniq(addrs)
-					if len(addrs) > 0 {
-						// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
-						ConnectBootstraps(ctx, b.h, addrs)
-					}
-				}
-			}
-		}()
+		b.startRefreshLoop(advCtx)
 	}
 
 	if addrs := BuildAddrs(b.Host()); len(addrs) > 0 {
@@ -240,6 +170,125 @@ func (b *RelayClient) setServerHealthy(ok bool) {
 	b.statusMu.Lock()
 	b.serverHealthy = ok
 	b.statusMu.Unlock()
+}
+
+// resolveBootstraps merges configured bootstraps with optional server-provided
+// multiaddrs from /health. It updates serverHealthy accordingly.
+func (b *RelayClient) resolveBootstraps() []string {
+	boot := make([]string, 0, len(b.cfg.Bootstraps)+4)
+	if len(b.cfg.Bootstraps) > 0 {
+		boot = append(boot, b.cfg.Bootstraps...)
+	}
+	if b.cfg.ServerURL != "" {
+		if addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
+			b.setServerHealthy(false)
+			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", b.cfg.ServerURL)
+		} else {
+			b.setServerHealthy(true)
+			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
+			boot = append(boot, addrs...)
+		}
+	}
+	return uniq(boot)
+}
+
+// setupStreamHandler installs the appropriate libp2p stream handler.
+func (b *RelayClient) setupStreamHandler() error {
+	switch {
+	case b.cfg.Handler != nil:
+		b.h.SetStreamHandler(b.protoID, b.cfg.Handler)
+	case b.cfg.TargetTCP != "":
+		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
+			defer s.Close()
+			c, err := net.Dial("tcp", b.cfg.TargetTCP)
+			if err != nil {
+				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
+				return
+			}
+			defer c.Close()
+			// raw byte pipe
+			go io.Copy(c, s)
+			io.Copy(s, c)
+		})
+	default:
+		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
+	}
+	return nil
+}
+
+// joinPubSub creates a GossipSub instance and joins the advert topic.
+func (b *RelayClient) joinPubSub(ctx context.Context) error {
+	ps, err := pubsub.NewGossipSub(ctx, b.h, pubsub.WithMessageSigning(true))
+	if err != nil {
+		return err
+	}
+	t, err := ps.Join(b.cfg.Topic)
+	if err != nil {
+		return err
+	}
+	b.ps, b.t = ps, t
+	return nil
+}
+
+// startAdvertiser periodically publishes Advertise messages with host addrs.
+func (b *RelayClient) startAdvertiser(ctx context.Context) {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		ticker := time.NewTicker(b.cfg.AdvertiseEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				enc := BuildAddrs(b.h)
+				ad := Advertise{
+					Peer:  b.h.ID().String(),
+					Name:  b.cfg.Name,
+					DNS:   b.cfg.DNS,
+					Addrs: enc,
+					Ready: true,
+					Load:  0.0,
+					TS:    time.Now().UTC(),
+					TTL:   int(b.cfg.AdvertiseTTL.Seconds()),
+					Proto: string(b.protoID),
+				}
+				payload, _ := json.Marshal(ad)
+				_ = b.t.Publish(ctx, payload)
+			}
+		}
+	}()
+}
+
+// startRefreshLoop periodically fetches /health and attempts (re)connects.
+func (b *RelayClient) startRefreshLoop(ctx context.Context) {
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+		t := time.NewTicker(b.cfg.RefreshBootstrapsEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout)
+				if err != nil {
+					b.setServerHealthy(false)
+					log.Warn().Err(err).Msgf("refresh /health from %s failed", b.cfg.ServerURL)
+					continue
+				}
+				b.setServerHealthy(true)
+				sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
+				addrs = uniq(addrs)
+				if len(addrs) > 0 {
+					// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
+					ConnectBootstraps(ctx, b.h, addrs)
+				}
+			}
+		}
+	}()
 }
 
 // ServerStatus returns a human-friendly status regarding connection to ServerURL.

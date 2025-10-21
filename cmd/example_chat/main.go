@@ -22,22 +22,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagServerURL  string
-	flagBootstraps []string
-	flagAddr       string
-	flagName       string
-	flagProtocol   string
-	flagTopic      string
+	flagServerURL string
+	flagPort      int
+	flagName      string
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver base URL to auto-fetch multiaddrs from /health")
-	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-	flags.StringVar(&flagAddr, "addr", ":8091", "local chat HTTP listen address")
+	flags.IntVar(&flagPort, "port", 8091, "local chat HTTP port")
 	flags.StringVar(&flagName, "name", "demo-chat", "backend display name")
-	flags.StringVar(&flagProtocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match server)")
-	flags.StringVar(&flagTopic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
 }
 
 func main() {
@@ -51,7 +45,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	// 1) start local chat HTTP backend
-	ln, err := net.Listen("tcp", flagAddr)
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
 	if err != nil {
 		return fmt.Errorf("listen chat: %w", err)
 	}
@@ -70,17 +64,12 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
-		Protocol:       flagProtocol,
-		Topic:          flagTopic,
-		AdvertiseEvery: 3 * time.Second,
-		Name:           flagName,
-		TargetTCP:      relaydns.AddrToTarget(flagAddr),
+		Name:      flagName,
+		TargetTCP: relaydns.AddrToTarget(fmt.Sprintf(":%d", flagPort)),
+		ServerURL: flagServerURL,
 
-		ServerURL:   flagServerURL,
-		Bootstraps:  flagBootstraps,
-		HTTPTimeout: 5 * time.Second,
-		PreferQUIC:  true,
-		PreferLocal: true,
+		Protocol: relaydns.DefaultProtocol,
+		Topic:    relaydns.DefaultTopic,
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)

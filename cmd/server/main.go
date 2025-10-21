@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -20,22 +21,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagBootstraps []string
-
-	httpAddr string // unified admin + HTTP proxy (e.g. :8080)
-	protocol string
-	topic    string
-	tcpAddr  string // optional raw TCP ingress (e.g. :2222 for SSH)
+	flagP2pPort  int // libp2p outbound TCP/UDP port (e.g. 4001)
+	flagHttpPort int // admin UI + HTTP proxy port (e.g. 8080)
+	flagTcpPort  int // optional raw TCP ingress port (0 to disable)
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
-	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-
-	flags.StringVar(&httpAddr, "http", ":8080", "Unified admin UI and HTTP proxy listen address")
-	flags.StringVar(&protocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match clients)")
-	flags.StringVar(&topic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
-	flags.StringVar(&tcpAddr, "tcp", "", "Optional raw TCP ingress (e.g. :2222 for SSH). Empty to disable")
+	flags.IntVar(&flagHttpPort, "http-port", 8080, "admin UI and HTTP proxy port")
+	flags.IntVar(&flagP2pPort, "p2p-port", 4001, "libp2p outbound TCP/UDP port")
+	flags.IntVar(&flagTcpPort, "tcp-port", 0, "optional raw TCP ingress port (0 to disable)")
 }
 
 func main() {
@@ -48,24 +43,21 @@ func runServer(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	const outBoundPort = 4001
-	h, err := relaydns.MakeHost(ctx, outBoundPort, true)
+	h, err := relaydns.MakeHost(ctx, flagP2pPort, true)
 	if err != nil {
 		return err
 	}
-	relaydns.ConnectBootstraps(ctx, h, flagBootstraps)
-
-	d, err := relaydns.NewRelayServer(ctx, h, protocol, topic)
+	d, err := relaydns.NewRelayServer(ctx, h, relaydns.DefaultProtocol, relaydns.DefaultTopic)
 	if err != nil {
 		return err
 	}
 
 	// Admin UI + per-peer HTTP proxy served here
-	go serveHTTP(ctx, httpAddr, d, h, cancel)
+	go serveHTTP(ctx, fmt.Sprintf(":%d", flagHttpPort), d, h, cancel)
 
 	// Optional raw TCP ingress (e.g., SSH)
-	if tcpAddr != "" {
-		go serveTCPIngress(ctx, tcpAddr, d)
+	if flagTcpPort > 0 {
+		go serveTCPIngress(ctx, fmt.Sprintf(":%d", flagTcpPort), d)
 	}
 
 	// graceful shutdown

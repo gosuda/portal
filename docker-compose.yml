@@ -7,11 +7,10 @@ services:
       dockerfile: Dockerfile
     image: dreamcacao/relaydns:latest
     command:
-      - "--http"
-      - ":8080"
-      # To add bootstraps, add more lines like below (repeatable):
-      # - "--bootstrap"
-      # - "/dnsaddr/bootstrap.example/p2p/12D3Koo..."
+      - "--http-port"
+      - "8080"
+      - "--p2p-port"
+      - "4001"
     ports:
       - "8080:8080"     # Admin UI + HTTP proxy
       - "4001:4001/tcp" # libp2p tcp

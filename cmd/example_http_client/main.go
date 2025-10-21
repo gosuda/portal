@@ -22,22 +22,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagServerURL  string
-	flagBootstraps []string
-	flagAddr       string
-	flagClientName string
-	flagProtocol   string
-	flagTopic      string
+	flagServerURL string
+	flagPort      int
+	flagName      string
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
-	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-	flags.StringVar(&flagAddr, "addr", ":8081", "local backend HTTP listen address")
-	flags.StringVar(&flagClientName, "name", "", "backend display name shown on server UI")
-	flags.StringVar(&flagProtocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match server)")
-	flags.StringVar(&flagTopic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
+	flags.IntVar(&flagPort, "port", 8081, "local backend HTTP port")
+	flags.StringVar(&flagName, "name", "", "backend display name shown on server UI")
 }
 
 func main() {
@@ -50,24 +44,24 @@ func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if flagClientName == "" {
+	if flagName == "" {
 		hn, err := os.Hostname()
 		if err != nil {
 			hn = "unknown-" + rand.Text()
 		}
-		flagClientName = hn
+		flagName = hn
 	}
 
 	// 1) HTTP backend
 	var clientRef *relaydns.RelayClient
-	ln, err := net.Listen("tcp", flagAddr)
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
 	}
 	log.Info().Msgf("[client] local backend http listening on %s", ln.Addr().String())
 
 	// Serve local backend view in a goroutine
-	go serveClientHTTP(ctx, ln, flagClientName, func() string {
+	go serveClientHTTP(ctx, ln, flagName, func() string {
 		if clientRef == nil {
 			return "Starting..."
 		}
@@ -76,17 +70,12 @@ func runClient(cmd *cobra.Command, args []string) error {
 
 	// 2) libp2p host
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
-		Protocol:       flagProtocol,
-		Topic:          flagTopic,
-		AdvertiseEvery: 3 * time.Second,
-		Name:           flagClientName,
-		TargetTCP:      relaydns.AddrToTarget(flagAddr),
+		Name:      flagName,
+		TargetTCP: relaydns.AddrToTarget(fmt.Sprintf(":%d", flagPort)),
+		ServerURL: flagServerURL,
 
-		ServerURL:   flagServerURL,
-		Bootstraps:  flagBootstraps,
-		HTTPTimeout: 5 * time.Second,
-		PreferQUIC:  true,
-		PreferLocal: true,
+		Protocol: relaydns.DefaultProtocol,
+		Topic:    relaydns.DefaultTopic,
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
