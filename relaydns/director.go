@@ -3,6 +3,7 @@ package relaydns
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -193,7 +194,20 @@ func (d *Director) ServeHTTP(addr string) error {
 		}
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok"))
+		type info struct {
+			Status string   `json:"status"`
+			Addrs  []string `json:"multiaddrs"`
+		}
+		var list []string = make([]string, 0)
+		for _, a := range d.h.Addrs() {
+			list = append(list, fmt.Sprintf("%s/p2p/%s", a.String(), d.h.ID().String()))
+		}
+		resp := info{
+			Status: "ok",
+			Addrs:  list,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	log.Printf("director HTTP API on %s", addr)
 	return http.ListenAndServe(addr, mux)
