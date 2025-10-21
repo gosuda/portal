@@ -72,12 +72,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 	}()
 
 	// 2) libp2p host
-	h, err := relaydns.MakeHost(ctx, 0, true)
-	if err != nil {
-		return fmt.Errorf("make host: %w", err)
-	}
-
-	client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
+	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
 		Protocol:       "/relaydns/http/1.0",
 		Topic:          "relaydns.backends",
 		AdvertiseEvery: 3 * time.Second,
@@ -92,15 +87,10 @@ func runClient(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	defer client.Close()
-
-	if addrs := h.Addrs(); len(addrs) > 0 {
-		for _, a := range addrs {
-			log.Info().Msgf("[client] host addr: %s/p2p/%s", a.String(), h.ID().String())
-		}
-	} else {
-		log.Info().Msgf("[client] host peer: %s (no listen addrs yet)", h.ID().String())
+	if err := client.Start(ctx); err != nil {
+		return fmt.Errorf("start client: %w", err)
 	}
+	defer client.Close()
 
 	// wait for termination
 	sig := make(chan os.Signal, 1)

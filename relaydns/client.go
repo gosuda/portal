@@ -56,51 +56,69 @@ type RelayClient struct {
 	stop context.CancelFunc
 }
 
-// NewClient wires a reusable backend node that other apps can embed.
-// It registers a stream handler and starts an advertiser loop.
-// Call Close() to stop.
-func NewClient(ctx context.Context, h host.Host, cfg ClientConfig) (*RelayClient, error) {
+// NewClient constructs a client with defaults applied and an initialized libp2p host.
+// It does not start networking. Call Start(ctx) to begin handlers, pubsub, and advertising.
+func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
 	if cfg.AdvertiseEvery <= 0 {
 		cfg.AdvertiseEvery = 5 * time.Second
 	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = 3 * time.Second
 	}
+	if cfg.Protocol == "" {
+		cfg.Protocol = "/relaydns/http/1.0"
+	}
+	if cfg.Topic == "" {
+		cfg.Topic = "relaydns.backends"
+	}
+
+	h, err := MakeHost(ctx, 0, true)
+	if err != nil {
+		return nil, fmt.Errorf("make host: %w", err)
+	}
 	b := &RelayClient{
 		h:       h,
 		cfg:     cfg,
 		protoID: protocol.ID(cfg.Protocol),
 	}
+	return b, nil
+}
 
-	boot := make([]string, 0, len(cfg.Bootstraps)+4)
-	if len(cfg.Bootstraps) > 0 {
-		boot = append(boot, cfg.Bootstraps...)
+// Start connects bootstraps, sets stream handler, joins pubsub, and starts advertising.
+func (b *RelayClient) Start(ctx context.Context) error {
+	if b.stop != nil {
+		return fmt.Errorf("client already started")
 	}
-	if cfg.ServerURL != "" {
-		if addrs, err := fetchMultiaddrsFromHealth(cfg.ServerURL, cfg.HTTPTimeout); err != nil {
-			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", cfg.ServerURL)
+	// resolve bootstraps (from flags and optional server health)
+	boot := make([]string, 0, len(b.cfg.Bootstraps)+4)
+	if len(b.cfg.Bootstraps) > 0 {
+		boot = append(boot, b.cfg.Bootstraps...)
+	}
+	if b.cfg.ServerURL != "" {
+		if addrs, err := fetchMultiaddrsFromHealth(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
+			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", b.cfg.ServerURL)
 		} else {
-			sortMultiaddrs(addrs, cfg.PreferQUIC, cfg.PreferLocal)
+			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 			boot = append(boot, addrs...)
 		}
 	}
 	boot = uniq(boot)
 	if len(boot) > 0 {
-		ConnectBootstraps(ctx, h, boot)
+		ConnectBootstraps(ctx, b.h, boot)
 	} else {
 		log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
 	}
 
-	// 1) stream handler
+	// stream handler
 	switch {
-	case cfg.Handler != nil:
-		h.SetStreamHandler(b.protoID, cfg.Handler)
-	case cfg.TargetTCP != "":
-		h.SetStreamHandler(b.protoID, func(s network.Stream) {
+	case b.cfg.Handler != nil:
+		b.h.SetStreamHandler(b.protoID, b.cfg.Handler)
+	case b.cfg.TargetTCP != "":
+		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
 			defer s.Close()
-			c, err := net.Dial("tcp", cfg.TargetTCP)
+			c, err := net.Dial("tcp", b.cfg.TargetTCP)
 			if err != nil {
-				log.Error().Err(err).Msgf("relaydns: dial %s", cfg.TargetTCP)
+				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
 				return
 			}
 			defer c.Close()
@@ -109,27 +127,27 @@ func NewClient(ctx context.Context, h host.Host, cfg ClientConfig) (*RelayClient
 			io.Copy(s, c)
 		})
 	default:
-		return nil, fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
+		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
 	}
 
-	// 2) pubsub join
-	ps, err := pubsub.NewGossipSub(ctx, h, pubsub.WithMessageSigning(true))
+	// pubsub join
+	ps, err := pubsub.NewGossipSub(ctx, b.h, pubsub.WithMessageSigning(true))
 	if err != nil {
-		return nil, err
+		return err
 	}
-	t, err := ps.Join(cfg.Topic)
+	t, err := ps.Join(b.cfg.Topic)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	b.ps, b.t = ps, t
 
-	// 3) advertiser loop
+	// advertiser loop
 	advCtx, cancel := context.WithCancel(ctx)
 	b.stop = cancel
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		ticker := time.NewTicker(cfg.AdvertiseEvery)
+		ticker := time.NewTicker(b.cfg.AdvertiseEvery)
 		defer ticker.Stop()
 		for {
 			select {
@@ -156,7 +174,19 @@ func NewClient(ctx context.Context, h host.Host, cfg ClientConfig) (*RelayClient
 		}
 	}()
 
-	return b, nil
+	if addrs := b.Host().Addrs(); len(addrs) > 0 {
+		for _, a := range addrs {
+			log.Info().Msgf("[client] host addr: %s/p2p/%s", a.String(), b.Host().ID().String())
+		}
+	} else {
+		log.Info().Msgf("[client] host peer: %s (no listen addrs yet)", b.Host().ID().String())
+	}
+
+	return nil
+}
+
+func (b *RelayClient) Host() host.Host {
+	return b.h
 }
 
 func (b *RelayClient) Close() error {
@@ -167,6 +197,7 @@ func (b *RelayClient) Close() error {
 	// leaving topic is optional; libp2p will clean up on host close
 	return nil
 }
+
 func fetchMultiaddrsFromHealth(base string, timeout time.Duration) ([]string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
@@ -201,7 +232,7 @@ func fetchMultiaddrsFromHealth(base string, timeout time.Duration) ([]string, er
 	}
 	addrs := make([]string, 0, len(payload.Multiaddrs))
 	for _, s := range payload.Multiaddrs {
-		// 아주 기본적인 sanity check
+		// sanity check
 		if strings.Contains(s, "/p2p/") && (strings.Contains(s, "/ip4/") || strings.Contains(s, "/ip6/")) {
 			addrs = append(addrs, s)
 		}

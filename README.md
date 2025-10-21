@@ -90,19 +90,18 @@ import (
     "context"
     "time"
     "github.com/gosuda/relaydns/relaydns"
-    "github.com/libp2p/go-libp2p"
 )
 
 func main() {
     ctx := context.Background()
-    h, _ := libp2p.New(libp2p.EnableHolePunching(), libp2p.EnableNATService())
-    client, _ := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
+    client, _ := relaydns.NewClient(ctx, relaydns.ClientConfig{
         Protocol:       "/relaydns/http/1.0",
         Topic:          "relaydns.backends",
         AdvertiseEvery: 5 * time.Second,
         TargetTCP:      "127.0.0.1:8081",
         Name:           "demo-http",
     })
+    _ = client.Start(ctx)
     defer client.Close()
     select {}
 }
