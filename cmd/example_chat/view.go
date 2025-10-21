@@ -168,10 +168,11 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       promptEl.textContent = nick + '@chat:~$';
     }
     function randomNick(){
-      const adjs = ['brisk','calm','clever','daring','eager','gentle','merry','rapid','vivid','bright'];
-      const animals = ['fox','lion','panda','otter','eagle','whale','koala','lynx','squid','yak'];
-      const a = adjs[Math.floor(Math.random()*adjs.length)];
-      const b = animals[Math.floor(Math.random()*animals.length)];
+      // Programming-meme themed nickname
+      const techs = ['gopher','rustacean','nixer','unix','kernel','docker','kube','vim','emacs','tmux','nvim','git','linux','bsd','wasm','grpc','lambda','pointer','monad','segfault','null','byte','packet','devops','cli'];
+      const roles = ['wizard','hacker','guru','daemon','runner','scripter','shell','warrior','artisan','smith'];
+      const a = techs[Math.floor(Math.random()*techs.length)];
+      const b = roles[Math.floor(Math.random()*roles.length)];
       const id = Math.random().toString(36).slice(2,6);
       return a + '-' + b + '-' + id;
     }
@@ -193,12 +194,25 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       user.focus();
     });
 
+    // Stable color per nickname
+    const PALETTE = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa','#14b8a6','#eab308','#f472b6','#8b5cf6','#06b6d4'];
+    function hashNick(s){
+      let h = 0;
+      for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }
+      return (h >>> 0);
+    }
+    function colorFor(nick){
+      const idx = hashNick(nick || 'anon') % PALETTE.length;
+      return PALETTE[idx];
+    }
     function append(msg){
       const div = document.createElement('div');
       div.className = 'line';
       const ts = new Date(msg.ts).toLocaleTimeString();
-      div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr">' +
-        (msg.user || 'anon') + '</span>: ' + escapeHTML(msg.text || '');
+      const nick = (msg.user || 'anon');
+      const color = colorFor(nick);
+      div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' +
+        nick + '</span>: ' + escapeHTML(msg.text || '');
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
     }
@@ -207,7 +221,8 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     }
 
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(wsProto + '://' + location.host + location.pathname + 'ws');
+    const basePath = location.pathname.endsWith('/') ? location.pathname : (location.pathname + '/');
+    const ws = new WebSocket(wsProto + '://' + location.host + basePath + 'ws');
     ws.onmessage = (e) => { try{ append(JSON.parse(e.data)); }catch(_){ } };
     function send(){
       const payload = { user: (user.value || 'anon'), text: cmd.value.trim() };

@@ -226,6 +226,13 @@ func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pat
 			if err := resp.Write(clientBuf); err == nil {
 				_ = clientBuf.Flush()
 			}
+			// Flush any bytes already buffered by http.ReadResponse's bufio.Reader
+			if n := br.Buffered(); n > 0 {
+				tmp := make([]byte, n)
+				if _, err := io.ReadFull(br, tmp); err == nil {
+					_, _ = clientConn.Write(tmp)
+				}
+			}
 			// Raw byte tunnel between client and upstream stream
 			go io.Copy(s, clientConn)
 			io.Copy(clientConn, s)
