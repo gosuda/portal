@@ -1,24 +1,24 @@
 package relaydns
 
 import (
-    "context"
-    "encoding/json"
-    "errors"
-    "fmt"
-    "io"
-    "net"
-    "net/http"
-    "net/url"
-    "sort"
-    "strings"
-    "sync"
-    "time"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 
-    pubsub "github.com/libp2p/go-libp2p-pubsub"
-    "github.com/libp2p/go-libp2p/core/host"
-    "github.com/libp2p/go-libp2p/core/network"
-    "github.com/libp2p/go-libp2p/core/protocol"
-    "github.com/rs/zerolog/log"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/rs/zerolog/log"
 )
 
 type ClientConfig struct {
@@ -60,12 +60,6 @@ type RelayClient struct {
 // It registers a stream handler and starts an advertiser loop.
 // Call Close() to stop.
 func NewClient(ctx context.Context, h host.Host, cfg ClientConfig) (*RelayClient, error) {
-	if cfg.Protocol == "" {
-		cfg.Protocol = "/relaydns/ssh/1.0"
-	}
-	if cfg.Topic == "" {
-		cfg.Topic = "relaydns.backends"
-	}
 	if cfg.AdvertiseEvery <= 0 {
 		cfg.AdvertiseEvery = 5 * time.Second
 	}
@@ -82,38 +76,38 @@ func NewClient(ctx context.Context, h host.Host, cfg ClientConfig) (*RelayClient
 	if len(cfg.Bootstraps) > 0 {
 		boot = append(boot, cfg.Bootstraps...)
 	}
-    if cfg.ServerURL != "" {
-        if addrs, err := fetchMultiaddrsFromHealth(cfg.ServerURL, cfg.HTTPTimeout); err != nil {
-            log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", cfg.ServerURL)
-        } else {
-            sortMultiaddrs(addrs, cfg.PreferQUIC, cfg.PreferLocal)
-            boot = append(boot, addrs...)
-        }
-    }
-    boot = uniq(boot)
-    if len(boot) > 0 {
-        ConnectBootstraps(ctx, h, boot)
-    } else {
-        log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
-    }
+	if cfg.ServerURL != "" {
+		if addrs, err := fetchMultiaddrsFromHealth(cfg.ServerURL, cfg.HTTPTimeout); err != nil {
+			log.Warn().Err(err).Msgf("relaydns: fetch /health from %s failed", cfg.ServerURL)
+		} else {
+			sortMultiaddrs(addrs, cfg.PreferQUIC, cfg.PreferLocal)
+			boot = append(boot, addrs...)
+		}
+	}
+	boot = uniq(boot)
+	if len(boot) > 0 {
+		ConnectBootstraps(ctx, h, boot)
+	} else {
+		log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
+	}
 
 	// 1) stream handler
 	switch {
 	case cfg.Handler != nil:
 		h.SetStreamHandler(b.protoID, cfg.Handler)
 	case cfg.TargetTCP != "":
-        h.SetStreamHandler(b.protoID, func(s network.Stream) {
-            defer s.Close()
-            c, err := net.Dial("tcp", cfg.TargetTCP)
-            if err != nil {
-                log.Error().Err(err).Msgf("relaydns: dial %s", cfg.TargetTCP)
-                return
-            }
-            defer c.Close()
-            // raw byte pipe
-            go io.Copy(c, s)
-            io.Copy(s, c)
-        })
+		h.SetStreamHandler(b.protoID, func(s network.Stream) {
+			defer s.Close()
+			c, err := net.Dial("tcp", cfg.TargetTCP)
+			if err != nil {
+				log.Error().Err(err).Msgf("relaydns: dial %s", cfg.TargetTCP)
+				return
+			}
+			defer c.Close()
+			// raw byte pipe
+			go io.Copy(c, s)
+			io.Copy(s, c)
+		})
 	default:
 		return nil, fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
 	}

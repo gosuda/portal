@@ -31,6 +31,9 @@ var (
 	flagAdvertiseEvery time.Duration
 	flagName           string
 	flagDNS            string
+	flagPreferQUIC     bool
+	flagPreferLocal    bool
+	flagHTTPTimeout    time.Duration
 )
 
 func init() {
@@ -44,6 +47,9 @@ func init() {
 	flags.DurationVar(&flagAdvertiseEvery, "advertise-every", 3*time.Second, "interval for backend adverts")
 	flags.StringVar(&flagName, "name", "demo-http", "backend display name")
 	flags.StringVar(&flagDNS, "dns", "demo-http.example", "backend DNS metadata (optional)")
+	flags.BoolVar(&flagPreferQUIC, "prefer-quic", true, "prefer QUIC multiaddrs when available")
+	flags.BoolVar(&flagPreferLocal, "prefer-local", true, "prefer loopback/local multiaddrs when available")
+	flags.DurationVar(&flagHTTPTimeout, "http-timeout", 3*time.Second, "timeout for server /health fetch")
 }
 
 func main() {
@@ -56,7 +62,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1) 로컬 HTTP 백엔드
+	// 1) HTTP backend
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -90,25 +96,24 @@ func runClient(cmd *cobra.Command, args []string) error {
 	}
 
 	client, err := relaydns.NewClient(ctx, h, relaydns.ClientConfig{
-		Protocol:       "/relaydns/http/1.0",
-		Topic:          "relaydns.backends",
-		AdvertiseEvery: 3 * time.Second,
-		Name:           "demo-http",
-		DNS:            "demo-http.example",
-		TargetTCP:      "127.0.0.1:8081",
+		Protocol:       flagProtocol,
+		Topic:          flagTopic,
+		AdvertiseEvery: flagAdvertiseEvery,
+		Name:           flagName,
+		DNS:            flagDNS,
+		TargetTCP:      addrToTarget(flagBackendHTTP),
 
-		// 편의성 업!
 		ServerURL:   flagServerURL,
 		Bootstraps:  flagBootstraps,
-		PreferQUIC:  true,
-		PreferLocal: true,
+		HTTPTimeout: flagHTTPTimeout,
+		PreferQUIC:  flagPreferQUIC,
+		PreferLocal: flagPreferLocal,
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
 	defer client.Close()
 
-	// 자기 주소/피어ID 로그로 찍어서 디버깅 편하게
 	if addrs := h.Addrs(); len(addrs) > 0 {
 		for _, a := range addrs {
 			log.Info().Msgf("[client] host addr: %s/p2p/%s", a.String(), h.ID().String())
@@ -117,7 +122,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 		log.Info().Msgf("[client] host peer: %s (no listen addrs yet)", h.ID().String())
 	}
 
-	// 종료 대기
+	// wait for termination
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
@@ -127,7 +132,6 @@ func runClient(cmd *cobra.Command, args []string) error {
 }
 
 func addrToTarget(listen string) string {
-	// ":8081" 같은 형식을 TargetTCP에 맞게 127.0.0.1로 보정
 	if len(listen) > 0 && listen[0] == ':' {
 		return "127.0.0.1" + listen
 	}
