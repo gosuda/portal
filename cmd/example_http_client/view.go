@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"html/template"
 	"net"
 	"net/http"
@@ -12,7 +11,7 @@ import (
 
 // serveClientHTTP serves the simple local backend UI and health endpoint.
 // getStatus should return a short string like "Connected" or "Connecting...".
-func serveClientHTTP(ctx context.Context, ln net.Listener, name string, getStatus func() string, cancel context.CancelFunc) {
+func serveClientHTTP(ln net.Listener, name string, getStatus func() string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		status := getStatus()
@@ -40,11 +39,17 @@ func serveClientHTTP(ctx context.Context, ln net.Listener, name string, getStatu
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+
 	log.Info().Msgf("[client] local backend http %s", ln.Addr().String())
-	if err := http.Serve(ln, mux); err != nil {
-		log.Error().Err(err).Msg("[client] http backend error")
-		cancel()
-	}
+
+	// Serve in background
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg(" http backend error")
+		}
+	}()
+	return srv
 }
 
 var clientPage = template.Must(template.New("index").Parse(`<!DOCTYPE html>

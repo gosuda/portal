@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
@@ -60,13 +59,13 @@ func runClient(cmd *cobra.Command, args []string) error {
 	}
 	log.Info().Msgf("[client] local backend http listening on %s", ln.Addr().String())
 
-	// Serve local backend view in a goroutine
-	go serveClientHTTP(ctx, ln, flagName, func() string {
+	// Serve local backend view and keep a server handle for shutdown
+	srv := serveClientHTTP(ln, flagName, func() string {
 		if clientRef == nil {
 			return "Starting..."
 		}
 		return clientRef.ServerStatus()
-	}, cancel)
+	})
 
 	// 2) libp2p host
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
@@ -90,7 +89,11 @@ func runClient(cmd *cobra.Command, args []string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Info().Msg("[client] shutting down")
-	time.Sleep(200 * time.Millisecond)
+	log.Info().Msg("[client] shutting down client...")
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Error().Err(err).Msg("[client] server forced to shutdown")
+	}
+	log.Info().Msg("[client] http server stopped")
+
 	return nil
 }

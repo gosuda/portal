@@ -48,7 +48,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listen chat: %w", err)
 	}
 	hub := newHub()
-	go serveChatHTTP(ctx, ln, flagName, hub, cancel)
+	srv := serveChatHTTP(ln, flagName, hub)
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
@@ -70,6 +70,11 @@ func runChat(cmd *cobra.Command, args []string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Info().Msg("[chat] shutting down")
+	log.Info().Msg("[chat] shutting down client...")
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Error().Err(err).Msg("[chat] server forced to shutdown")
+	}
+	// ensure any active websocket conns are closed to stop goroutines
+	hub.closeAll()
 	return nil
 }

@@ -162,7 +162,15 @@ func (b *RelayClient) Close() error {
 		b.stop()
 	}
 	b.wg.Wait()
-	// leaving topic is optional; libp2p will clean up on host close
+	if b.t != nil {
+		_ = b.t.Close()
+	}
+	if b.h != nil {
+		if b.protoID != "" {
+			b.h.RemoveStreamHandler(b.protoID)
+		}
+		return b.h.Close()
+	}
 	return nil
 }
 

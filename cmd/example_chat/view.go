@@ -18,16 +18,18 @@ type hub struct {
 	mu       sync.RWMutex
 	messages []message
 	conns    map[*websocket.Conn]struct{}
+	names    map[*websocket.Conn]string
 }
 
 type message struct {
-	TS   time.Time `json:"ts"`
-	User string    `json:"user"`
-	Text string    `json:"text"`
+	TS    time.Time `json:"ts"`
+	User  string    `json:"user"`
+	Text  string    `json:"text"`
+	Event string    `json:"event,omitempty"` // "joined" | "left"
 }
 
 func newHub() *hub {
-	return &hub{conns: map[*websocket.Conn]struct{}{}, messages: make([]message, 0, 64)}
+	return &hub{conns: map[*websocket.Conn]struct{}{}, names: map[*websocket.Conn]string{}, messages: make([]message, 0, 64)}
 }
 
 func (h *hub) broadcast(m message) {
@@ -42,6 +44,19 @@ func (h *hub) broadcast(m message) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = wsjson.Write(ctx, c, m)
 		cancel()
+	}
+}
+
+// closeAll force-closes all active websocket connections (used during shutdown).
+func (h *hub) closeAll() {
+	h.mu.Lock()
+	conns := make([]*websocket.Conn, 0, len(h.conns))
+	for c := range h.conns {
+		conns = append(conns, c)
+	}
+	h.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close(websocket.StatusGoingAway, "server shutdown")
 	}
 }
 
@@ -67,9 +82,17 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 	}
 	go func() {
 		defer func() {
+			var leftUser string
 			h.mu.Lock()
+			if name, ok := h.names[conn]; ok && name != "" {
+				leftUser = name
+			}
+			delete(h.names, conn)
 			delete(h.conns, conn)
 			h.mu.Unlock()
+			if leftUser != "" {
+				h.broadcast(message{TS: time.Now().UTC(), User: leftUser, Event: "left"})
+			}
 			conn.Close(websocket.StatusNormalClosure, "")
 			cancelConn()
 		}()
@@ -84,6 +107,17 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 			if req.User == "" {
 				req.User = "anon"
 			}
+			// first frame per connection: remember name and announce join
+			var announce bool
+			h.mu.Lock()
+			if _, ok := h.names[conn]; !ok {
+				h.names[conn] = req.User
+				announce = true
+			}
+			h.mu.Unlock()
+			if announce {
+				h.broadcast(message{TS: time.Now().UTC(), User: req.User, Event: "joined"})
+			}
 			if req.Text == "" {
 				continue
 			}
@@ -97,16 +131,22 @@ func serveIndex(w http.ResponseWriter, r *http.Request, name string) {
 	_ = indexTmpl.Execute(w, struct{ Name string }{Name: name})
 }
 
-// serveChatHTTP hosts the chat UI and websocket endpoint on the provided listener.
-func serveChatHTTP(ctx context.Context, ln net.Listener, name string, h *hub, cancel context.CancelFunc) {
+// serveChatHTTP starts serving the chat UI and websocket endpoint and returns the server.
+// Callers are responsible for shutting it down via Server.Shutdown.
+func serveChatHTTP(ln net.Listener, name string, h *hub) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { serveIndex(w, r, name) })
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { handleWS(w, r, h) })
+
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Info().Msgf("[chat] http listening on %s", ln.Addr().String())
-	if err := http.Serve(ln, mux); err != nil && err != http.ErrServerClosed {
-		log.Error().Err(err).Msg("chat http error")
-		cancel()
-	}
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("chat http error")
+		}
+	}()
+	return srv
 }
 
 var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
@@ -229,8 +269,14 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       const ts = new Date(msg.ts).toLocaleTimeString();
       const nick = (msg.user || 'anon');
       const color = colorFor(nick);
-      div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' +
-        nick + '</span>: ' + escapeHTML(msg.text || '');
+      if (msg.event === 'joined' || msg.event === 'left') {
+        const verb = msg.event === 'joined' ? 'joined' : 'left';
+        div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' + nick + '</span> ' + verb;
+        div.style.opacity = '0.8';
+      } else {
+        div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' +
+          nick + '</span>: ' + escapeHTML(msg.text || '');
+      }
       log.appendChild(div);
       log.scrollTop = log.scrollHeight;
     }
@@ -242,6 +288,9 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     const basePath = location.pathname.endsWith('/') ? location.pathname : (location.pathname + '/');
     const ws = new WebSocket(wsProto + '://' + location.host + basePath + 'ws');
     ws.onmessage = (e) => { try{ append(JSON.parse(e.data)); }catch(_){ } };
+    ws.onopen = () => {
+      try{ ws.send(JSON.stringify({ user: (user.value || 'anon'), text: '' })); }catch(_){ }
+    };
     function send(){
       const payload = { user: (user.value || 'anon'), text: cmd.value.trim() };
       if(!payload.text) return;
