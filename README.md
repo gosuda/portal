@@ -46,8 +46,7 @@ docker compose logs -f relayserver
 ```
 
 Published ports:
-- Admin HTTP: `8080`
-- HTTP ingress (tcp-level): `8082`
+- Unified Admin UI + HTTP proxy: `8080`
 - libp2p TCP/QUIC: `4001/tcp`, `4001/udp`
 
 To add bootstraps, edit `docker-compose.yml` and append repeated `--bootstrap` flags under `relayserver.command`.
@@ -110,8 +109,7 @@ func main() {
 ## Configuration Reference
 
 Server flags (see `docker-compose.yml`):
-- `--admin-http` Admin API listen address (default `:8080`)
-- `--ingress-http` HTTP ingress listen address (default `:8082`)
+- `--http` Unified admin UI + HTTP proxy listen address (default `:8080`)
 - `--bootstrap` Repeatable multiaddr with `/p2p/`
 
 Example client flags (see `make client-run`):

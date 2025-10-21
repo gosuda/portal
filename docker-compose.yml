@@ -7,16 +7,13 @@ services:
       dockerfile: Dockerfile
     image: relaydns/server:local
     command:
-      - "--admin-http"
+      - "--http"
       - ":8080"
-      - "--ingress-http"
-      - ":8082"
       # To add bootstraps, add more lines like below (repeatable):
       # - "--bootstrap"
       # - "/dnsaddr/bootstrap.example/p2p/12D3Koo..."
     ports:
-      - "8080:8080"     # Admin HTTP
-      - "8082:8082"     # HTTP ingress (tcp-level)
+      - "8080:8080"     # Admin UI + HTTP proxy
       - "4001:4001/tcp" # libp2p tcp
       - "4001:4001/udp" # libp2p quic/udp
     restart: unless-stopped

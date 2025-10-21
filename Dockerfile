@@ -17,6 +17,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/relayserver /usr/bin/relayserver
 
-EXPOSE 8080 8082 4001/tcp 4001/udp
+EXPOSE 8080 4001/tcp 4001/udp
 
 ENTRYPOINT ["/usr/bin/relayserver"]

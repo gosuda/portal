@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,16 +24,18 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagServerURL   string
-	flagBootstraps  []string
-	flagBackendHTTP string
+	flagServerURL  string
+	flagBootstraps []string
+	flagAddr       string
+	flagClientName string
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
 	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
-	flags.StringVar(&flagBackendHTTP, "backend-http", ":8081", "local backend HTTP listen address")
+	flags.StringVar(&flagAddr, "addr", ":8081", "local backend HTTP listen address")
+	flags.StringVar(&flagClientName, "name", "", "backend display name shown on server UI")
 }
 
 func main() {
@@ -44,7 +48,21 @@ func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	if flagClientName == "" {
+		hn, err := os.Hostname()
+		if err != nil {
+			hn = "unknown-" + rand.Text()
+		}
+		flagClientName = hn
+	}
+
 	// 1) HTTP backend
+	ln, err := net.Listen("tcp", flagAddr)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to listen")
+	}
+	log.Info().Msgf("[client] local backend http listening on %s", ln.Addr().String())
+
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +73,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 			}{
 				Now:  time.Now().Format(time.RFC1123),
 				Host: r.Host,
-				Addr: flagBackendHTTP,
+				Addr: flagAddr,
 			}
 			_ = pageTmpl.Execute(w, data)
 		})
@@ -64,8 +82,8 @@ func runClient(cmd *cobra.Command, args []string) error {
 			_, _ = w.Write([]byte("ok"))
 		})
 
-		log.Info().Msgf("[client] local backend http %s", flagBackendHTTP)
-		if err := http.ListenAndServe(flagBackendHTTP, mux); err != nil {
+		log.Info().Msgf("[client] local backend http %s", flagAddr)
+		if err := http.Serve(ln, mux); err != nil {
 			log.Error().Err(err).Msg("[client] http backend error")
 			cancel()
 		}
@@ -76,7 +94,8 @@ func runClient(cmd *cobra.Command, args []string) error {
 		Protocol:       "/relaydns/http/1.0",
 		Topic:          "relaydns.backends",
 		AdvertiseEvery: 3 * time.Second,
-		TargetTCP:      addrToTarget(flagBackendHTTP),
+		Name:           flagClientName,
+		TargetTCP:      addrToTarget(flagAddr),
 
 		ServerURL:   flagServerURL,
 		Bootstraps:  flagBootstraps,
