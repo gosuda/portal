@@ -1,13 +1,13 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"html/template"
-	"net/http"
-	"strings"
-	"time"
+    "context"
+    "encoding/json"
+    "fmt"
+    "html/template"
+    "net/http"
+    "strings"
+    "time"
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -27,22 +27,26 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 			http.NotFound(w, r)
 			return
 		}
-		rows := make([]row, 0)
-		for _, v := range d.Hosts() {
-			ttl := ""
-			if v.Info.TTL > 0 {
-				ttl = fmt.Sprintf("%ds", v.Info.TTL)
-			}
-			rows = append(rows, row{
-				Peer:      v.Info.Peer,
-				Name:      v.Info.Name,
-				DNS:       v.Info.DNS,
-				LastSeen:  time.Since(v.LastSeen).Round(time.Second).String() + " ago",
-				Link:      "/peer/" + v.Info.Peer + "/",
-				TTL:       ttl,
-				Connected: v.Connected,
-			})
-		}
+        rows := make([]row, 0)
+        for _, v := range d.Hosts() {
+            ttl := ""
+            if v.Info.TTL > 0 {
+                ttl = fmt.Sprintf("%ds", v.Info.TTL)
+            }
+            kind := "TCP"
+            if strings.Contains(v.Info.Proto, "/http/") { kind = "HTTP" }
+            if strings.Contains(v.Info.Proto, "/ssh/") { kind = "SSH" }
+            rows = append(rows, row{
+                Peer:      v.Info.Peer,
+                Name:      v.Info.Name,
+                DNS:       v.Info.DNS,
+                LastSeen:  time.Since(v.LastSeen).Round(time.Second).String() + " ago",
+                Link:      "/peer/" + v.Info.Peer + "/",
+                TTL:       ttl,
+                Connected: v.Connected,
+                Kind:      kind,
+            })
+        }
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Int("clients", len(rows)).Msg("render admin index")
 		_ = adminIndexTmpl.Execute(w, page{
@@ -93,13 +97,14 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 
 // view model types used by template rendering
 type row struct {
-	Peer      string
-	Name      string
-	DNS       string
-	LastSeen  string
-	Link      string
-	TTL       string
-	Connected bool
+    Peer      string
+    Name      string
+    DNS       string
+    LastSeen  string
+    Link      string
+    TTL       string
+    Connected bool
+    Kind      string
 }
 
 type page struct {
@@ -124,40 +129,37 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
   <title>RelayDNS — Admin</title>
   <style>
     * { box-sizing: border-box }
-    body {
-      margin: 0;
-      background: #f6f7fb;
-      color: #111827;
-      font-family: sans-serif;
-      font-size: 16px;
-      line-height: 1.5;
+    :root {
+      --bg:#fafbff; --panel:#ffffff; --ink:#0f172a; --muted:#6b7280; --line:#e9eef5;
+      --primary:#2563eb; --ok:#059669; --bad:#b91c1c; --ok-bg:#ecfdf5; --bad-bg:#fee2e2;
     }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 28px 18px }
-    header { display:flex; align-items:center; justify-content:space-between; padding: 14px 18px; background:#ffffff; border:1px solid #e5e7eb; border-radius: 10px }
-    .brand { font-weight: 700; font-size: 20px }
-    .status { color:#059669; font-weight:600 }
-    main { margin-top: 18px; display:block }
-    .box { background:#ffffff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; margin-bottom:12px }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; color:#374151; word-break: break-all }
-    .title { font-weight:700; margin: 0 0 8px 0; font-size: 18px; color:#374151 }
-    .muted { color:#6b7280; font-size: 14px }
-    .btn { display:inline-block; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px; padding:10px 14px; font-weight:700; margin-top: 6px }
-    .stat { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-weight:700; font-size:14px }
-    .stat.connected { background:#ecfdf5; color:#065f46 }
-    .stat.disconnected { background:#fee2e2; color:#b91c1c }
-    .stat .dot { width:8px; height:8px; border-radius:999px; background:#10b981; display:inline-block }
-    .stat.disconnected .dot { background:#ef4444 }
+    body { margin:0; background:var(--bg); color:var(--ink); font-family:sans-serif; font-size:16px; line-height:1.6 }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px }
+    header { display:flex; align-items:center; justify-content:space-between; padding: 20px 24px; background:var(--panel); border:1px solid var(--line); border-radius: 14px }
+    .brand { font-weight:800; font-size:22px; letter-spacing:.2px }
+    .status { color:var(--ok); font-weight:700 }
+    main { margin-top: 22px }
+    .section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color:#374151; word-break: break-all }
+    .title { font-weight:800; margin:0 0 10px 0; font-size:18px }
+    .muted { color:var(--muted); font-size:14px }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-weight:800; font-size:13px }
+    .pill.ok { background:var(--ok-bg); color:var(--ok) }
+    .pill.bad { background:var(--bad-bg); color:var(--bad) }
+    .pill .dot { width:8px; height:8px; border-radius:999px; background:var(--ok); display:inline-block }
+    .pill.bad .dot { background:var(--bad) }
     .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
+    .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
   </style>
   </head>
 <body>
   <div class="wrap">
     <header>
-      <div class="brand">RelayDNS Admin</div>
-      <div class="status">Active</div>
+      <div class="brand">RelayDNS</div>
+      <div class="status">Admin</div>
     </header>
     <main>
-      <section class="box">
+      <section class="section">
         <div class="title">Server</div>
         <div class="mono">Peer ID: {{.NodeID}}</div>
         {{if .Addrs}}
@@ -167,14 +169,17 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
         <div class="muted" style="margin-top:6px">Known clients: {{len .Rows}}</div>
       </section>
       {{range .Rows}}
-      <section class="box">
+      <section class="section">
         <div class="head">
           <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
-          {{if .Connected}}
-            <span class="stat connected"><span class="dot"></span>Connected</span>
-          {{else}}
-            <span class="stat disconnected"><span class="dot"></span>Disconnected</span>
-          {{end}}
+          <div>
+            <span class="muted" style="margin-right:8px">{{.Kind}}</span>
+            {{if .Connected}}
+              <span class="pill ok"><span class="dot"></span>Connected</span>
+            {{else}}
+              <span class="pill bad"><span class="dot"></span>Disconnected</span>
+            {{end}}
+          </div>
         </div>
         {{if .DNS}}<div class="muted">DNS: <span class="mono">{{.DNS}}</span></div>{{end}}
         <div class="muted">Peer</div>
@@ -183,7 +188,7 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
         <a class="btn" href="{{.Link}}">Open</a>
       </section>
       {{else}}
-      <section class="box">
+      <section class="section">
         <div class="title">No clients discovered</div>
         <div class="muted">Start a client and ensure bootstraps are configured.</div>
       </section>

@@ -183,6 +183,7 @@ func (b *RelayClient) Start(ctx context.Context) error {
 					Load:  0.0,
 					TS:    time.Now().UTC(),
 					TTL:   int(b.cfg.AdvertiseTTL.Seconds()),
+					Proto: string(b.protoID),
 				}
 				payload, _ := json.Marshal(ad)
 				_ = b.t.Publish(advCtx, payload)

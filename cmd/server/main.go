@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +25,7 @@ var (
 	httpAddr string // unified admin + HTTP proxy (e.g. :8080)
 	protocol string
 	topic    string
+    tcpAddr  string // optional raw TCP ingress (e.g. :2222 for SSH)
 )
 
 func init() {
@@ -33,6 +35,7 @@ func init() {
 	flags.StringVar(&httpAddr, "http", ":8080", "Unified admin UI and HTTP proxy listen address")
 	flags.StringVar(&protocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match clients)")
 	flags.StringVar(&topic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
+    flags.StringVar(&tcpAddr, "tcp", "", "Optional raw TCP ingress (e.g. :2222 for SSH). Empty to disable")
 }
 
 func main() {
@@ -60,6 +63,11 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Admin UI + per-peer HTTP proxy served here
 	go serveHTTP(ctx, httpAddr, d, h, cancel)
 
+	// Optional raw TCP ingress (e.g., SSH)
+	if tcpAddr != "" {
+		go serveTCPIngress(ctx, tcpAddr, d)
+	}
+
 	// graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -68,3 +76,42 @@ func runServer(cmd *cobra.Command, args []string) error {
 	time.Sleep(300 * time.Millisecond)
 	return nil
 }
+
+// serveTCPIngress listens on addr for raw TCP (e.g., SSH) and proxies
+// incoming connections to a chosen peer over libp2p stream using Director.
+func serveTCPIngress(ctx context.Context, addr string, d *relaydns.Director) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Error().Err(err).Msgf("tcp ingress listen failed: %s", addr)
+		return
+	}
+	log.Info().Msgf("[server] tcp ingress: %s", addr)
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			continue
+		}
+            go func(c net.Conn) {
+                hosts := d.Hosts()
+                if len(hosts) == 0 {
+                    log.Warn().Msg("tcp ingress: no backend peers available")
+                    _ = c.Close()
+                    return
+                }
+                // pick most recent (Hosts() sorted by last seen)
+                peerID := hosts[0].Info.Peer
+                if err := d.ProxyTCP(c, peerID); err != nil {
+                    log.Warn().Err(err).Msgf("tcp ingress proxy failed to %s", peerID)
+                }
+            }(conn)
+        }
+    }

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -215,4 +217,28 @@ func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pat
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// ProxyTCP opens a libp2p stream to peerID using the Director protocol and
+// pipes raw bytes between the accepted TCP connection and the libp2p stream.
+func (d *Director) ProxyTCP(c net.Conn, peerID string) error {
+	defer c.Close()
+	d.storeMu.Lock()
+	entry, ok := d.store[peerID]
+	d.storeMu.Unlock()
+	if !ok || entry.AddrInfo == nil {
+		return fmt.Errorf("peer not found")
+	}
+	if err := d.h.Connect(d.ctx, *entry.AddrInfo); err != nil {
+		return err
+	}
+	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocolID(d.protocol))
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	// bidirectional copy
+	go io.Copy(s, c)
+	_, _ = io.Copy(c, s)
+	return nil
 }
