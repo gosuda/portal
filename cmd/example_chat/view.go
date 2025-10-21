@@ -19,6 +19,7 @@ type hub struct {
 	messages []message
 	conns    map[*websocket.Conn]struct{}
 	names    map[*websocket.Conn]string
+	wg       sync.WaitGroup
 }
 
 type message struct {
@@ -60,6 +61,11 @@ func (h *hub) closeAll() {
 	}
 }
 
+// wait blocks until all websocket handler goroutines have finished.
+func (h *hub) wait() {
+	h.wg.Wait()
+}
+
 func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Allow any origin for demo simplicity. Consider tightening in production.
@@ -80,6 +86,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 	for _, m := range backlog {
 		_ = wsjson.Write(connCtx, conn, m)
 	}
+	h.wg.Add(1)
 	go func() {
 		defer func() {
 			var leftUser string
@@ -95,6 +102,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 			}
 			conn.Close(websocket.StatusNormalClosure, "")
 			cancelConn()
+			h.wg.Done()
 		}()
 		for {
 			var req struct {

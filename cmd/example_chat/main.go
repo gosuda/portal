@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
@@ -40,7 +41,6 @@ func main() {
 
 func runChat(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// 1) start local chat HTTP backend
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
@@ -65,16 +65,32 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
-	defer client.Close()
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Info().Msg("[chat] shutting down client...")
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Error().Err(err).Msg("[chat] server forced to shutdown")
+	log.Info().Msg("[chat] shutting down...")
+	
+	// Shutdown sequence:
+	// 1. Cancel context to stop client advertising/refresh loops
+	cancel()
+	
+	// 2. Close client (waits for goroutines, closes libp2p host)
+	if err := client.Close(); err != nil {
+		log.Warn().Err(err).Msg("[chat] client close error")
 	}
-	// ensure any active websocket conns are closed to stop goroutines
+	
+	// 3. Shutdown HTTP server with a fresh context (with timeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("[chat] http server shutdown error")
+	}
+	
+	// 4. Close all websocket connections and wait for handlers to finish
 	hub.closeAll()
+	hub.wait()
+	
+	log.Info().Msg("[chat] shutdown complete")
 	return nil
 }
