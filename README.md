@@ -31,48 +31,26 @@ without depending on centralized reverse-proxy services.
 
 ### 1️⃣ Run the Server (Docker Compose)
 
-The server accepts incoming TCP connections and forwards them over libp2p to available clients.
-
-Option A — using Makefile:
-```bash
-make server-up           # build + start
-make server-down         # stop
-```
-
-Option B — raw docker compose:
 ```bash
 docker compose up --build -d
-docker compose logs -f relayserver
 ```
 
 Published ports:
-- Unified Admin UI + HTTP proxy: `8080`
+- Admin/UI + HTTP proxy: `8080`
 - libp2p TCP/QUIC: `4001/tcp`, `4001/udp`
 
-To add bootstraps, edit `docker-compose.yml` and append repeated `--bootstrap` flags under `relayserver.command`.
+### 2️⃣ Run the Example Client (Makefile)
 
-### 2️⃣ Run the Example Client (Local Go)
+The example client runs a tiny local HTTP backend and advertises it over libp2p.
 
-The example client runs a local HTTP backend and advertises it via libp2p.
-
-Option A — using Makefile (recommended):
 ```bash
-make client-run \
-  BACKEND_HTTP=:8081 \
-  SERVER_URL=http://localhost:8080 \
-  BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
+make client-run
+# Optional (override on demand):
+# make client-run BACKEND_HTTP=:8081 SERVER_URL=http://localhost:8080 \
+#   BOOTSTRAPS="/dnsaddr/your.bootstrap/p2p/12D3Koo..."
 ```
 
-Option B — go run directly:
-```bash
-go run ./cmd/example_client \
-  --backend-http :8081 \
-  --server-url http://localhost:8080 \
-  --bootstrap /dnsaddr/your.bootstrap/p2p/12D3Koo... \
-  
-```
-
-The client exposes a tiny local HTTP server at `--backend-http` and tunnels traffic from the server to this address via libp2p streams.
+The client exposes a tiny local HTTP server and tunnels traffic to it via libp2p streams.
 
 ### 3️⃣ Embed the Client SDK in Your App
 
@@ -116,18 +94,3 @@ Example client flags (see `make client-run`):
 - `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
 - `--bootstrap` Repeatable multiaddr with `/p2p/`
 - `--backend-http` Local backend HTTP listen address (default `:8081`)
-
-## Logging
-
-This project uses `zerolog` for structured logging. Binaries initialize a human-friendly console logger by default.
-
-## Development
-
-Useful commands:
-```bash
-make server-up      # build and start the server via docker compose
-make server-down    # stop the compose stack
-
-make client-run     # run the example client locally
-make client-build   # build the example client to ./bin/relaydns-client
-```
