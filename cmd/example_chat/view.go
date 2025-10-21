@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"html/template"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/rs/zerolog/log"
 )
 
 // simple in-memory chat hub
@@ -93,6 +95,18 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 func serveIndex(w http.ResponseWriter, r *http.Request, name string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = indexTmpl.Execute(w, struct{ Name string }{Name: name})
+}
+
+// serveChatHTTP hosts the chat UI and websocket endpoint on the provided listener.
+func serveChatHTTP(ctx context.Context, ln net.Listener, name string, h *hub, cancel context.CancelFunc) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { serveIndex(w, r, name) })
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { handleWS(w, r, h) })
+	log.Info().Msgf("[chat] http listening on %s", ln.Addr().String())
+	if err := http.Serve(ln, mux); err != nil && err != http.ErrServerClosed {
+		log.Error().Err(err).Msg("chat http error")
+		cancel()
+	}
 }
 
 var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
