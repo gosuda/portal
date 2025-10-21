@@ -13,11 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 )
 
-type StringSlice []string
-
-func (s *StringSlice) String() string     { return fmt.Sprint([]string(*s)) }
-func (s *StringSlice) Set(v string) error { *s = append(*s, v); return nil }
-
 func AddrToTarget(listen string) string {
 	if len(listen) > 0 && listen[0] == ':' {
 		return "127.0.0.1" + listen

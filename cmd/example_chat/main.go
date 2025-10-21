@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,30 +12,37 @@ import (
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 )
+
+var rootCmd = &cobra.Command{
+	Use:   "relaydns-chat",
+	Short: "RelayDNS demo chat (local HTTP backend + libp2p advertiser)",
+	RunE:  runChat,
+}
 
 var (
 	flagServerURL  string
-	flagBootstraps relaydns.StringSlice
+	flagBootstraps []string
 	flagAddr       string
 	flagName       string
 )
 
 func init() {
-	flag.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver base URL to fetch multiaddrs from /health")
-	flag.Var(&flagBootstraps, "bootstrap", "multiaddr with /p2p/ (repeat). supports /dnsaddr/")
-	flag.StringVar(&flagAddr, "addr", ":8091", "local chat HTTP listen address")
-	flag.StringVar(&flagName, "name", "demo-chat", "backend display name")
+	flags := rootCmd.PersistentFlags()
+	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver base URL to auto-fetch multiaddrs from /health")
+	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
+	flags.StringVar(&flagAddr, "addr", ":8091", "local chat HTTP listen address")
+	flags.StringVar(&flagName, "name", "demo-chat", "backend display name")
 }
 
 func main() {
-	flag.Parse()
-	if err := run(); err != nil {
-		log.Fatal().Err(err).Msg("example_chat")
+	if err := rootCmd.Execute(); err != nil {
+		log.Fatal().Err(err).Msg("execute chat command")
 	}
 }
 
-func run() error {
+func runChat(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -83,7 +89,7 @@ func run() error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	cancel()
+	log.Info().Msg("[chat] shutting down")
 	shutCtx, cancelFn := context.WithTimeout(context.Background(), 2*time.Second)
 	_ = srv.Shutdown(shutCtx)
 	cancelFn()
