@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: relaydns/server:local
+    image: dreamcacao/relaydns:latest
     command:
       - "--http"
       - ":8080"
