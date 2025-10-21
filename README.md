@@ -15,15 +15,14 @@ without depending on centralized reverse-proxy services.
 ## Architecture Overview
 
 ```
-┌──────────────┐      pubsub (GossipSub)      ┌──────────────┐
-│  relaydns    │ <--------------------------> │   client(s)  │
-│  server      │                              │ (imported in │
-│ (director)   │                              │  your app)   │
-└──────────────┘                              └──────────────┘
-       │                                              │
-       │   TCP stream (e.g. SSH, HTTP, custom)        │
-       ▼                                              ▼
-   Your users                                Your local service
+┌────────────┐   pubsub (GossipSub)    ┌─────────────┐
+│  relay dns │ <---------------------> │  client(s)  │
+│  server    │                         │(in your app)│
+└────────────┘                         └─────────────┘
+      │                                      │
+      │ TCP stream (e.g. SSH, HTTP, custom)  │
+      ▼                                      ▼
+   Your users                        Your local service
 ```
 
 ## Getting Started

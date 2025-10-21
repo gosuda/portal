@@ -204,6 +204,7 @@ func (b *RelayClient) Start(ctx context.Context) error {
 					sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 					addrs = uniq(addrs)
 					if len(addrs) > 0 {
+						// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
 						ConnectBootstraps(ctx, b.h, addrs)
 					}
 				}

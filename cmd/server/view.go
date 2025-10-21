@@ -15,7 +15,7 @@ import (
 )
 
 // serveHTTP builds the HTTP mux.
-func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Host, cancel context.CancelFunc) {
+func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host.Host, cancel context.CancelFunc) {
 	if addr == "" {
 		return
 	}

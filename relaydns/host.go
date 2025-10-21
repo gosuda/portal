@@ -1,14 +1,15 @@
 package relaydns
 
 import (
-	"context"
-	"fmt"
+    "context"
+    "fmt"
 
-	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
-	"github.com/rs/zerolog/log"
+    "github.com/libp2p/go-libp2p"
+    "github.com/libp2p/go-libp2p/core/host"
+    "github.com/libp2p/go-libp2p/core/network"
+    "github.com/libp2p/go-libp2p/core/peer"
+    ma "github.com/multiformats/go-multiaddr"
+    "github.com/rs/zerolog/log"
 )
 
 func MakeHost(ctx context.Context, port int, enableRelay bool) (host.Host, error) {
@@ -39,21 +40,32 @@ func MakeHost(ctx context.Context, port int, enableRelay bool) (host.Host, error
 }
 
 func ConnectBootstraps(ctx context.Context, h host.Host, addrs []string) {
-	for _, s := range addrs {
-		m, err := ma.NewMultiaddr(s)
-		if err != nil {
-			log.Warn().Err(err).Msgf("bootstrap bad multiaddr %q", s)
-			continue
-		}
-		ai, err := peer.AddrInfoFromP2pAddr(m)
-		if err != nil {
-			log.Warn().Err(err).Msgf("bootstrap missing /p2p/ in %q", s)
-			continue
-		}
-		if err := h.Connect(ctx, *ai); err != nil {
-			log.Warn().Err(err).Msgf("bootstrap connect %s", ai.ID)
-		} else {
-			log.Info().Msgf("connected bootstrap %s", ai.ID)
-		}
-	}
+    // Connect once per unique peer ID; skip already-connected peers to avoid noisy logs.
+    seen := make(map[string]struct{}, len(addrs))
+    for _, s := range addrs {
+        m, err := ma.NewMultiaddr(s)
+        if err != nil {
+            log.Warn().Err(err).Msgf("bootstrap bad multiaddr %q", s)
+            continue
+        }
+        ai, err := peer.AddrInfoFromP2pAddr(m)
+        if err != nil {
+            log.Warn().Err(err).Msgf("bootstrap missing /p2p/ in %q", s)
+            continue
+        }
+        pid := ai.ID.String()
+        if _, ok := seen[pid]; ok {
+            continue
+        }
+        seen[pid] = struct{}{}
+
+        if h.Network().Connectedness(ai.ID) == network.Connected {
+            // Already connected: skip loudly logging.
+            continue
+        }
+        if err := h.Connect(ctx, *ai); err != nil {
+            // Only warn on errors
+            log.Warn().Err(err).Msgf("bootstrap connect %s", ai.ID)
+        }
+    }
 }

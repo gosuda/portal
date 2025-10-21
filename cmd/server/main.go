@@ -55,7 +55,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 	relaydns.ConnectBootstraps(ctx, h, flagBootstraps)
 
-	d, err := relaydns.NewDirector(ctx, h, protocol, topic)
+	d, err := relaydns.NewRelayServer(ctx, h, protocol, topic)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 // serveTCPIngress listens on addr for raw TCP (e.g., SSH) and proxies
 // incoming connections to a chosen peer over libp2p stream using Director.
-func serveTCPIngress(ctx context.Context, addr string, d *relaydns.Director) {
+func serveTCPIngress(ctx context.Context, addr string, d *relaydns.RelayServer) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Error().Err(err).Msgf("tcp ingress listen failed: %s", addr)

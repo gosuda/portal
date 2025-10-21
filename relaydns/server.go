@@ -22,7 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type Director struct {
+type RelayServer struct {
 	ctx       context.Context
 	h         host.Host
 	protocol  string
@@ -35,7 +35,7 @@ type Director struct {
 	deadTTL time.Duration
 }
 
-func NewDirector(ctx context.Context, h host.Host, protocol, topic string) (*Director, error) {
+func NewRelayServer(ctx context.Context, h host.Host, protocol, topic string) (*RelayServer, error) {
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ func NewDirector(ctx context.Context, h host.Host, protocol, topic string) (*Dir
 	if err != nil {
 		return nil, err
 	}
-	d := &Director{
+	d := &RelayServer{
 		ctx:       ctx,
 		h:         h,
 		protocol:  protocol,
@@ -63,14 +63,14 @@ func NewDirector(ctx context.Context, h host.Host, protocol, topic string) (*Dir
 	return d, nil
 }
 
-func (d *Director) Close() error {
-	d.sub.Cancel()
+func (s *RelayServer) Close() error {
+	s.sub.Cancel()
 	return nil
 }
 
-func (d *Director) collect() {
+func (s *RelayServer) collect() {
 	for {
-		msg, err := d.sub.Next(d.ctx)
+		msg, err := s.sub.Next(s.ctx)
 		if err != nil {
 			return
 		}
@@ -94,48 +94,48 @@ func (d *Director) collect() {
 			continue
 		}
 		now := time.Now()
-		d.storeMu.Lock()
-		_, existed := d.store[ad.Peer]
-		d.store[ad.Peer] = HostEntry{Info: ad, AddrInfo: ai, LastSeen: now, Connected: true}
+		s.storeMu.Lock()
+		_, existed := s.store[ad.Peer]
+		s.store[ad.Peer] = HostEntry{Info: ad, AddrInfo: ai, LastSeen: now, Connected: true}
 		// refresh picker snapshot
-		snap := make([]HostEntry, 0, len(d.store))
-		for _, v := range d.store {
+		snap := make([]HostEntry, 0, len(s.store))
+		for _, v := range s.store {
 			snap = append(snap, v)
 		}
-		d.storeMu.Unlock()
+		s.storeMu.Unlock()
 		if existed {
-			log.Debug().Str("peer", ad.Peer).Str("name", ad.Name).Msg("director: updated client advert")
+			log.Debug().Str("peer", ad.Peer).Str("name", ad.Name).Msg("server: updated client advert")
 		} else {
-			log.Info().Str("peer", ad.Peer).Str("name", ad.Name).Msg("director: added client")
+			log.Info().Str("peer", ad.Peer).Str("name", ad.Name).Msg("server: added client")
 		}
 		_ = snap // snapshot kept local; selection handled explicitly via /peer
 	}
 }
 
-func (d *Director) gc() {
+func (s *RelayServer) gc() {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
 		select {
-		case <-d.ctx.Done():
+		case <-s.ctx.Done():
 			return
 		case <-t.C:
 			now := time.Now()
 			removed := make([]HostEntry, 0)
-			d.storeMu.Lock()
-			for k, v := range d.store {
+			s.storeMu.Lock()
+			for k, v := range s.store {
 				// Prefer client-provided TTL if present; fallback to default d.ttl
-				ttl := d.ttl
+				ttl := s.ttl
 				if v.Info.TTL > 0 {
 					ttl = time.Duration(v.Info.TTL) * time.Second
 				}
 				// mark disconnected after ttl
 				if now.Sub(v.LastSeen) > ttl && v.Connected {
 					v.Connected = false
-					d.store[k] = v
+					s.store[k] = v
 				}
 				// remove only after extended dead TTL
-				deadAfter := d.deadTTL
+				deadAfter := s.deadTTL
 				if v.Info.TTL > 0 {
 					da := time.Duration(v.Info.TTL) * time.Second * 5
 					if da > deadAfter {
@@ -144,14 +144,14 @@ func (d *Director) gc() {
 				}
 				if now.Sub(v.LastSeen) > deadAfter {
 					removed = append(removed, v)
-					delete(d.store, k)
+					delete(s.store, k)
 				}
 			}
-			snap := make([]HostEntry, 0, len(d.store))
-			for _, v := range d.store {
+			snap := make([]HostEntry, 0, len(s.store))
+			for _, v := range s.store {
 				snap = append(snap, v)
 			}
-			d.storeMu.Unlock()
+			s.storeMu.Unlock()
 			for _, r := range removed {
 				log.Info().Str("peer", r.Info.Peer).Str("name", r.Info.Name).Dur("idle", now.Sub(r.LastSeen)).Msg("director: removed stale client")
 			}
@@ -161,11 +161,11 @@ func (d *Director) gc() {
 }
 
 // Hosts returns a snapshot of current known hosts.
-func (d *Director) Hosts() []HostEntry {
-	d.storeMu.Lock()
-	defer d.storeMu.Unlock()
-	list := make([]HostEntry, 0, len(d.store))
-	for _, v := range d.store {
+func (s *RelayServer) Hosts() []HostEntry {
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	list := make([]HostEntry, 0, len(s.store))
+	for _, v := range s.store {
 		list = append(list, v)
 	}
 	// Sort by last-seen (most recent first)
@@ -176,7 +176,7 @@ func (d *Director) Hosts() []HostEntry {
 }
 
 // ProxyHTTP proxies the given HTTP request to the specified peer and writes the response to w.
-func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pathSuffix string) {
+func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pathSuffix string) {
 	d.storeMu.Lock()
 	entry, ok := d.store[peerID]
 	d.storeMu.Unlock()
@@ -268,7 +268,7 @@ func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pat
 
 // ProxyTCP opens a libp2p stream to peerID using the Director protocol and
 // pipes raw bytes between the accepted TCP connection and the libp2p stream.
-func (d *Director) ProxyTCP(c net.Conn, peerID string) error {
+func (d *RelayServer) ProxyTCP(c net.Conn, peerID string) error {
 	defer c.Close()
 	d.storeMu.Lock()
 	entry, ok := d.store[peerID]
