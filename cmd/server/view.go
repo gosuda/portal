@@ -1,13 +1,13 @@
 package main
 
 import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "html/template"
-    "net/http"
-    "strings"
-    "time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -27,26 +27,30 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 			http.NotFound(w, r)
 			return
 		}
-        rows := make([]row, 0)
-        for _, v := range d.Hosts() {
-            ttl := ""
-            if v.Info.TTL > 0 {
-                ttl = fmt.Sprintf("%ds", v.Info.TTL)
-            }
-            kind := "TCP"
-            if strings.Contains(v.Info.Proto, "/http/") { kind = "HTTP" }
-            if strings.Contains(v.Info.Proto, "/ssh/") { kind = "SSH" }
-            rows = append(rows, row{
-                Peer:      v.Info.Peer,
-                Name:      v.Info.Name,
-                DNS:       v.Info.DNS,
-                LastSeen:  time.Since(v.LastSeen).Round(time.Second).String() + " ago",
-                Link:      "/peer/" + v.Info.Peer + "/",
-                TTL:       ttl,
-                Connected: v.Connected,
-                Kind:      kind,
-            })
-        }
+		rows := make([]row, 0)
+		for _, v := range d.Hosts() {
+			ttl := ""
+			if v.Info.TTL > 0 {
+				ttl = fmt.Sprintf("%ds", v.Info.TTL)
+			}
+			kind := "TCP"
+			if strings.Contains(v.Info.Proto, "/http/") {
+				kind = "HTTP"
+			}
+			if strings.Contains(v.Info.Proto, "/ssh/") {
+				kind = "SSH"
+			}
+			rows = append(rows, row{
+				Peer:      v.Info.Peer,
+				Name:      v.Info.Name,
+				DNS:       v.Info.DNS,
+				LastSeen:  time.Since(v.LastSeen).Round(time.Second).String() + " ago",
+				Link:      "/peer/" + v.Info.Peer + "/",
+				TTL:       ttl,
+				Connected: v.Connected,
+				Kind:      kind,
+			})
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Int("clients", len(rows)).Msg("render admin index")
 		_ = adminIndexTmpl.Execute(w, page{
@@ -97,14 +101,14 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 
 // view model types used by template rendering
 type row struct {
-    Peer      string
-    Name      string
-    DNS       string
-    LastSeen  string
-    Link      string
-    TTL       string
-    Connected bool
-    Kind      string
+	Peer      string
+	Name      string
+	DNS       string
+	LastSeen  string
+	Link      string
+	TTL       string
+	Connected bool
+	Kind      string
 }
 
 type page struct {

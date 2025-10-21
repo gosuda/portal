@@ -25,7 +25,7 @@ var (
 	httpAddr string // unified admin + HTTP proxy (e.g. :8080)
 	protocol string
 	topic    string
-    tcpAddr  string // optional raw TCP ingress (e.g. :2222 for SSH)
+	tcpAddr  string // optional raw TCP ingress (e.g. :2222 for SSH)
 )
 
 func init() {
@@ -35,7 +35,7 @@ func init() {
 	flags.StringVar(&httpAddr, "http", ":8080", "Unified admin UI and HTTP proxy listen address")
 	flags.StringVar(&protocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match clients)")
 	flags.StringVar(&topic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
-    flags.StringVar(&tcpAddr, "tcp", "", "Optional raw TCP ingress (e.g. :2222 for SSH). Empty to disable")
+	flags.StringVar(&tcpAddr, "tcp", "", "Optional raw TCP ingress (e.g. :2222 for SSH). Empty to disable")
 }
 
 func main() {
@@ -100,18 +100,18 @@ func serveTCPIngress(ctx context.Context, addr string, d *relaydns.Director) {
 			}
 			continue
 		}
-            go func(c net.Conn) {
-                hosts := d.Hosts()
-                if len(hosts) == 0 {
-                    log.Warn().Msg("tcp ingress: no backend peers available")
-                    _ = c.Close()
-                    return
-                }
-                // pick most recent (Hosts() sorted by last seen)
-                peerID := hosts[0].Info.Peer
-                if err := d.ProxyTCP(c, peerID); err != nil {
-                    log.Warn().Err(err).Msgf("tcp ingress proxy failed to %s", peerID)
-                }
-            }(conn)
-        }
-    }
+		go func(c net.Conn) {
+			hosts := d.Hosts()
+			if len(hosts) == 0 {
+				log.Warn().Msg("tcp ingress: no backend peers available")
+				_ = c.Close()
+				return
+			}
+			// pick most recent (Hosts() sorted by last seen)
+			peerID := hosts[0].Info.Peer
+			if err := d.ProxyTCP(c, peerID); err != nil {
+				log.Warn().Err(err).Msgf("tcp ingress proxy failed to %s", peerID)
+			}
+		}(conn)
+	}
+}
