@@ -28,10 +28,10 @@ CLIENT_FLAGS := \
 	$(CLIENT_BOOTSTRAPS_FLAGS)
 
 client-run:
-	go run ./cmd/example_client $(CLIENT_FLAGS)
+	go run ./cmd/example_http_client $(CLIENT_FLAGS)
 
 client-build:
-	go build -trimpath -o bin/relaydns-client ./cmd/example_client
+	go build -trimpath -o bin/relaydns-client ./cmd/example_http_client
 
 # ---------- Dev helpers ----------
 fmt:
@@ -45,7 +45,7 @@ help:
 	@echo "  make server-up        # build and start relayserver (docker compose)"
 	@echo "  make server-down      # stop and remove containers"
 	@echo "\nClient:"
-	@echo "  make client-run       # run example_client locally with minimal flags"
-	@echo "  make client-build     # build example_client to ./bin/relaydns-client"
+	@echo "  make client-run       # run example_http_client locally with minimal flags"
+	@echo "  make client-build     # build example_http_client to ./bin/relaydns-client"
 	@echo "\nFlags (override with make VAR=value):"
 	@echo "  SERVER_URL BACKEND_HTTP BOOTSTRAPS"

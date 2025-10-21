@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/rs/zerolog/log"
 )
@@ -187,7 +189,7 @@ func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pat
 		http.Error(w, "upstream connect failed", http.StatusBadGateway)
 		return
 	}
-	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocolID(d.protocol))
+	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocol.ID(d.protocol))
 	if err != nil {
 		log.Error().Err(err).Msg("new stream")
 		http.Error(w, "open stream failed", http.StatusBadGateway)
@@ -210,12 +212,50 @@ func (d *Director) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, pat
 		return
 	}
 	defer resp.Body.Close()
+
+	// Handle WebSocket Upgrade: write 101 response and then raw-tunnel bytes
+	if resp.StatusCode == http.StatusSwitchingProtocols && strings.Contains(strings.ToLower(resp.Header.Get("Upgrade")), "websocket") {
+		if hj, ok := w.(http.Hijacker); ok {
+			clientConn, clientBuf, err := hj.Hijack()
+			if err != nil {
+				log.Error().Err(err).Msg("hijack client conn")
+				return
+			}
+			defer clientConn.Close()
+			// Write upstream 101 response (headers)
+			if err := resp.Write(clientBuf); err == nil {
+				_ = clientBuf.Flush()
+			}
+			// Raw byte tunnel between client and upstream stream
+			go io.Copy(s, clientConn)
+			io.Copy(clientConn, s)
+			return
+		}
+	}
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
+	// If upstream is SSE, forward with Flush to avoid buffering
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		if f, ok := w.(http.Flusher); ok {
+			buf := make([]byte, 4096)
+			for {
+				n, err := resp.Body.Read(buf)
+				if n > 0 {
+					if _, werr := w.Write(buf[:n]); werr == nil {
+						f.Flush()
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+			return
+		}
+	}
 	_, _ = io.Copy(w, resp.Body)
 }
 
@@ -232,7 +272,7 @@ func (d *Director) ProxyTCP(c net.Conn, peerID string) error {
 	if err := d.h.Connect(d.ctx, *entry.AddrInfo); err != nil {
 		return err
 	}
-	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocolID(d.protocol))
+	s, err := d.h.NewStream(d.ctx, entry.AddrInfo.ID, protocol.ID(d.protocol))
 	if err != nil {
 		return err
 	}

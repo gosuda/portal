@@ -14,7 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// serveHTTP builds the HTTP mux and starts serving admin UI + per-peer proxy.
+// serveHTTP builds the HTTP mux.
 func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Host, cancel context.CancelFunc) {
 	if addr == "" {
 		return
@@ -33,12 +33,13 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 			if v.Info.TTL > 0 {
 				ttl = fmt.Sprintf("%ds", v.Info.TTL)
 			}
+			// Derive a friendly kind from protocol id. Be lenient to variations.
+			p := strings.ToLower(v.Info.Proto)
 			kind := "TCP"
-			if strings.Contains(v.Info.Proto, "/http/") {
-				kind = "HTTP"
-			}
-			if strings.Contains(v.Info.Proto, "/ssh/") {
+			if strings.Contains(p, "ssh") {
 				kind = "SSH"
+			} else if strings.Contains(p, "http") {
+				kind = "HTTP"
 			}
 			rows = append(rows, row{
 				Peer:      v.Info.Peer,
@@ -55,7 +56,7 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 		log.Debug().Int("clients", len(rows)).Msg("render admin index")
 		_ = adminIndexTmpl.Execute(w, page{
 			NodeID: h.ID().String(),
-			Addrs:  buildAddrs(h),
+			Addrs:  relaydns.BuildAddrs(h),
 			Rows:   rows,
 		})
 	})
@@ -87,12 +88,12 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.Director, h host.Ho
 			Status string   `json:"status"`
 			Addrs  []string `json:"multiaddrs"`
 		}
-		resp := info{Status: "ok", Addrs: buildAddrs(h)}
+		resp := info{Status: "ok", Addrs: relaydns.BuildAddrs(h)}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	log.Info().Msgf("[server] http (admin+proxy): %s", addr)
+	log.Info().Msgf("[server] http: %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Error().Err(err).Msg("[server] http error")
 		cancel()
@@ -115,14 +116,6 @@ type page struct {
 	NodeID string
 	Addrs  []string
 	Rows   []row
-}
-
-func buildAddrs(h host.Host) []string {
-	out := make([]string, 0)
-	for _, a := range h.Addrs() {
-		out = append(out, fmt.Sprintf("%s/p2p/%s", a.String(), h.ID().String()))
-	}
-	return out
 }
 
 var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html>

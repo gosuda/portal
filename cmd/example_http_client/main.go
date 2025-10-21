@@ -76,11 +76,11 @@ func runClient(cmd *cobra.Command, args []string) error {
 
 	// 2) libp2p host
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
-		Protocol:  flagProtocol,
-		Topic:     flagTopic,
-		Advertise: 3 * time.Second,
-		Name:      flagClientName,
-		TargetTCP: addrToTarget(flagAddr),
+		Protocol:       flagProtocol,
+		Topic:          flagTopic,
+		AdvertiseEvery: 3 * time.Second,
+		Name:           flagClientName,
+		TargetTCP:      relaydns.AddrToTarget(flagAddr),
 
 		ServerURL:   flagServerURL,
 		Bootstraps:  flagBootstraps,
@@ -104,11 +104,4 @@ func runClient(cmd *cobra.Command, args []string) error {
 	log.Info().Msg("[client] shutting down")
 	time.Sleep(200 * time.Millisecond)
 	return nil
-}
-
-func addrToTarget(listen string) string {
-	if len(listen) > 0 && listen[0] == ':' {
-		return "127.0.0.1" + listen
-	}
-	return listen
 }
