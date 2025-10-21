@@ -5,6 +5,18 @@
 It lets you expose and discover TCP services (like SSH, API endpoints, etc.) even behind NAT,  
 without depending on centralized reverse-proxy services.
 
+## Why RelayDNS?
+Traditional DNS and hosting rely on centralized servers and public IPs.
+RelayDNS removes that dependency — making connections open, direct, and owned by the users themselves.
+
+This means:
+- No middlemen or fixed infrastructure.
+- Anyone can share or host freely.
+- Discovery remains open, but communication stays truly peer-to-peer.
+
+In a decentralized world, RelayDNS turns DNS from a naming system for servers into a discovery network for people —
+keeping coordination simple, while ownership and control stay entirely in your hands.
+
 ## Features
 
 - **Peer-to-peer routing** over libp2p (supports hole punching, relay, pubsub)
@@ -48,7 +60,7 @@ Clients are NOT required to run the server. They are provided for testing/demo.
   # make client-run BACKEND_PORT=8081 SERVER_URL=http://localhost:8080
   ```
 
-- Chat client (optional): WebSocket chat UI (local) + advertiser (libp2p). Uses coder/websocket.
+- Chat client (optional): WebSocket chat UI (local) + advertiser (libp2p).
   ```bash
   make chat-run
   # Optional overrides:
