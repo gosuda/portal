@@ -77,8 +77,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Shutdown HTTP server with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("[server] http server shutdown error")
+	if httpServer != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("[server] http server shutdown error")
+		}
 	}
 
 	// Close relay server (waits for background goroutines)

@@ -16,6 +16,10 @@ import (
 
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host.Host, cancel context.CancelFunc) *http.Server {
+	if addr == "" {
+		return nil
+	}
+
 	mux := http.NewServeMux()
 
 	// Index page
