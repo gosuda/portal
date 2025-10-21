@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
@@ -41,7 +42,7 @@ func main() {
 
 func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer cancel() // Ensure context is cancelled on all exit paths
 
 	if flagName == "" {
 		hn, err := os.Hostname()
@@ -83,17 +84,28 @@ func runClient(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("start client: %w", err)
 	}
 	clientRef = client
-	defer client.Close()
 
 	// wait for termination
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
-	log.Info().Msg("[client] shutting down client...")
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Error().Err(err).Msg("[client] server forced to shutdown")
-	}
-	log.Info().Msg("[client] http server stopped")
+	log.Info().Msg("[client] shutting down...")
 
+	// Shutdown sequence:
+	// Note: defer cancel() at function start stops client advertising/refresh loops
+
+	// 1. Close client (waits for goroutines, closes libp2p host)
+	if err := client.Close(); err != nil {
+		log.Warn().Err(err).Msg("[client] client close error")
+	}
+
+	// 2. Shutdown HTTP server with a fresh context (with timeout)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("[client] http server shutdown error")
+	}
+
+	log.Info().Msg("[client] shutdown complete")
 	return nil
 }

@@ -207,16 +207,26 @@ func (b *RelayClient) setupStreamHandler() error {
 		b.h.SetStreamHandler(b.protoID, b.cfg.Handler)
 	case b.cfg.TargetTCP != "":
 		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
-			defer s.Close()
+			defer func() {
+				if err := s.Close(); err != nil {
+					log.Debug().Err(err).Msg("relaydns: stream close")
+				}
+			}()
 			c, err := net.Dial("tcp", b.cfg.TargetTCP)
 			if err != nil {
 				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
 				return
 			}
-			defer c.Close()
-			// raw byte pipe
-			go io.Copy(c, s)
-			io.Copy(s, c)
+			defer func() {
+				if err := c.Close(); err != nil {
+					log.Debug().Err(err).Msg("relaydns: conn close")
+				}
+			}()
+			// raw byte pipe (bidirectional)
+			go func() {
+				_, _ = io.Copy(c, s)
+			}()
+			_, _ = io.Copy(s, c)
 		})
 	default:
 		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
