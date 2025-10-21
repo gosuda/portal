@@ -14,11 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// serveHTTP builds the HTTP mux.
-func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host.Host, cancel context.CancelFunc) {
-	if addr == "" {
-		return
-	}
+// serveHTTP builds the HTTP mux and returns the server.
+func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host.Host, cancel context.CancelFunc) *http.Server {
 	mux := http.NewServeMux()
 
 	// Index page
@@ -105,11 +102,20 @@ func serveHTTP(ctx context.Context, addr string, d *relaydns.RelayServer, h host
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	log.Info().Msgf("[server] http: %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Error().Err(err).Msg("[server] http error")
-		cancel()
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
 	}
+
+	go func() {
+		log.Info().Msgf("[server] http: %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("[server] http error")
+			cancel()
+		}
+	}()
+
+	return srv
 }
 
 var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html>

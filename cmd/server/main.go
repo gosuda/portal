@@ -53,7 +53,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Admin UI + per-peer HTTP proxy served here
-	go serveHTTP(ctx, fmt.Sprintf(":%d", flagHttpPort), d, h, cancel)
+	httpServer := serveHTTP(ctx, fmt.Sprintf(":%d", flagHttpPort), d, h, cancel)
 
 	// Optional raw TCP ingress (e.g., SSH)
 	if flagTcpPort > 0 {
@@ -64,8 +64,29 @@ func runServer(cmd *cobra.Command, args []string) error {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+	log.Info().Msg("[server] shutting down...")
+
+	// Cancel context to stop all goroutines
 	cancel()
-	time.Sleep(300 * time.Millisecond)
+
+	// Shutdown HTTP server with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Error().Err(err).Msg("[server] http server shutdown error")
+	}
+
+	// Close relay server (waits for background goroutines)
+	if err := d.Close(); err != nil {
+		log.Warn().Err(err).Msg("[server] relay server close error")
+	}
+
+	// Close libp2p host
+	if err := h.Close(); err != nil {
+		log.Warn().Err(err).Msg("[server] libp2p host close error")
+	}
+
+	log.Info().Msg("[server] shutdown complete")
 	return nil
 }
 
