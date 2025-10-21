@@ -193,7 +193,11 @@ func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, 
 		http.Error(w, "open stream failed", http.StatusBadGateway)
 		return
 	}
-	defer s.Close()
+	defer func() {
+		if err := s.Close(); err != nil {
+			log.Debug().Err(err).Msg("stream close")
+		}
+	}()
 	outReq := r.Clone(d.ctx)
 	outReq.URL = &url.URL{Path: pathSuffix, RawQuery: r.URL.RawQuery}
 	outReq.RequestURI = ""
@@ -209,7 +213,11 @@ func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, 
 		http.Error(w, "bad upstream response", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Debug().Err(err).Msg("response body close")
+		}
+	}()
 
 	// Handle WebSocket Upgrade: write 101 response and then raw-tunnel bytes
 	if resp.StatusCode == http.StatusSwitchingProtocols && strings.Contains(strings.ToLower(resp.Header.Get("Upgrade")), "websocket") {
@@ -219,7 +227,11 @@ func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, 
 				log.Error().Err(err).Msg("hijack client conn")
 				return
 			}
-			defer clientConn.Close()
+			defer func() {
+				if err := clientConn.Close(); err != nil {
+					log.Debug().Err(err).Msg("client conn close")
+				}
+			}()
 			// Write upstream 101 response (headers)
 			if err := resp.Write(clientBuf); err == nil {
 				_ = clientBuf.Flush()
@@ -231,9 +243,11 @@ func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, 
 					_, _ = clientConn.Write(tmp)
 				}
 			}
-			// Raw byte tunnel between client and upstream stream
-			go io.Copy(s, clientConn)
-			io.Copy(clientConn, s)
+			// Raw byte tunnel between client and upstream stream (bidirectional)
+			go func() {
+				_, _ = io.Copy(s, clientConn)
+			}()
+			_, _ = io.Copy(clientConn, s)
 			return
 		}
 	}
@@ -267,7 +281,11 @@ func (d *RelayServer) ProxyHTTP(w http.ResponseWriter, r *http.Request, peerID, 
 // ProxyTCP opens a libp2p stream to peerID using the Director protocol and
 // pipes raw bytes between the accepted TCP connection and the libp2p stream.
 func (d *RelayServer) ProxyTCP(c net.Conn, peerID string) error {
-	defer c.Close()
+	defer func() {
+		if err := c.Close(); err != nil {
+			log.Debug().Err(err).Msg("tcp conn close")
+		}
+	}()
 	d.storeMu.Lock()
 	entry, ok := d.store[peerID]
 	d.storeMu.Unlock()
@@ -281,9 +299,15 @@ func (d *RelayServer) ProxyTCP(c net.Conn, peerID string) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() {
+		if err := s.Close(); err != nil {
+			log.Debug().Err(err).Msg("stream close")
+		}
+	}()
 	// bidirectional copy
-	go io.Copy(s, c)
+	go func() {
+		_, _ = io.Copy(s, c)
+	}()
 	_, _ = io.Copy(c, s)
 	return nil
 }

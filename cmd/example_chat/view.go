@@ -100,7 +100,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 			if leftUser != "" {
 				h.broadcast(message{TS: time.Now().UTC(), User: leftUser, Event: "left"})
 			}
-			conn.Close(websocket.StatusNormalClosure, "")
+			_ = conn.Close(websocket.StatusNormalClosure, "")
 			cancelConn()
 			h.wg.Done()
 		}()

@@ -41,6 +41,7 @@ func main() {
 
 func runChat(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled on all exit paths
 
 	// 1) start local chat HTTP backend
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
@@ -70,27 +71,26 @@ func runChat(cmd *cobra.Command, args []string) error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Info().Msg("[chat] shutting down...")
-	
+
 	// Shutdown sequence:
-	// 1. Cancel context to stop client advertising/refresh loops
-	cancel()
-	
-	// 2. Close client (waits for goroutines, closes libp2p host)
+	// Note: defer cancel() at function start stops client advertising/refresh loops
+
+	// 1. Close client (waits for goroutines, closes libp2p host)
 	if err := client.Close(); err != nil {
 		log.Warn().Err(err).Msg("[chat] client close error")
 	}
-	
-	// 3. Shutdown HTTP server with a fresh context (with timeout)
+
+	// 2. Shutdown HTTP server with a fresh context (with timeout)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("[chat] http server shutdown error")
 	}
-	
-	// 4. Close all websocket connections and wait for handlers to finish
+
+	// 3. Close all websocket connections and wait for handlers to finish
 	hub.closeAll()
 	hub.wait()
-	
+
 	log.Info().Msg("[chat] shutdown complete")
 	return nil
 }

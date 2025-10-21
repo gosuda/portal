@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/rs/zerolog/log"
 )
 
 func AddrToTarget(listen string) string {
@@ -73,7 +74,11 @@ func fetchMultiaddrsFromHosts(base string, timeout time.Duration) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Debug().Err(err).Msg("response body close")
+		}
+	}()
 
 	var payload Hosts
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
