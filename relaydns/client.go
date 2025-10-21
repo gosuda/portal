@@ -76,15 +76,15 @@ func applyDefaults(cfg ClientConfig) ClientConfig {
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = defaultHTTPTimeout
 	}
-    if cfg.RefreshBootstrapsEvery <= 0 {
-        cfg.RefreshBootstrapsEvery = defaultRefreshBootstraps
-    }
-    // Always prefer QUIC and local addresses for better performance and locality.
-    cfg.PreferQUIC = true
-    cfg.PreferLocal = true
-    if cfg.Protocol == "" {
-        cfg.Protocol = DefaultProtocol
-    }
+	if cfg.RefreshBootstrapsEvery <= 0 {
+		cfg.RefreshBootstrapsEvery = defaultRefreshBootstraps
+	}
+	// Always prefer QUIC and local addresses for better performance and locality.
+	cfg.PreferQUIC = true
+	cfg.PreferLocal = true
+	if cfg.Protocol == "" {
+		cfg.Protocol = DefaultProtocol
+	}
 	if cfg.Topic == "" {
 		cfg.Topic = DefaultTopic
 	}
