@@ -194,8 +194,12 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       user.focus();
     });
 
-    // Stable color per nickname
-    const PALETTE = ['#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa','#14b8a6','#eab308','#f472b6','#8b5cf6','#06b6d4'];
+    // Stable color per nickname (expanded palette)
+    const PALETTE = [
+      '#60a5fa','#22c55e','#f59e0b','#ef4444','#a78bfa','#14b8a6','#eab308','#f472b6','#8b5cf6','#06b6d4',
+      '#34d399','#fb7185','#c084fc','#f97316','#84cc16','#10b981','#38bdf8','#f43f5e','#e879f9','#fde047',
+      '#93c5fd','#4ade80','#fca5a5','#a3e635','#67e8f9','#f0abfc','#fbbf24','#86efac'
+    ];
     function hashNick(s){
       let h = 0;
       for (let i = 0; i < s.length; i++) { h = ((h << 5) - h) + s.charCodeAt(i); h |= 0; }

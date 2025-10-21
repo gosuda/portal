@@ -26,6 +26,8 @@ var (
 	flagBootstraps []string
 	flagAddr       string
 	flagName       string
+	flagProtocol   string
+	flagTopic      string
 )
 
 func init() {
@@ -34,6 +36,8 @@ func init() {
 	flags.StringSliceVar(&flagBootstraps, "bootstrap", nil, "multiaddrs with /p2p/ (supports /dnsaddr/ that resolves to /p2p/)")
 	flags.StringVar(&flagAddr, "addr", ":8091", "local chat HTTP listen address")
 	flags.StringVar(&flagName, "name", "demo-chat", "backend display name")
+	flags.StringVar(&flagProtocol, "protocol", "/relaydns/http/1.0", "libp2p protocol id for streams (must match server)")
+	flags.StringVar(&flagTopic, "topic", "relaydns.backends", "pubsub topic for backend adverts")
 }
 
 func main() {
@@ -66,8 +70,8 @@ func runChat(cmd *cobra.Command, args []string) error {
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
-		Protocol:       "/relaydns/http/1.0",
-		Topic:          "relaydns.backends",
+		Protocol:       flagProtocol,
+		Topic:          flagTopic,
 		AdvertiseEvery: 3 * time.Second,
 		Name:           flagName,
 		TargetTCP:      relaydns.AddrToTarget(flagAddr),
