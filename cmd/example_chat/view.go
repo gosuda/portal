@@ -5,6 +5,8 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,34 +17,47 @@ import (
 
 // simple in-memory chat hub
 type hub struct {
-	mu       sync.RWMutex
-	messages []message
-	conns    map[*websocket.Conn]struct{}
-	names    map[*websocket.Conn]string
-	wg       sync.WaitGroup
-	store    *messageStore
+	mu        sync.RWMutex
+	messages  []message
+	conns     map[*websocket.Conn]struct{}
+	connUID   map[*websocket.Conn]string
+	userConns map[string]map[*websocket.Conn]struct{}
+	userName  map[string]string
+	wg        sync.WaitGroup
+	store     *messageStore
 }
 
 type message struct {
 	TS    time.Time `json:"ts"`
 	User  string    `json:"user"`
 	Text  string    `json:"text"`
-	Event string    `json:"event,omitempty"` // "joined" | "left"
+	Event string    `json:"event,omitempty"` // "joined" | "left" | "roster"
+	UID   string    `json:"uid,omitempty"`
+	Users []string  `json:"users,omitempty"`
 }
 
 func newHub() *hub {
-	return &hub{conns: map[*websocket.Conn]struct{}{}, names: map[*websocket.Conn]string{}, messages: make([]message, 0, 64)}
+	return &hub{
+		conns:     map[*websocket.Conn]struct{}{},
+		connUID:   map[*websocket.Conn]string{},
+		userConns: map[string]map[*websocket.Conn]struct{}{},
+		userName:  map[string]string{},
+		messages:  make([]message, 0, 64),
+	}
 }
 
 func (h *hub) broadcast(m message) {
 	h.mu.Lock()
-	h.messages = append(h.messages, m)
+	// Do not persist/retain roster messages in backlog; they are ephemeral UI state
+	if m.Event != "roster" {
+		h.messages = append(h.messages, m)
+	}
 	conns := make([]*websocket.Conn, 0, len(h.conns))
 	for c := range h.conns {
 		conns = append(conns, c)
 	}
 	h.mu.Unlock()
-	if h.store != nil {
+	if h.store != nil && m.Event != "roster" {
 		if err := h.store.Append(m); err != nil {
 			log.Debug().Err(err).Msg("persist message")
 		}
@@ -52,6 +67,26 @@ func (h *hub) broadcast(m message) {
 		_ = wsjson.Write(ctx, c, m)
 		cancel()
 	}
+}
+
+// broadcastRoster sends the current list of connected user names to all clients.
+func (h *hub) broadcastRoster() {
+	// Build roster snapshot
+	h.mu.RLock()
+	users := make([]string, 0, len(h.userName))
+	for uid, name := range h.userName {
+		if set, ok := h.userConns[uid]; !ok || len(set) == 0 {
+			continue
+		}
+		if name == "" {
+			name = "anon"
+		}
+		users = append(users, name)
+	}
+	h.mu.RUnlock()
+	// Sort for stable UI order
+	sort.Strings(users)
+	h.broadcast(message{TS: time.Now().UTC(), Event: "roster", Users: users})
 }
 
 // attachStore connects a persistent store to the hub.
@@ -108,15 +143,31 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 	go func() {
 		defer func() {
 			var leftUser string
+			var uid string
+			var lastConn bool
 			h.mu.Lock()
-			if name, ok := h.names[conn]; ok && name != "" {
-				leftUser = name
+			uid = h.connUID[conn]
+			if uid != "" {
+				if set, ok := h.userConns[uid]; ok {
+					delete(set, conn)
+					if len(set) == 0 {
+						lastConn = true
+						delete(h.userConns, uid)
+					} else {
+						h.userConns[uid] = set
+					}
+				}
+				leftUser = h.userName[uid]
+				if lastConn {
+					delete(h.userName, uid)
+				}
+				delete(h.connUID, conn)
 			}
-			delete(h.names, conn)
 			delete(h.conns, conn)
 			h.mu.Unlock()
-			if leftUser != "" {
+			if leftUser != "" && lastConn {
 				h.broadcast(message{TS: time.Now().UTC(), User: leftUser, Event: "left"})
+				h.broadcastRoster()
 			}
 			_ = conn.Close(websocket.StatusNormalClosure, "")
 			cancelConn()
@@ -126,6 +177,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 			var req struct {
 				User string `json:"user"`
 				Text string `json:"text"`
+				UID  string `json:"uid"`
 			}
 			if err := wsjson.Read(connCtx, conn, &req); err != nil {
 				return
@@ -133,16 +185,40 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 			if req.User == "" {
 				req.User = "anon"
 			}
-			// first frame per connection: remember name and announce join
+			if req.UID == "" {
+				// Fallback to a per-connection unique id if client didn't provide one
+				req.UID = strconv.FormatInt(time.Now().UnixNano(), 10)
+			}
+			// map connection to uid and maintain per-user state
 			var announce bool
+			var renamed bool
+			var prevName string
 			h.mu.Lock()
-			if _, ok := h.names[conn]; !ok {
-				h.names[conn] = req.User
-				announce = true
+			if _, ok := h.connUID[conn]; !ok {
+				h.connUID[conn] = req.UID
+				if _, ok := h.userConns[req.UID]; !ok {
+					h.userConns[req.UID] = map[*websocket.Conn]struct{}{}
+				}
+				if len(h.userConns[req.UID]) == 0 {
+					announce = true
+				}
+				h.userConns[req.UID][conn] = struct{}{}
+			}
+			if cur, ok := h.userName[req.UID]; !ok {
+				h.userName[req.UID] = req.User
+			} else if cur != req.User {
+				prevName = cur
+				h.userName[req.UID] = req.User
+				renamed = true
 			}
 			h.mu.Unlock()
 			if announce {
 				h.broadcast(message{TS: time.Now().UTC(), User: req.User, Event: "joined"})
+				h.broadcastRoster()
+			} else if renamed {
+				// Announce rename as an event line in chat
+				h.broadcast(message{TS: time.Now().UTC(), User: prevName, Text: req.User, Event: "rename"})
+				h.broadcastRoster()
 			}
 			if req.Text == "" {
 				continue
@@ -197,8 +273,9 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     body { margin:0; padding:24px; background:var(--bg); color:var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial }
     .wrap { max-width: 920px; margin: 0 auto }
     h1 { margin:0 0 12px 0; font-weight:700 }
-    .term { border:1px solid var(--border); border-radius:10px; background:var(--panel); overflow:hidden }
+    .term { border:1px solid var(--border); border-radius:10px; background:var(--panel); overflow:hidden; position: relative }
     .termbar { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px }
+    .term-actions { display:flex; align-items:center; gap:8px }
     .dots { display:flex; gap:6px }
     .dot { width:10px; height:10px; border-radius:50%; }
     .dot.red{ background:#ef4444 }
@@ -217,6 +294,14 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     #prompt { color:var(--accent) }
     #cmd { flex:1; background:transparent; border:none; outline:none; color:var(--fg); font-family: inherit; font-size:14px; caret-color: var(--cursor) }
     small{ color:var(--muted); display:block; margin-top:10px }
+
+    /* Scrollbar styling for log and users list */
+    .screen { scrollbar-width: thin; scrollbar-color: #374151 #0d1117; }
+    .screen::-webkit-scrollbar { width: 10px }
+    .screen::-webkit-scrollbar-track { background: #0d1117 }
+    .screen::-webkit-scrollbar-thumb { background: #374151; border-radius: 8px; border: 2px solid #111827 }
+    .screen::-webkit-scrollbar-thumb:hover { background: #4b5563 }
+    .userspill { display:inline-block; border:1px solid var(--border); padding:2px 10px; border-radius:999px; color:var(--fg); font-size:12px; opacity:.9 }
 
     /* Mobile responsiveness */
     @media (max-width: 640px) {
@@ -238,17 +323,17 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     <div class="term">
       <div class="termbar">
         <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
-        <div style="opacity:.9">relaychat@relaydns</div>
-        <div class="nick">
-          <label for="user" style="color:var(--muted)">nick</label>
-          <input id="user" type="text" placeholder="anon" />
-          <button id="roll" title="randomize nickname">🎲</button>
-        </div>
+        <div class="term-actions"><span class="userspill">Users <span id="users-count">0</span></span></div>
       </div>
       <div id="log" class="screen"></div>
       <div class="promptline">
         <span id="prompt"></span>
         <input id="cmd" type="text" autocomplete="off" spellcheck="false" placeholder="type a message and press Enter" />
+        <div class="nick" style="margin-left:auto">
+          <label for="user" style="color:var(--muted)">nick</label>
+          <input id="user" type="text" placeholder="anon" />
+          <button id="roll" title="randomize nickname">🎲</button>
+        </div>
       </div>
     </div>
     <small>Tip: Enter to send • Nickname persists locally</small>
@@ -259,31 +344,54 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     const cmd = document.getElementById('cmd');
     const roll = document.getElementById('roll');
     const promptEl = document.getElementById('prompt');
+    const usersCount = document.getElementById('users-count');
 
     function setPrompt(){
       const nick = (user.value || 'anon').replace(/\s+/g,'').slice(0,24) || 'anon';
       promptEl.textContent = nick + '@chat:~$';
     }
     function randomNick(){
-      // Programming-meme themed nickname
-      const techs = ['gopher','rustacean','nixer','unix','kernel','docker','kube','vim','emacs','tmux','nvim','git','linux','bsd','wasm','grpc','lambda','pointer','monad','segfault','null','byte','packet','devops','cli'];
-      const roles = ['wizard','hacker','guru','daemon','runner','scripter','shell','warrior','artisan','smith'];
-      const a = techs[Math.floor(Math.random()*techs.length)];
-      const b = roles[Math.floor(Math.random()*roles.length)];
-      const id = Math.random().toString(36).slice(2,6);
-      return a + '-' + b + '-' + id;
+      // Short nickname: one word + 4-digit number
+      const words = ['gopher','rust','unix','kernel','docker','kube','vim','emacs','tmux','nvim','git','linux','bsd','wasm','grpc','lambda','pointer','monad','null','byte','packet','devops','cli'];
+      const w = words[Math.floor(Math.random()*words.length)];
+      const num = Math.floor(Math.random()*9000) + 1000; // 4-digit
+      return w + '-' + num;
     }
+    // Stable client UID per browser (per origin)
+    function genUID(){ try{ return (crypto.randomUUID && crypto.randomUUID()) || '' }catch(_){ return '' } }
+    function fallbackUID(){ return Math.random().toString(36).slice(2) + Date.now().toString(36) }
+    let clientUID = null;
+    try { clientUID = localStorage.getItem('relaydns_uid'); } catch(_) {}
+    if(!clientUID || clientUID.length < 8){ clientUID = genUID() || fallbackUID(); try { localStorage.setItem('relaydns_uid', clientUID); } catch(_) {} }
+
     // Restore nickname or initialize randomly
     let savedNick = null;
     try { savedNick = localStorage.getItem('relaydns_nick'); } catch(_) {}
     if(savedNick){
-      user.value = savedNick;
+      const oldPattern = /^[a-z]+-[a-z]+-[0-9a-z]{2,}$/i.test(savedNick);
+      if (oldPattern) {
+        user.value = randomNick();
+        try { localStorage.setItem('relaydns_nick', user.value); } catch(_) {}
+      } else {
+        user.value = savedNick;
+      }
     } else {
       user.value = randomNick();
       try { localStorage.setItem('relaydns_nick', user.value); } catch(_) {}
     }
     setPrompt();
-    user.addEventListener('input', () => { try{ localStorage.setItem('relaydns_nick', user.value); }catch(_){}; setPrompt(); });
+    // Debounced notify of nickname changes to server so roster updates without sending a chat
+    let nickTimer = null;
+    user.addEventListener('input', () => {
+      try{ localStorage.setItem('relaydns_nick', user.value); }catch(_){}
+      setPrompt();
+      if (ws && ws.readyState === 1) {
+        if (nickTimer) clearTimeout(nickTimer);
+        nickTimer = setTimeout(() => {
+          try{ ws.send(JSON.stringify({ user: (user.value || 'anon'), text: '', uid: clientUID })); }catch(_){ }
+        }, 300);
+      }
+    });
     roll.addEventListener('click', () => {
       user.value = randomNick();
       try{ localStorage.setItem('relaydns_nick', user.value); }catch(_){}
@@ -306,13 +414,21 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       const idx = hashNick(nick || 'anon') % PALETTE.length;
       return PALETTE[idx];
     }
+    function renderRoster(users){
+      const count = (users ? users.length : 0);
+      if (usersCount) usersCount.textContent = String(count);
+    }
     function append(msg){
       const div = document.createElement('div');
       div.className = 'line';
-      const ts = new Date(msg.ts).toLocaleTimeString();
+      const ts = new Date(msg.ts).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const nick = (msg.user || 'anon');
       const color = colorFor(nick);
-      if (msg.event === 'joined' || msg.event === 'left') {
+      if (msg.event === 'roster') { renderRoster(msg.users || []); return; }
+      if (msg.event === 'rename') {
+        div.className = 'line event';
+        div.innerHTML = '<span class="ts">[' + ts + ']</span> ' + escapeHTML(msg.user || 'anon') + ' -> ' + escapeHTML(msg.text || '') + ' changed';
+      } else if (msg.event === 'joined' || msg.event === 'left') {
         const verb = msg.event === 'joined' ? 'joined' : 'left';
         div.className = 'line event';
         div.innerHTML = '<span class="ts">[' + ts + ']</span> ' + escapeHTML(nick) + ' ' + verb;
@@ -332,10 +448,10 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     const ws = new WebSocket(wsProto + '://' + location.host + basePath + 'ws');
     ws.onmessage = (e) => { try{ append(JSON.parse(e.data)); }catch(_){ } };
     ws.onopen = () => {
-      try{ ws.send(JSON.stringify({ user: (user.value || 'anon'), text: '' })); }catch(_){ }
+      try{ ws.send(JSON.stringify({ user: (user.value || 'anon'), text: '', uid: clientUID })); }catch(_){ }
     };
     function send(){
-      const payload = { user: (user.value || 'anon'), text: cmd.value.trim() };
+      const payload = { user: (user.value || 'anon'), text: cmd.value.trim(), uid: clientUID };
       if(!payload.text) return;
       ws.send(JSON.stringify(payload));
       cmd.value='';
