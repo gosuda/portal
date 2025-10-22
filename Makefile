@@ -25,7 +25,7 @@ chat-run:
 # --- Build binaries ---
 build:
 	@echo "Building binaries..."
-	@mkdir -p bin
+	@mkdir bin
 	go build -trimpath -o bin/relaydns-server ./cmd/server
 	go build -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
 	go build -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat

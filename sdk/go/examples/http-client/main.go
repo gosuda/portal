@@ -12,7 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/gosuda/relaydns/sdk/go"
+	sdk "github.com/gosuda/relaydns/sdk/go"
 )
 
 var rootCmd = &cobra.Command{

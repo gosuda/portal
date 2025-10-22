@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/sdk/go"
+	sdk "github.com/gosuda/relaydns/sdk/go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
