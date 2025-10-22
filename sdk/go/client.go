@@ -1,4 +1,4 @@
-package relaydns
+package sdk
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/relaydns/relaydns"
 )
 
 type ClientConfig struct {
@@ -86,10 +88,10 @@ func applyDefaults(cfg ClientConfig) ClientConfig {
 	cfg.PreferQUIC = true
 	cfg.PreferLocal = true
 	if cfg.Protocol == "" {
-		cfg.Protocol = DefaultProtocol
+		cfg.Protocol = relaydns.DefaultProtocol
 	}
 	if cfg.Topic == "" {
-		cfg.Topic = DefaultTopic
+		cfg.Topic = relaydns.DefaultTopic
 	}
 	return cfg
 }
@@ -99,7 +101,7 @@ func applyDefaults(cfg ClientConfig) ClientConfig {
 func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
 	cfg = applyDefaults(cfg)
 
-	h, err := MakeHost(ctx, 0, true)
+	h, err := relaydns.MakeHost(ctx, 0, true)
 	if err != nil {
 		return nil, fmt.Errorf("make host: %w", err)
 	}
@@ -119,11 +121,11 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	// 1) resolve bootstraps (flags + optional server health)
 	boot := b.resolveBootstraps()
 	if len(boot) > 0 {
-		ConnectBootstraps(ctx, b.h, boot)
+		relaydns.ConnectBootstraps(ctx, b.h, boot)
 		// If a server URL is configured, only mark healthy if actually
 		// connected to the server peer (not just able to fetch /hosts).
 		if b.cfg.ServerURL != "" {
-			if addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err == nil {
+			if addrs, err := relaydns.FetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err == nil {
 				if pid, ok := serverPeerFromAddrs(addrs); ok {
 					if b.h.Network().Connectedness(pid) == network.Connected {
 						b.setServerHealthy(true)
@@ -157,7 +159,7 @@ func (b *RelayClient) Start(ctx context.Context) error {
 		b.startRefreshLoop(advCtx)
 	}
 
-	if addrs := BuildAddrs(b.Host()); len(addrs) > 0 {
+	if addrs := relaydns.BuildAddrs(b.Host()); len(addrs) > 0 {
 		for _, s := range addrs {
 			log.Info().Msgf("[client] host addr: %s", s)
 		}
@@ -203,16 +205,16 @@ func (b *RelayClient) resolveBootstraps() []string {
 		boot = append(boot, b.cfg.Bootstraps...)
 	}
 	if b.cfg.ServerURL != "" {
-		if addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
+		if addrs, err := relaydns.FetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
 			b.setServerHealthy(false)
 			log.Warn().Err(err).Msgf("relaydns: fetch /hosts from %s failed", b.cfg.ServerURL)
 		} else {
 			// Do not mark healthy yet; only after verifying libp2p connectivity
-			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
+			relaydns.SortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 			boot = append(boot, addrs...)
 		}
 	}
-	return RemoveDuplicate(boot)
+	return relaydns.RemoveDuplicate(boot)
 }
 
 // setupStreamHandler installs the appropriate libp2p stream handler.
@@ -275,8 +277,8 @@ func (b *RelayClient) startAdvertiser(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				enc := BuildAddrs(b.h)
-				ad := Advertise{
+				enc := relaydns.BuildAddrs(b.h)
+				ad := relaydns.Advertise{
 					Peer:  b.h.ID().String(),
 					Name:  b.cfg.Name,
 					DNS:   b.cfg.DNS,
@@ -306,17 +308,17 @@ func (b *RelayClient) startRefreshLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout)
+				addrs, err := relaydns.FetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout)
 				if err != nil {
 					b.setServerHealthy(false)
 					log.Warn().Err(err).Msgf("refresh /hosts from %s failed", b.cfg.ServerURL)
 					continue
 				}
-				sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
-				addrs = RemoveDuplicate(addrs)
+				relaydns.SortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
+				addrs = relaydns.RemoveDuplicate(addrs)
 				if len(addrs) > 0 {
 					// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
-					ConnectBootstraps(ctx, b.h, addrs)
+					relaydns.ConnectBootstraps(ctx, b.h, addrs)
 					// Only mark healthy if actually connected to server peer
 					if pid, ok := serverPeerFromAddrs(addrs); ok {
 						if b.h.Network().Connectedness(pid) == network.Connected {

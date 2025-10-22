@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"net"
 	"os"
@@ -10,9 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	"github.com/gosuda/relaydns/sdk/go"
 )
 
 var rootCmd = &cobra.Command{
@@ -44,16 +44,8 @@ func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled on all exit paths
 
-	if flagName == "" {
-		hn, err := os.Hostname()
-		if err != nil {
-			hn = "unknown-" + rand.Text()
-		}
-		flagName = hn
-	}
-
 	// 1) HTTP backend
-	var clientRef *relaydns.RelayClient
+	var clientRef *sdk.RelayClient
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
@@ -69,21 +61,18 @@ func runClient(cmd *cobra.Command, args []string) error {
 	})
 
 	// 2) libp2p host
-	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
+	rc, err := sdk.NewClient(ctx, sdk.ClientConfig{
 		Name:      flagName,
-		TargetTCP: relaydns.AddrToTarget(fmt.Sprintf(":%d", flagPort)),
+		TargetTCP: fmt.Sprintf("127.0.0.1:%d", flagPort),
 		ServerURL: flagServerURL,
-
-		Protocol: relaydns.DefaultProtocol,
-		Topic:    relaydns.DefaultTopic,
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	if err := client.Start(ctx); err != nil {
+	if err := rc.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
-	clientRef = client
+	clientRef = rc
 
 	// wait for termination
 	sig := make(chan os.Signal, 1)
@@ -95,7 +84,7 @@ func runClient(cmd *cobra.Command, args []string) error {
 	// Note: defer cancel() at function start stops client advertising/refresh loops
 
 	// 1. Close client (waits for goroutines, closes libp2p host)
-	if err := client.Close(); err != nil {
+	if err := rc.Close(); err != nil {
 		log.Warn().Err(err).Msg("[client] client close error")
 	}
 
