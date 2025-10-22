@@ -37,7 +37,7 @@ func openMessageStore(dir string) (*messageStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	if it.Last() {
 		if len(it.Key()) >= 8 {
 			s.next = binary.BigEndian.Uint64(it.Key()[:8]) + 1
@@ -67,7 +67,7 @@ func (s *messageStore) LoadAll() ([]message, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer it.Close()
+	defer func() { _ = it.Close() }()
 	out := make([]message, 0, 256)
 	for it.First(); it.Valid(); it.Next() {
 		var m message
