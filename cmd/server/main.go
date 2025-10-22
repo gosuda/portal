@@ -10,9 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	"github.com/gosuda/relaydns/relaydns"
 )
 
 var rootCmd = &cobra.Command{

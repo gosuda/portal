@@ -90,10 +90,10 @@ jobs:
         run: go build -v -trimpath -o bin/relaydns-server ./cmd/server
 
       - name: Build example HTTP client
-        run: go build -v -trimpath -o bin/relaydns-client ./cmd/example_http_client
+        run: go build -v -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
 
       - name: Build example chat client
-        run: go build -v -trimpath -o bin/relaydns-chat ./cmd/example_chat
+        run: go build -v -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4

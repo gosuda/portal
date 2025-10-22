@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/relaydns/relaydns"
 )
 
 // serveHTTP builds the HTTP mux and returns the server.

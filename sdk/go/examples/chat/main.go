@@ -9,9 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	sdk "github.com/gosuda/relaydns/sdk/go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	sdk "github.com/gosuda/relaydns/sdk/go"
 )
 
 var rootCmd = &cobra.Command{
