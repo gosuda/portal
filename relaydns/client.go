@@ -12,7 +12,9 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/rs/zerolog/log"
 )
 
@@ -117,6 +119,19 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	boot := b.resolveBootstraps()
 	if len(boot) > 0 {
 		ConnectBootstraps(ctx, b.h, boot)
+		// If a server URL is configured, only mark healthy if actually
+		// connected to the server peer (not just able to fetch /hosts).
+		if b.cfg.ServerURL != "" {
+			if addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err == nil {
+				if pid, ok := serverPeerFromAddrs(addrs); ok {
+					if b.h.Network().Connectedness(pid) == network.Connected {
+						b.setServerHealthy(true)
+					} else {
+						b.setServerHealthy(false)
+					}
+				}
+			}
+		}
 	} else {
 		log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
 	}
@@ -191,7 +206,7 @@ func (b *RelayClient) resolveBootstraps() []string {
 			b.setServerHealthy(false)
 			log.Warn().Err(err).Msgf("relaydns: fetch /hosts from %s failed", b.cfg.ServerURL)
 		} else {
-			b.setServerHealthy(true)
+			// Do not mark healthy yet; only after verifying libp2p connectivity
 			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 			boot = append(boot, addrs...)
 		}
@@ -296,16 +311,38 @@ func (b *RelayClient) startRefreshLoop(ctx context.Context) {
 					log.Warn().Err(err).Msgf("refresh /hosts from %s failed", b.cfg.ServerURL)
 					continue
 				}
-				b.setServerHealthy(true)
 				sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
 				addrs = RemoveDuplicate(addrs)
 				if len(addrs) > 0 {
 					// Always attempt (re)connect; ConnectBootstraps handles dedupe and quiet logging
 					ConnectBootstraps(ctx, b.h, addrs)
+					// Only mark healthy if actually connected to server peer
+					if pid, ok := serverPeerFromAddrs(addrs); ok {
+						if b.h.Network().Connectedness(pid) == network.Connected {
+							b.setServerHealthy(true)
+						} else {
+							b.setServerHealthy(false)
+						}
+					}
 				}
 			}
 		}
 	}()
+}
+
+// serverPeerFromAddrs extracts the first peer.ID found in the provided
+// multiaddrs. The server advertises its own addrs including /p2p/<peer>.
+func serverPeerFromAddrs(addrs []string) (peer.ID, bool) {
+	for _, s := range addrs {
+		m, err := ma.NewMultiaddr(s)
+		if err != nil {
+			continue
+		}
+		if ai, err := peer.AddrInfoFromP2pAddr(m); err == nil {
+			return ai.ID, true
+		}
+	}
+	return "", false
 }
 
 // ServerStatus returns a human-friendly status regarding connection to ServerURL.
