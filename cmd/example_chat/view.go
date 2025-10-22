@@ -275,6 +275,8 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     h1 { margin:0 0 12px 0; font-weight:700 }
     .term { border:1px solid var(--border); border-radius:10px; background:var(--panel); overflow:hidden; position: relative }
     .termbar { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px }
+    .termbar-left { display:flex; align-items:center; gap:8px }
+    .termbar-center { flex:1 1 auto; display:flex; justify-content:center }
     .term-actions { display:flex; align-items:center; gap:8px }
     .dots { display:flex; gap:6px }
     .dot { width:10px; height:10px; border-radius:50%; }
@@ -292,7 +294,7 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     .event .usr { color: var(--muted) }
     .promptline { display:flex; align-items:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     #prompt { color:var(--accent) }
-    #cmd { flex:1; background:transparent; border:none; outline:none; color:var(--fg); font-family: inherit; font-size:14px; caret-color: var(--cursor) }
+    #cmd { flex:1 1 auto; min-width:0; background:transparent; border:none; outline:none; color:var(--fg); font-family: inherit; font-size:14px; caret-color: var(--cursor) }
     small{ color:var(--muted); display:block; margin-top:10px }
 
     /* Scrollbar styling for log and users list */
@@ -309,11 +311,15 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       .wrap { max-width: 100%; }
       h1 { font-size: 18px; }
       .termbar { flex-wrap: wrap; gap: 8px; }
+      .termbar-center { order: 2; width: 100%; justify-content: center; }
+      .promptline { flex-direction: column; align-items: stretch; gap: 10px; }
+      #prompt { order: 1; }
+      #cmd { order: 2; font-size: 16px; }
+      .nick { order: 3; width: 100%; }
       .nick input { width: 100%; font-size: 16px; }
       .nick button { font-size: 16px; }
       .screen { height: 50vh; font-size: 13px; }
-      .promptline { flex-wrap: wrap; gap: 6px; }
-      #cmd { font-size: 16px; }
+      .promptline { flex-wrap: nowrap; }
     }
   </style>
 </head>
@@ -322,18 +328,22 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     <h1>🔐 Chatting — {{.Name}}</h1>
     <div class="term">
       <div class="termbar">
-        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <div class="termbar-left">
+          <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        </div>
+        <div class="termbar-center">
+          <div class="nick">
+            <label for="user" style="color:var(--muted)">nickname</label>
+            <input id="user" type="text" placeholder="anon" />
+            <button id="roll" title="randomize nickname">🎲</button>
+          </div>
+        </div>
         <div class="term-actions"><span class="userspill">Users <span id="users-count">0</span></span></div>
       </div>
       <div id="log" class="screen"></div>
       <div class="promptline">
         <span id="prompt"></span>
-        <input id="cmd" type="text" autocomplete="off" spellcheck="false" placeholder="type a message and press Enter" />
-        <div class="nick" style="margin-left:auto">
-          <label for="user" style="color:var(--muted)">nick</label>
-          <input id="user" type="text" placeholder="anon" />
-          <button id="roll" title="randomize nickname">🎲</button>
-        </div>
+        <input id="cmd" type="text" autocomplete="off" spellcheck="false" placeholder="type a message and press Enter" enterkeyhint="send" inputmode="text" />
       </div>
     </div>
     <small>Tip: Enter to send • Nickname persists locally</small>
@@ -460,7 +470,13 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     // on Enter when using Korean/Japanese/Chinese input methods.
     cmd.addEventListener('keydown', e => {
       if (e.isComposing || e.keyCode === 229) { return; }
-      if (e.key === 'Enter') { e.preventDefault(); send(); }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        send();
+        // Ensure focus stays on the message input on mobile
+        setTimeout(() => cmd.focus(), 0);
+      }
     });
     // Focus command line on load
     setTimeout(()=>cmd.focus(), 0);
