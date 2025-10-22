@@ -68,7 +68,7 @@ repos:
       - id: go-build
         name: go build
         description: Build all Go binaries to ensure they compile
-        entry: bash -c 'go build -trimpath -o /tmp/dnsportal-server ./cmd/server && go build -trimpath -o /tmp/dnsportal-client ./cmd/example_http_client && go build -trimpath -o /tmp/dnsportal-chat ./cmd/example_chat'
+        entry: bash -c 'go build -trimpath -o /tmp/relaydns-server ./cmd/server && go build -trimpath -o /tmp/relaydns-client ./cmd/example_http_client && go build -trimpath -o /tmp/relaydns-chat ./cmd/example_chat'
         language: system
         pass_filenames: false
         types: [go]

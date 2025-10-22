@@ -162,7 +162,7 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DNSPortal Chat — {{.Name}}</title>
+  <title>RelayDNS Chat — {{.Name}}</title>
   <style>
     :root{
       --bg: #0d1117;
@@ -203,7 +203,7 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     <div class="term">
       <div class="termbar">
         <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
-        <div style="opacity:.9">relaychat@dnsportal</div>
+        <div style="opacity:.9">relaychat@relaydns</div>
         <div class="nick">
           <label for="user" style="color:var(--muted)">nick</label>
           <input id="user" type="text" placeholder="anon" />
@@ -240,18 +240,18 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     }
     // Restore nickname or initialize randomly
     let savedNick = null;
-    try { savedNick = localStorage.getItem('dnsportal_nick'); } catch(_) {}
+    try { savedNick = localStorage.getItem('relaydns_nick'); } catch(_) {}
     if(savedNick){
       user.value = savedNick;
     } else {
       user.value = randomNick();
-      try { localStorage.setItem('dnsportal_nick', user.value); } catch(_) {}
+      try { localStorage.setItem('relaydns_nick', user.value); } catch(_) {}
     }
     setPrompt();
-    user.addEventListener('input', () => { try{ localStorage.setItem('dnsportal_nick', user.value); }catch(_){}; setPrompt(); });
+    user.addEventListener('input', () => { try{ localStorage.setItem('relaydns_nick', user.value); }catch(_){}; setPrompt(); });
     roll.addEventListener('click', () => {
       user.value = randomNick();
-      try{ localStorage.setItem('dnsportal_nick', user.value); }catch(_){}
+      try{ localStorage.setItem('relaydns_nick', user.value); }catch(_){}
       setPrompt();
       user.focus();
     });

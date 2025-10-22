@@ -9,14 +9,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/dnsportal/relaydns"
+	"github.com/gosuda/relaydns/relaydns"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "dnsportal-chat",
-	Short: "DNSPortal demo chat (local HTTP backend + libp2p advertiser)",
+	Use:   "relaydns-chat",
+	Short: "RelayDNS demo chat (local HTTP backend + libp2p advertiser)",
 	RunE:  runChat,
 }
 
@@ -51,7 +51,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	hub := newHub()
 	srv := serveChatHTTP(ln, flagName, hub)
 
-	// 2) advertise over DNSPortal (HTTP tunneled via server /peer route)
+	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
 	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
 		Name:      flagName,
 		TargetTCP: relaydns.AddrToTarget(fmt.Sprintf(":%d", flagPort)),

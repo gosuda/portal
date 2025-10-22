@@ -1,6 +1,6 @@
 # CI/CD Setup Guide
 
-This document describes the CI/CD infrastructure for the DNSPortal project, including pre-commit hooks, linters, formatters, sanitizers, and GitHub Actions workflows.
+This document describes the CI/CD infrastructure for the RelayDNS project, including pre-commit hooks, linters, formatters, sanitizers, and GitHub Actions workflows.
 
 ## Table of Contents
 
@@ -107,13 +107,13 @@ go fmt ./...
 
 **goimports** - Organizes imports
 ```bash
-goimports -local github.com/gosuda/dnsportal -w .
+goimports -local github.com/gosuda/relaydns -w .
 ```
 
 **gci** - Controls import order (integrated in golangci-lint)
 - Standard library imports
 - Third-party imports
-- Local imports (github.com/gosuda/dnsportal)
+- Local imports (github.com/gosuda/relaydns)
 
 ### Sanitizers
 
@@ -157,7 +157,7 @@ Hooks run automatically before each commit:
 
 2. **Go checks**
    - `go fmt ./...`
-   - `goimports -local github.com/gosuda/dnsportal`
+   - `goimports -local github.com/gosuda/relaydns`
    - `go vet ./...`
    - `go mod tidy` (ensures go.mod is clean)
    - `golangci-lint run`
@@ -327,7 +327,7 @@ Main linter configuration with 30+ linters enabled.
 Key settings:
 - Timeout: 5 minutes
 - Go version: 1.25
-- Local prefix: `github.com/gosuda/dnsportal`
+- Local prefix: `github.com/gosuda/relaydns`
 - Excludes test files from certain linters
 - Excludes example code from security checks
 

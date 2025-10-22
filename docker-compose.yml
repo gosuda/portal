@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dreamcacao/dnsportal:latest
+    image: dreamcacao/relaydns:latest
     command:
       - "--http-port"
       - "19080"

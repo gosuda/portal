@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gosuda/dnsportal/relaydns"
+	"github.com/gosuda/relaydns/relaydns"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/rs/zerolog/log"
 )
@@ -127,7 +127,7 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DNSPortal — Admin</title>
+  <title>RelayDNS — Admin</title>
   <style>
     * { box-sizing: border-box }
     :root {
@@ -156,7 +156,7 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
 <body>
   <div class="wrap">
     <header>
-      <div class="brand">DNSPortal</div>
+      <div class="brand">RelayDNS</div>
       <div class="status">Admin</div>
     </header>
     <main>

@@ -28,7 +28,7 @@ client-run:
 	go run ./cmd/example_http_client $(CLIENT_FLAGS)
 
 client-build:
-	go build -trimpath -o bin/dnsportal-client ./cmd/example_http_client
+	go build -trimpath -o bin/relaydns-client ./cmd/example_http_client
 
 # ---------- Chat (local go) ----------
 CHAT_PORT ?= 8091
@@ -43,15 +43,15 @@ chat-run:
 	go run ./cmd/example_chat $(CHAT_FLAGS)
 
 chat-build:
-	go build -trimpath -o bin/dnsportal-chat ./cmd/example_chat
+	go build -trimpath -o bin/relaydns-chat ./cmd/example_chat
 
 # ---------- Build all binaries ----------
 build-all: clean
 	@echo "Building all binaries..."
 	@mkdir -p bin
-	go build -trimpath -o bin/dnsportal-server ./cmd/server
-	go build -trimpath -o bin/dnsportal-client ./cmd/example_http_client
-	go build -trimpath -o bin/dnsportal-chat ./cmd/example_chat
+	go build -trimpath -o bin/relaydns-server ./cmd/server
+	go build -trimpath -o bin/relaydns-client ./cmd/example_http_client
+	go build -trimpath -o bin/relaydns-chat ./cmd/example_chat
 	@echo "Binaries built successfully in ./bin/"
 
 # ---------- Dev helpers ----------
@@ -60,7 +60,7 @@ fmt:
 	@command -v gofumpt >/dev/null 2>&1 || { echo "Installing gofumpt..."; go install mvdan.cc/gofumpt@latest; }
 	gofumpt -l -w .
 	@command -v goimports >/dev/null 2>&1 || { echo "Installing goimports..."; go install golang.org/x/tools/cmd/goimports@latest; }
-	goimports -local github.com/gosuda/dnsportal -w .
+	goimports -local github.com/gosuda/relaydns -w .
 
 tidy:
 	@echo "Tidying go.mod..."
@@ -152,7 +152,7 @@ clean:
 
 # ---------- Help ----------
 help:
-	@echo "DNSPortal Makefile"
+	@echo "RelayDNS Makefile"
 	@echo ""
 	@echo "Server:"
 	@echo "  make server-up        # build and start relayserver (docker compose)"
@@ -161,9 +161,9 @@ help:
 	@echo ""
 	@echo "Clients (optional):"
 	@echo "  make client-run       # run example_http_client locally"
-	@echo "  make client-build     # build example_http_client to ./bin/dnsportal-client"
+	@echo "  make client-build     # build example_http_client to ./bin/relaydns-client"
 	@echo "  make chat-run         # run example_chat locally (WS UI + advertiser)"
-	@echo "  make chat-build       # build example_chat to ./bin/dnsportal-chat"
+	@echo "  make chat-build       # build example_chat to ./bin/relaydns-chat"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build-all        # build all binaries (server, client, chat)"

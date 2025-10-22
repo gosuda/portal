@@ -1,28 +1,28 @@
-# DNSPortal
+# RelayDNS
 > A lightweight, DNS-driven peer-to-peer proxy layer built on libp2p.
 
-`dnsportal` provides a minimal DNS-entry proxy that routes traffic between arbitrary nodes over **libp2p**.  
+`relaydns` provides a minimal DNS-entry proxy that routes traffic between arbitrary nodes over **libp2p**.  
 It lets you expose and discover TCP services (like SSH, API endpoints, etc.) even behind NAT,  
 without depending on centralized reverse-proxy services.
 
-## Why DNSPortal?
+## Why RelayDNS?
 Traditional DNS and hosting rely on centralized servers and public IPs.
-DNSPortal closes that gap — serving as a lightweight bridge for peer discovery and connection.
+RelayDNS removes that dependency — making connections open, direct, and owned by the users themselves.
 
-Think of it as the DNS layer for the peer-to-peer world:
-- It keeps discovery simple and human-readable (via DNS entries).
-- It connects peers that can’t directly see each other, acting as a neutral relay.
-- It gradually fades out once peers establish direct connectivity.
+This means:
+- No middlemen or fixed infrastructure.
+- Anyone can share or host freely.
+- Discovery remains open, but communication stays truly peer-to-peer.
 
-It provides a clear, DNS-driven entrypoint to your peer network — 
-letting decentralized services stay reachable without depending on fixed infrastructure or centralized gateways.
+In a decentralized world, RelayDNS turns DNS from a naming system for servers into a discovery network for people —
+keeping coordination simple, while ownership and control stay entirely in your hands.
 
 ## Features
 
 - **Peer-to-peer routing** over libp2p (supports hole punching, relay, pubsub)
 - **DNS-driven entrypoint** (server acts as a lightweight coordinator)
 - **Automatic peer advertisement** via GossipSub
-- **Pluggable client SDK** — embed the dnsportal client directly into your Go applications
+- **Pluggable client SDK** — embed the relaydns client directly into your Go applications
 
 ## Architecture Overview
 
@@ -75,7 +75,7 @@ If you run the chat client:
 
 Install the module:
 ```bash
-go get github.com/gosuda/dnsportal
+go get github.com/gosuda/relaydns
 ```
 
 Minimal snippet:
@@ -85,7 +85,7 @@ package main
 import (
     "context"
     "time"
-    "github.com/gosuda/dnsportal/relaydns"
+    "github.com/gosuda/relaydns/relaydns"
 )
 
 func main() {
