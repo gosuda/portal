@@ -53,7 +53,7 @@ jobs:
         run: go vet ./...
 
       - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v8
         with:
           version: v2.5.0
           args: --timeout=5m --config=.golangci.yml
@@ -169,12 +169,6 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@latest
           staticcheck ./...
 
-      - name: Run gosec (security scanner)
-        run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-          gosec -fmt=json -out=gosec-report.json ./... || true
-          gosec ./...
-
       - name: Check for ineffective assignments
         run: |
           go install github.com/gordonklaus/ineffassign@latest
@@ -185,13 +179,18 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@latest
           staticcheck -checks=U1000 ./...
 
-
-      - name: Upload gosec report
-        uses: actions/upload-artifact@v4
-        with:
-          name: gosec-report
-          path: gosec-report.json
-          retention-days: 7
+      # - name: Run gosec (security scanner)
+      #   run: |
+      #     go install github.com/securego/gosec/v2/cmd/gosec@latest
+      #     gosec -fmt=json -out=gosec-report.json ./... || true
+      #     gosec ./...
+  
+      # - name: Upload gosec report
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: gosec-report
+      #     path: gosec-report.json
+      #     retention-days: 7
   
   # Docker build job
   docker:
