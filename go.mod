@@ -11,6 +11,7 @@ require (
 	github.com/multiformats/go-multiaddr v0.16.0
 	github.com/rs/zerolog v1.34.0
 	github.com/spf13/cobra v1.10.1
+	golang.org/x/crypto v0.41.0
 )
 
 require (
@@ -105,7 +106,6 @@ require (
 	go.uber.org/mock v0.5.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476 // indirect
 	golang.org/x/mod v0.27.0 // indirect
 	golang.org/x/net v0.43.0 // indirect
