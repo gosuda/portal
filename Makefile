@@ -17,18 +17,18 @@ server-build:
 
 # --- Go SDK examples ---
 client-run:
-	go run ./sdk/go/example/http-client
+	go run ./sdk/go/examples/http-client
 
 chat-run:
-	go run ./sdk/go/example/chat
+	go run ./sdk/go/examples/chat
 
 # --- Build binaries ---
 build:
 	@echo "Building binaries..."
 	@mkdir -p bin
 	go build -trimpath -o bin/relaydns-server ./cmd/server
-	go build -trimpath -o bin/relaydns-client ./sdk/go/example/http-client
-	go build -trimpath -o bin/relaydns-chat ./sdk/go/example/chat
+	go build -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
+	go build -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat
 	@echo "Done: ./bin"
 
 # --- Module maintenance ---
