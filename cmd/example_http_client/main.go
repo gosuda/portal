@@ -29,9 +29,9 @@ var (
 
 func init() {
 	flags := rootCmd.PersistentFlags()
-	flags.StringVar(&flagServerURL, "server-url", "http://localhost:8080", "relayserver admin base URL to auto-fetch multiaddrs from /health")
+	flags.StringVar(&flagServerURL, "server-url", "http://relaydns.gosuda.org", "relayserver admin base URL to auto-fetch multiaddrs from /health")
 	flags.IntVar(&flagPort, "port", 8081, "local backend HTTP port")
-	flags.StringVar(&flagName, "name", "", "backend display name shown on server UI")
+	flags.StringVar(&flagName, "name", "bangjang-backend", "backend display name shown on server UI")
 }
 
 func main() {

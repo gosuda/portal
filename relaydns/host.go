@@ -40,8 +40,10 @@ func MakeHost(ctx context.Context, port int, enableRelay bool) (host.Host, error
 }
 
 func ConnectBootstraps(ctx context.Context, h host.Host, addrs []string) {
-	// Connect once per unique peer ID; skip already-connected peers to avoid noisy logs.
-	seen := make(map[string]struct{}, len(addrs))
+	// Aggregate all multiaddrs per peer and dial them together so the dialer
+	// can fall back from loopback to routable addresses.
+	perPeer := make(map[peer.ID][]ma.Multiaddr)
+
 	for _, s := range addrs {
 		m, err := ma.NewMultiaddr(s)
 		if err != nil {
@@ -53,19 +55,47 @@ func ConnectBootstraps(ctx context.Context, h host.Host, addrs []string) {
 			log.Warn().Err(err).Msgf("bootstrap missing /p2p/ in %q", s)
 			continue
 		}
-		pid := ai.ID.String()
-		if _, ok := seen[pid]; ok {
+		// Prefer the addr(s) returned by AddrInfoFromP2pAddr (base part without /p2p)
+		bases := ai.Addrs
+		if len(bases) == 0 {
+			// Fallback: try to decapsulate /p2p component manually
+			dec := m
+			// Construct a /p2p/<peerID> multiaddr for decapsulation
+			p2pComp, derr := ma.NewMultiaddr(fmt.Sprintf("/p2p/%s", ai.ID.String()))
+			if derr == nil {
+				dec = m.Decapsulate(p2pComp)
+			}
+			if dec != nil && dec.String() != "" {
+				bases = []ma.Multiaddr{dec}
+			}
+		}
+		if len(bases) == 0 {
 			continue
 		}
-		seen[pid] = struct{}{}
+		// Append while de-duplicating per peer, preserving original order.
+		cur := perPeer[ai.ID]
+		seen := make(map[string]struct{}, len(cur))
+		for _, a := range cur {
+			seen[a.String()] = struct{}{}
+		}
+		for _, a := range bases {
+			if _, ok := seen[a.String()]; ok {
+				continue
+			}
+			cur = append(cur, a)
+			seen[a.String()] = struct{}{}
+		}
+		perPeer[ai.ID] = cur
+	}
 
-		if h.Network().Connectedness(ai.ID) == network.Connected {
-			// Already connected: skip loudly logging.
+	// Now attempt a single connect per peer with all known addresses.
+	for pid, maddrs := range perPeer {
+		if h.Network().Connectedness(pid) == network.Connected {
 			continue
 		}
-		if err := h.Connect(ctx, *ai); err != nil {
-			// Only warn on errors
-			log.Warn().Err(err).Msgf("bootstrap connect %s", ai.ID)
+		info := peer.AddrInfo{ID: pid, Addrs: maddrs}
+		if err := h.Connect(ctx, info); err != nil {
+			log.Warn().Err(err).Msgf("bootstrap connect %s", pid)
 		}
 	}
 }

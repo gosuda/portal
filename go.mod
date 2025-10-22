@@ -3,6 +3,7 @@ module github.com/gosuda/relaydns
 go 1.25.0
 
 require (
+	github.com/cockroachdb/crlib v0.0.0-20251001180057-2a49e1873587
 	github.com/coder/websocket v1.8.14
 	github.com/libp2p/go-libp2p v0.44.0
 	github.com/libp2p/go-libp2p-pubsub v0.15.0
