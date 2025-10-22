@@ -211,6 +211,8 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     .line { white-space: pre-wrap; word-break: break-word }
     .ts { color:var(--muted) }
     .usr { color:#60a5fa }
+    .event { color: var(--muted) }
+    .event .usr { color: var(--muted) }
     .promptline { display:flex; align-items:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     #prompt { color:var(--accent) }
     #cmd { flex:1; background:transparent; border:none; outline:none; color:var(--fg); font-family: inherit; font-size:14px; caret-color: var(--cursor) }
@@ -312,8 +314,8 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       const color = colorFor(nick);
       if (msg.event === 'joined' || msg.event === 'left') {
         const verb = msg.event === 'joined' ? 'joined' : 'left';
-        div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' + nick + '</span> ' + verb;
-        div.style.opacity = '0.8';
+        div.className = 'line event';
+        div.innerHTML = '<span class="ts">[' + ts + ']</span> ' + escapeHTML(nick) + ' ' + verb;
       } else {
         div.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="usr" style="color:' + color + '">' +
           nick + '</span>: ' + escapeHTML(msg.text || '');
