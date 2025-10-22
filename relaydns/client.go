@@ -69,12 +69,13 @@ const (
 
 // applyDefaults fills zero-values in cfg with sane defaults.
 func applyDefaults(cfg ClientConfig) ClientConfig {
-	if cfg.AdvertiseEvery <= 0 {
-		cfg.AdvertiseEvery = defaultAdvertiseEvery
-	}
-	if cfg.AdvertiseTTL <= 0 {
-		cfg.AdvertiseTTL = 10 * cfg.AdvertiseEvery
-	}
+    if cfg.AdvertiseEvery <= 0 {
+        cfg.AdvertiseEvery = defaultAdvertiseEvery
+    }
+    if cfg.AdvertiseTTL <= 0 {
+        // Reduce default TTL from 50s to 15s (3x default advertise interval)
+        cfg.AdvertiseTTL = 3 * cfg.AdvertiseEvery
+    }
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = defaultHTTPTimeout
 	}

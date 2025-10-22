@@ -170,7 +170,7 @@ var adminIndexTmpl = template.Must(template.New("admin-index").Parse(`<!doctype 
         <div class="muted" style="margin-top:6px">Known clients: {{len .Rows}}</div>
       </section>
       {{range .Rows}}
-      <section class="section">
+      <section class="section" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}">
         <div class="head">
           <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
           <div>
