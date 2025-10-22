@@ -1,4 +1,4 @@
-module github.com/gosuda/relaydns
+module github.com/gosuda/dnsportal
 
 go 1.25.0
 

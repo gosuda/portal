@@ -10,14 +10,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
+	"github.com/gosuda/dnsportal/relaydns"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "relaydns-client",
-	Short: "RelayDNS demo client (local HTTP backend + libp2p advertiser)",
+	Use:   "dnsportal-client",
+	Short: "DNSPortal demo client (local HTTP backend + libp2p advertiser)",
 	RunE:  runClient,
 }
 

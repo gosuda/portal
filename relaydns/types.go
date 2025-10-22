@@ -8,8 +8,8 @@ import (
 
 // Defaults shared by server and client.
 const (
-	DefaultProtocol = "/relaydns/http/1.0"
-	DefaultTopic    = "relaydns.backends"
+	DefaultProtocol = "/dnsportal/http/1.0"
+	DefaultTopic    = "dnsportal.backends"
 )
 
 type Hosts struct {

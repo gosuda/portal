@@ -25,9 +25,9 @@ type ClientConfig struct {
 	PreferQUIC  bool
 	PreferLocal bool
 
-	// libp2p stream protocol id (e.g. "/relaydns/ssh/1.0")
+	// libp2p stream protocol id (e.g. "/dnsportal/ssh/1.0")
 	Protocol string
-	// pubsub topic for backend adverts (e.g. "relaydns.backends")
+	// pubsub topic for backend adverts (e.g. "dnsportal.backends")
 	Topic string
 	// advertise interval
 	AdvertiseEvery time.Duration
@@ -69,13 +69,13 @@ const (
 
 // applyDefaults fills zero-values in cfg with sane defaults.
 func applyDefaults(cfg ClientConfig) ClientConfig {
-    if cfg.AdvertiseEvery <= 0 {
-        cfg.AdvertiseEvery = defaultAdvertiseEvery
-    }
-    if cfg.AdvertiseTTL <= 0 {
-        // Reduce default TTL from 50s to 15s (3x default advertise interval)
-        cfg.AdvertiseTTL = 3 * cfg.AdvertiseEvery
-    }
+	if cfg.AdvertiseEvery <= 0 {
+		cfg.AdvertiseEvery = defaultAdvertiseEvery
+	}
+	if cfg.AdvertiseTTL <= 0 {
+		// Reduce default TTL from 50s to 15s (3x default advertise interval)
+		cfg.AdvertiseTTL = 3 * cfg.AdvertiseEvery
+	}
 	if cfg.HTTPTimeout <= 0 {
 		cfg.HTTPTimeout = defaultHTTPTimeout
 	}
@@ -134,7 +134,7 @@ func (b *RelayClient) Start(ctx context.Context) error {
 			}
 		}
 	} else {
-		log.Warn().Msg("relaydns: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
+		log.Warn().Msg("dnsportal: no bootstrap sources provided (Bootstraps/ServerURL); discovery may fail")
 	}
 
 	// 2) stream handler for inbound libp2p streams
@@ -205,7 +205,7 @@ func (b *RelayClient) resolveBootstraps() []string {
 	if b.cfg.ServerURL != "" {
 		if addrs, err := fetchMultiaddrsFromHosts(b.cfg.ServerURL, b.cfg.HTTPTimeout); err != nil {
 			b.setServerHealthy(false)
-			log.Warn().Err(err).Msgf("relaydns: fetch /hosts from %s failed", b.cfg.ServerURL)
+			log.Warn().Err(err).Msgf("dnsportal: fetch /hosts from %s failed", b.cfg.ServerURL)
 		} else {
 			// Do not mark healthy yet; only after verifying libp2p connectivity
 			sortMultiaddrs(addrs, b.cfg.PreferQUIC, b.cfg.PreferLocal)
@@ -224,17 +224,17 @@ func (b *RelayClient) setupStreamHandler() error {
 		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
 			defer func() {
 				if err := s.Close(); err != nil {
-					log.Debug().Err(err).Msg("relaydns: stream close")
+					log.Debug().Err(err).Msg("dnsportal: stream close")
 				}
 			}()
 			c, err := net.Dial("tcp", b.cfg.TargetTCP)
 			if err != nil {
-				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
+				log.Error().Err(err).Msgf("dnsportal: dial %s", b.cfg.TargetTCP)
 				return
 			}
 			defer func() {
 				if err := c.Close(); err != nil {
-					log.Debug().Err(err).Msg("relaydns: conn close")
+					log.Debug().Err(err).Msg("dnsportal: conn close")
 				}
 			}()
 			// raw byte pipe (bidirectional)
@@ -244,7 +244,7 @@ func (b *RelayClient) setupStreamHandler() error {
 			_, _ = io.Copy(s, c)
 		})
 	default:
-		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
+		return fmt.Errorf("dnsportal: either Handler or TargetTCP must be set")
 	}
 	return nil
 }

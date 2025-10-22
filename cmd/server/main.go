@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
+	"github.com/gosuda/dnsportal/relaydns"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
