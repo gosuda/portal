@@ -11,8 +11,5 @@ services:
       - "19080"
       - "--p2p-port"
       - "4001"
-    ports:
-      - "19080:19080"     # Admin UI + HTTP proxy
-      - "4001:4001/tcp" # libp2p tcp
-      - "4001:4001/udp" # libp2p quic/udp
+    network_mode: "host"
     restart: unless-stopped
