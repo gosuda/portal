@@ -91,9 +91,10 @@ func main() {
     client, _ := relaydns.NewClient(ctx, relaydns.ClientConfig{
         Protocol: relaydns.DefaultProtocol,
         Topic:    relaydns.DefaultTopic,
-        AdvertiseEvery: 5 * time.Second,
-        TargetTCP:      "127.0.0.1:8081",
-        Name:           "demo-http",
+
+    		ServerURL: "http://relaydns.gosuda.org",
+        TargetTCP: "127.0.0.1:8081",
+        Name:      "demo-http",
     })
     _ = client.Start(ctx)
     defer client.Close()

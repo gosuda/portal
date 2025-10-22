@@ -18,29 +18,15 @@ server-build:
 
 # ---------- Client (local go) ----------
 # Default flags (override via `make VAR=value`)
-SERVER_URL ?= http://localhost:8080
-BACKEND_PORT ?= 8081
-CLIENT_FLAGS := \
-	--server-url $(SERVER_URL) \
-	--port $(BACKEND_PORT)
-
 client-run:
-	go run ./cmd/example_http_client $(CLIENT_FLAGS)
+	go run ./cmd/example_http_client
 
 client-build:
 	go build -trimpath -o bin/relaydns-client ./cmd/example_http_client
 
 # ---------- Chat (local go) ----------
-CHAT_PORT ?= 8091
-CHAT_NAME ?= demo-chat
-
-CHAT_FLAGS := \
-	--server-url $(SERVER_URL) \
-	--port $(CHAT_PORT) \
-	--name $(CHAT_NAME)
-
 chat-run:
-	go run ./cmd/example_chat $(CHAT_FLAGS)
+	go run ./cmd/example_chat
 
 chat-build:
 	go build -trimpath -o bin/relaydns-chat ./cmd/example_chat
@@ -165,8 +151,18 @@ help:
 	@echo "  make chat-run         # run example_chat locally (WS UI + advertiser)"
 	@echo "  make chat-build       # build example_chat to ./bin/relaydns-chat"
 	@echo ""
+	@echo "  Tips: override via variables, ARGS or use -- to pass extra flags"
+	@echo "    make chat-run CHAT_NAME=alice CHAT_PORT=8099"
+	@echo "    make chat-run ARGS=\"--name alice --port 8099\""
+	@echo "    make chat-run -- --name alice --port 8099"
+	@echo ""
 	@echo "Build:"
 	@echo "  make build-all        # build all binaries (server, client, chat)"
+
+# Swallow extra words after `--` so make doesn't error on them
+# This keeps explicit targets intact; only unknown goals match this pattern.
+%::
+	@:
 	@echo ""
 	@echo "Development:"
 	@echo "  make fmt              # format Go code with gofmt and goimports"
