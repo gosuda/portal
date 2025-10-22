@@ -20,6 +20,7 @@ type hub struct {
 	conns    map[*websocket.Conn]struct{}
 	names    map[*websocket.Conn]string
 	wg       sync.WaitGroup
+	store    *messageStore
 }
 
 type message struct {
@@ -41,11 +42,30 @@ func (h *hub) broadcast(m message) {
 		conns = append(conns, c)
 	}
 	h.mu.Unlock()
+	if h.store != nil {
+		if err := h.store.Append(m); err != nil {
+			log.Debug().Err(err).Msg("persist message")
+		}
+	}
 	for _, c := range conns {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = wsjson.Write(ctx, c, m)
 		cancel()
 	}
+}
+
+// attachStore connects a persistent store to the hub.
+func (h *hub) attachStore(s *messageStore) {
+	h.mu.Lock()
+	h.store = s
+	h.mu.Unlock()
+}
+
+// bootstrap preloads history into the in-memory buffer.
+func (h *hub) bootstrap(msgs []message) {
+	h.mu.Lock()
+	h.messages = append(h.messages, msgs...)
+	h.mu.Unlock()
 }
 
 // closeAll force-closes all active websocket connections (used during shutdown).
@@ -80,9 +100,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 	h.conns[conn] = struct{}{}
 	backlog := append([]message(nil), h.messages...)
 	h.mu.Unlock()
-	if len(backlog) > 20 {
-		backlog = backlog[len(backlog)-20:]
-	}
+
 	for _, m := range backlog {
 		_ = wsjson.Write(connCtx, conn, m)
 	}
@@ -174,11 +192,13 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       --cursor: #22c55e;
     }
     *{ box-sizing: border-box }
+    /* Prefer locally-installed D2Coding for Korean monospaced rendering */
+    @font-face { font-family: 'D2Coding'; src: local('D2Coding'), local('D2Coding Ligature'), local('D2Coding Nerd'); font-display: swap; }
     body { margin:0; padding:24px; background:var(--bg); color:var(--fg); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial }
     .wrap { max-width: 920px; margin: 0 auto }
     h1 { margin:0 0 12px 0; font-weight:700 }
     .term { border:1px solid var(--border); border-radius:10px; background:var(--panel); overflow:hidden }
-    .termbar { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px }
+    .termbar { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px }
     .dots { display:flex; gap:6px }
     .dot { width:10px; height:10px; border-radius:50%; }
     .dot.red{ background:#ef4444 }
@@ -187,14 +207,27 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
     .nick { display:flex; align-items:center; gap:8px }
     .nick input{ background:transparent; border:1px solid var(--border); color:var(--fg); padding:6px 8px; border-radius:6px; font-family:inherit; font-size:13px; width:180px }
     .nick button{ background:transparent; border:1px solid var(--border); color:var(--fg); padding:6px 8px; border-radius:6px; font-family:inherit; font-size:13px; cursor:pointer }
-    .screen { height:420px; overflow:auto; padding:14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px; line-height:1.5; }
+    .screen { height:420px; overflow:auto; padding:14px; font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:14px; line-height:1.5; }
     .line { white-space: pre-wrap; word-break: break-word }
     .ts { color:var(--muted) }
     .usr { color:#60a5fa }
-    .promptline { display:flex; align-items:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .promptline { display:flex; align-items:center; gap:8px; padding:12px 14px; border-top:1px solid var(--border); font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     #prompt { color:var(--accent) }
     #cmd { flex:1; background:transparent; border:none; outline:none; color:var(--fg); font-family: inherit; font-size:14px; caret-color: var(--cursor) }
     small{ color:var(--muted); display:block; margin-top:10px }
+
+    /* Mobile responsiveness */
+    @media (max-width: 640px) {
+      body { padding: 12px; }
+      .wrap { max-width: 100%; }
+      h1 { font-size: 18px; }
+      .termbar { flex-wrap: wrap; gap: 8px; }
+      .nick input { width: 100%; font-size: 16px; }
+      .nick button { font-size: 16px; }
+      .screen { height: 50vh; font-size: 13px; }
+      .promptline { flex-wrap: wrap; gap: 6px; }
+      #cmd { font-size: 16px; }
+    }
   </style>
 </head>
 <body>
@@ -305,8 +338,11 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
       ws.send(JSON.stringify(payload));
       cmd.value='';
     }
+    // Handle IME composition properly to avoid duplicated last character
+    // on Enter when using Korean/Japanese/Chinese input methods.
     cmd.addEventListener('keydown', e => {
-      if(e.key === 'Enter') { e.preventDefault(); send(); }
+      if (e.isComposing || e.keyCode === 229) { return; }
+      if (e.key === 'Enter') { e.preventDefault(); send(); }
     });
     // Focus command line on load
     setTimeout(()=>cmd.focus(), 0);

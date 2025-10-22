@@ -24,6 +24,7 @@ var (
 	flagServerURL string
 	flagPort      int
 	flagName      string
+	flagDataPath  string
 )
 
 func init() {
@@ -31,6 +32,7 @@ func init() {
 	flags.StringVar(&flagServerURL, "server-url", "http://relaydns.gosuda.org", "relayserver base URL to auto-fetch multiaddrs from /health")
 	flags.IntVar(&flagPort, "port", 8091, "local chat HTTP port")
 	flags.StringVar(&flagName, "name", "example-chat", "backend display name")
+	flags.StringVar(&flagDataPath, "data-path", "", "optional directory to persist chat history via PebbleDB")
 }
 
 func main() {
@@ -49,6 +51,24 @@ func runChat(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("listen chat: %w", err)
 	}
 	hub := newHub()
+
+	// Optional: open persistent store and preload history
+	var store *messageStore
+	if flagDataPath != "" {
+		s, err := openMessageStore(flagDataPath)
+		if err != nil {
+			log.Warn().Err(err).Msg("[chat] open store failed; running in memory only")
+		} else {
+			store = s
+			if msgs, err := store.LoadAll(); err != nil {
+				log.Warn().Err(err).Msg("[chat] load history failed")
+			} else if len(msgs) > 0 {
+				hub.bootstrap(msgs)
+				log.Info().Msgf("[chat] loaded %d messages from store", len(msgs))
+			}
+			hub.attachStore(store)
+		}
+	}
 	srv := serveChatHTTP(ln, flagName, hub)
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
@@ -90,6 +110,13 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// 3. Close all websocket connections and wait for handlers to finish
 	hub.closeAll()
 	hub.wait()
+
+	// 4. Close persistent store if opened
+	if store != nil {
+		if err := store.Close(); err != nil {
+			log.Warn().Err(err).Msg("[chat] store close error")
+		}
+	}
 
 	log.Info().Msg("[chat] shutdown complete")
 	return nil
