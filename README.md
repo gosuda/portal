@@ -6,16 +6,14 @@ It lets you expose and discover TCP services (like SSH, API endpoints, etc.) eve
 without depending on centralized reverse-proxy services.
 
 ## Why RelayDNS?
-Traditional DNS and hosting rely on centralized servers and public IPs.
-RelayDNS removes that dependency — making connections open, direct, and owned by the users themselves.
+Traditional DNS and hosting rely on centralized servers and public IPs. DNSPortal closes that gap — serving as a lightweight bridge for peer discovery and connection.
 
-This means:
-- No middlemen or fixed infrastructure.
-- Anyone can share or host freely.
-- Discovery remains open, but communication stays truly peer-to-peer.
+Think of it as the DNS layer for the peer-to-peer world:
+- It keeps discovery simple and human-readable (via DNS entries).
+- It connects peers that can’t directly see each other, acting as a neutral relay.
+- It gradually fades out once peers establish direct connectivity.
 
-In a decentralized world, RelayDNS turns DNS from a naming system for servers into a discovery network for people —
-keeping coordination simple, while ownership and control stay entirely in your hands.
+It provides a clear, DNS-driven entrypoint to your peer network — letting decentralized services stay reachable without depending on fixed infrastructure or centralized gateways.
 
 ## Features
 
