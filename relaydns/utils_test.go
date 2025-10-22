@@ -12,7 +12,7 @@ func TestFetchMultiAddrsFromHosts(t *testing.T) {
 	url := "http://relaydns.gosuda.org"
 	timeout := 5 * time.Second
 
-	addrs, err := fetchMultiaddrsFromHosts(url, timeout)
+	addrs, err := FetchMultiaddrsFromHosts(url, timeout)
 	require.NoError(t, err)
 	fmt.Println(addrs)
 }

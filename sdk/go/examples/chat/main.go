@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gosuda/relaydns/relaydns"
+	"github.com/gosuda/relaydns/sdk/go"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -72,18 +72,15 @@ func runChat(cmd *cobra.Command, args []string) error {
 	srv := serveChatHTTP(ln, flagName, hub)
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
-	client, err := relaydns.NewClient(ctx, relaydns.ClientConfig{
+	cli, err := sdk.NewClient(ctx, sdk.ClientConfig{
 		Name:      flagName,
-		TargetTCP: relaydns.AddrToTarget(fmt.Sprintf(":%d", flagPort)),
+		TargetTCP: fmt.Sprintf("127.0.0.1:%d", flagPort),
 		ServerURL: flagServerURL,
-
-		Protocol: relaydns.DefaultProtocol,
-		Topic:    relaydns.DefaultTopic,
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	if err := client.Start(ctx); err != nil {
+	if err := cli.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
 
@@ -96,7 +93,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	// Note: defer cancel() at function start stops client advertising/refresh loops
 
 	// 1. Close client (waits for goroutines, closes libp2p host)
-	if err := client.Close(); err != nil {
+	if err := cli.Close(); err != nil {
 		log.Warn().Err(err).Msg("[chat] client close error")
 	}
 

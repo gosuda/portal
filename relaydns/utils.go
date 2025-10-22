@@ -13,13 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func AddrToTarget(listen string) string {
-	if len(listen) > 0 && listen[0] == ':' {
-		return "127.0.0.1" + listen
-	}
-	return listen
-}
-
 func BuildAddrs(h host.Host) []string {
 	out := make([]string, 0)
 	for _, a := range h.Addrs() {
@@ -28,7 +21,7 @@ func BuildAddrs(h host.Host) []string {
 	return out
 }
 
-func sortMultiaddrs(addrs []string, preferQUIC, preferLocal bool) {
+func SortMultiaddrs(addrs []string, preferQUIC, preferLocal bool) {
 	score := func(a string) int {
 		sc := 0
 		if preferQUIC && strings.Contains(a, "/quic-v1") {
@@ -55,7 +48,7 @@ func RemoveDuplicate(ss []string) []string {
 	return out
 }
 
-func fetchMultiaddrsFromHosts(base string, timeout time.Duration) ([]string, error) {
+func FetchMultiaddrsFromHosts(base string, timeout time.Duration) ([]string, error) {
 	u, err := url.Parse(base)
 	if err != nil {
 		return nil, fmt.Errorf("parse server-url: %w", err)
