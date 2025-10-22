@@ -172,9 +172,25 @@ func (s *RelayServer) Hosts() []HostEntry {
 	for _, v := range s.store {
 		list = append(list, v)
 	}
-	// Sort by last-seen (most recent first)
 	sort.SliceStable(list, func(i, j int) bool {
-		return list[i].LastSeen.After(list[j].LastSeen)
+		li, lj := list[i], list[j]
+		if li.Connected != lj.Connected {
+			return li.Connected // true before false
+		}
+		// Normalize names for comparison; fallback to peer id if empty
+		nameI := strings.ToLower(strings.TrimSpace(li.Info.Name))
+		if nameI == "" {
+			nameI = strings.ToLower(li.Info.Peer)
+		}
+		nameJ := strings.ToLower(strings.TrimSpace(lj.Info.Name))
+		if nameJ == "" {
+			nameJ = strings.ToLower(lj.Info.Peer)
+		}
+		if nameI != nameJ {
+			return nameI < nameJ
+		}
+		// As a final tiebreaker, keep most recent first for stability
+		return li.LastSeen.After(lj.LastSeen)
 	})
 	return list
 }
