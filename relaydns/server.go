@@ -58,7 +58,7 @@ func NewRelayServer(ctx context.Context, h host.Host, protocol, topic string) (*
 		sub:       sub,
 		store:     map[string]HostEntry{},
 		ttl:       15 * time.Second,
-		deadTTL:   10 * time.Minute,
+		deadTTL:   1 * time.Minute,
 	}
 	d.wg.Add(2)
 	go d.collect()
