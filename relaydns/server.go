@@ -33,6 +33,8 @@ type RelayServer struct {
 	store   map[string]HostEntry
 	ttl     time.Duration
 	deadTTL time.Duration
+
+	wg sync.WaitGroup
 }
 
 func NewRelayServer(ctx context.Context, h host.Host, protocol, topic string) (*RelayServer, error) {
@@ -58,6 +60,7 @@ func NewRelayServer(ctx context.Context, h host.Host, protocol, topic string) (*
 		ttl:       15 * time.Second,
 		deadTTL:   10 * time.Minute,
 	}
+	d.wg.Add(2)
 	go d.collect()
 	go d.gc()
 	return d, nil
@@ -65,10 +68,12 @@ func NewRelayServer(ctx context.Context, h host.Host, protocol, topic string) (*
 
 func (s *RelayServer) Close() error {
 	s.sub.Cancel()
+	s.wg.Wait()
 	return nil
 }
 
 func (s *RelayServer) collect() {
+	defer s.wg.Done()
 	for {
 		msg, err := s.sub.Next(s.ctx)
 		if err != nil {
@@ -111,6 +116,7 @@ func (s *RelayServer) collect() {
 }
 
 func (s *RelayServer) gc() {
+	defer s.wg.Done()
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {

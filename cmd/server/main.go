@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,6 +44,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Wait group for tracking TCP ingress goroutines
+	var tcpWg sync.WaitGroup
+
 	h, err := relaydns.MakeHost(ctx, flagP2pPort, true)
 	if err != nil {
 		return err
@@ -53,35 +57,71 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Admin UI + per-peer HTTP proxy served here
-	go serveHTTP(ctx, fmt.Sprintf(":%d", flagHttpPort), d, h, cancel)
+	httpServer := serveHTTP(ctx, fmt.Sprintf(":%d", flagHttpPort), d, h, cancel)
 
 	// Optional raw TCP ingress (e.g., SSH)
 	if flagTcpPort > 0 {
-		go serveTCPIngress(ctx, fmt.Sprintf(":%d", flagTcpPort), d)
+		tcpWg.Add(1)
+		go serveTCPIngress(ctx, fmt.Sprintf(":%d", flagTcpPort), d, &tcpWg)
 	}
 
 	// graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
+	log.Info().Msg("[server] shutting down...")
+
+	// Cancel context to stop all goroutines
 	cancel()
-	time.Sleep(300 * time.Millisecond)
+
+	// Shutdown HTTP server with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if httpServer != nil {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("[server] http server shutdown error")
+		}
+	}
+
+	// Close relay server (waits for background goroutines)
+	if err := d.Close(); err != nil {
+		log.Warn().Err(err).Msg("[server] relay server close error")
+	}
+
+	// Close libp2p host
+	if err := h.Close(); err != nil {
+		log.Warn().Err(err).Msg("[server] libp2p host close error")
+	}
+
+	// Wait for all TCP ingress goroutines to complete
+	log.Debug().Msg("[server] waiting for TCP ingress goroutines...")
+	tcpWg.Wait()
+	log.Debug().Msg("[server] all TCP ingress goroutines stopped")
+
+	log.Info().Msg("[server] shutdown complete")
 	return nil
 }
 
 // serveTCPIngress listens on addr for raw TCP (e.g., SSH) and proxies
 // incoming connections to a chosen peer over libp2p stream using Director.
-func serveTCPIngress(ctx context.Context, addr string, d *relaydns.RelayServer) {
+func serveTCPIngress(ctx context.Context, addr string, d *relaydns.RelayServer, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Error().Err(err).Msgf("tcp ingress listen failed: %s", addr)
 		return
 	}
 	log.Info().Msgf("[server] tcp ingress: %s", addr)
+
+	// Goroutine to close listener on context cancellation
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -92,7 +132,12 @@ func serveTCPIngress(ctx context.Context, addr string, d *relaydns.RelayServer) 
 			}
 			continue
 		}
+
+		// Launch connection handler with wait group tracking
+		wg.Add(1)
 		go func(c net.Conn) {
+			defer wg.Done()
+
 			hosts := d.Hosts()
 			if len(hosts) == 0 {
 				log.Warn().Msg("tcp ingress: no backend peers available")

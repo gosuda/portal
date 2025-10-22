@@ -134,7 +134,6 @@ func (b *RelayClient) Start(ctx context.Context) error {
 	// 4) advertiser loop
 	advCtx, cancel := context.WithCancel(ctx)
 	b.stop = cancel
-	b.wg.Add(1)
 	b.startAdvertiser(advCtx)
 
 	// 5) background: periodically re-fetch bootstraps from server and reconnect
