@@ -1,6 +1,6 @@
 module github.com/gosuda/relaydns
 
-go 1.25.0
+go 1.25.3
 
 require (
 	github.com/cockroachdb/crlib v0.0.0-20251001180057-2a49e1873587

@@ -1,4 +1,5 @@
 # RelayDNS
+
 > A lightweight, DNS-driven peer-to-peer proxy layer built on libp2p.
 
 `relaydns` provides a minimal DNS-entry proxy that routes traffic between arbitrary nodes over **libp2p**.  
@@ -6,6 +7,7 @@ It lets you expose and discover TCP services (like SSH, API endpoints, etc.) eve
 without depending on centralized reverse-proxy services.
 
 ## Why RelayDNS?
+
 Traditional DNS and hosting rely on centralized servers and public IPs. DNSPortal closes that gap — serving as a lightweight bridge for peer discovery and connection.
 
 Think of it as the DNS layer for the peer-to-peer world:
