@@ -338,7 +338,7 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
             <button id="roll" title="randomize nickname">🎲</button>
           </div>
         </div>
-        <div class="term-actions"><span class="userspill">Users <span id="users-count">0</span></span></div>
+        <div class="term-actions"><span class="userspill"><span id="users-count">0</span> Online</span></div>
       </div>
       <div id="log" class="screen"></div>
       <div class="promptline">
