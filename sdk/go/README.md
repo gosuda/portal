@@ -1,4 +1,4 @@
-# Go SDK Quickstart
+# Go SDK
 
 This SDK helps you advertise a local TCP service (e.g., HTTP) over libp2p so a RelayDNS server can discover and proxy to it.
 

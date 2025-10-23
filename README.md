@@ -71,11 +71,12 @@ If you run the chat client:
 
 ### 3. Embed the Client SDK in Your App
 
-See SDK quickstarts and examples:
-- Go: sdk/go/README.md
-- TypeScript: sdk/typescript (WIP)
-- Python: sdk/python (WIP)
-- Rust: sdk/rust (WIP)
+See SDK quickstarts and the protocol spec:
+- [Specification](./sdk/spec.md)
+- [Go](./sdk/go/README.md)
+- [TypeScript](./sdk/typescript/README.md)
+- [Python](./sdk/python/README.md)
+- [Rust](./sdk/rust/README.md)
 
 ## Configuration Reference
 
