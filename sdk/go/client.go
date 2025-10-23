@@ -20,6 +20,7 @@ import (
 	"github.com/gosuda/relaydns/relaydns"
 )
 
+// ClientConfig configures the client. Defaults apply; set Handler or TargetTCP.
 type ClientConfig struct {
 	ServerURL   string
 	Bootstraps  []string
@@ -27,27 +28,23 @@ type ClientConfig struct {
 	PreferQUIC  bool
 	PreferLocal bool
 
-	// libp2p stream protocol id (e.g. "/relaydns/ssh/1.0")
+	// Protocol (e.g. "/relaydns/http/1.0"); Topic for adverts.
 	Protocol string
-	// pubsub topic for backend adverts (e.g. "relaydns.backends")
-	Topic string
-	// advertise interval
-	AdvertiseEvery time.Duration
-	// advertise TTL (how long server should keep this entry alive)
-	AdvertiseTTL time.Duration
-	// how often to refresh server health/bootstraps (if ServerURL set)
+	Topic    string
+
+	AdvertiseEvery         time.Duration
+	AdvertiseTTL           time.Duration
 	RefreshBootstrapsEvery time.Duration
-	// optional metadata
+
 	Name string
 	DNS  string
 
-	// One of the following:
-	// 1) Provide a custom stream handler
-	Handler func(s network.Stream)
-	// 2) Or just set TargetTCP to auto-pipe bytes to a local TCP service (e.g. "127.0.0.1:22")
+	// Set one: custom stream Handler, or TargetTCP to proxy bytes to a local TCP service.
+	Handler   func(s network.Stream)
 	TargetTCP string
 }
 
+// RelayClient advertises over pubsub and handles inbound streams.
 type RelayClient struct {
 	h       host.Host
 	cfg     ClientConfig
@@ -96,8 +93,7 @@ func applyDefaults(cfg ClientConfig) ClientConfig {
 	return cfg
 }
 
-// NewClient constructs a client with defaults applied and an initialized libp2p host.
-// It does not start networking. Call Start(ctx) to begin handlers, pubsub, and advertising.
+// NewClient creates a client (not started) with defaults applied.
 func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
 	cfg = applyDefaults(cfg)
 
@@ -113,7 +109,7 @@ func NewClient(ctx context.Context, cfg ClientConfig) (*RelayClient, error) {
 	return b, nil
 }
 
-// Start connects bootstraps, sets stream handler, joins pubsub, and starts advertising.
+// Start wires handlers, joins pubsub, advertises, and refreshes bootstraps.
 func (b *RelayClient) Start(ctx context.Context) error {
 	if b.stop != nil {
 		return fmt.Errorf("client already started")
@@ -174,6 +170,7 @@ func (b *RelayClient) Host() host.Host {
 	return b.h
 }
 
+// Close stops all loops, removes the handler, and closes the host.
 func (b *RelayClient) Close() error {
 	if b.stop != nil {
 		b.stop()
@@ -217,33 +214,37 @@ func (b *RelayClient) resolveBootstraps() []string {
 	return relaydns.RemoveDuplicate(boot)
 }
 
-// setupStreamHandler installs the appropriate libp2p stream handler.
+// setupStreamHandler installs the handler. TargetTCP proxies stream <-> local TCP.
 func (b *RelayClient) setupStreamHandler() error {
 	switch {
 	case b.cfg.Handler != nil:
 		b.h.SetStreamHandler(b.protoID, b.cfg.Handler)
 	case b.cfg.TargetTCP != "":
 		b.h.SetStreamHandler(b.protoID, func(s network.Stream) {
+			stream := s
+			backendAddr := b.cfg.TargetTCP
 			defer func() {
-				if err := s.Close(); err != nil {
+				if err := stream.Close(); err != nil {
 					log.Debug().Err(err).Msg("relaydns: stream close")
 				}
 			}()
-			c, err := net.Dial("tcp", b.cfg.TargetTCP)
+
+			backendConn, err := net.Dial("tcp", backendAddr)
 			if err != nil {
-				log.Error().Err(err).Msgf("relaydns: dial %s", b.cfg.TargetTCP)
+				log.Error().Err(err).Msgf("relaydns: dial %s", backendAddr)
 				return
 			}
 			defer func() {
-				if err := c.Close(); err != nil {
+				if err := backendConn.Close(); err != nil {
 					log.Debug().Err(err).Msg("relaydns: conn close")
 				}
 			}()
-			// raw byte pipe (bidirectional)
-			go func() {
-				_, _ = io.Copy(c, s)
-			}()
-			_, _ = io.Copy(s, c)
+
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); _, _ = io.Copy(backendConn, stream) }()
+			go func() { defer wg.Done(); _, _ = io.Copy(stream, backendConn) }()
+			wg.Wait()
 		})
 	default:
 		return fmt.Errorf("relaydns: either Handler or TargetTCP must be set")
@@ -348,8 +349,7 @@ func serverPeerFromAddrs(addrs []string) (peer.ID, bool) {
 	return "", false
 }
 
-// ServerStatus returns a human-friendly status regarding connection to ServerURL.
-// If no ServerURL is configured, returns "N/A".
+// ServerStatus returns "Connected", "Connecting...", or "N/A".
 func (b *RelayClient) ServerStatus() string {
 	if b.cfg.ServerURL == "" {
 		return "N/A"

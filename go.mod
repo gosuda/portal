@@ -6,6 +6,7 @@ require (
 	github.com/cockroachdb/crlib v0.0.0-20251001180057-2a49e1873587
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/coder/websocket v1.8.14
+	github.com/go-chi/chi/v5 v5.2.3
 	github.com/libp2p/go-libp2p v0.44.0
 	github.com/libp2p/go-libp2p-pubsub v0.15.0
 	github.com/multiformats/go-multiaddr v0.16.0

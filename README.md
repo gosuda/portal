@@ -71,33 +71,11 @@ If you run the chat client:
 
 ### 3. Embed the Client SDK in Your App
 
-Install the Go SDK module:
-```bash
-go get github.com/gosuda/relaydns/sdk/go
-```
-
-Minimal snippet (defaults for Protocol/Topic are applied by the SDK):
-```go
-package main
-
-import (
-    "context"
-    "time"
-    "github.com/gosuda/relaydns/sdk/go"
-)
-
-func main() {
-    ctx := context.Background()
-    c, _ := sdk.NewClient(ctx, sdk.ClientConfig{
-        ServerURL: "http://relaydns.gosuda.org",
-        TargetTCP: "127.0.0.1:8081",
-        Name:      "demo-http",
-    })
-    _ = c.Start(ctx)
-    defer c.Close()
-    select {}
-}
-```
+See SDK quickstarts and examples:
+- Go: sdk/go/README.md
+- TypeScript: sdk/typescript (WIP)
+- Python: sdk/python (WIP)
+- Rust: sdk/rust (WIP)
 
 ## Configuration Reference
 
@@ -113,15 +91,6 @@ Chat client flags (see `make chat-run`):
 - `--server-url` Admin base URL to fetch `/health` (default `http://localhost:8080`)
 - `--port` Local chat HTTP port (default `8091`)
 - `--name` Display name (shown on server UI)
-
-## Other SDKs
-
-The repository includes placeholders for additional SDKs under `sdk/`:
-- TypeScript: `sdk/typescript` — TODO
-- Python: `sdk/python` — TODO
-- Rust: `sdk/rust` — TODO
-
-These will mirror the Go SDK ergonomics (simple defaults, minimal wiring). Contributions or early feedback on desired APIs are welcome.
 
 ## Deploying the Server (public)
 
