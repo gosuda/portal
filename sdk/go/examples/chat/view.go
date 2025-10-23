@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"html/template"
-	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 )
 
@@ -235,20 +235,12 @@ func serveIndex(w http.ResponseWriter, r *http.Request, name string) {
 
 // serveChatHTTP starts serving the chat UI and websocket endpoint and returns the server.
 // Callers are responsible for shutting it down via Server.Shutdown.
-func serveChatHTTP(ln net.Listener, name string, h *hub) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { serveIndex(w, r, name) })
-	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) { handleWS(w, r, h) })
-
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
-	log.Info().Msgf("[chat] http listening on %s", ln.Addr().String())
-
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("chat http error")
-		}
-	}()
-	return srv
+// NewHandler builds the chat HTTP router (UI + websocket)
+func NewHandler(name string, h *hub) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) { serveIndex(w, r, name) })
+	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) { handleWS(w, r, h) })
+	return r
 }
 
 var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
@@ -338,7 +330,7 @@ var indexTmpl = template.Must(template.New("chat").Parse(`<!DOCTYPE html>
             <button id="roll" title="randomize nickname">🎲</button>
           </div>
         </div>
-        <div class="term-actions"><span class="userspill">Users <span id="users-count">0</span></span></div>
+        <div class="term-actions"><span class="userspill"><span id="users-count">0</span> Online</span></div>
       </div>
       <div id="log" class="screen"></div>
       <div class="promptline">

@@ -2,18 +2,17 @@ package main
 
 import (
 	"html/template"
-	"net"
 	"net/http"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/go-chi/chi/v5"
 )
 
-// serveClientHTTP serves the simple local backend UI and health endpoint.
+// serveClientHTTP builds the local backend router using chi.
 // getStatus should return a short string like "Connected" or "Connecting...".
-func serveClientHTTP(ln net.Listener, name string, getStatus func() string) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+func NewHandler(addr string, name string, getStatus func() string) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		status := getStatus()
 		statusClass := "disconnected"
 		if status == "Connected" {
@@ -28,28 +27,17 @@ func serveClientHTTP(ln net.Listener, name string, getStatus func() string) *htt
 		}{
 			Now:         time.Now().Format(time.RFC1123),
 			Name:        name,
-			Addr:        ln.Addr().String(),
+			Addr:        addr,
 			Status:      status,
 			StatusClass: statusClass,
 		}
 		_ = clientPage.Execute(w, data)
 	})
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
-
-	log.Info().Msgf("[client] local backend http %s", ln.Addr().String())
-
-	// Serve in background
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg(" http backend error")
-		}
-	}()
-	return srv
+	return r
 }
 
 var clientPage = template.Must(template.New("index").Parse(`<!DOCTYPE html>

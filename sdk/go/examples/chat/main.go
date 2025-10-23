@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -47,7 +48,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	defer cancel() // Ensure context is cancelled on all exit paths
 
 	// 1) start local chat HTTP backend
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
+	httpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
 	if err != nil {
 		return fmt.Errorf("listen chat: %w", err)
 	}
@@ -70,10 +71,17 @@ func runChat(cmd *cobra.Command, args []string) error {
 			hub.attachStore(store)
 		}
 	}
-	srv := serveChatHTTP(ln, flagName, hub)
+	// Build router and run server in main
+	handler := NewHandler(flagName, hub)
+	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	go func() {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("chat http error")
+		}
+	}()
 
 	// 2) advertise over RelayDNS (HTTP tunneled via server /peer route)
-	cli, err := sdk.NewClient(ctx, sdk.ClientConfig{
+	client, err := sdk.NewClient(ctx, sdk.ClientConfig{
 		Name:      flagName,
 		TargetTCP: fmt.Sprintf("127.0.0.1:%d", flagPort),
 		ServerURL: flagServerURL,
@@ -81,7 +89,7 @@ func runChat(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	if err := cli.Start(ctx); err != nil {
+	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
 
@@ -91,17 +99,15 @@ func runChat(cmd *cobra.Command, args []string) error {
 	log.Info().Msg("[chat] shutting down...")
 
 	// Shutdown sequence:
-	// Note: defer cancel() at function start stops client advertising/refresh loops
-
 	// 1. Close client (waits for goroutines, closes libp2p host)
-	if err := cli.Close(); err != nil {
+	if err := client.Close(); err != nil {
 		log.Warn().Err(err).Msg("[chat] client close error")
 	}
 
 	// 2. Shutdown HTTP server with a fresh context (with timeout)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("[chat] http server shutdown error")
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -44,24 +45,28 @@ func runClient(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled on all exit paths
 
-	// 1) HTTP backend
-	var clientRef *sdk.RelayClient
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
+	// 1) start local HTTP backend
+	var relayClient *sdk.RelayClient
+	httpLn, err := net.Listen("tcp", fmt.Sprintf(":%d", flagPort))
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
 	}
-	log.Info().Msgf("[client] local backend http listening on %s", ln.Addr().String())
-
-	// Serve local backend view and keep a server handle for shutdown
-	srv := serveClientHTTP(ln, flagName, func() string {
-		if clientRef == nil {
+	log.Info().Msgf("[client] local backend http listening on %s", httpLn.Addr().String())
+	handler := NewHandler(httpLn.Addr().String(), flagName, func() string {
+		if relayClient == nil {
 			return "Starting..."
 		}
-		return clientRef.ServerStatus()
+		return relayClient.ServerStatus()
 	})
+	httpSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	go func() {
+		if err := httpSrv.Serve(httpLn); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg(" http backend error")
+		}
+	}()
 
-	// 2) libp2p host
-	rc, err := sdk.NewClient(ctx, sdk.ClientConfig{
+	// 2) libp2p client
+	client, err := sdk.NewClient(ctx, sdk.ClientConfig{
 		Name:      flagName,
 		TargetTCP: fmt.Sprintf("127.0.0.1:%d", flagPort),
 		ServerURL: flagServerURL,
@@ -69,10 +74,10 @@ func runClient(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	if err := rc.Start(ctx); err != nil {
+	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("start client: %w", err)
 	}
-	clientRef = rc
+	relayClient = client
 
 	// wait for termination
 	sig := make(chan os.Signal, 1)
@@ -81,17 +86,15 @@ func runClient(cmd *cobra.Command, args []string) error {
 	log.Info().Msg("[client] shutting down...")
 
 	// Shutdown sequence:
-	// Note: defer cancel() at function start stops client advertising/refresh loops
-
 	// 1. Close client (waits for goroutines, closes libp2p host)
-	if err := rc.Close(); err != nil {
+	if err := client.Close(); err != nil {
 		log.Warn().Err(err).Msg("[client] client close error")
 	}
 
 	// 2. Shutdown HTTP server with a fresh context (with timeout)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("[client] http server shutdown error")
 	}
 
