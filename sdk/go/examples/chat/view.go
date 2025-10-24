@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"html/template"
 	"net/http"
 	"sort"
@@ -9,9 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 	"github.com/go-chi/chi/v5"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
 
@@ -63,9 +61,7 @@ func (h *hub) broadcast(m message) {
 		}
 	}
 	for _, c := range conns {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = wsjson.Write(ctx, c, m)
-		cancel()
+		_ = c.WriteJSON(m)
 	}
 }
 
@@ -112,7 +108,7 @@ func (h *hub) closeAll() {
 	}
 	h.mu.Unlock()
 	for _, c := range conns {
-		_ = c.Close(websocket.StatusGoingAway, "server shutdown")
+		_ = c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"))
 	}
 }
 
@@ -122,22 +118,20 @@ func (h *hub) wait() {
 }
 
 func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// Allow any origin for demo simplicity. Consider tightening in production.
-		OriginPatterns: []string{"*"},
-	})
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
-	// Use a connection-scoped context not tied to the HTTP request lifecycle.
-	connCtx, cancelConn := context.WithCancel(context.Background())
 	h.mu.Lock()
 	h.conns[conn] = struct{}{}
 	backlog := append([]message(nil), h.messages...)
 	h.mu.Unlock()
 
 	for _, m := range backlog {
-		_ = wsjson.Write(connCtx, conn, m)
+		_ = conn.WriteJSON(m)
 	}
 	h.wg.Add(1)
 	go func() {
@@ -169,8 +163,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 				h.broadcast(message{TS: time.Now().UTC(), User: leftUser, Event: "left"})
 				h.broadcastRoster()
 			}
-			_ = conn.Close(websocket.StatusNormalClosure, "")
-			cancelConn()
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 			h.wg.Done()
 		}()
 		for {
@@ -179,7 +172,7 @@ func handleWS(w http.ResponseWriter, r *http.Request, h *hub) {
 				Text string `json:"text"`
 				UID  string `json:"uid"`
 			}
-			if err := wsjson.Read(connCtx, conn, &req); err != nil {
+			if err := conn.ReadJSON(&req); err != nil {
 				return
 			}
 			if req.User == "" {
