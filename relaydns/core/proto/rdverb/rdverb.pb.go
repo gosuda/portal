@@ -89,31 +89,34 @@ func (PacketType) EnumDescriptor() ([]byte, []int) {
 type ResponseCode int32
 
 const (
-	ResponseCode_RESPONSE_CODE_ACCEPTED         ResponseCode = 0
-	ResponseCode_RESPONSE_CODE_INVALID_EXPIRES  ResponseCode = 1
-	ResponseCode_RESPONSE_CODE_INVALID_IDENTITY ResponseCode = 2
-	ResponseCode_RESPONSE_CODE_INVALID_NAME     ResponseCode = 3
-	ResponseCode_RESPONSE_CODE_INVALID_ALPN     ResponseCode = 4
-	ResponseCode_RESPONSE_CODE_REJECTED         ResponseCode = 5
+	ResponseCode_RESPONSE_CODE_UNKNOWN          ResponseCode = 0
+	ResponseCode_RESPONSE_CODE_ACCEPTED         ResponseCode = 1
+	ResponseCode_RESPONSE_CODE_INVALID_EXPIRES  ResponseCode = 2
+	ResponseCode_RESPONSE_CODE_INVALID_IDENTITY ResponseCode = 3
+	ResponseCode_RESPONSE_CODE_INVALID_NAME     ResponseCode = 4
+	ResponseCode_RESPONSE_CODE_INVALID_ALPN     ResponseCode = 5
+	ResponseCode_RESPONSE_CODE_REJECTED         ResponseCode = 6
 )
 
 // Enum value maps for ResponseCode.
 var (
 	ResponseCode_name = map[int32]string{
-		0: "RESPONSE_CODE_ACCEPTED",
-		1: "RESPONSE_CODE_INVALID_EXPIRES",
-		2: "RESPONSE_CODE_INVALID_IDENTITY",
-		3: "RESPONSE_CODE_INVALID_NAME",
-		4: "RESPONSE_CODE_INVALID_ALPN",
-		5: "RESPONSE_CODE_REJECTED",
+		0: "RESPONSE_CODE_UNKNOWN",
+		1: "RESPONSE_CODE_ACCEPTED",
+		2: "RESPONSE_CODE_INVALID_EXPIRES",
+		3: "RESPONSE_CODE_INVALID_IDENTITY",
+		4: "RESPONSE_CODE_INVALID_NAME",
+		5: "RESPONSE_CODE_INVALID_ALPN",
+		6: "RESPONSE_CODE_REJECTED",
 	}
 	ResponseCode_value = map[string]int32{
-		"RESPONSE_CODE_ACCEPTED":         0,
-		"RESPONSE_CODE_INVALID_EXPIRES":  1,
-		"RESPONSE_CODE_INVALID_IDENTITY": 2,
-		"RESPONSE_CODE_INVALID_NAME":     3,
-		"RESPONSE_CODE_INVALID_ALPN":     4,
-		"RESPONSE_CODE_REJECTED":         5,
+		"RESPONSE_CODE_UNKNOWN":          0,
+		"RESPONSE_CODE_ACCEPTED":         1,
+		"RESPONSE_CODE_INVALID_EXPIRES":  2,
+		"RESPONSE_CODE_INVALID_IDENTITY": 3,
+		"RESPONSE_CODE_INVALID_NAME":     4,
+		"RESPONSE_CODE_INVALID_ALPN":     5,
+		"RESPONSE_CODE_REJECTED":         6,
 	}
 )
 
@@ -505,7 +508,7 @@ func (x *LeaseUpdateResponse) GetCode() ResponseCode {
 	if x != nil {
 		return x.Code
 	}
-	return ResponseCode_RESPONSE_CODE_ACCEPTED
+	return ResponseCode_RESPONSE_CODE_UNKNOWN
 }
 
 type LeaseDeleteRequest struct {
@@ -609,7 +612,7 @@ func (x *LeaseDeleteResponse) GetCode() ResponseCode {
 	if x != nil {
 		return x.Code
 	}
-	return ResponseCode_RESPONSE_CODE_ACCEPTED
+	return ResponseCode_RESPONSE_CODE_UNKNOWN
 }
 
 type ConnectionRequest struct {
@@ -705,7 +708,7 @@ func (x *ConnectionResponse) GetCode() ResponseCode {
 	if x != nil {
 		return x.Code
 	}
-	return ResponseCode_RESPONSE_CODE_ACCEPTED
+	return ResponseCode_RESPONSE_CODE_UNKNOWN
 }
 
 var File_relaydns_core_proto_rdverb_rdverb_proto protoreflect.FileDescriptor
@@ -755,14 +758,15 @@ const file_relaydns_core_proto_rdverb_rdverb_proto_rawDesc = "" +
 	" PACKET_TYPE_LEASE_DELETE_REQUEST\x10\x04\x12%\n" +
 	"!PACKET_TYPE_LEASE_DELETE_RESPONSE\x10\x05\x12\"\n" +
 	"\x1ePACKET_TYPE_CONNECTION_REQUEST\x10\x06\x12#\n" +
-	"\x1fPACKET_TYPE_CONNECTION_RESPONSE\x10\a*\xcd\x01\n" +
-	"\fResponseCode\x12\x1a\n" +
-	"\x16RESPONSE_CODE_ACCEPTED\x10\x00\x12!\n" +
-	"\x1dRESPONSE_CODE_INVALID_EXPIRES\x10\x01\x12\"\n" +
-	"\x1eRESPONSE_CODE_INVALID_IDENTITY\x10\x02\x12\x1e\n" +
-	"\x1aRESPONSE_CODE_INVALID_NAME\x10\x03\x12\x1e\n" +
-	"\x1aRESPONSE_CODE_INVALID_ALPN\x10\x04\x12\x1a\n" +
-	"\x16RESPONSE_CODE_REJECTED\x10\x05B\x8f\x01\n" +
+	"\x1fPACKET_TYPE_CONNECTION_RESPONSE\x10\a*\xe8\x01\n" +
+	"\fResponseCode\x12\x19\n" +
+	"\x15RESPONSE_CODE_UNKNOWN\x10\x00\x12\x1a\n" +
+	"\x16RESPONSE_CODE_ACCEPTED\x10\x01\x12!\n" +
+	"\x1dRESPONSE_CODE_INVALID_EXPIRES\x10\x02\x12\"\n" +
+	"\x1eRESPONSE_CODE_INVALID_IDENTITY\x10\x03\x12\x1e\n" +
+	"\x1aRESPONSE_CODE_INVALID_NAME\x10\x04\x12\x1e\n" +
+	"\x1aRESPONSE_CODE_INVALID_ALPN\x10\x05\x12\x1a\n" +
+	"\x16RESPONSE_CODE_REJECTED\x10\x06B\x8f\x01\n" +
 	"\n" +
 	"com.rdverbB\vRdverbProtoP\x01Z<github.com/gosuda/relaydns/relaydns/core/proto/rdverb;rdverb\xa2\x02\x03RXX\xaa\x02\x06Rdverb\xca\x02\x06Rdverb\xe2\x02\x12Rdverb\\GPBMetadata\xea\x02\x06Rdverbb\x06proto3"
 
