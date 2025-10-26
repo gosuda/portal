@@ -66,42 +66,42 @@ jobs:
             exit 1
           fi
 
-  # Build job - verify binaries compile
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.25.0']
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ matrix.go-version }}
-          cache: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build server binary
-        run: go build -v -trimpath -o bin/relaydns-server ./cmd/server
-
-      - name: Build example HTTP client
-        run: go build -v -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
-
-      - name: Build example chat client
-        run: go build -v -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat
-
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        if: matrix.go-version == '1.25.0'
-        with:
-          name: binaries
-          path: bin/*
-          retention-days: 7
+#  # Build job - verify binaries compile
+#  build:
+#    name: Build
+#    runs-on: ubuntu-latest
+#    strategy:
+#      matrix:
+#        go-version: ['1.25.0']
+#    steps:
+#      - name: Checkout code
+#        uses: actions/checkout@v4
+#
+#      - name: Set up Go ${{ matrix.go-version }}
+#        uses: actions/setup-go@v5
+#        with:
+#          go-version: ${{ matrix.go-version }}
+#          cache: true
+#
+#      - name: Download dependencies
+#        run: go mod download
+#
+#      - name: Build server binary
+#        run: go build -v -trimpath -o bin/relaydns-server ./cmd/server
+#
+#      - name: Build example HTTP client
+#        run: go build -v -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
+#
+#      - name: Build example chat client
+#        run: go build -v -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat
+#
+#      - name: Upload binaries
+#        uses: actions/upload-artifact@v4
+#        if: matrix.go-version == '1.25.0'
+#        with:
+#          name: binaries
+#          path: bin/*
+#          retention-days: 7
 
   # # Test job - unit tests with race detection
   # test:

@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package rdsec;
+
+option go_package = "github.com/gosuda/relaydns/relaydns/core/proto/rdsec;rdsec";
+
+message Identity {
+  string id = 1;
+  bytes public_key = 2;
+}
+
+enum ProtocolVersion {
+  PROTOCOL_VERSION_1 = 0;
+}
+
+message ClientInitPayload {
+  ProtocolVersion version = 1;
+  bytes nonce = 2;
+  int64 timestamp = 3;
+  Identity identity = 4;
+  string alpn = 5;
+
+  bytes session_public_key = 6;
+}
+
+message SignedPayload {
+  bytes data = 1;
+  bytes signature = 2;
+}
+
+message ServerInitPayload {
+  ProtocolVersion version = 1;
+  bytes nonce = 2;
+  int64 timestamp = 3;
+  Identity identity = 4;
+  string alpn = 5;
+
+  bytes session_public_key = 6;
+}
+
+message EncryptedData {
+  bytes nonce = 1;
+  bytes payload = 2;
+}

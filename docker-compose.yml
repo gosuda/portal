@@ -1,15 +1,11 @@
-version: "3.9"
-
 services:
   relayserver:
     build:
       context: .
       dockerfile: Dockerfile
-    image: dreamcacao/relaydns:latest
     command:
       - "--http-port"
       - "19080"
-      - "--p2p-port"
-      - "4001"
-    network_mode: "host"
+    ports:
+      - "19080:19080"
     restart: unless-stopped
