@@ -19,7 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdsec"
-	"github.com/gosuda/relaydns/relaydns/internal/randpool"
+	"github.com/gosuda/relaydns/relaydns/utils/randpool"
 	"github.com/valyala/bytebufferpool"
 )
 
@@ -100,11 +100,23 @@ func NewHandshaker(credential *Credential) *Handshaker {
 
 // SecureConnection represents a secured connection with encryption capabilities
 type SecureConnection struct {
-	conn      io.ReadWriteCloser
+	conn io.ReadWriteCloser
+
+	localID  string
+	remoteID string
+
 	encryptor cipher.AEAD
 	decryptor cipher.AEAD
 
 	readBuffer *bytebufferpool.ByteBuffer
+}
+
+func (sc *SecureConnection) LocalID() string {
+	return sc.localID
+}
+
+func (sc *SecureConnection) RemoteID() string {
+	return sc.remoteID
 }
 
 // Write encrypts and writes data to the underlying connection
@@ -301,7 +313,7 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 	wipeMemory(ephemeralPriv)
 
 	// Create secure connection
-	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey)
+	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey, serverInitPayload.GetIdentity().GetId())
 }
 
 // ServerHandshake performs the server-side of the handshake
@@ -391,7 +403,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 	}
 
 	// Create secure connection
-	return h.createSecureConnection(conn, serverEncryptKey, serverDecryptKey)
+	return h.createSecureConnection(conn, serverEncryptKey, serverDecryptKey, clientInitPayload.GetIdentity().GetId())
 }
 
 // validateClientInit validates the client init message
@@ -498,7 +510,7 @@ func (h *Handshaker) deriveServerSessionKeys(serverPriv, clientPub, clientNonce,
 }
 
 // createSecureConnection creates a new SecureConnection with the given keys and nonces
-func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey, decryptKey []byte) (*SecureConnection, error) {
+func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey, decryptKey []byte, remoteID string) (*SecureConnection, error) {
 	// Create AEAD instances
 	encryptor, err := chacha20poly1305.New(encryptKey)
 	if err != nil {
@@ -515,6 +527,8 @@ func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey,
 
 	secureConn := &SecureConnection{
 		conn:       conn,
+		localID:    h.credential.id,
+		remoteID:   remoteID,
 		encryptor:  encryptor,
 		decryptor:  decryptor,
 		readBuffer: readBuffer,

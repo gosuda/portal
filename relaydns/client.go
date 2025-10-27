@@ -1,7 +1,6 @@
 package relaydns
 
 import (
-	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -21,11 +20,19 @@ var (
 
 type IncommingConn struct {
 	*cryptoops.SecureConnection
-	id string
+	leaseID string
 }
 
-func (i *IncommingConn) ID() string {
-	return i.id
+func (i *IncommingConn) LeaseID() string {
+	return i.leaseID
+}
+
+func (i *IncommingConn) LocalID() string {
+	return i.LocalID()
+}
+
+func (i *IncommingConn) RemoteID() string {
+	return i.RemoteID()
 }
 
 // RelayClient는 RelayServer에 연결하여 서비스를 요청하는 클라이언트입니다.
@@ -176,12 +183,12 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 
 	g.incommingConnCh <- &IncommingConn{
 		SecureConnection: secConn,
-		id:               req.LeaseId,
+		leaseID:          req.LeaseId,
 	}
 }
 
 // GetRelayInfo는 서버의 릴레이 정보를 요청합니다.
-func (g *RelayClient) GetRelayInfo(ctx context.Context) (*rdverb.RelayInfo, error) {
+func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
@@ -357,7 +364,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 }
 
 // requestConnection은 다른 클라이언트로의 연결을 요청합니다.
-func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, io.ReadWriteCloser, error) {
+func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
@@ -463,14 +470,14 @@ func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 		PublicKey: cred.PublicKey(),
 	}
 
+	g.leasesMu.Lock()
+	delete(g.leases, identity.Id)
+	g.leasesMu.Unlock()
+
 	resp, err := g.deleteLease(cred, identity)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		return err
 	}
-
-	g.leasesMu.Lock()
-	delete(g.leases, identity.Id)
-	g.leasesMu.Unlock()
 
 	return nil
 }
