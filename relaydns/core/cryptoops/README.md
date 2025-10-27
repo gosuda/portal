@@ -35,7 +35,7 @@ Each peer has a long-term Ed25519 keypair that identifies them:
 type Credential struct {
     privateKey ed25519.PrivateKey  // 64 bytes
     publicKey  ed25519.PublicKey   // 32 bytes
-    id         string               // Base58-encoded SHA256 hash of public key
+    id         string               // Base32-encoded HMAC-SHA256 of public key
 }
 ```
 
@@ -274,7 +274,7 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 - **Signature-based**: Ed25519 signatures over handshake payloads
 - **Identity binding**: Public keys are cryptographically bound to identity IDs
   ```go
-  id := Base58Encode(SHA256(publicKey))
+  id := Base32Encode(HMAC_SHA256(publicKey, "RDVERB_PROTOCOL_VER_01_SHA256_ID"))
   ```
 
 ### 2. Forward Secrecy
