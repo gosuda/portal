@@ -19,15 +19,15 @@ func decodeProtobuf[T interface {
 }](
 	data []byte,
 ) (
-	T,
+	*T,
 	error,
 ) {
 	var t T
 	err := t.UnmarshalVT(data)
 	if err != nil {
-		return t, err
+		return nil, err
 	}
-	return t, nil
+	return &t, nil
 }
 
 func writePacket(w io.Writer, packet *rdverb.Packet) error {

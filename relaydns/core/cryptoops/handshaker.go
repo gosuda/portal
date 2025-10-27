@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -237,7 +238,7 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 }
 
 // ServerHandshake performs the server-side of the handshake
-func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpn string) (*SecureConnection, error) {
+func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
 	// Read client init message
 	clientInitBytes, err := readLengthPrefixed(conn)
 	if err != nil {
@@ -256,7 +257,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 	}
 
 	// Validate client init
-	if err := h.validateClientInit(clientInitSigned, clientInitPayload, alpn); err != nil {
+	if err := h.validateClientInit(clientInitSigned, clientInitPayload, alpns); err != nil {
 		// Silent failure: close connection and return error without sending response
 		conn.Close()
 		return nil, err
@@ -283,7 +284,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 			Id:        h.credential.ID(),
 			PublicKey: h.credential.PublicKey(),
 		},
-		Alpn:             alpn,
+		Alpn:             clientInitPayload.Alpn,
 		SessionPublicKey: ephemeralPub,
 	}
 
@@ -325,7 +326,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 }
 
 // validateClientInit validates the client init message
-func (h *Handshaker) validateClientInit(clientInitSigned *rdsec.SignedPayload, clientInitPayload *rdsec.ClientInitPayload, expectedAlpn string) error {
+func (h *Handshaker) validateClientInit(clientInitSigned *rdsec.SignedPayload, clientInitPayload *rdsec.ClientInitPayload, expectedAlpns []string) error {
 	if clientInitSigned == nil || clientInitPayload == nil {
 		return ErrInvalidProtocol
 	}
@@ -341,7 +342,7 @@ func (h *Handshaker) validateClientInit(clientInitSigned *rdsec.SignedPayload, c
 	}
 
 	// Check ALPN
-	if clientInitPayload.GetAlpn() != expectedAlpn {
+	if !slices.Contains(expectedAlpns, clientInitPayload.GetAlpn()) {
 		return ErrHandshakeFailed
 	}
 

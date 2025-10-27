@@ -85,7 +85,7 @@ func TestHandshake(t *testing.T) {
 	// Start server handshake in a goroutine
 	go func() {
 		defer func() { done <- true }()
-		serverSecureConn, serverErr = serverHandshaker.ServerHandshake(serverPipeConn, alpn)
+		serverSecureConn, serverErr = serverHandshaker.ServerHandshake(serverPipeConn, []string{alpn})
 	}()
 
 	// Give the server a moment to start waiting
@@ -326,7 +326,7 @@ func TestHandshakeWithInvalidALPN(t *testing.T) {
 	// Start server handshake in a goroutine
 	go func() {
 		defer func() { done <- true }()
-		_, serverErr = serverHandshaker.ServerHandshake(serverPipeConn, serverALPN)
+		_, serverErr = serverHandshaker.ServerHandshake(serverPipeConn, []string{serverALPN})
 	}()
 
 	// Give the server a moment to start waiting

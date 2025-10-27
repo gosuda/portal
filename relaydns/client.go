@@ -19,43 +19,57 @@ var (
 	ErrConnectionRejected = errors.New("connection rejected")
 )
 
+type IncommingConn struct {
+	*cryptoops.SecureConnection
+	id string
+}
+
+func (i *IncommingConn) ID() string {
+	return i.id
+}
+
 // RelayClient는 RelayServer에 연결하여 서비스를 요청하는 클라이언트입니다.
 type RelayClient struct {
 	conn io.ReadWriteCloser
 
 	sess *yamux.Session
 
-	streams   map[uint32]*yamux.Stream
-	streamsMu sync.Mutex
-
-	leases   map[string]*LeaseWithCred
+	leases   map[string]*leaseWithCred
 	leasesMu sync.Mutex
 
 	stopCh    chan struct{}
 	waitGroup sync.WaitGroup
+
+	incommingConnCh chan *IncommingConn
 }
 
-type LeaseWithCred struct {
+type leaseWithCred struct {
 	Lease *rdverb.Lease
 	Cred  *cryptoops.Credential
 }
 
 // NewRelayClient는 새로운 RelayClient 인스턴스를 생성합니다.
 func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
-	return &RelayClient{
-		conn:    conn,
-		streams: make(map[uint32]*yamux.Stream),
-		leases:  make(map[string]*LeaseWithCred),
-		stopCh:  make(chan struct{}),
+	g := &RelayClient{
+		conn:            conn,
+		leases:          make(map[string]*leaseWithCred),
+		stopCh:          make(chan struct{}),
+		incommingConnCh: make(chan *IncommingConn),
 	}
+
+	g.waitGroup.Add(1)
+	go g.leaseUpdateWorker()
+	go g.leaseListenWorker()
+
+	return g
 }
 
 // Close는 서버와의 연결을 종료합니다.
-func (c *RelayClient) Close() error {
-	close(c.stopCh)
-	c.waitGroup.Wait()
+func (g *RelayClient) Close() error {
+	close(g.stopCh)
+	g.waitGroup.Wait()
 
-	err := c.conn.Close()
+	err := g.conn.Close()
 	if err != nil {
 		return err
 	}
@@ -63,38 +77,113 @@ func (c *RelayClient) Close() error {
 }
 
 // leaseUpdateWorker는 리스 업데이트를 처리하는 워커입니다.
-func (c *RelayClient) leaseUpdateWorker() {
+func (g *RelayClient) leaseUpdateWorker() {
+	defer g.waitGroup.Done()
+
 	ticker := time.NewTicker(5 * time.Second)
-	var updateRequired = map[*LeaseWithCred]struct{}{}
+	var updateRequired = map[*leaseWithCred]struct{}{}
 
 	defer ticker.Stop()
 	for {
 		select {
-		case <-c.stopCh:
+		case <-g.stopCh:
 			return
 		case <-ticker.C:
 			clear(updateRequired)
 
-			c.leasesMu.Lock()
-			for _, lease := range c.leases {
+			g.leasesMu.Lock()
+			for _, lease := range g.leases {
 				if lease.Lease.Expires < int64(time.Now().Add(30*time.Second).Unix()) {
 					updateRequired[lease] = struct{}{}
 				}
 			}
-			c.leasesMu.Unlock()
+			g.leasesMu.Unlock()
 
 			for lease := range updateRequired {
 				lease.Lease.Expires = time.Now().Add(30 * time.Second).Unix()
-				c.updateLease(context.Background(), lease.Cred, lease.Lease)
+				g.updateLease(context.Background(), lease.Cred, lease.Lease)
 			}
 		}
 	}
 }
 
+func (g *RelayClient) leaseListenWorker() {
+	for {
+		stream, err := g.sess.AcceptStream()
+		if err != nil {
+			continue
+		}
+		go g.handleConnectionRequestStream(stream)
+	}
+}
+
+func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
+	pkt, err := readPacket(stream)
+	if err != nil {
+		stream.Close()
+		return
+	}
+
+	if pkt.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST {
+		stream.Close()
+		return
+	}
+
+	req := &rdverb.ConnectionRequest{}
+	err = req.UnmarshalVT(pkt.Payload)
+	if err != nil {
+		stream.Close()
+		return
+	}
+
+	g.leasesMu.Lock()
+	lease, ok := g.leases[req.LeaseId]
+	g.leasesMu.Unlock()
+
+	resp := &rdverb.ConnectionResponse{}
+	if !ok {
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+	} else {
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
+	}
+
+	respPayload, err := resp.MarshalVT()
+	if err != nil {
+		stream.Close()
+		return
+	}
+
+	err = writePacket(stream, &rdverb.Packet{
+		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+		Payload: respPayload,
+	})
+	if err != nil {
+		stream.Close()
+		return
+	}
+
+	if !ok {
+		stream.Close()
+		return
+	}
+
+	handshaker := cryptoops.NewHandshaker(lease.Cred)
+	secConn, err := handshaker.ServerHandshake(stream, lease.Lease.Alpn)
+	if err != nil {
+		stream.Close()
+		return
+	}
+
+	g.incommingConnCh <- &IncommingConn{
+		SecureConnection: secConn,
+		id:               req.LeaseId,
+	}
+}
+
 // GetRelayInfo는 서버의 릴레이 정보를 요청합니다.
-func (c *RelayClient) GetRelayInfo(ctx context.Context) (*rdverb.RelayInfo, error) {
+func (g *RelayClient) GetRelayInfo(ctx context.Context) (*rdverb.RelayInfo, error) {
 	// 새 스트림 열기
-	stream, err := c.sess.OpenStream()
+	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return nil, err
 	}
@@ -136,9 +225,9 @@ func (c *RelayClient) GetRelayInfo(ctx context.Context) (*rdverb.RelayInfo, erro
 }
 
 // updateLease는 서버에 리스 업데이트를 요청합니다.
-func (c *RelayClient) updateLease(ctx context.Context, cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
+func (g *RelayClient) updateLease(ctx context.Context, cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
 	// 새 스트림 열기
-	stream, err := c.sess.OpenStream()
+	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -202,9 +291,9 @@ func (c *RelayClient) updateLease(ctx context.Context, cred *cryptoops.Credentia
 }
 
 // deleteLease는 서버에 리스 삭제를 요청합니다.
-func (c *RelayClient) deleteLease(ctx context.Context, cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
+func (g *RelayClient) deleteLease(ctx context.Context, cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
 	// 새 스트림 열기
-	stream, err := c.sess.OpenStream()
+	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -268,9 +357,9 @@ func (c *RelayClient) deleteLease(ctx context.Context, cred *cryptoops.Credentia
 }
 
 // requestConnection은 다른 클라이언트로의 연결을 요청합니다.
-func (c *RelayClient) requestConnection(ctx context.Context, leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, io.ReadWriteCloser, error) {
+func (g *RelayClient) requestConnection(ctx context.Context, leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, io.ReadWriteCloser, error) {
 	// 새 스트림 열기
-	stream, err := c.sess.OpenStream()
+	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
@@ -337,7 +426,7 @@ func (c *RelayClient) requestConnection(ctx context.Context, leaseID string, alp
 	return resp.Code, secConn, nil
 }
 
-func (c *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credential, name string, alpns []string) error {
+func (g *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credential, name string, alpns []string) error {
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
 		PublicKey: cred.PublicKey(),
@@ -350,20 +439,42 @@ func (c *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credent
 		Alpn:     alpns,
 	}
 
-	c.leasesMu.Lock()
-	c.leases[identity.Id] = &LeaseWithCred{
+	g.leasesMu.Lock()
+	g.leases[identity.Id] = &leaseWithCred{
 		Lease: lease,
 		Cred:  cred,
 	}
-	c.leasesMu.Unlock()
+	g.leasesMu.Unlock()
 
-	resp, err := c.updateLease(ctx, cred, lease)
+	resp, err := g.updateLease(ctx, cred, lease)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
-		c.leasesMu.Lock()
-		delete(c.leases, identity.Id)
-		c.leasesMu.Unlock()
+		g.leasesMu.Lock()
+		delete(g.leases, identity.Id)
+		g.leasesMu.Unlock()
 		return err
 	}
 
 	return nil
+}
+
+func (g *RelayClient) DeregisterLease(ctx context.Context, cred *cryptoops.Credential) error {
+	identity := &rdsec.Identity{
+		Id:        cred.ID(),
+		PublicKey: cred.PublicKey(),
+	}
+
+	resp, err := g.deleteLease(ctx, cred, identity)
+	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		return err
+	}
+
+	g.leasesMu.Lock()
+	delete(g.leases, identity.Id)
+	g.leasesMu.Unlock()
+
+	return nil
+}
+
+func (g *RelayClient) IncommingConnection() <-chan *IncommingConn {
+	return g.incommingConnCh
 }
