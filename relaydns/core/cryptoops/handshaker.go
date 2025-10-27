@@ -111,6 +111,27 @@ type SecureConnection struct {
 	readBuffer *bytebufferpool.ByteBuffer
 }
 
+func (r *SecureConnection) SetDeadline(t time.Time) error {
+	if conn, ok := r.conn.(interface{ SetDeadline(time.Time) error }); ok {
+		return conn.SetDeadline(t)
+	}
+	return nil
+}
+
+func (r *SecureConnection) SetReadDeadline(t time.Time) error {
+	if conn, ok := r.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		return conn.SetReadDeadline(t)
+	}
+	return nil
+}
+
+func (r *SecureConnection) SetWriteDeadline(t time.Time) error {
+	if conn, ok := r.conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		return conn.SetWriteDeadline(t)
+	}
+	return nil
+}
+
 func (sc *SecureConnection) LocalID() string {
 	return sc.localID
 }

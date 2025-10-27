@@ -57,14 +57,25 @@ type leaseWithCred struct {
 
 // NewRelayClient는 새로운 RelayClient 인스턴스를 생성합니다.
 func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
+	// Create yamux session as client
+	config := yamux.DefaultConfig()
+	config.Logger = nil // Disable logging for cleaner output
+	sess, err := yamux.Client(conn, config)
+	if err != nil {
+		// If session creation fails, close the connection and return nil
+		conn.Close()
+		return nil
+	}
+
 	g := &RelayClient{
 		conn:            conn,
+		sess:            sess,
 		leases:          make(map[string]*leaseWithCred),
 		stopCh:          make(chan struct{}),
 		incommingConnCh: make(chan *IncommingConn),
 	}
 
-	g.waitGroup.Add(1)
+	g.waitGroup.Add(2) // One for leaseUpdateWorker, one for leaseListenWorker
 	go g.leaseUpdateWorker()
 	go g.leaseListenWorker()
 
@@ -76,9 +87,24 @@ func (g *RelayClient) Close() error {
 	close(g.stopCh)
 	g.waitGroup.Wait()
 
-	err := g.conn.Close()
-	if err != nil {
-		return err
+	var errs []error
+
+	// Close the session first
+	if g.sess != nil {
+		if err := g.sess.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// Then close the underlying connection
+	if g.conn != nil {
+		if err := g.conn.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs[0]
 	}
 	return nil
 }
@@ -108,19 +134,42 @@ func (g *RelayClient) leaseUpdateWorker() {
 
 			for lease := range updateRequired {
 				lease.Lease.Expires = time.Now().Add(30 * time.Second).Unix()
-				g.updateLease(lease.Cred, lease.Lease)
+				// Check if session is available before updating lease
+				if g.sess != nil {
+					g.updateLease(lease.Cred, lease.Lease)
+				}
 			}
 		}
 	}
 }
 
 func (g *RelayClient) leaseListenWorker() {
+	defer g.waitGroup.Done()
+
 	for {
-		stream, err := g.sess.AcceptStream()
-		if err != nil {
-			continue
+		select {
+		case <-g.stopCh:
+			return
+		default:
+			if g.sess == nil {
+				// Session not initialized, wait a bit and retry
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			stream, err := g.sess.AcceptStream()
+			if err != nil {
+				// Check if we're supposed to stop
+				select {
+				case <-g.stopCh:
+					return
+				default:
+					// Continue trying to accept streams
+					continue
+				}
+			}
+			go g.handleConnectionRequestStream(stream)
 		}
-		go g.handleConnectionRequestStream(stream)
 	}
 }
 
