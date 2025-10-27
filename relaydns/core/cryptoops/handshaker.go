@@ -298,6 +298,8 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 		return nil, err
 	}
 
+	wipeMemory(ephemeralPriv)
+
 	// Create secure connection
 	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey)
 }
@@ -374,6 +376,8 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 	if err != nil {
 		return nil, err
 	}
+
+	wipeMemory(ephemeralPriv)
 
 	// Send server init message
 	serverInitBytes, err := proto.Marshal(serverInit)
