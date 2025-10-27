@@ -336,58 +336,6 @@ func (x *ServerInitPayload) GetSessionPublicKey() []byte {
 	return nil
 }
 
-type EncryptedData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nonce         []byte                 `protobuf:"bytes,1,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EncryptedData) Reset() {
-	*x = EncryptedData{}
-	mi := &file_relaydns_core_proto_rdsec_rdsec_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EncryptedData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EncryptedData) ProtoMessage() {}
-
-func (x *EncryptedData) ProtoReflect() protoreflect.Message {
-	mi := &file_relaydns_core_proto_rdsec_rdsec_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EncryptedData.ProtoReflect.Descriptor instead.
-func (*EncryptedData) Descriptor() ([]byte, []int) {
-	return file_relaydns_core_proto_rdsec_rdsec_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *EncryptedData) GetNonce() []byte {
-	if x != nil {
-		return x.Nonce
-	}
-	return nil
-}
-
-func (x *EncryptedData) GetPayload() []byte {
-	if x != nil {
-		return x.Payload
-	}
-	return nil
-}
-
 var File_relaydns_core_proto_rdsec_rdsec_proto protoreflect.FileDescriptor
 
 const file_relaydns_core_proto_rdsec_rdsec_proto_rawDesc = "" +
@@ -413,10 +361,7 @@ const file_relaydns_core_proto_rdsec_rdsec_proto_rawDesc = "" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12+\n" +
 	"\bidentity\x18\x04 \x01(\v2\x0f.rdsec.IdentityR\bidentity\x12\x12\n" +
 	"\x04alpn\x18\x05 \x01(\tR\x04alpn\x12,\n" +
-	"\x12session_public_key\x18\x06 \x01(\fR\x10sessionPublicKey\"?\n" +
-	"\rEncryptedData\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\fR\x05nonce\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload*)\n" +
+	"\x12session_public_key\x18\x06 \x01(\fR\x10sessionPublicKey*)\n" +
 	"\x0fProtocolVersion\x12\x16\n" +
 	"\x12PROTOCOL_VERSION_1\x10\x00B\x87\x01\n" +
 	"\tcom.rdsecB\n" +
@@ -435,14 +380,13 @@ func file_relaydns_core_proto_rdsec_rdsec_proto_rawDescGZIP() []byte {
 }
 
 var file_relaydns_core_proto_rdsec_rdsec_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_relaydns_core_proto_rdsec_rdsec_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_relaydns_core_proto_rdsec_rdsec_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_relaydns_core_proto_rdsec_rdsec_proto_goTypes = []any{
 	(ProtocolVersion)(0),      // 0: rdsec.ProtocolVersion
 	(*Identity)(nil),          // 1: rdsec.Identity
 	(*ClientInitPayload)(nil), // 2: rdsec.ClientInitPayload
 	(*SignedPayload)(nil),     // 3: rdsec.SignedPayload
 	(*ServerInitPayload)(nil), // 4: rdsec.ServerInitPayload
-	(*EncryptedData)(nil),     // 5: rdsec.EncryptedData
 }
 var file_relaydns_core_proto_rdsec_rdsec_proto_depIdxs = []int32{
 	0, // 0: rdsec.ClientInitPayload.version:type_name -> rdsec.ProtocolVersion
@@ -467,7 +411,7 @@ func file_relaydns_core_proto_rdsec_rdsec_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relaydns_core_proto_rdsec_rdsec_proto_rawDesc), len(file_relaydns_core_proto_rdsec_rdsec_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

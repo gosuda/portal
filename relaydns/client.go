@@ -101,7 +101,7 @@ func (g *RelayClient) leaseUpdateWorker() {
 
 			for lease := range updateRequired {
 				lease.Lease.Expires = time.Now().Add(30 * time.Second).Unix()
-				g.updateLease(context.Background(), lease.Cred, lease.Lease)
+				g.updateLease(lease.Cred, lease.Lease)
 			}
 		}
 	}
@@ -225,7 +225,7 @@ func (g *RelayClient) GetRelayInfo(ctx context.Context) (*rdverb.RelayInfo, erro
 }
 
 // updateLease는 서버에 리스 업데이트를 요청합니다.
-func (g *RelayClient) updateLease(ctx context.Context, cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
+func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
@@ -291,7 +291,7 @@ func (g *RelayClient) updateLease(ctx context.Context, cred *cryptoops.Credentia
 }
 
 // deleteLease는 서버에 리스 삭제를 요청합니다.
-func (g *RelayClient) deleteLease(ctx context.Context, cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
+func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
@@ -357,7 +357,7 @@ func (g *RelayClient) deleteLease(ctx context.Context, cred *cryptoops.Credentia
 }
 
 // requestConnection은 다른 클라이언트로의 연결을 요청합니다.
-func (g *RelayClient) requestConnection(ctx context.Context, leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, io.ReadWriteCloser, error) {
+func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, io.ReadWriteCloser, error) {
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
@@ -426,7 +426,7 @@ func (g *RelayClient) requestConnection(ctx context.Context, leaseID string, alp
 	return resp.Code, secConn, nil
 }
 
-func (g *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credential, name string, alpns []string) error {
+func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, name string, alpns []string) error {
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
 		PublicKey: cred.PublicKey(),
@@ -446,7 +446,7 @@ func (g *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credent
 	}
 	g.leasesMu.Unlock()
 
-	resp, err := g.updateLease(ctx, cred, lease)
+	resp, err := g.updateLease(cred, lease)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		g.leasesMu.Lock()
 		delete(g.leases, identity.Id)
@@ -457,13 +457,13 @@ func (g *RelayClient) RegisterLease(ctx context.Context, cred *cryptoops.Credent
 	return nil
 }
 
-func (g *RelayClient) DeregisterLease(ctx context.Context, cred *cryptoops.Credential) error {
+func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
 		PublicKey: cred.PublicKey(),
 	}
 
-	resp, err := g.deleteLease(ctx, cred, identity)
+	resp, err := g.deleteLease(cred, identity)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		return err
 	}

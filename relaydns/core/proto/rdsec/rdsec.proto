@@ -37,8 +37,3 @@ message ServerInitPayload {
 
   bytes session_public_key = 6;
 }
-
-message EncryptedData {
-  bytes nonce = 1;
-  bytes payload = 2;
-}

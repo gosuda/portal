@@ -5,10 +5,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -17,7 +19,49 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdsec"
+	"github.com/gosuda/relaydns/relaydns/internal/randpool"
+	"github.com/valyala/bytebufferpool"
 )
+
+var _lengthBufferPool = sync.Pool{
+	New: func() interface{} {
+		return new([4]byte)
+	},
+}
+
+var _secureMemoryPool bytebufferpool.Pool
+
+func wipeMemory(b []byte) {
+	b = b[:cap(b)]
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {
+	currentCap := cap(buffer.B)
+	if n > currentCap {
+		wipeMemory(buffer.B)
+		// Align to 16KB boundaries
+		newSize := (n + 16383) &^ 16383
+		buffer.B = make([]byte, 0, newSize)
+	}
+	buffer.B = buffer.B[:0]
+}
+
+func acquireBuffer(n int) *bytebufferpool.ByteBuffer {
+	buffer := _secureMemoryPool.Get()
+	if buffer.B == nil {
+		buffer.B = make([]byte, 0)
+	}
+	bufferGrow(buffer, n)
+	return buffer
+}
+
+func releaseBuffer(buffer *bytebufferpool.ByteBuffer) {
+	wipeMemory(buffer.B)
+	_secureMemoryPool.Put(buffer)
+}
 
 var (
 	ErrHandshakeFailed  = errors.New("handshake failed")
@@ -56,41 +100,51 @@ func NewHandshaker(credential *Credential) *Handshaker {
 
 // SecureConnection represents a secured connection with encryption capabilities
 type SecureConnection struct {
-	conn         io.ReadWriteCloser
-	encryptor    cipher.AEAD
-	decryptor    cipher.AEAD
-	encryptNonce []byte
-	decryptNonce []byte
+	conn      io.ReadWriteCloser
+	encryptor cipher.AEAD
+	decryptor cipher.AEAD
+
+	readBuffer *bytebufferpool.ByteBuffer
 }
 
 // Write encrypts and writes data to the underlying connection
 func (sc *SecureConnection) Write(p []byte) (int, error) {
-	// Increment nonce for each message
-	incrementNonce(sc.encryptNonce)
-
-	// Encrypt the data
-	encrypted := sc.encryptor.Seal(nil, sc.encryptNonce, p, nil)
-
-	// Create EncryptedData message
-	encryptedData := &rdsec.EncryptedData{
-		Nonce:   make([]byte, len(sc.encryptNonce)),
-		Payload: encrypted,
+	const fragSize = maxRawPacketSize / 2
+	if len(p) > fragSize {
+		for i := 0; i < (len(p)+fragSize-1)/fragSize; i++ {
+			start := i * fragSize
+			end := min(start+fragSize, len(p))
+			_, err := sc.writeFragmentation(p[start:end])
+			if err != nil {
+				return 0, err
+			}
+		}
+		return len(p), nil
 	}
-	copy(encryptedData.Nonce, sc.encryptNonce)
+	return sc.writeFragmentation(p)
+}
 
-	// Serialize and send
-	data, err := proto.Marshal(encryptedData)
+// writeFragmentation
+func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
+	cipherSize := sc.encryptor.NonceSize() + len(p) + sc.encryptor.Overhead()
+	bufferSize := 4 + cipherSize
+	buffer := acquireBuffer(bufferSize)
+	buffer.B = buffer.B[:bufferSize]
+	defer releaseBuffer(buffer)
+
+	binary.BigEndian.PutUint32(buffer.B[:4], uint32(cipherSize))
+
+	randpool.CSPRNG_RAND(buffer.B[4 : 4+sc.encryptor.NonceSize()])
+
+	sc.encryptor.Seal(
+		buffer.B[4+sc.encryptor.NonceSize():][:0], // len(0), cap(len(p)+Overhead)
+		buffer.B[4:4+sc.encryptor.NonceSize()],
+		p,
+		nil,
+	)
+
+	_, err := sc.conn.Write(buffer.B)
 	if err != nil {
-		return 0, ErrEncryptionFailed
-	}
-
-	// Check packet size limit
-	if len(data) > maxRawPacketSize {
-		return 0, ErrEncryptionFailed
-	}
-
-	// Write length-prefixed message
-	if err := writeLengthPrefixed(sc.conn, data); err != nil {
 		return 0, err
 	}
 
@@ -99,18 +153,21 @@ func (sc *SecureConnection) Write(p []byte) (int, error) {
 
 // Read reads and decrypts data from the underlying connection
 func (sc *SecureConnection) Read(p []byte) (int, error) {
-	// Read the encrypted data message
-	encryptedData := &rdsec.EncryptedData{}
+	if len(sc.readBuffer.B) > 0 {
+		n := copy(p, sc.readBuffer.B)
+		copy(sc.readBuffer.B[:len(sc.readBuffer.B)-n], sc.readBuffer.B[n:])
+		sc.readBuffer.B = sc.readBuffer.B[:len(sc.readBuffer.B)-n]
+		return n, nil
+	}
 
 	// Read length prefix first (4 bytes)
-	lengthBuf := make([]byte, 4)
-	_, err := io.ReadFull(sc.conn, lengthBuf)
+	lengthBuf := _lengthBufferPool.Get().(*[4]byte)
+	_, err := io.ReadFull(sc.conn, lengthBuf[:])
 	if err != nil {
 		return 0, err
 	}
-
-	// Calculate message length
-	length := int(lengthBuf[0])<<24 | int(lengthBuf[1])<<16 | int(lengthBuf[2])<<8 | int(lengthBuf[3])
+	length := binary.BigEndian.Uint32(lengthBuf[:])
+	_lengthBufferPool.Put(lengthBuf)
 
 	// Check packet size limit
 	if length > maxRawPacketSize {
@@ -118,36 +175,44 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 	}
 
 	// Read the message
-	msgBuf := make([]byte, length)
-	_, err = io.ReadFull(sc.conn, msgBuf)
+	msgBuf := acquireBuffer(int(length))
+	msgBuf.B = msgBuf.B[:length]
+	defer releaseBuffer(msgBuf)
+	_, err = io.ReadFull(sc.conn, msgBuf.B)
 	if err != nil {
 		return 0, err
 	}
 
-	// Unmarshal the message
-	err = proto.Unmarshal(msgBuf, encryptedData)
-	if err != nil {
+	// length check
+	if len(msgBuf.B) < sc.decryptor.NonceSize()+sc.decryptor.Overhead() {
 		return 0, ErrDecryptionFailed
 	}
 
-	// Validate nonce
-	if len(encryptedData.Nonce) != nonceSize {
-		return 0, ErrInvalidNonce
-	}
+	// Extract nonce and ciphertext
+	nonce := msgBuf.B[0:sc.decryptor.NonceSize()]
+	ciphertext := msgBuf.B[sc.decryptor.NonceSize():]
 
-	// Decrypt the data
-	decrypted, err := sc.decryptor.Open(nil, encryptedData.Nonce, encryptedData.Payload, nil)
+	// Decrypt the data in-place
+	decrypted, err := sc.decryptor.Open(ciphertext[:0], nonce, ciphertext, nil)
 	if err != nil {
 		return 0, ErrDecryptionFailed
 	}
 
 	// Copy decrypted data to the provided buffer
-	copy(p, decrypted)
-	return len(decrypted), nil
+	n := copy(p, decrypted)
+	if n < len(decrypted) {
+		sc.readBuffer.B = append(sc.readBuffer.B, decrypted[n:]...)
+	}
+
+	return n, nil
 }
 
-// Close closes the underlying connection
+// Close closes the underlying connection and releases resources
 func (sc *SecureConnection) Close() error {
+	if sc.readBuffer != nil {
+		releaseBuffer(sc.readBuffer)
+		sc.readBuffer = nil
+	}
 	return sc.conn.Close()
 }
 
@@ -226,7 +291,7 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 
 	// Derive session keys
 	clientEncryptKey, clientDecryptKey, err := h.deriveClientSessionKeys(
-		ephemeralPriv, ephemeralPub, serverInitPayload.GetSessionPublicKey(),
+		ephemeralPriv, serverInitPayload.GetSessionPublicKey(),
 		clientInitPayload.GetNonce(), serverInitPayload.GetNonce(),
 	)
 	if err != nil {
@@ -234,7 +299,7 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 	}
 
 	// Create secure connection
-	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey, nonce, serverInitPayload.GetNonce())
+	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey)
 }
 
 // ServerHandshake performs the server-side of the handshake
@@ -303,7 +368,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 
 	// Derive session keys
 	serverEncryptKey, serverDecryptKey, err := h.deriveServerSessionKeys(
-		ephemeralPriv, ephemeralPub, clientInitPayload.GetSessionPublicKey(),
+		ephemeralPriv, clientInitPayload.GetSessionPublicKey(),
 		clientInitPayload.GetNonce(), nonce,
 	)
 	if err != nil {
@@ -322,7 +387,7 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 	}
 
 	// Create secure connection
-	return h.createSecureConnection(conn, serverEncryptKey, serverDecryptKey, nonce, clientInitPayload.GetNonce())
+	return h.createSecureConnection(conn, serverEncryptKey, serverDecryptKey)
 }
 
 // validateClientInit validates the client init message
@@ -389,7 +454,7 @@ func (h *Handshaker) validateServerInit(serverInitSigned *rdsec.SignedPayload, s
 }
 
 // deriveClientSessionKeys derives encryption and decryption keys for the client
-func (h *Handshaker) deriveClientSessionKeys(clientPriv, clientPub, serverPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
+func (h *Handshaker) deriveClientSessionKeys(clientPriv, serverPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
 	// Compute shared secret
 	sharedSecret, err := curve25519.X25519(clientPriv, serverPub)
 	if err != nil {
@@ -409,7 +474,7 @@ func (h *Handshaker) deriveClientSessionKeys(clientPriv, clientPub, serverPub, c
 }
 
 // deriveServerSessionKeys derives encryption and decryption keys for the server
-func (h *Handshaker) deriveServerSessionKeys(serverPriv, serverPub, clientPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
+func (h *Handshaker) deriveServerSessionKeys(serverPriv, clientPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
 	// Compute shared secret (should be same as client's)
 	sharedSecret, err := curve25519.X25519(serverPriv, clientPub)
 	if err != nil {
@@ -429,7 +494,7 @@ func (h *Handshaker) deriveServerSessionKeys(serverPriv, serverPub, clientPub, c
 }
 
 // createSecureConnection creates a new SecureConnection with the given keys and nonces
-func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey, decryptKey, encryptNonce, decryptNonce []byte) (*SecureConnection, error) {
+func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey, decryptKey []byte) (*SecureConnection, error) {
 	// Create AEAD instances
 	encryptor, err := chacha20poly1305.New(encryptKey)
 	if err != nil {
@@ -441,19 +506,17 @@ func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey,
 		return nil, ErrEncryptionFailed
 	}
 
-	// Copy nonces to avoid modifying the originals
-	encNonce := make([]byte, nonceSize)
-	decNonce := make([]byte, nonceSize)
-	copy(encNonce, encryptNonce)
-	copy(decNonce, decryptNonce)
+	readBuffer := acquireBuffer(1 << 12)
+	readBuffer.B = readBuffer.B[:0]
 
-	return &SecureConnection{
-		conn:         conn,
-		encryptor:    encryptor,
-		decryptor:    decryptor,
-		encryptNonce: encNonce,
-		decryptNonce: decNonce,
-	}, nil
+	secureConn := &SecureConnection{
+		conn:       conn,
+		encryptor:  encryptor,
+		decryptor:  decryptor,
+		readBuffer: readBuffer,
+	}
+
+	return secureConn, nil
 }
 
 // Helper functions
@@ -494,17 +557,6 @@ func validateTimestamp(timestamp int64) error {
 	}
 
 	return nil
-}
-
-// incrementNonce increments the nonce for the next message
-func incrementNonce(nonce []byte) {
-	// Simple increment - in production, you might want a more sophisticated approach
-	for i := len(nonce) - 1; i >= 0; i-- {
-		nonce[i]++
-		if nonce[i] != 0 {
-			break
-		}
-	}
 }
 
 // writeLengthPrefixed writes a length-prefixed message to the connection
