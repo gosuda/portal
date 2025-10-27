@@ -344,14 +344,25 @@ The implementation uses careful memory management to minimize allocations and pr
 // Secure buffer pool for sensitive data
 var _secureMemoryPool bytebufferpool.Pool
 
+func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {
+	currentCap := cap(buffer.B)
+	if n > currentCap {
+		wipeMemory(buffer.B)
+		// Align to 16KB boundaries
+		newSize := (n + 16383) &^ 16383
+		buffer.B = make([]byte, 0, newSize)
+	}
+	buffer.B = buffer.B[:0]
+}
+
 // Acquire buffer with auto-growing and alignment
 func acquireBuffer(n int) *bytebufferpool.ByteBuffer {
-    buffer := _secureMemoryPool.Get()
-    if n > cap(buffer.B) {
-        wipeMemory(buffer.B)  // Zero old data
-        buffer.B = make([]byte, ((n+(1<<14)-1)/1<<14)*(1<<14))  // 16KB aligned
-    }
-    return buffer
+	buffer := _secureMemoryPool.Get()
+	if buffer.B == nil {
+		buffer.B = make([]byte, 0)
+	}
+	bufferGrow(buffer, n)
+	return buffer
 }
 
 // Release and wipe buffer
