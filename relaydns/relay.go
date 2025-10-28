@@ -9,6 +9,7 @@ import (
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdsec"
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdverb"
 	"github.com/hashicorp/yamux"
+	"github.com/rs/zerolog/log"
 )
 
 type Connection struct {
@@ -60,9 +61,20 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 var _yamux_config = yamux.DefaultConfig()
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
+	log.Debug().Int64("conn_id", id).Msg("[RelayServer] Handling new connection")
+
 	defer func() {
+		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection closing, cleaning up")
+
 		// Clean up leases associated with this connection when it closes
 		cleanedLeaseIDs := g.leaseManager.CleanupLeasesByConnectionID(id)
+
+		if len(cleanedLeaseIDs) > 0 {
+			log.Debug().
+				Int64("conn_id", id).
+				Strs("lease_ids", cleanedLeaseIDs).
+				Msg("[RelayServer] Cleaned up leases for connection")
+		}
 
 		// Also clean up lease connections mapping
 		g.leaseConnectionsLock.Lock()
@@ -91,13 +103,20 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 
 		// Close the underlying connection
 		connection.conn.Close()
+		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection cleanup complete")
 	}()
 
 	for {
 		stream, err := connection.sess.AcceptStream()
 		if err != nil {
+			log.Debug().Err(err).Int64("conn_id", id).Msg("[RelayServer] Error accepting stream, connection closing")
 			return
 		}
+		log.Debug().
+			Int64("conn_id", id).
+			Uint32("stream_id", stream.StreamID()).
+			Msg("[RelayServer] Accepted new stream")
+
 		connection.streamsLock.Lock()
 		connection.streams[stream.StreamID()] = stream
 		connection.streamsLock.Unlock()
@@ -108,14 +127,28 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 const _MAX_RAW_PACKET_SIZE = 1 << 26 // 64MB
 
 func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *Connection) {
+	log.Debug().
+		Int64("conn_id", id).
+		Uint32("stream_id", stream.StreamID()).
+		Msg("[RelayServer] Handling stream")
+
 	var hijacked bool = false
 	defer func() {
 		stream_id := stream.StreamID()
 		if !hijacked {
+			log.Debug().
+				Int64("conn_id", id).
+				Uint32("stream_id", stream_id).
+				Msg("[RelayServer] Closing stream")
 			connection.streamsLock.Lock()
 			stream.Close()
 			delete(connection.streams, stream_id)
 			connection.streamsLock.Unlock()
+		} else {
+			log.Debug().
+				Int64("conn_id", id).
+				Uint32("stream_id", stream_id).
+				Msg("[RelayServer] Stream was hijacked, not closing")
 		}
 	}()
 
@@ -130,8 +163,19 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 	for {
 		packet, err := readPacket(stream)
 		if err != nil {
+			log.Debug().
+				Err(err).
+				Int64("conn_id", id).
+				Uint32("stream_id", stream.StreamID()).
+				Msg("[RelayServer] Error reading packet")
 			return
 		}
+
+		log.Debug().
+			Int64("conn_id", id).
+			Uint32("stream_id", stream.StreamID()).
+			Str("packet_type", packet.Type.String()).
+			Msg("[RelayServer] Received packet")
 
 		switch packet.Type {
 		case rdverb.PacketType_PACKET_TYPE_RELAY_INFO_REQUEST:
@@ -143,38 +187,53 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 		case rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST:
 			err = g.handleConnectionRequest(ctx, packet)
 		default:
+			log.Warn().
+				Int64("conn_id", id).
+				Str("packet_type", packet.Type.String()).
+				Msg("[RelayServer] Unknown packet type")
 			// Unknown packet type, return to close the stream
 			return
 		}
 
 		if err != nil {
+			log.Error().
+				Err(err).
+				Int64("conn_id", id).
+				Str("packet_type", packet.Type.String()).
+				Msg("[RelayServer] Error handling packet")
 			return
 		}
 
 		// If the stream was hijacked, exit the loop
 		if hijacked {
+			log.Debug().Int64("conn_id", id).Msg("[RelayServer] Stream hijacked, exiting handler")
 			return
 		}
 	}
 }
 
 func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
+	log.Debug().Msg("[RelayServer] New connection received")
+
 	sess, err := yamux.Server(conn, _yamux_config)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayServer] Failed to create yamux server session")
 		return err
 	}
 
 	g.connectionsLock.Lock()
 	g.connidCounter++
+	connID := g.connidCounter
 	connection := &Connection{
 		conn:    conn,
 		sess:    sess,
 		streams: make(map[uint32]*yamux.Stream),
 	}
-	g.connections[g.connidCounter] = connection
+	g.connections[connID] = connection
 	g.connectionsLock.Unlock()
 
-	go g.handleConn(g.connidCounter, connection)
+	log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Connection registered, starting handler")
+	go g.handleConn(connID, connection)
 
 	return nil
 }

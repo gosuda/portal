@@ -11,6 +11,7 @@ import (
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdsec"
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdverb"
 	"github.com/hashicorp/yamux"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -28,11 +29,11 @@ func (i *IncommingConn) LeaseID() string {
 }
 
 func (i *IncommingConn) LocalID() string {
-	return i.LocalID()
+	return i.SecureConnection.LocalID()
 }
 
 func (i *IncommingConn) RemoteID() string {
-	return i.RemoteID()
+	return i.SecureConnection.RemoteID()
 }
 
 // RelayClient는 RelayServer에 연결하여 서비스를 요청하는 클라이언트입니다.
@@ -57,15 +58,20 @@ type leaseWithCred struct {
 
 // NewRelayClient는 새로운 RelayClient 인스턴스를 생성합니다.
 func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
+	log.Debug().Msg("[RelayClient] Creating new relay client")
+
 	// Create yamux session as client
 	config := yamux.DefaultConfig()
 	config.Logger = nil // Disable logging for cleaner output
 	sess, err := yamux.Client(conn, config)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to create yamux session")
 		// If session creation fails, close the connection and return nil
 		conn.Close()
 		return nil
 	}
+
+	log.Debug().Msg("[RelayClient] Yamux session created successfully")
 
 	g := &RelayClient{
 		conn:            conn,
@@ -79,11 +85,13 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	go g.leaseUpdateWorker()
 	go g.leaseListenWorker()
 
+	log.Debug().Msg("[RelayClient] RelayClient initialized and workers started")
 	return g
 }
 
 // Close는 서버와의 연결을 종료합니다.
 func (g *RelayClient) Close() error {
+	log.Debug().Msg("[RelayClient] Closing relay client")
 	close(g.stopCh)
 	g.waitGroup.Wait()
 
@@ -92,6 +100,7 @@ func (g *RelayClient) Close() error {
 	// Close the session first
 	if g.sess != nil {
 		if err := g.sess.Close(); err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Error closing yamux session")
 			errs = append(errs, err)
 		}
 	}
@@ -99,10 +108,12 @@ func (g *RelayClient) Close() error {
 	// Then close the underlying connection
 	if g.conn != nil {
 		if err := g.conn.Close(); err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Error closing connection")
 			errs = append(errs, err)
 		}
 	}
 
+	log.Debug().Msg("[RelayClient] Relay client closed")
 	if len(errs) > 0 {
 		return errs[0]
 	}
@@ -145,10 +156,12 @@ func (g *RelayClient) leaseUpdateWorker() {
 
 func (g *RelayClient) leaseListenWorker() {
 	defer g.waitGroup.Done()
+	log.Debug().Msg("[RelayClient] Lease listen worker started")
 
 	for {
 		select {
 		case <-g.stopCh:
+			log.Debug().Msg("[RelayClient] Lease listen worker stopped")
 			return
 		default:
 			if g.sess == nil {
@@ -164,23 +177,29 @@ func (g *RelayClient) leaseListenWorker() {
 				case <-g.stopCh:
 					return
 				default:
+					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
 					// Continue trying to accept streams
 					continue
 				}
 			}
+			log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Accepted incoming stream")
 			go g.handleConnectionRequestStream(stream)
 		}
 	}
 }
 
 func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
+	log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Handling connection request stream")
+
 	pkt, err := readPacket(stream)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		stream.Close()
 		return
 	}
 
 	if pkt.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST {
+		log.Warn().Str("packet_type", pkt.Type.String()).Msg("[RelayClient] Unexpected packet type")
 		stream.Close()
 		return
 	}
@@ -188,9 +207,12 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	req := &rdverb.ConnectionRequest{}
 	err = req.UnmarshalVT(pkt.Payload)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to unmarshal connection request")
 		stream.Close()
 		return
 	}
+
+	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayClient] Connection request received")
 
 	g.leasesMu.Lock()
 	lease, ok := g.leases[req.LeaseId]
@@ -198,13 +220,16 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 
 	resp := &rdverb.ConnectionResponse{}
 	if !ok {
+		log.Warn().Str("lease_id", req.LeaseId).Msg("[RelayClient] Lease not found, rejecting connection")
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 	} else {
+		log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayClient] Lease found, accepting connection")
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 	}
 
 	respPayload, err := resp.MarshalVT()
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to marshal response")
 		stream.Close()
 		return
 	}
@@ -214,6 +239,7 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 		Payload: respPayload,
 	})
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to write response packet")
 		stream.Close()
 		return
 	}
@@ -223,12 +249,20 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 		return
 	}
 
+	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayClient] Starting server handshake")
 	handshaker := cryptoops.NewHandshaker(lease.Cred)
 	secConn, err := handshaker.ServerHandshake(stream, lease.Lease.Alpn)
 	if err != nil {
+		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayClient] Server handshake failed")
 		stream.Close()
 		return
 	}
+
+	log.Debug().
+		Str("lease_id", req.LeaseId).
+		Str("local_id", secConn.LocalID()).
+		Str("remote_id", secConn.RemoteID()).
+		Msg("[RelayClient] Secure connection established, sending to incoming channel")
 
 	g.incommingConnCh <- &IncommingConn{
 		SecureConnection: secConn,
@@ -414,9 +448,12 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 
 // requestConnection은 다른 클라이언트로의 연결을 요청합니다.
 func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
+	log.Debug().Str("lease_id", leaseID).Str("alpn", alpn).Msg("[RelayClient] Requesting connection")
+
 	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to open stream for connection request")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
@@ -433,28 +470,34 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to marshal connection request")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
 	// 요청 전송
+	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Sending connection request")
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST,
 		Payload: reqPayload,
 	})
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to write connection request packet")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
 	// 응답 수신
+	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Waiting for connection response")
 	respPacket, err := readPacket(stream)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to read connection response")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE {
+		log.Warn().Str("packet_type", respPacket.Type.String()).Msg("[RelayClient] Unexpected response packet type")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, ErrInvalidResponse
 	}
@@ -462,22 +505,37 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	var resp rdverb.ConnectionResponse
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayClient] Failed to unmarshal connection response")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
+	log.Debug().
+		Str("lease_id", leaseID).
+		Str("response_code", resp.Code.String()).
+		Msg("[RelayClient] Connection response received")
+
 	// 거절된 경우 스트림을 닫고 오류 코드 반환
 	if resp.Code != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		log.Warn().Str("lease_id", leaseID).Str("code", resp.Code.String()).Msg("[RelayClient] Connection rejected")
 		stream.Close()
 		return resp.Code, nil, ErrConnectionRejected
 	}
 
+	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Starting client handshake")
 	handshaker := cryptoops.NewHandshaker(clientCred)
 	secConn, err := handshaker.ClientHandshake(stream, alpn)
 	if err != nil {
+		log.Error().Err(err).Str("lease_id", leaseID).Msg("[RelayClient] Client handshake failed")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
+
+	log.Debug().
+		Str("lease_id", leaseID).
+		Str("local_id", secConn.LocalID()).
+		Str("remote_id", secConn.RemoteID()).
+		Msg("[RelayClient] Secure connection established successfully")
 
 	return resp.Code, secConn, nil
 }
@@ -487,6 +545,12 @@ func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, name string, alp
 		Id:        cred.ID(),
 		PublicKey: cred.PublicKey(),
 	}
+
+	log.Debug().
+		Str("lease_id", identity.Id).
+		Str("name", name).
+		Strs("alpns", alpns).
+		Msg("[RelayClient] Registering lease")
 
 	lease := &rdverb.Lease{
 		Identity: identity,
@@ -504,12 +568,18 @@ func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, name string, alp
 
 	resp, err := g.updateLease(cred, lease)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		log.Error().
+			Err(err).
+			Str("lease_id", identity.Id).
+			Str("response", resp.String()).
+			Msg("[RelayClient] Failed to register lease")
 		g.leasesMu.Lock()
 		delete(g.leases, identity.Id)
 		g.leasesMu.Unlock()
 		return err
 	}
 
+	log.Debug().Str("lease_id", identity.Id).Msg("[RelayClient] Lease registered successfully")
 	return nil
 }
 

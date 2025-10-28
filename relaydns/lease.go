@@ -116,6 +116,23 @@ func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
 	return lease, true
 }
 
+func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
+	lm.leasesLock.RLock()
+	defer lm.leasesLock.RUnlock()
+
+	lease, exists := lm.leases[leaseID]
+	if !exists {
+		return nil, false
+	}
+
+	// Check if lease is expired
+	if time.Now().After(lease.Expires) {
+		return nil, false
+	}
+
+	return lease, true
+}
+
 func (lm *LeaseManager) GetAllLeases() []*rdverb.Lease {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()

@@ -9,6 +9,7 @@ import (
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdsec"
 	"github.com/gosuda/relaydns/relaydns/core/proto/rdverb"
 	"github.com/hashicorp/yamux"
+	"github.com/rs/zerolog/log"
 	"github.com/valyala/bytebufferpool"
 )
 
@@ -133,171 +134,258 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	var req rdverb.ConnectionRequest
 	err := req.UnmarshalVT(packet.Payload)
 	if err != nil {
+		log.Error().Err(err).Msg("[RelayServer] Failed to unmarshal connection request")
 		return err
 	}
+
+	log.Debug().
+		Str("lease_id", req.LeaseId).
+		Str("client_id", req.ClientIdentity.Id).
+		Int64("conn_id", ctx.ConnectionID).
+		Msg("[RelayServer] Handling connection request")
 
 	var resp rdverb.ConnectionResponse
 
-	// Check if lease exists and get lease connection
-	leaseEntry, exists := g.leaseManager.GetLease(req.ClientIdentity)
+	// Check if lease exists and get lease connection using LeaseId
+	leaseEntry, exists := g.leaseManager.GetLeaseByID(req.LeaseId)
 	if !exists {
+		log.Warn().Str("lease_id", req.LeaseId).Msg("[RelayServer] Lease not found")
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
-	} else {
-		// Get the lease connection using connection ID
-		g.connectionsLock.RLock()
-		leaseConn, leaseExists := g.connections[leaseEntry.ConnectionID]
-		g.connectionsLock.RUnlock()
 
-		if !leaseExists {
-			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
-		} else {
-			// Forward the connection request to the lease holder
-			forwardResp, err := g.forwardConnectionRequest(leaseConn, &req)
-			if err != nil {
-				resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
-			} else {
-				resp.Code = forwardResp.Code
-
-				// If accepted, set up bidirectional forwarding
-				if resp.Code == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
-					ctx.Hijack()
-					go g.setupBidirectionalForwarding(ctx.Stream, leaseConn, leaseEntry)
-				}
-			}
+		response, err := resp.MarshalVT()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayServer] Failed to marshal connection response")
+			return err
 		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
 
-	response, err := resp.MarshalVT()
+	log.Debug().
+		Str("lease_id", req.LeaseId).
+		Int64("lease_conn_id", leaseEntry.ConnectionID).
+		Msg("[RelayServer] Lease found, forwarding to lease holder")
+
+	// Get the lease connection using connection ID
+	g.connectionsLock.RLock()
+	leaseConn, leaseExists := g.connections[leaseEntry.ConnectionID]
+	g.connectionsLock.RUnlock()
+
+	if !leaseExists {
+		log.Warn().
+			Str("lease_id", req.LeaseId).
+			Int64("lease_conn_id", leaseEntry.ConnectionID).
+			Msg("[RelayServer] Lease connection no longer active")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayServer] Failed to marshal connection response")
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	// Open a stream to the lease holder
+	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayServer] Opening stream to lease holder")
+	leaseStream, err := leaseConn.sess.OpenStream()
 	if err != nil {
-		return err
-	}
+		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayServer] Failed to open stream to lease holder")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 
-	return writePacket(ctx.Stream, &rdverb.Packet{
-		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
-		Payload: response,
-	})
-}
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
 
-func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdverb.ConnectionRequest) (*rdverb.ConnectionResponse, error) {
-	// Open a new stream to the lease holder
-	forwardStream, err := leaseConn.sess.OpenStream()
-	if err != nil {
-		return nil, err
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
-	defer forwardStream.Close()
 
 	// Forward the connection request
 	requestPayload, err := req.MarshalVT()
 	if err != nil {
-		return nil, err
+		log.Error().Err(err).Msg("[RelayServer] Failed to marshal forward request")
+		leaseStream.Close()
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
 
-	err = writePacket(forwardStream, &rdverb.Packet{
+	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayServer] Sending connection request to lease holder")
+	err = writePacket(leaseStream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST,
 		Payload: requestPayload,
 	})
 	if err != nil {
-		return nil, err
+		log.Error().Err(err).Msg("[RelayServer] Failed to write forward request")
+		leaseStream.Close()
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
 
 	// Read the response
-	respPacket, err := readPacket(forwardStream)
+	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayServer] Waiting for response from lease holder")
+	respPacket, err := readPacket(leaseStream)
 	if err != nil {
-		return nil, err
+		log.Error().Err(err).Msg("[RelayServer] Failed to read forward response")
+		leaseStream.Close()
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE {
-		return nil, err
+		log.Warn().Str("packet_type", respPacket.Type.String()).Msg("[RelayServer] Unexpected response packet type")
+		leaseStream.Close()
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
 	}
 
-	var resp rdverb.ConnectionResponse
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
+		log.Error().Err(err).Msg("[RelayServer] Failed to unmarshal forward response")
+		leaseStream.Close()
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 
-func (g *RelayServer) setupBidirectionalForwarding(clientStream *yamux.Stream, leaseConn *Connection, leaseEntry *LeaseEntry) {
-	// Open a new stream to the lease holder for data forwarding
-	dataStream, err := leaseConn.sess.OpenStream()
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	log.Debug().
+		Str("lease_id", req.LeaseId).
+		Str("response_code", resp.Code.String()).
+		Msg("[RelayServer] Received response from lease holder, sending to client")
+
+	// Send response to client
+	response, err := resp.MarshalVT()
 	if err != nil {
-		return
-	}
-	defer dataStream.Close()
-
-	// Send a special packet to indicate this is a data stream
-	initPacket := &rdverb.Packet{
-		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST, // Reuse as init signal
-		Payload: []byte("DATA_STREAM"),
+		log.Error().Err(err).Msg("[RelayServer] Failed to marshal connection response")
+		leaseStream.Close()
+		return err
 	}
 
-	err = writePacket(dataStream, initPacket)
+	err = writePacket(ctx.Stream, &rdverb.Packet{
+		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE,
+		Payload: response,
+	})
 	if err != nil {
-		return
+		log.Error().Err(err).Msg("[RelayServer] Failed to write connection response")
+		leaseStream.Close()
+		return err
 	}
 
-	// Read the response to confirm data stream is ready
-	respPacket, err := readPacket(dataStream)
-	if err != nil {
-		return
-	}
+	// If accepted, hijack both streams and set up bidirectional forwarding
+	if resp.Code == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayServer] Connection accepted, setting up bidirectional forwarding")
+		ctx.Hijack()
 
-	// Check if we got a data stream confirmation
-	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE {
-		return
-	}
+		leaseID := string(leaseEntry.Lease.Identity.Id)
+		g.relayedConnectionsLock.Lock()
+		g.relayedConnections[leaseID] = append(g.relayedConnections[leaseID], ctx.Stream)
+		g.relayedConnectionsLock.Unlock()
 
-	var resp rdverb.ConnectionResponse
-	err = resp.UnmarshalVT(respPacket.Payload)
-	if err != nil {
-		return
-	}
+		// Set up bidirectional copying
+		var wg sync.WaitGroup
+		wg.Add(2)
 
-	if resp.Code != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
-		return
-	}
+		// Copy from client to lease holder
+		go func() {
+			defer wg.Done()
+			n, err := io.Copy(leaseStream, ctx.Stream)
+			log.Debug().
+				Str("lease_id", leaseID).
+				Int64("bytes", n).
+				Err(err).
+				Msg("[RelayServer] Client -> Lease copy finished")
+			leaseStream.Close()
+		}()
 
-	// Track this relayed connection
-	leaseID := string(leaseEntry.Lease.Identity.Id)
-	g.relayedConnectionsLock.Lock()
-	g.relayedConnections[leaseID] = append(g.relayedConnections[leaseID], clientStream)
-	g.relayedConnectionsLock.Unlock()
+		// Copy from lease holder to client
+		go func() {
+			defer wg.Done()
+			n, err := io.Copy(ctx.Stream, leaseStream)
+			log.Debug().
+				Str("lease_id", leaseID).
+				Int64("bytes", n).
+				Err(err).
+				Msg("[RelayServer] Lease -> Client copy finished")
+			ctx.Stream.Close()
+		}()
 
-	// Set up bidirectional copying with cleanup
-	var wg sync.WaitGroup
-	wg.Add(2)
+		wg.Wait()
+		log.Debug().Str("lease_id", leaseID).Msg("[RelayServer] Bidirectional forwarding completed")
 
-	// Copy from client to lease holder
-	go func() {
-		defer wg.Done()
-		io.Copy(dataStream, clientStream)
-	}()
-
-	// Copy from lease holder to client
-	go func() {
-		defer wg.Done()
-		io.Copy(clientStream, dataStream)
-	}()
-
-	wg.Wait()
-
-	// Clean up relayed connection tracking when done
-	g.relayedConnectionsLock.Lock()
-	if streams, exists := g.relayedConnections[leaseID]; exists {
-		// Remove this stream from the slice
-		for i, stream := range streams {
-			if stream == clientStream {
-				g.relayedConnections[leaseID] = append(streams[:i], streams[i+1:]...)
-				break
+		// Clean up relayed connection tracking
+		g.relayedConnectionsLock.Lock()
+		if streams, exists := g.relayedConnections[leaseID]; exists {
+			for i, stream := range streams {
+				if stream == ctx.Stream {
+					g.relayedConnections[leaseID] = append(streams[:i], streams[i+1:]...)
+					break
+				}
+			}
+			if len(g.relayedConnections[leaseID]) == 0 {
+				delete(g.relayedConnections, leaseID)
 			}
 		}
-		// If no more streams for this lease, remove the entry
-		if len(g.relayedConnections[leaseID]) == 0 {
-			delete(g.relayedConnections, leaseID)
-		}
+		g.relayedConnectionsLock.Unlock()
+	} else {
+		// Connection rejected, close lease stream
+		leaseStream.Close()
 	}
-	g.relayedConnectionsLock.Unlock()
+
+	return nil
 }
 
 // Helper function to read packet from stream
