@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -6,18 +6,66 @@ import (
 	"html/template"
 	"net/http"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/relaydns/relaydns"
+	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
 )
 
+type leaseRow struct {
+	Peer      string
+	Name      string
+	Kind      string
+	Connected bool
+	DNS       string
+	LastSeen  string
+	TTL       string
+	Link      string
+}
+
+type adminPageData struct {
+	NodeID     string
+	Bootstraps []string
+	Rows       []leaseRow
+}
+
+var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, cancel context.CancelFunc) *http.Server {
+func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
 
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("[server] websocket upgrade failed")
+			return
+		}
+
+		stream := &wsstream.WsStream{Conn: wsConn}
+		if err := serv.HandleConnection(stream); err != nil {
+			log.Error().Err(err).Msg("[server] websocket relay connection error")
+			wsConn.Close()
+			return
+		}
+	})
 
 	// Index page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -26,9 +74,16 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, can
 			return
 		}
 
+		data := adminPageData{
+			NodeID:     nodeID,
+			Bootstraps: bootstraps,
+		}
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Msg("render admin index")
-		_ = serverTmpl.Execute(w, nil) // TODO
+		if err := serverTmpl.Execute(w, data); err != nil {
+			log.Error().Err(err).Msg("[server] render admin index")
+		}
 	})
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +116,7 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RelayDNS — Admin</title>
+  <title>RelayDNS Admin</title>
   <style>
     * { box-sizing: border-box }
     :root {
@@ -96,12 +151,12 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     <main>
       <section class="section">
         <div class="title">Server</div>
-        <div class="mono">Peer ID: {{.NodeID}}</div>
-        {{if .Addrs}}
-          <div class="muted" style="margin-top:6px">Multiaddrs</div>
-          <div class="mono">{{range .Addrs}}{{.}}<br/>{{end}}</div>
+        <div class="mono">Server ID: {{.NodeID}}</div>
+        {{if .Bootstraps}}
+          <div class="muted" style="margin-top:6px">Bootstrap URLs</div>
+          <div class="mono">{{range .Bootstraps}}<a href="{{.}}" target="_blank" rel="noreferrer noopener">{{.}}</a><br/>{{end}}</div>
         {{end}}
-        <div class="muted" style="margin-top:6px">Known clients: {{len .Rows}}</div>
+        <div class="muted" style="margin-top:6px">Active clients: {{len .Rows}}</div>
       </section>
       {{range .Rows}}
       <section class="section" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}">
@@ -116,16 +171,16 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
             {{end}}
           </div>
         </div>
-        {{if .DNS}}<div class="muted">DNS: <span class="mono">{{.DNS}}</span></div>{{end}}
-        <div class="muted">Peer</div>
+        {{if .DNS}}<div class="muted">DNS Label: <span class="mono">{{.DNS}}</span></div>{{end}}
+        <div class="muted">Lease Identity</div>
         <div class="mono">{{.Peer}}</div>
-        <div class="muted" style="margin-top:6px">Last seen: {{.LastSeen}}{{if .TTL}} · TTL: {{.TTL}}{{end}}</div>
+        <div class="muted" style="margin-top:6px">Last seen: {{.LastSeen}}{{if .TTL}} - TTL: {{.TTL}}{{end}}</div>
         <a class="btn" href="{{.Link}}">Open</a>
       </section>
       {{else}}
       <section class="section">
         <div class="title">No clients discovered</div>
-        <div class="muted">Start a client and ensure bootstraps are configured.</div>
+        <div class="muted">Start a client and ensure bootstrap URLs point at this server's /relay WebSocket endpoint.</div>
       </section>
       {{end}}
     </main>

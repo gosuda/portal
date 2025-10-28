@@ -51,7 +51,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	defer serv.Stop()
 
 	// Admin UI + per-peer HTTP proxy
-	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, stop)
+	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), bootstraps, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
