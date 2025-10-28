@@ -29,7 +29,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	flags := rootCmd.PersistentFlags()
-	flags.StringArrayVar(&flagBootstraps, "bootstrap", []string{"ws://127.0.0.1:4017"}, "bootstrap websocket url (repeatable), e.g. ws://127.0.0.1:4017/relay")
+	flags.StringArrayVar(&flagBootstraps, "bootstrap", []string{"ws://127.0.0.1:4017/relay"}, "bootstrap websocket url (repeatable), e.g. ws://127.0.0.1:4017/relay")
 	flags.StringVar(&flagName, "name", "demo", "lease name to display on server UI")
 	flags.StringArrayVar(&flagALPNs, "alpn", []string{"h1"}, "ALPN identifier for this service")
 	flags.IntVar(&flagAdminPort, "admin-port", 0, "optional admin UI port (0 to disable)")
