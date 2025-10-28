@@ -1,0 +1,73 @@
+[package]
+name = "relaydns-wasm"
+version = "0.1.0"
+edition = "2021"
+authors = ["RelayDNS Contributors"]
+description = "WebAssembly client for RelayDNS"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# WASM bindings
+wasm-bindgen = "0.2.104"
+wasm-bindgen-futures = "0.4.54"
+js-sys = "0.3.81"
+web-sys = { version = "0.3", features = [
+    "WebSocket",
+    "MessageEvent",
+    "BinaryType",
+    "ErrorEvent",
+    "CloseEvent",
+    "Window",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Headers",
+    "Blob",
+    "FormData",
+] }
+
+# Async runtime
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await", "std"] }
+tokio = { version = "1.48.0", default-features = false, features = [
+    "sync",
+    "macros",
+] }
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde-wasm-bindgen = "0.6.5"
+serde_json = "1.0.145"
+
+# Protobuf
+prost = "0.14.1"
+bytes = "1.10.1"
+
+# Crypto
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+chacha20poly1305 = "0.10.1"
+hkdf = "0.12.4"
+sha2 = "0.10.9"
+getrandom = { version = "0.2", features = ["js"] }
+rand_core = { version = "0.6", default-features = false }
+
+# Simple multiplexer implementation for WASM (yamux has getrandom 0.3 dependency issues)
+
+# Utilities
+parking_lot = "0.12.5"
+thiserror = "2.0.17"
+anyhow = "1.0.100"
+log = "0.4.28"
+hex = "0.4.3"
+console_error_panic_hook = "0.1.7"
+wee_alloc = "0.4.5"
+
+
+[build-dependencies]
+prost-build = "0.14.1"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.54"

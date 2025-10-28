@@ -285,6 +285,24 @@ func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
 	return entries
 }
 
+// GetLeaseALPNs returns the ALPN identifiers for a given lease ID
+func (g *RelayServer) GetLeaseALPNs(leaseID string) []string {
+	g.leaseManager.leasesLock.RLock()
+	defer g.leaseManager.leasesLock.RUnlock()
+
+	entry, exists := g.leaseManager.leases[leaseID]
+	if !exists {
+		return nil
+	}
+
+	now := time.Now()
+	if now.After(entry.Expires) {
+		return nil
+	}
+
+	return entry.Lease.Alpn
+}
+
 func (g *RelayServer) Start() {
 	g.leaseManager.Start()
 }

@@ -172,24 +172,37 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 			}
 		}
 
-		client, err := initProxyClient(r)
+		// Get ALPN from lease metadata
+		alpns := serv.GetLeaseALPNs(leaseID)
+		if len(alpns) == 0 {
+			http.Error(w, "lease not found or no ALPN registered", http.StatusNotFound)
+			return
+		}
+		targetALPN := alpns[0] // Use the first ALPN
+
+		// Temporary credential for this proxy connection
+		cred, err := sdk.NewCredential()
 		if err != nil {
-			http.Error(w, "proxy init failed", http.StatusBadGateway)
-			log.Error().Err(err).Msg("[server] init proxy client")
+			http.Error(w, "credential error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		// Create a reverse proxy whose transport dials via RelayDNS to the lease
+		client, err := initProxyClient(r)
+		if err != nil {
+			http.Error(w, "proxy client init: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Create a reverse proxy whose transport dials via SDK client
 		target, _ := url.Parse("http://relay-peer")
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		proxy.Transport = &http.Transport{
 			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
-				// Create a fresh credential per dial
-				cred, cerr := sdk.NewCredential()
-				if cerr != nil {
-					return nil, cerr
+				conn, err := client.Dial(cred, leaseID, targetALPN)
+				if err != nil {
+					return nil, err
 				}
-				return client.Dial(cred, leaseID, alpn)
+				return conn, nil
 			},
 		}
 
@@ -274,6 +287,13 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
+	// Serve WASM files for Service Worker
+	mux.Handle("/pkg/", http.StripPrefix("/pkg/", http.FileServer(http.Dir("./relaydns/wasm/pkg"))))
+	mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		http.ServeFile(w, r, "./relaydns/wasm/sw-proxy.js")
+	})
+
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -321,6 +341,34 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
   </style>
   <script>
+    // Register Service Worker for E2EE proxy
+    (async () => {
+      try {
+        console.log('[RelayDNS] Registering Service Worker...');
+        const registration = await navigator.serviceWorker.register('/sw-proxy.js');
+        console.log('[RelayDNS] ✓ Service Worker registered');
+
+        await navigator.serviceWorker.ready;
+        console.log('[RelayDNS] ✓ Service Worker active');
+
+        // Check WASM status
+        const channel = new MessageChannel();
+        const status = await new Promise((resolve) => {
+          channel.port1.onmessage = (event) => resolve(event.data);
+          registration.active.postMessage({ type: 'GET_STATUS' }, [channel.port2]);
+          setTimeout(() => resolve({ success: false }), 2000);
+        });
+
+        if (status.success && status.status.wasmReady) {
+          console.log('[RelayDNS] ✓ E2EE WASM ready!');
+        } else {
+          console.log('[RelayDNS] ⚠ WASM still loading...');
+        }
+      } catch (error) {
+        console.error('[RelayDNS] Service Worker error:', error);
+      }
+    })();
+
     // Auto-refresh lease data every 5 seconds
     async function refreshLeases() {
       try {

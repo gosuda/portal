@@ -1,0 +1,20 @@
+{
+  "name": "relaydns-wasm",
+  "type": "module",
+  "collaborators": [
+    "RelayDNS Contributors"
+  ],
+  "description": "WebAssembly client for RelayDNS",
+  "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "relaydns_wasm_bg.wasm",
+    "relaydns_wasm.js",
+    "relaydns_wasm.d.ts"
+  ],
+  "main": "relaydns_wasm.js",
+  "types": "relaydns_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

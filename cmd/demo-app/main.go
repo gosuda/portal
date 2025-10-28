@@ -1,116 +1,232 @@
 package main
 
 import (
-	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
-	"time"
 
-	"github.com/rs/zerolog"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	"github.com/gosuda/relaydns/sdk"
 )
 
-var (
-	flagBootstraps []string
-	flagALPNs      []string
-	flagName       string
-	flagPort       int
-)
+//go:embed static
+var staticFiles embed.FS
 
 var rootCmd = &cobra.Command{
-	Use:   "relayclient",
-	Short: "RelayDNS demo client that serves a simple HTTP backend over the relay",
-	RunE:  runClient,
+	Use:   "relaydns-paint",
+	Short: "RelayDNS collaborative paint (local HTTP backend + libp2p advertiser)",
+	RunE:  runPaint,
 }
+
+var (
+	flagServerURL string
+	flagPort      int
+	flagName      string
+)
 
 func init() {
 	flags := rootCmd.PersistentFlags()
-	flags.StringArrayVar(&flagBootstraps, "bootstrap", []string{"ws://127.0.0.1:4017/relay"}, "bootstrap websocket urls")
-	flags.StringArrayVar(&flagALPNs, "alpn", []string{"h1"}, "ALPN identifiers for this service")
-	flags.StringVar(&flagName, "name", "demo-app", "lease name to display on server UI")
-	flags.IntVar(&flagPort, "port", 4018, "demo app port")
+	flags.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	flags.IntVar(&flagPort, "port", 8092, "local paint HTTP port")
+	flags.StringVar(&flagName, "name", "example-paint", "backend display name")
 }
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	if err := rootCmd.Execute(); err != nil {
-		log.Fatal().Err(err).Msg("execute client")
+		log.Fatal().Err(err).Msg("execute paint command")
 	}
 }
 
-func runClient(cmd *cobra.Command, args []string) error {
-	// Ctrl-C / SIGTERM handling
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+// DrawMessage represents a drawing action
+type DrawMessage struct {
+	Type   string  `json:"type"` // "draw", "shape", "text", or "clear"
+	X      float64 `json:"x,omitempty"`
+	Y      float64 `json:"y,omitempty"`
+	PrevX  float64 `json:"prevX,omitempty"`
+	PrevY  float64 `json:"prevY,omitempty"`
+	StartX float64 `json:"startX,omitempty"`
+	StartY float64 `json:"startY,omitempty"`
+	EndX   float64 `json:"endX,omitempty"`
+	EndY   float64 `json:"endY,omitempty"`
+	Mode   string  `json:"mode,omitempty"` // "line", "circle", "rectangle"
+	Text   string  `json:"text,omitempty"` // for text type
+	Color  string  `json:"color,omitempty"`
+	Width  int     `json:"width,omitempty"`
+	Canvas string  `json:"canvas,omitempty"` // for initial state
+}
 
-	// Create credential for this client (in-memory)
-	cred, err := sdk.NewCredential()
-	if err != nil {
-		return err
+// Canvas holds the current drawing state
+type Canvas struct {
+	mu      sync.RWMutex
+	clients map[*websocket.Conn]bool
+	wg      sync.WaitGroup
+	history []DrawMessage
+}
+
+func newCanvas() *Canvas {
+	return &Canvas{
+		clients: make(map[*websocket.Conn]bool),
+		history: make([]DrawMessage, 0),
+	}
+}
+
+func (c *Canvas) register(conn *websocket.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clients[conn] = true
+
+	// Send history to new client
+	for _, msg := range c.history {
+		conn.WriteJSON(msg)
+	}
+}
+
+func (c *Canvas) unregister(conn *websocket.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.clients[conn]; ok {
+		delete(c.clients, conn)
+		conn.Close()
+	}
+}
+
+func (c *Canvas) broadcast(msg DrawMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Store in history
+	switch msg.Type {
+	case "draw", "shape", "text":
+		c.history = append(c.history, msg)
+	case "clear":
+		c.history = make([]DrawMessage, 0)
 	}
 
-	// Create client and connect to relay(s)
+	// Broadcast to all clients
+	for client := range c.clients {
+		err := client.WriteJSON(msg)
+		if err != nil {
+			log.Error().Err(err).Msg("write to client")
+			client.Close()
+			delete(c.clients, client)
+		}
+	}
+}
+
+func (c *Canvas) closeAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for client := range c.clients {
+		client.Close()
+	}
+	c.clients = make(map[*websocket.Conn]bool)
+}
+
+func (c *Canvas) wait() {
+	c.wg.Wait()
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+func (c *Canvas) handleWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Error().Err(err).Msg("upgrade websocket")
+		return
+	}
+
+	c.register(conn)
+	c.wg.Add(1)
+
+	defer func() {
+		c.unregister(conn)
+		c.wg.Done()
+	}()
+
+	for {
+		var msg DrawMessage
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Error().Err(err).Msg("read message")
+			}
+			break
+		}
+		c.broadcast(msg)
+	}
+}
+
+func runPaint(cmd *cobra.Command, args []string) error {
+	// 1) Create credential for this paint app
+	cred, err := sdk.NewCredential()
+	if err != nil {
+		return fmt.Errorf("new credential: %w", err)
+	}
+
+	// 2) Create SDK client and connect to relay(s)
 	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
-		c.BootstrapServers = flagBootstraps
+		c.BootstrapServers = []string{flagServerURL}
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("new client: %w", err)
 	}
 	defer client.Close()
 
-	// Register lease and obtain a net.Listener that accepts relayed connections
-	listener, err := client.Listen(cred, flagName, flagALPNs)
+	// 3) Register lease and obtain a net.Listener that accepts relayed connections
+	alpns := []string{"paint"}
+	listener, err := client.Listen(cred, flagName, alpns)
 	if err != nil {
-		return err
+		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
 
-	// Simple HTTP backend on the relay listener
+	// 4) Setup HTTP handler
+	canvas := newCanvas()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "ok: relaydns backend\n")
-		fmt.Fprintf(w, "time: %s\n", time.Now().Format(time.RFC3339))
-		fmt.Fprintf(w, "method: %s\n", r.Method)
-		fmt.Fprintf(w, "path: %s\n", r.URL.Path)
-		fmt.Fprintf(w, "client: %s\n", r.RemoteAddr)
-		fmt.Fprintf(w, "server: %s\n", r.Host)
-	})
 
-	// Optional local admin UI
-	var adminSrv *http.Server
-	if flagPort > 0 {
-		adminSrv = serveClientHTTP(ctx, fmt.Sprintf(":%d", flagPort), cred.ID(), flagName, flagALPNs, flagBootstraps, client.GetRelays, stop)
+	// Serve static files from embedded filesystem
+	staticFS, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		return fmt.Errorf("create static fs: %w", err)
 	}
+	mux.Handle("/", http.FileServer(http.FS(staticFS)))
+	mux.HandleFunc("/ws", canvas.handleWS)
 
-	// Serve HTTP over relay listener
+	// 5) Serve HTTP over relay listener
+	log.Info().Msgf("[paint] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+
 	srvErr := make(chan error, 1)
 	go func() {
-		log.Info().Msgf("[client] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
 		srvErr <- http.Serve(listener, mux)
 	}()
 
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
 	select {
-	case <-ctx.Done():
-		log.Info().Msg("[client] shutting down...")
+	case <-sig:
+		log.Info().Msg("[paint] shutting down...")
 	case err := <-srvErr:
 		if err != nil {
-			log.Error().Err(err).Msg("[client] http serve error")
+			log.Error().Err(err).Msg("[paint] http serve error")
 		}
 	}
 
-	// Stop admin UI if started
-	if adminSrv != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = adminSrv.Shutdown(shutdownCtx)
-	}
+	canvas.closeAll()
+	canvas.wait()
 
-	log.Info().Msg("[client] shutdown complete")
+	log.Info().Msg("[paint] shutdown complete")
 	return nil
 }
