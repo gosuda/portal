@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -28,6 +30,80 @@ type adminPageData struct {
 	NodeID     string
 	Bootstraps []string
 	Rows       []leaseRow
+}
+
+// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the admin page
+func convertLeaseEntriesToRows(serv *relaydns.RelayServer) []leaseRow {
+	// Get all lease entries directly from the lease manager
+	leaseEntries := serv.GetAllLeaseEntries()
+
+	var rows []leaseRow
+	now := time.Now()
+
+	for _, leaseEntry := range leaseEntries {
+		// Check if lease is still valid
+		if now.After(leaseEntry.Expires) {
+			continue
+		}
+
+		lease := leaseEntry.Lease
+		identityID := string(lease.Identity.Id)
+
+		// Calculate TTL
+		ttl := time.Until(leaseEntry.Expires)
+		ttlStr := ""
+		if ttl > 0 {
+			if ttl > time.Hour {
+				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
+			} else if ttl > time.Minute {
+				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
+			} else {
+				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
+			}
+		}
+
+		// Format last seen time
+		lastSeenStr := leaseEntry.LastSeen.Format("2006-01-02 15:04:05")
+
+		// Check if connection is still active by checking if the connection ID exists in the connections map
+		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
+
+		// Use name from lease if available
+		name := lease.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
+
+		// Determine kind/type based on ALPN if available
+		kind := "client"
+		if len(lease.Alpn) > 0 {
+			kind = lease.Alpn[0]
+		}
+
+		// Create DNS label from identity (first 8 chars for display)
+		dnsLabel := identityID
+		if len(dnsLabel) > 8 {
+			dnsLabel = dnsLabel[:8] + "..."
+		}
+
+		// Create link for the lease
+		link := fmt.Sprintf("/peer/%s", identityID)
+
+		row := leaseRow{
+			Peer:      identityID,
+			Name:      name,
+			Kind:      kind,
+			Connected: connected,
+			DNS:       dnsLabel,
+			LastSeen:  lastSeenStr,
+			TTL:       ttlStr,
+			Link:      link,
+		}
+
+		rows = append(rows, row)
+	}
+
+	return rows
 }
 
 var wsUpgrader = websocket.Upgrader{
@@ -74,15 +150,36 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 			return
 		}
 
+		// Convert lease entries to rows for the admin page
+		rows := convertLeaseEntriesToRows(serv)
+
 		data := adminPageData{
 			NodeID:     nodeID,
 			Bootstraps: bootstraps,
+			Rows:       rows,
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Msg("render admin index")
 		if err := serverTmpl.Execute(w, data); err != nil {
 			log.Error().Err(err).Msg("[server] render admin index")
+		}
+	})
+
+	mux.HandleFunc("/api/leases", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Convert lease entries to rows
+		rows := convertLeaseEntriesToRows(serv)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(rows); err != nil {
+			log.Error().Err(err).Msg("[server] failed to encode lease data")
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 		}
 	})
 
@@ -140,7 +237,95 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .pill.bad .dot { background:var(--bad) }
     .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
     .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
+    .refresh-btn { background:var(--muted); font-size:12px; padding:6px 10px; margin-left:8px }
   </style>
+  <script>
+    // Auto-refresh lease data every 5 seconds
+    async function refreshLeases() {
+      try {
+        const response = await fetch('/api/leases');
+        if (!response.ok) throw new Error('Failed to fetch leases');
+        
+        const leases = await response.json();
+        updateLeaseDisplay(leases);
+      } catch (error) {
+        console.error('Error refreshing leases:', error);
+      }
+    }
+    
+    function updateLeaseDisplay(leases) {
+      const main = document.querySelector('main');
+      
+      // Find the existing sections
+      const serverSection = main.querySelector('.section');
+      const existingLeaseSections = main.querySelectorAll('.section[id^="peer-"]');
+      const noClientsSection = main.querySelector('.section:not([id])');
+      
+      // Remove existing lease sections and "no clients" section
+      existingLeaseSections.forEach(section => section.remove());
+      if (noClientsSection && noClientsSection.textContent.includes('No clients discovered')) {
+        noClientsSection.remove();
+      }
+      
+      // Add lease sections
+      if (leases.length === 0) {
+        const noClientsSection = document.createElement('section');
+        noClientsSection.className = 'section';
+        noClientsSection.innerHTML = '<div class="title">No clients discovered</div><div class="muted">Start a client and ensure bootstrap URLs point at this server\'s /relay WebSocket endpoint.</div>';
+        main.appendChild(noClientsSection);
+      } else {
+        leases.forEach(lease => {
+          const section = document.createElement('section');
+          section.className = 'section';
+          section.id = 'peer-' + lease.Peer;
+          section.setAttribute('data-peer', lease.Peer);
+          section.setAttribute('data-name', lease.Name);
+          
+          const connectedClass = lease.Connected ? 'ok' : 'bad';
+          const connectedText = lease.Connected ? 'Connected' : 'Disconnected';
+          const displayName = lease.Name || '(unnamed)';
+          
+          let html = '<div class="head"><div class="title">' + displayName + '</div><div><span class="muted" style="margin-right:8px">' + lease.Kind + '</span><span class="pill ' + connectedClass + '"><span class="dot"></span>' + connectedText + '</span></div></div>';
+          if (lease.DNS) {
+            html += '<div class="muted">DNS Label: <span class="mono">' + lease.DNS + '</span></div>';
+          }
+          html += '<div class="muted">Lease Identity</div><div class="mono">' + lease.Peer + '</div><div class="muted" style="margin-top:6px">Last seen: ' + lease.LastSeen;
+          if (lease.TTL) {
+            html += ' - TTL: ' + lease.TTL;
+          }
+          html += '</div><a class="btn" href="' + lease.Link + '">Open</a>';
+          section.innerHTML = html;
+          
+          main.appendChild(section);
+        });
+      }
+      
+      // Update active clients count
+      const activeCountElement = serverSection.querySelector('.muted');
+      if (activeCountElement && activeCountElement.textContent.includes('Active clients:')) {
+        activeCountElement.textContent = 'Active clients: ' + leases.length;
+      }
+    }
+    
+    // Start auto-refresh when page loads
+    document.addEventListener('DOMContentLoaded', () => {
+      // Initial refresh
+      refreshLeases();
+      
+      // Set up interval for auto-refresh
+      setInterval(refreshLeases, 5000);
+      
+      // Add manual refresh button
+      const title = document.querySelector('.title');
+      if (title && title.textContent === 'Server') {
+        const refreshBtn = document.createElement('button');
+        refreshBtn.className = 'btn refresh-btn';
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.onclick = refreshLeases;
+        title.parentNode.appendChild(refreshBtn);
+      }
+    });
+  </script>
   </head>
 <body>
   <div class="wrap">

@@ -193,6 +193,37 @@ func (g *RelayServer) relayInfo() *rdverb.RelayInfo {
 	}
 }
 
+// GetLeaseManager returns the lease manager instance
+func (g *RelayServer) GetLeaseManager() *LeaseManager {
+	return g.leaseManager
+}
+
+// IsConnectionActive checks if a connection with the given ID is still active
+func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
+	g.connectionsLock.RLock()
+	defer g.connectionsLock.RUnlock()
+
+	_, exists := g.connections[connectionID]
+	return exists
+}
+
+// GetAllLeaseEntries returns all lease entries from the lease manager
+func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
+	g.leaseManager.leasesLock.RLock()
+	defer g.leaseManager.leasesLock.RUnlock()
+
+	var entries []*LeaseEntry
+	now := time.Now()
+
+	for _, entry := range g.leaseManager.leases {
+		if now.Before(entry.Expires) {
+			entries = append(entries, entry)
+		}
+	}
+
+	return entries
+}
+
 func (g *RelayServer) Start() {
 	g.leaseManager.Start()
 }
