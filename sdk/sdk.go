@@ -18,8 +18,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func NewCredential() (*cryptoops.Credential, error) {
-	return cryptoops.NewCredential()
+func NewCredential() *cryptoops.Credential {
+	cred, err := cryptoops.NewCredential()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create credential")
+	}
+	return cred
 }
 
 func webSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {

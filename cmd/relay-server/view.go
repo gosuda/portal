@@ -84,11 +84,7 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		targetALPN := alpns[0] // Use the first ALPN
 
 		// Temporary credential for this proxy connection
-		cred, err := sdk.NewCredential()
-		if err != nil {
-			http.Error(w, "credential error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
+		cred := sdk.NewCredential()
 
 		client, err := initProxyClient(r)
 		if err != nil {

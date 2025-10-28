@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gosuda/relaydns/relaydns"
-	"github.com/gosuda/relaydns/relaydns/core/cryptoops"
+	"github.com/gosuda/relaydns/sdk"
 )
 
 var rootCmd = &cobra.Command{
@@ -46,10 +46,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cred, err := cryptoops.NewCredential()
-	if err != nil {
-		return err
-	}
+	cred := sdk.NewCredential()
 
 	serv := relaydns.NewRelayServer(cred, flagBootstraps)
 	serv.Start()

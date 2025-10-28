@@ -86,10 +86,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 3. Create app credential and SDK client
 	log.Info().Msg("[TEST] Step 3: Creating app (listener) credential")
-	appCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create app credential: %v", err)
-	}
+	appCred := NewCredential()
 	log.Debug().Str("app_id", appCred.ID()).Msg("[TEST] App credential created")
 
 	// 4. Create app SDK client and register listener
@@ -138,10 +135,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 7. Create client credential
 	log.Info().Msg("[TEST] Step 7: Creating client credential")
-	clientCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create client credential: %v", err)
-	}
+	clientCred := NewCredential()
 	log.Debug().Str("client_id", clientCred.ID()).Msg("[TEST] Client credential created")
 
 	// 8. Create client SDK client
@@ -272,10 +266,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Setup app
-	appCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create app credential: %v", err)
-	}
+	appCred := NewCredential()
 
 	appClient, err := NewClient(func(c *RDClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
@@ -308,10 +299,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Create client
-	clientCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create client credential: %v", err)
-	}
+	clientCred := NewCredential()
 
 	clientSDK, err := NewClient(func(c *RDClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
@@ -372,10 +360,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	log.Info().Msg("=== Starting Connection Timeout Test ===")
 
 	// Create client with non-existent relay
-	clientCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create client credential: %v", err)
-	}
+	clientCred := NewCredential()
 
 	// This should fail or timeout appropriately
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -401,10 +386,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	}
 
 	// Try to dial to non-existent lease
-	relayServerCred, err := cryptoops.NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create relay server credential: %v", err)
-	}
+	relayServerCred := NewCredential()
 
 	relayServer := relaydns.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14019/relay"})
 	relayServer.Start()

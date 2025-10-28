@@ -170,10 +170,7 @@ func (c *Canvas) handleWS(w http.ResponseWriter, r *http.Request) {
 
 func runPaint(cmd *cobra.Command, args []string) error {
 	// 1) Create credential for this paint app
-	cred, err := sdk.NewCredential()
-	if err != nil {
-		return fmt.Errorf("new credential: %w", err)
-	}
+	cred := sdk.NewCredential()
 
 	// 2) Create SDK client and connect to relay(s)
 	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
