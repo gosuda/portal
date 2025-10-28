@@ -92,18 +92,22 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 // Close는 서버와의 연결을 종료합니다.
 func (g *RelayClient) Close() error {
 	log.Debug().Msg("[RelayClient] Closing relay client")
+
+	// Signal workers to stop
 	close(g.stopCh)
-	g.waitGroup.Wait()
 
 	var errs []error
 
-	// Close the session first
+	// Close the session first to unblock AcceptStream() calls
 	if g.sess != nil {
 		if err := g.sess.Close(); err != nil {
 			log.Error().Err(err).Msg("[RelayClient] Error closing yamux session")
 			errs = append(errs, err)
 		}
 	}
+
+	// Wait for workers to finish after unblocking them
+	g.waitGroup.Wait()
 
 	// Then close the underlying connection
 	if g.conn != nil {

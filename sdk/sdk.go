@@ -116,7 +116,8 @@ type RDClient struct {
 	relays    map[string]*rdRelay
 	listeners map[string]*RDListener
 
-	stopch chan struct{}
+	stopch    chan struct{}
+	waitGroup sync.WaitGroup // Track all listener workers
 }
 
 var (
@@ -308,6 +309,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 
 	// Start listener worker for each relay
 	for _, relay := range g.relays {
+		g.waitGroup.Add(1)
 		go g.listenerWorker(relay)
 	}
 
@@ -316,6 +318,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 }
 
 func (g *RDClient) listenerWorker(server *rdRelay) {
+	defer g.waitGroup.Done()
 	log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker started")
 
 	for {
@@ -405,6 +408,9 @@ func (g *RDClient) Close() error {
 	}
 	g.relays = make(map[string]*rdRelay)
 	g.mu.Unlock()
+
+	// Wait for all listener workers to finish
+	g.waitGroup.Wait()
 
 	if len(errs) > 0 {
 		return errs[0]
