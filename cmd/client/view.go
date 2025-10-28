@@ -10,11 +10,11 @@ import (
 )
 
 type clientViewData struct {
-    NodeID     string
-    Name       string
-    ALPNs      []string
-    Bootstraps []string
-    Relays     []string
+	NodeID     string
+	Name       string
+	ALPNs      []string
+	Bootstraps []string
+	Relays     []string
 }
 
 // serveClientHTTP starts a tiny admin UI for the client.
@@ -31,13 +31,13 @@ func serveClientHTTP(ctx context.Context, addr string, nodeID string, name strin
 			http.NotFound(w, r)
 			return
 		}
-        data := clientViewData{
-            NodeID:     nodeID,
-            Name:       name,
-            ALPNs:      alpns,
-            Bootstraps: bootstraps,
-            Relays:     getRelays(),
-        }
+		data := clientViewData{
+			NodeID:     nodeID,
+			Name:       name,
+			ALPNs:      alpns,
+			Bootstraps: bootstraps,
+			Relays:     getRelays(),
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := clientTmpl.Execute(w, data); err != nil {
 			log.Error().Err(err).Msg("[client] render admin index")
