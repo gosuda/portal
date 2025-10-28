@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     command:
-      - "--http-port"
+      - "--port"
       - "4017"
     ports:
       - "4017:4017"

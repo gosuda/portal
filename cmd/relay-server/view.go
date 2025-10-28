@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -20,6 +22,185 @@ import (
 	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
 	"github.com/gosuda/relaydns/sdk"
 )
+
+// Paths are relative to this file's directory
+//
+//go:embed wasm
+var wasmFS embed.FS
+
+// serveHTTP builds the HTTP mux and returns the server.
+func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, alpn string, cancel context.CancelFunc) *http.Server {
+	if addr == "" {
+		addr = ":0"
+	}
+
+	mux := http.NewServeMux()
+
+	// Per-peer HTTP reverse proxy over RelayDNS
+	// Route: /peer/{leaseID}/*
+	var (
+		proxyClient     *sdk.RDClient
+		proxyClientOnce sync.Once
+		proxyClientErr  error
+	)
+	// Lazily initialize a client that connects to provided bootstraps or current server
+	initProxyClient := func(r *http.Request) (*sdk.RDClient, error) {
+		proxyClientOnce.Do(func() {
+			bs := bootstraps
+			if len(bs) == 0 {
+				// Derive bootstrap from current request host
+				// Assume same host/port as admin with path /relay
+				scheme := "ws"
+				// No TLS handling here; extend to wss if needed in future
+				bs = []string{fmt.Sprintf("%s://%s/relay", scheme, r.Host)}
+			}
+			proxyClient, proxyClientErr = sdk.NewClient(func(c *sdk.RDClientConfig) {
+				c.BootstrapServers = bs
+			})
+		})
+		return proxyClient, proxyClientErr
+	}
+
+	mux.HandleFunc("/peer/", func(w http.ResponseWriter, r *http.Request) {
+		// Expect path /peer/{leaseID}[/{rest}]
+		path := strings.TrimPrefix(r.URL.Path, "/peer/")
+		if path == "" {
+			http.NotFound(w, r)
+			return
+		}
+		parts := strings.SplitN(path, "/", 2)
+		leaseID := parts[0]
+		rest := "/"
+		if len(parts) == 2 && parts[1] != "" {
+			rest = "/" + parts[1]
+		}
+
+		// Get ALPN from lease metadata
+		alpns := serv.GetLeaseALPNs(leaseID)
+		if len(alpns) == 0 {
+			http.Error(w, "lease not found or no ALPN registered", http.StatusNotFound)
+			return
+		}
+		targetALPN := alpns[0] // Use the first ALPN
+
+		// Temporary credential for this proxy connection
+		cred, err := sdk.NewCredential()
+		if err != nil {
+			http.Error(w, "credential error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		client, err := initProxyClient(r)
+		if err != nil {
+			http.Error(w, "proxy client init: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Create a reverse proxy whose transport dials via SDK client
+		target, _ := url.Parse("http://relay-peer")
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Transport = &http.Transport{
+			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
+				conn, err := client.Dial(cred, leaseID, targetALPN)
+				if err != nil {
+					return nil, err
+				}
+				return conn, nil
+			},
+		}
+
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+			log.Error().Err(e).Str("lease", leaseID).Msg("[server] proxy error")
+			http.Error(rw, "upstream error", http.StatusBadGateway)
+		}
+
+		// Use default Director; adjust path on a shallow clone
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = rest
+		proxy.ServeHTTP(w, r2)
+	})
+
+	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("[server] websocket upgrade failed")
+			return
+		}
+
+		stream := &wsstream.WsStream{Conn: wsConn}
+		if err := serv.HandleConnection(stream); err != nil {
+			log.Error().Err(err).Msg("[server] websocket relay connection error")
+			wsConn.Close()
+			return
+		}
+	})
+
+	// Index page
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		// Convert lease entries to rows for the admin page
+		rows := convertLeaseEntriesToRows(serv)
+
+		data := adminPageData{
+			NodeID:     nodeID,
+			Bootstraps: bootstraps,
+			Rows:       rows,
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		log.Debug().Msg("render admin index")
+		if err := serverTmpl.Execute(w, data); err != nil {
+			log.Error().Err(err).Msg("[server] render admin index")
+		}
+	})
+
+	// Note: removed /api/leases; admin renders server-side for simplicity
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		type info struct {
+			Status string `json:"status"`
+		}
+		resp := info{Status: "ok"}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// Serve embedded WASM pkg files at /pkg/
+	if sub, err := fs.Sub(wasmFS, "wasm"); err != nil {
+		log.Error().Err(err).Msg("[server] failed to init embedded wasm pkg FS")
+	} else {
+		mux.Handle("/pkg/", http.StripPrefix("/pkg/", http.FileServer(http.FS(sub))))
+	}
+	mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		http.ServeFile(w, r, "./relaydns/wasm/sw-proxy.js")
+	})
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	go func() {
+		log.Info().Msgf("[server] http: %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("[server] http error")
+			cancel()
+		}
+	}()
+
+	return srv
+}
 
 type leaseRow struct {
 	Peer      string
@@ -120,196 +301,6 @@ var wsUpgrader = websocket.Upgrader{
 	},
 }
 
-// serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, alpn string, cancel context.CancelFunc) *http.Server {
-	if addr == "" {
-		addr = ":0"
-	}
-
-	mux := http.NewServeMux()
-
-	// Per-peer HTTP reverse proxy over RelayDNS
-	// Route: /peer/{leaseID}/*
-	var (
-		proxyClient     *sdk.RDClient
-		proxyClientOnce sync.Once
-		proxyClientErr  error
-	)
-	// Lazily initialize a client that connects to provided bootstraps or the current server
-	initProxyClient := func(r *http.Request) (*sdk.RDClient, error) {
-		proxyClientOnce.Do(func() {
-			bs := bootstraps
-			if len(bs) == 0 {
-				// Derive bootstrap from current request host
-				// Assume same host/port as admin with path /relay
-				scheme := "ws"
-				// No TLS handling here; extend to wss if needed in future
-				bs = []string{fmt.Sprintf("%s://%s/relay", scheme, r.Host)}
-			}
-			proxyClient, proxyClientErr = sdk.NewClient(func(c *sdk.RDClientConfig) {
-				c.BootstrapServers = bs
-			})
-		})
-		return proxyClient, proxyClientErr
-	}
-
-	mux.HandleFunc("/peer/", func(w http.ResponseWriter, r *http.Request) {
-		// Expect path /peer/{leaseID}[/{rest}]
-		path := strings.TrimPrefix(r.URL.Path, "/peer/")
-		if path == "" {
-			http.NotFound(w, r)
-			return
-		}
-		// Split leaseID and remainder
-		var leaseID, rest string
-		slash := strings.IndexByte(path, '/')
-		if slash == -1 {
-			leaseID, rest = path, "/"
-		} else {
-			leaseID, rest = path[:slash], path[slash:]
-			if rest == "" {
-				rest = "/"
-			}
-		}
-
-		// Get ALPN from lease metadata
-		alpns := serv.GetLeaseALPNs(leaseID)
-		if len(alpns) == 0 {
-			http.Error(w, "lease not found or no ALPN registered", http.StatusNotFound)
-			return
-		}
-		targetALPN := alpns[0] // Use the first ALPN
-
-		// Temporary credential for this proxy connection
-		cred, err := sdk.NewCredential()
-		if err != nil {
-			http.Error(w, "credential error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		client, err := initProxyClient(r)
-		if err != nil {
-			http.Error(w, "proxy client init: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Create a reverse proxy whose transport dials via SDK client
-		target, _ := url.Parse("http://relay-peer")
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Transport = &http.Transport{
-			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
-				conn, err := client.Dial(cred, leaseID, targetALPN)
-				if err != nil {
-					return nil, err
-				}
-				return conn, nil
-			},
-		}
-
-		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
-			log.Error().Err(e).Str("lease", leaseID).Msg("[server] proxy error")
-			http.Error(rw, "upstream error", http.StatusBadGateway)
-		}
-
-		// Use default Director; adjust path on a shallow clone
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = rest
-		proxy.ServeHTTP(w, r2)
-	})
-
-	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		wsConn, err := wsUpgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] websocket upgrade failed")
-			return
-		}
-
-		stream := &wsstream.WsStream{Conn: wsConn}
-		if err := serv.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[server] websocket relay connection error")
-			wsConn.Close()
-			return
-		}
-	})
-
-	// Index page
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Convert lease entries to rows for the admin page
-		rows := convertLeaseEntriesToRows(serv)
-
-		data := adminPageData{
-			NodeID:     nodeID,
-			Bootstraps: bootstraps,
-			Rows:       rows,
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		log.Debug().Msg("render admin index")
-		if err := serverTmpl.Execute(w, data); err != nil {
-			log.Error().Err(err).Msg("[server] render admin index")
-		}
-	})
-
-	mux.HandleFunc("/api/leases", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Convert lease entries to rows
-		rows := convertLeaseEntriesToRows(serv)
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(rows); err != nil {
-			log.Error().Err(err).Msg("[server] failed to encode lease data")
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-		}
-	})
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		type info struct {
-			Status string `json:"status"`
-		}
-		resp := info{Status: "ok"}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
-	// Serve WASM files for Service Worker
-	mux.Handle("/pkg/", http.StripPrefix("/pkg/", http.FileServer(http.Dir("./relaydns/wasm/pkg"))))
-	mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript")
-		http.ServeFile(w, r, "./relaydns/wasm/sw-proxy.js")
-	})
-
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-
-	go func() {
-		log.Info().Msgf("[server] http: %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("[server] http error")
-			cancel()
-		}
-	}()
-
-	return srv
-}
-
 var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html>
 <html lang="ko">
 <head>
@@ -340,111 +331,6 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
     .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
   </style>
-  <script>
-    // Register Service Worker for E2EE proxy
-    (async () => {
-      try {
-        console.log('[RelayDNS] Registering Service Worker...');
-        const registration = await navigator.serviceWorker.register('/sw-proxy.js');
-        console.log('[RelayDNS] ✓ Service Worker registered');
-
-        await navigator.serviceWorker.ready;
-        console.log('[RelayDNS] ✓ Service Worker active');
-
-        // Check WASM status
-        const channel = new MessageChannel();
-        const status = await new Promise((resolve) => {
-          channel.port1.onmessage = (event) => resolve(event.data);
-          registration.active.postMessage({ type: 'GET_STATUS' }, [channel.port2]);
-          setTimeout(() => resolve({ success: false }), 2000);
-        });
-
-        if (status.success && status.status.wasmReady) {
-          console.log('[RelayDNS] ✓ E2EE WASM ready!');
-        } else {
-          console.log('[RelayDNS] ⚠ WASM still loading...');
-        }
-      } catch (error) {
-        console.error('[RelayDNS] Service Worker error:', error);
-      }
-    })();
-
-    // Auto-refresh lease data every 5 seconds
-    async function refreshLeases() {
-      try {
-        const response = await fetch('/api/leases');
-        if (!response.ok) throw new Error('Failed to fetch leases');
-        
-        const leases = await response.json();
-        updateLeaseDisplay(leases);
-      } catch (error) {
-        console.error('Error refreshing leases:', error);
-      }
-    }
-    
-    function updateLeaseDisplay(leases) {
-      const main = document.querySelector('main');
-      
-      // Find the existing sections
-      const serverSection = main.querySelector('.section');
-      const existingLeaseSections = main.querySelectorAll('.section[id^="peer-"]');
-      const noClientsSection = main.querySelector('.section:not([id])');
-      
-      // Remove existing lease sections and "no clients" section
-      existingLeaseSections.forEach(section => section.remove());
-      if (noClientsSection && noClientsSection.textContent.includes('No clients discovered')) {
-        noClientsSection.remove();
-      }
-      
-      // Add lease sections
-      if (leases.length === 0) {
-        const noClientsSection = document.createElement('section');
-        noClientsSection.className = 'section';
-        noClientsSection.innerHTML = '<div class="title">No clients discovered</div><div class="muted">Start a client and ensure bootstrap URLs point at this server\'s /relay WebSocket endpoint.</div>';
-        main.appendChild(noClientsSection);
-      } else {
-        leases.forEach(lease => {
-          const section = document.createElement('section');
-          section.className = 'section';
-          section.id = 'peer-' + lease.Peer;
-          section.setAttribute('data-peer', lease.Peer);
-          section.setAttribute('data-name', lease.Name);
-          
-          const connectedClass = lease.Connected ? 'ok' : 'bad';
-          const connectedText = lease.Connected ? 'Connected' : 'Disconnected';
-          const displayName = lease.Name || '(unnamed)';
-          
-          let html = '<div class="head"><div class="title">' + displayName + '</div><div><span class="muted" style="margin-right:8px">' + lease.Kind + '</span><span class="pill ' + connectedClass + '"><span class="dot"></span>' + connectedText + '</span></div></div>';
-          if (lease.DNS) {
-            html += '<div class="muted">DNS Label: <span class="mono">' + lease.DNS + '</span></div>';
-          }
-          html += '<div class="muted">Lease Identity</div><div class="mono">' + lease.Peer + '</div><div class="muted" style="margin-top:6px">Last seen: ' + lease.LastSeen;
-          if (lease.TTL) {
-            html += ' - TTL: ' + lease.TTL;
-          }
-          html += '</div><a class="btn" href="' + lease.Link + '">Open</a>';
-          section.innerHTML = html;
-          
-          main.appendChild(section);
-        });
-      }
-      
-      // Update active clients count
-      const activeCountElement = serverSection.querySelector('.muted');
-      if (activeCountElement && activeCountElement.textContent.includes('Active clients:')) {
-        activeCountElement.textContent = 'Active clients: ' + leases.length;
-      }
-    }
-    
-    // Start auto-refresh when page loads
-    document.addEventListener('DOMContentLoaded', () => {
-      // Initial refresh
-      refreshLeases();
-      
-      // Set up interval for auto-refresh
-      setInterval(refreshLeases, 5000);
-    });
-  </script>
   </head>
 <body>
   <div class="wrap">
