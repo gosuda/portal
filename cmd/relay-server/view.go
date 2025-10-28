@@ -121,7 +121,7 @@ var wsUpgrader = websocket.Upgrader{
 }
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
+func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, alpn string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -182,13 +182,6 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		// Create a reverse proxy whose transport dials via RelayDNS to the lease
 		target, _ := url.Parse("http://relay-peer")
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Director = func(req *http.Request) {
-			// Preserve original method, headers, query; rewrite URL to dummy host
-			req.URL.Scheme = "http"
-			req.URL.Host = target.Host
-			req.URL.Path = rest
-			// Keep Host header as-is (or could clear)
-		}
 		proxy.Transport = &http.Transport{
 			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
 				// Create a fresh credential per dial
@@ -196,7 +189,7 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 				if cerr != nil {
 					return nil, cerr
 				}
-				return client.Dial(cred, leaseID, "h1")
+				return client.Dial(cred, leaseID, alpn)
 			},
 		}
 
@@ -205,7 +198,10 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 			http.Error(rw, "upstream error", http.StatusBadGateway)
 		}
 
-		proxy.ServeHTTP(w, r)
+		// Use default Director; adjust path on a shallow clone
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = rest
+		proxy.ServeHTTP(w, r2)
 	})
 
 	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +319,6 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .pill.bad .dot { background:var(--bad) }
     .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
     .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
-    .refresh-btn { background:var(--muted); font-size:12px; padding:6px 10px; margin-left:8px }
   </style>
   <script>
     // Auto-refresh lease data every 5 seconds
@@ -400,16 +395,6 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
       
       // Set up interval for auto-refresh
       setInterval(refreshLeases, 5000);
-      
-      // Add manual refresh button
-      const title = document.querySelector('.title');
-      if (title && title.textContent === 'Server') {
-        const refreshBtn = document.createElement('button');
-        refreshBtn.className = 'btn refresh-btn';
-        refreshBtn.textContent = 'Refresh';
-        refreshBtn.onclick = refreshLeases;
-        title.parentNode.appendChild(refreshBtn);
-      }
     });
   </script>
   </head>

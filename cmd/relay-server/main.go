@@ -21,14 +21,16 @@ var rootCmd = &cobra.Command{
 }
 
 var (
-	flagPort   int // admin UI + HTTP proxy port (e.g. 4017)
-	bootstraps []string
+	flagBootstraps []string
+	flagALPN       string
+	flagPort       int
 )
 
 func init() {
 	flags := rootCmd.PersistentFlags()
+	flags.StringArrayVar(&flagBootstraps, "bootstraps", nil, "bootstrap addresses")
+	flags.StringVar(&flagALPN, "alpn", "h1", "ALPN identifier for this service")
 	flags.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
-	flags.StringArrayVar(&bootstraps, "bootstraps", nil, "bootstrap addresses")
 }
 
 func main() {
@@ -46,12 +48,12 @@ func runServer(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	serv := relaydns.NewRelayServer(cred, bootstraps)
+	serv := relaydns.NewRelayServer(cred, flagBootstraps)
 	serv.Start()
 	defer serv.Stop()
 
 	// Admin UI + per-peer HTTP proxy
-	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), bootstraps, stop)
+	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, flagALPN, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
