@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     command:
       - "--http-port"
-      - "19080"
+      - "4017"
     ports:
-      - "19080:19080"
+      - "4017:4017"
     restart: unless-stopped

@@ -30,7 +30,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringArrayVar(&flagBootstraps, "bootstrap", []string{"ws://127.0.0.1:4017/relay"}, "bootstrap websocket url (repeatable), e.g. ws://127.0.0.1:4017/relay")
-	flags.StringVar(&flagName, "name", "demo", "lease name to display on server UI")
+	flags.StringVar(&flagName, "name", "demo-app", "lease name to display on server UI")
 	flags.StringArrayVar(&flagALPNs, "alpn", []string{"h1"}, "ALPN identifier for this service")
 	flags.IntVar(&flagAdminPort, "admin-port", 0, "optional admin UI port (0 to disable)")
 }
@@ -42,10 +42,6 @@ func main() {
 }
 
 func runClient(cmd *cobra.Command, args []string) error {
-	if len(flagBootstraps) == 0 {
-		return fmt.Errorf("no bootstrap servers provided; use --bootstrap ws://host:port/relay")
-	}
-
 	// Ctrl-C / SIGTERM handling
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

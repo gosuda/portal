@@ -5,7 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -13,6 +18,7 @@ import (
 
 	"github.com/gosuda/relaydns/relaydns"
 	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
+	"github.com/gosuda/relaydns/sdk"
 )
 
 type leaseRow struct {
@@ -121,6 +127,86 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 	}
 
 	mux := http.NewServeMux()
+
+	// Per-peer HTTP reverse proxy over RelayDNS
+	// Route: /peer/{leaseID}/*
+	var (
+		proxyClient     *sdk.RDClient
+		proxyClientOnce sync.Once
+		proxyClientErr  error
+	)
+	// Lazily initialize a client that connects to provided bootstraps or the current server
+	initProxyClient := func(r *http.Request) (*sdk.RDClient, error) {
+		proxyClientOnce.Do(func() {
+			bs := bootstraps
+			if len(bs) == 0 {
+				// Derive bootstrap from current request host
+				// Assume same host/port as admin with path /relay
+				scheme := "ws"
+				// No TLS handling here; extend to wss if needed in future
+				bs = []string{fmt.Sprintf("%s://%s/relay", scheme, r.Host)}
+			}
+			proxyClient, proxyClientErr = sdk.NewClient(func(c *sdk.RDClientConfig) {
+				c.BootstrapServers = bs
+			})
+		})
+		return proxyClient, proxyClientErr
+	}
+
+	mux.HandleFunc("/peer/", func(w http.ResponseWriter, r *http.Request) {
+		// Expect path /peer/{leaseID}[/{rest}]
+		path := strings.TrimPrefix(r.URL.Path, "/peer/")
+		if path == "" {
+			http.NotFound(w, r)
+			return
+		}
+		// Split leaseID and remainder
+		var leaseID, rest string
+		slash := strings.IndexByte(path, '/')
+		if slash == -1 {
+			leaseID, rest = path, "/"
+		} else {
+			leaseID, rest = path[:slash], path[slash:]
+			if rest == "" {
+				rest = "/"
+			}
+		}
+
+		client, err := initProxyClient(r)
+		if err != nil {
+			http.Error(w, "proxy init failed", http.StatusBadGateway)
+			log.Error().Err(err).Msg("[server] init proxy client")
+			return
+		}
+
+		// Create a reverse proxy whose transport dials via RelayDNS to the lease
+		target, _ := url.Parse("http://relay-peer")
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Director = func(req *http.Request) {
+			// Preserve original method, headers, query; rewrite URL to dummy host
+			req.URL.Scheme = "http"
+			req.URL.Host = target.Host
+			req.URL.Path = rest
+			// Keep Host header as-is (or could clear)
+		}
+		proxy.Transport = &http.Transport{
+			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
+				// Create a fresh credential per dial
+				cred, cerr := sdk.NewCredential()
+				if cerr != nil {
+					return nil, cerr
+				}
+				return client.Dial(cred, leaseID, "h1")
+			},
+		}
+
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
+			log.Error().Err(e).Str("lease", leaseID).Msg("[server] proxy error")
+			http.Error(rw, "upstream error", http.StatusBadGateway)
+		}
+
+		proxy.ServeHTTP(w, r)
+	})
 
 	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

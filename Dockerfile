@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags "-s -w" -o /out/relayserver ./cmd/server
+    go build -trimpath -ldflags "-s -w" -o /out/relayserver ./cmd/relay-server
 
 # Minimal runtime image
 FROM gcr.io/distroless/static-debian12:nonroot
