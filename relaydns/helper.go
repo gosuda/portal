@@ -10,7 +10,11 @@ import (
 
 func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {
 	if n > cap(buffer.B) {
-		buffer.B = make([]byte, ((n+(1<<14)-1)/1<<14)*(1<<14))
+		if n > _MAX_RAW_PACKET_SIZE {
+			n = _MAX_RAW_PACKET_SIZE
+		}
+		newSize := ((n + (1 << 14) - 1) / (1 << 14)) * (1 << 14)
+		buffer.B = make([]byte, newSize)
 	}
 }
 
