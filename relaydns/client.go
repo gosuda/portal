@@ -197,7 +197,7 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 
 	pkt, err := readPacket(stream)
 	if err != nil {
-		log.Error().Err(err).Msg("[RelayClient] Failed to read packet from stream")
+		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		stream.Close()
 		return
 	}
@@ -368,16 +368,19 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 	// 응답 수신
 	respPacket, err := readPacket(stream)
 	if err != nil {
+		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_LEASE_UPDATE_RESPONSE {
+		log.Error().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Unexpected response packet type")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, ErrInvalidResponse
 	}
 
 	var resp rdverb.LeaseUpdateResponse
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
+		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to unmarshal lease update response")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
@@ -434,6 +437,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 	// 응답 수신
 	respPacket, err := readPacket(stream)
 	if err != nil {
+		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
@@ -495,7 +499,7 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Waiting for connection response")
 	respPacket, err := readPacket(stream)
 	if err != nil {
-		log.Error().Err(err).Msg("[RelayClient] Failed to read connection response")
+		log.Error().Str("lease_id", leaseID).Err(err).Msg("[RelayClient] Failed to read connection response")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
@@ -509,7 +513,7 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	var resp rdverb.ConnectionResponse
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
-		log.Error().Err(err).Msg("[RelayClient] Failed to unmarshal connection response")
+		log.Error().Str("lease_id", leaseID).Err(err).Msg("[RelayClient] Failed to unmarshal connection response")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}

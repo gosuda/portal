@@ -163,11 +163,13 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 	for {
 		packet, err := readPacket(stream)
 		if err != nil {
-			log.Debug().
-				Err(err).
-				Int64("conn_id", id).
-				Uint32("stream_id", stream.StreamID()).
-				Msg("[RelayServer] Error reading packet")
+			if err != io.EOF {
+				log.Debug().
+					Err(err).
+					Int64("conn_id", id).
+					Uint32("stream_id", stream.StreamID()).
+					Msg("[RelayServer] Error reading packet")
+			}
 			return
 		}
 

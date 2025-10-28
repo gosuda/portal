@@ -72,6 +72,12 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 		g.leaseConnectionsLock.Lock()
 		g.leaseConnections[leaseID] = ctx.Connection
 		g.leaseConnectionsLock.Unlock()
+
+		// Log lease update completion
+		log.Debug().
+			Str("lease_id", leaseID).
+			Int64("connection_id", ctx.ConnectionID).
+			Msg("[RelayServer] Lease update completed successfully")
 	} else {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_EXPIRES
 	}
@@ -115,6 +121,11 @@ func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdver
 		g.leaseConnectionsLock.Lock()
 		delete(g.leaseConnections, leaseID)
 		g.leaseConnectionsLock.Unlock()
+
+		// Log lease deletion completion
+		log.Debug().
+			Str("lease_id", leaseID).
+			Msg("[RelayServer] Lease deletion completed successfully")
 	} else {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
 	}
@@ -254,7 +265,7 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayServer] Waiting for response from lease holder")
 	respPacket, err := readPacket(leaseStream)
 	if err != nil {
-		log.Error().Err(err).Msg("[RelayServer] Failed to read forward response")
+		log.Error().Str("lease_id", req.LeaseId).Err(err).Msg("[RelayServer] Failed to read forward response")
 		leaseStream.Close()
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 
@@ -364,7 +375,7 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		}()
 
 		wg.Wait()
-		log.Debug().Str("lease_id", leaseID).Msg("[RelayServer] Bidirectional forwarding completed")
+		log.Debug().Str("lease_id", leaseID).Msg("[RelayServer] Connection forwarding completed successfully")
 
 		// Clean up relayed connection tracking
 		g.relayedConnectionsLock.Lock()
