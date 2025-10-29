@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"slices"
 	"sync"
 	"time"
@@ -24,6 +25,22 @@ func NewCredential() *cryptoops.Credential {
 		log.Fatal().Err(err).Msg("Failed to create credential")
 	}
 	return cred
+}
+
+// URL-safe name validation regex
+// Allows: Unicode letters (\p{L}), Unicode numbers (\p{N}), hyphen (-), underscore (_)
+// This includes Korean (한글), Japanese (日本語), Chinese (中文), Arabic (العربية), etc.
+var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
+
+// isURLSafeName checks if a name contains only URL-safe characters
+// Supports Unicode characters including Korean (한글), Japanese (日本語), Chinese (中文), etc.
+// Disallows: spaces, special characters like /, ?, &, =, %, etc.
+// Note: Browsers will automatically URL-encode non-ASCII characters (e.g., 한글 → %ED%95%9C%EA%B8%80)
+func isURLSafeName(name string) bool {
+	if name == "" {
+		return true // Empty name is allowed (will be treated as unnamed)
+	}
+	return urlSafeNameRegex.MatchString(name)
 }
 
 func webSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
@@ -130,6 +147,7 @@ var (
 	ErrListenerExists       = errors.New("listener already exists for this credential")
 	ErrRelayExists          = errors.New("relay already exists")
 	ErrRelayNotFound        = errors.New("relay not found")
+	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
 	ErrFailedToCreateClient = errors.New("failed to create relay client")
 )
 
@@ -264,6 +282,14 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 		Str("name", name).
 		Strs("alpns", alpns).
 		Msg("[SDK] Creating listener")
+
+	// Validate name is URL-safe
+	if !isURLSafeName(name) {
+		log.Error().
+			Str("name", name).
+			Msg("[SDK] Lease name contains invalid characters")
+		return nil, ErrInvalidName
+	}
 
 	g.mu.Lock()
 	defer g.mu.Unlock()

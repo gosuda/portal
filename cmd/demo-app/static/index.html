@@ -1,22 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <title>RelayDNS Paint</title>
-    <script>
-        // Set base URL for relative paths - must be before any relative resource loads
-        const base = document.createElement('base');
-        const path = window.location.pathname;
-        // Ensure trailing slash for proper relative path resolution
-        base.href = path.endsWith('/') ? path : (path + '/');
-        document.head.appendChild(base);
-        console.log('[Paint] Base path set to:', base.href);
-    </script>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="container">
         <h1>🎨 RelayDNS Collaborative Paint</h1>
@@ -35,18 +28,29 @@
                 <label for="color">Color:</label>
                 <input type="color" id="color" value="#000000">
                 <div class="color-presets">
-                    <button class="color-preset" data-color="#000000" style="background: #000000;" title="Black"></button>
-                    <button class="color-preset" data-color="#ffffff" style="background: #ffffff; border: 1px solid #ddd;" title="White"></button>
+                    <button class="color-preset" data-color="#000000" style="background: #000000;"
+                        title="Black"></button>
+                    <button class="color-preset" data-color="#ffffff"
+                        style="background: #ffffff; border: 1px solid #ddd;" title="White"></button>
                     <button class="color-preset" data-color="#ef4444" style="background: #ef4444;" title="Red"></button>
-                    <button class="color-preset" data-color="#f97316" style="background: #f97316;" title="Orange"></button>
-                    <button class="color-preset" data-color="#eab308" style="background: #eab308;" title="Yellow"></button>
-                    <button class="color-preset" data-color="#22c55e" style="background: #22c55e;" title="Green"></button>
-                    <button class="color-preset" data-color="#06b6d4" style="background: #06b6d4;" title="Cyan"></button>
-                    <button class="color-preset" data-color="#3b82f6" style="background: #3b82f6;" title="Blue"></button>
-                    <button class="color-preset" data-color="#8b5cf6" style="background: #8b5cf6;" title="Purple"></button>
-                    <button class="color-preset" data-color="#ec4899" style="background: #ec4899;" title="Pink"></button>
-                    <button class="color-preset" data-color="#a855f7" style="background: #a855f7;" title="Violet"></button>
-                    <button class="color-preset" data-color="#6b7280" style="background: #6b7280;" title="Gray"></button>
+                    <button class="color-preset" data-color="#f97316" style="background: #f97316;"
+                        title="Orange"></button>
+                    <button class="color-preset" data-color="#eab308" style="background: #eab308;"
+                        title="Yellow"></button>
+                    <button class="color-preset" data-color="#22c55e" style="background: #22c55e;"
+                        title="Green"></button>
+                    <button class="color-preset" data-color="#06b6d4" style="background: #06b6d4;"
+                        title="Cyan"></button>
+                    <button class="color-preset" data-color="#3b82f6" style="background: #3b82f6;"
+                        title="Blue"></button>
+                    <button class="color-preset" data-color="#8b5cf6" style="background: #8b5cf6;"
+                        title="Purple"></button>
+                    <button class="color-preset" data-color="#ec4899" style="background: #ec4899;"
+                        title="Pink"></button>
+                    <button class="color-preset" data-color="#a855f7" style="background: #a855f7;"
+                        title="Violet"></button>
+                    <button class="color-preset" data-color="#6b7280" style="background: #6b7280;"
+                        title="Gray"></button>
                 </div>
             </div>
 
@@ -68,4 +72,5 @@
 
     <script src="app.js"></script>
 </body>
+
 </html>

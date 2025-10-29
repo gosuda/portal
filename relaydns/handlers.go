@@ -76,10 +76,17 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 		// Log lease update completion
 		log.Debug().
 			Str("lease_id", leaseID).
+			Str("lease_name", req.Lease.Name).
 			Int64("connection_id", ctx.ConnectionID).
 			Msg("[RelayServer] Lease update completed successfully")
 	} else {
-		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_EXPIRES
+		// Lease update failed (could be expired or name conflict)
+		leaseID := string(req.Lease.Identity.Id)
+		log.Warn().
+			Str("lease_id", leaseID).
+			Str("lease_name", req.Lease.Name).
+			Msg("[RelayServer] Lease update rejected (expired or name conflict)")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 	}
 
 	response, err := resp.MarshalVT()

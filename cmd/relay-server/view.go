@@ -62,17 +62,50 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 	}
 
 	mux.HandleFunc("/peer/", func(w http.ResponseWriter, r *http.Request) {
-		// Expect path /peer/{leaseID}[/{rest}]
+		// Expect path /peer/{nameOrID}[/{rest}]
 		path := strings.TrimPrefix(r.URL.Path, "/peer/")
 		if path == "" {
 			http.NotFound(w, r)
 			return
 		}
 		parts := strings.SplitN(path, "/", 2)
-		leaseID := parts[0]
+		nameOrID := parts[0]
 		rest := "/"
 		if len(parts) == 2 && parts[1] != "" {
 			rest = "/" + parts[1]
+		}
+
+		// Redirect /peer/my-title to /peer/my-title/ for proper relative path resolution
+		// This ensures that relative paths like "style.css" resolve to "/peer/my-title/style.css"
+		// instead of "/peer/style.css"
+		if len(parts) == 1 && !strings.HasSuffix(r.URL.Path, "/") {
+			redirectURL := r.URL.Path + "/"
+			if r.URL.RawQuery != "" {
+				redirectURL += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, redirectURL, http.StatusMovedPermanently)
+			return
+		}
+
+		// URL decode the name (handles Unicode like 한글 → %ED%95%9C%EA%B8%80)
+		decodedName, err := url.QueryUnescape(nameOrID)
+		if err != nil {
+			log.Warn().Err(err).Str("name", nameOrID).Msg("[server] Failed to decode peer name")
+			decodedName = nameOrID // Fallback to original if decode fails
+		}
+
+		// Try to find lease by name first, then by ID
+		leaseID := ""
+		leaseEntries := serv.GetAllLeaseEntries()
+		for _, entry := range leaseEntries {
+			if entry.Lease.Name == decodedName {
+				leaseID = string(entry.Lease.Identity.Id)
+				break
+			}
+		}
+		// If not found by name, assume it's an ID
+		if leaseID == "" {
+			leaseID = decodedName
 		}
 
 		// Get ALPN from lease metadata
@@ -292,7 +325,12 @@ func convertLeaseEntriesToRows(serv *relaydns.RelayServer) []leaseRow {
 		}
 
 		// Create link for the lease
-		link := fmt.Sprintf("/peer/%s", identityID)
+		// Use name if available, otherwise fall back to identity ID
+		linkPath := name
+		if linkPath == "" || linkPath == "(unnamed)" {
+			linkPath = identityID
+		}
+		link := fmt.Sprintf("/peer/%s", linkPath)
 
 		row := leaseRow{
 			Peer:      identityID,

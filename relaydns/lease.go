@@ -76,6 +76,21 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 		return false
 	}
 
+	// Check for name conflicts (only if name is not empty)
+	if lease.Name != "" && lease.Name != "(unnamed)" {
+		for existingID, existingEntry := range lm.leases {
+			// Skip if it's the same identity (updating own lease)
+			if existingID == identityID {
+				continue
+			}
+			// Check if another identity is using the same name
+			if existingEntry.Lease.Name == lease.Name {
+				// Name conflict with a different identity
+				return false
+			}
+		}
+	}
+
 	lm.leases[identityID] = &LeaseEntry{
 		Lease:        lease,
 		Expires:      expires,
