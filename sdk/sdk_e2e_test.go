@@ -102,7 +102,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 5. Register listener on app side
 	log.Info().Msg("[TEST] Step 5: Registering app listener")
-	appListener, err := appClient.Listen(appCred, "test-app", []string{"h1"})
+	appListener, err := appClient.Listen(appCred, "test-app", []string{"http/1.1"})
 	if err != nil {
 		t.Fatalf("Failed to create app listener: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 10. Dial to app through relay
 	log.Info().Msg("[TEST] Step 10: Client dialing to app through relay")
-	conn, err := clientSDK.Dial(clientCred, appCred.ID(), "h1")
+	conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
 	if err != nil {
 		t.Fatalf("Failed to dial to app: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	}
 	defer appClient.Close()
 
-	appListener, err := appClient.Listen(appCred, "multi-test-app", []string{"h1"})
+	appListener, err := appClient.Listen(appCred, "multi-test-app", []string{"http/1.1"})
 	if err != nil {
 		t.Fatalf("Failed to create app listener: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 		go func() {
 			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
 
-			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "h1")
+			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
 			if err != nil {
 				t.Errorf("Connection %d failed to dial: %v", i, err)
 				return
@@ -432,7 +432,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	// Try to dial to non-existent lease
 	log.Info().Msg("[TEST] Attempting to dial non-existent lease")
-	_, err = clientSDK.Dial(clientCred, "non-existent-lease-id", "h1")
+	_, err = clientSDK.Dial(clientCred, "non-existent-lease-id", "http/1.1")
 	if err == nil {
 		t.Error("Expected error when dialing non-existent lease")
 	} else {

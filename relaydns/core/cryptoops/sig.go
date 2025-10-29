@@ -10,11 +10,12 @@ import (
 )
 
 var _id_magic = []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID")
+var _base32_encoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
 
 func DeriveID(publickey ed25519.PublicKey) string {
 	h := hmac.New(sha256.New, _id_magic)
 	h.Write(publickey)
-	return base32.StdEncoding.EncodeToString(h.Sum(nil))
+	return _base32_encoding.EncodeToString(h.Sum(nil))
 }
 
 type Credential struct {

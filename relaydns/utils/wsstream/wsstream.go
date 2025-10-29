@@ -2,6 +2,7 @@ package wsstream
 
 import (
 	"io"
+	"strings"
 
 	"github.com/gorilla/websocket"
 )
@@ -26,14 +27,22 @@ func (g *WsStream) Read(p []byte) (n int, err error) {
 		err = nil
 	}
 
+	if err != nil && strings.HasPrefix(err.Error(), "websocket: close ") {
+		return 0, io.EOF
+	}
+
 	return n, err
 }
 
 func (g *WsStream) Write(p []byte) (n int, err error) {
 	err = g.Conn.WriteMessage(websocket.BinaryMessage, p)
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "websocket: close ") {
+			return 0, io.EOF
+		}
 		return 0, err
 	}
+
 	return len(p), nil
 }
 

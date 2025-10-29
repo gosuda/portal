@@ -170,7 +170,7 @@ func (g *RelayClient) leaseListenWorker() {
 		default:
 			if g.sess == nil {
 				// Session not initialized, wait a bit and retry
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(500 * time.Millisecond)
 				continue
 			}
 
@@ -182,8 +182,7 @@ func (g *RelayClient) leaseListenWorker() {
 					return
 				default:
 					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
-					// Continue trying to accept streams
-					continue
+					time.Sleep(500 * time.Millisecond) // waiting for reconnection
 				}
 			}
 			log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Accepted incoming stream")

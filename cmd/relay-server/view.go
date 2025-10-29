@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -22,11 +20,6 @@ import (
 	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
 	"github.com/gosuda/relaydns/sdk"
 )
-
-// Paths are relative to this file's directory
-//
-//go:embed wasm
-var wasmFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, alpn string, cancel context.CancelFunc) *http.Server {
@@ -193,33 +186,6 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		}
 	})
 
-	// API: Get relay server info for E2EE WebSocket
-	mux.HandleFunc("/api/relay-info", func(w http.ResponseWriter, r *http.Request) {
-		// Build relay WebSocket URL from current request
-		scheme := "ws"
-		if r.TLS != nil {
-			scheme = "wss"
-		}
-		// Check X-Forwarded-Proto header (for reverse proxy)
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
-			scheme = "wss"
-		}
-
-		relayUrl := fmt.Sprintf("%s://%s/relay", scheme, r.Host)
-
-		type relayInfo struct {
-			RelayUrl string `json:"relayUrl"`
-			NodeID   string `json:"nodeId"`
-		}
-		resp := relayInfo{
-			RelayUrl: relayUrl,
-			NodeID:   nodeID,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		type info struct {
 			Status string `json:"status"`
@@ -228,39 +194,6 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	})
-
-	// Serve embedded WASM files
-	if sub, err := fs.Sub(wasmFS, "wasm"); err != nil {
-		log.Error().Err(err).Msg("[server] failed to init embedded wasm FS")
-	} else {
-		// Serve WASM binaries at /pkg/
-		mux.Handle("/pkg/", http.StripPrefix("/pkg/", http.FileServer(http.FS(sub))))
-
-		// Serve Service Worker files from embed
-		mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			w.Header().Set("Service-Worker-Allowed", "/")
-			data, err := fs.ReadFile(sub, "sw-proxy.js")
-			if err != nil {
-				log.Error().Err(err).Msg("[server] failed to read sw-proxy.js")
-				http.Error(w, "Service Worker not found", http.StatusNotFound)
-				return
-			}
-			w.Write(data)
-		})
-
-		mux.HandleFunc("/sw.js", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			w.Header().Set("Service-Worker-Allowed", "/")
-			data, err := fs.ReadFile(sub, "sw.js")
-			if err != nil {
-				log.Error().Err(err).Msg("[server] failed to read sw.js")
-				http.Error(w, "Service Worker not found", http.StatusNotFound)
-				return
-			}
-			w.Write(data)
-		})
-	}
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -456,13 +389,5 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
       {{end}}
     </main>
   </div>
-  <script>
-    // Register E2EE Proxy Service Worker
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw-proxy.js')
-        .then(reg => console.log('[Admin] Service Worker registered:', reg.scope))
-        .catch(err => console.error('[Admin] Service Worker registration failed:', err));
-    }
-  </script>
 </body>
 </html>`))
