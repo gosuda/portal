@@ -332,65 +332,98 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     }
     body { margin:0; background:var(--bg); color:var(--ink); font-family:sans-serif; font-size:16px; line-height:1.6 }
     .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px }
-    header { display:flex; align-items:center; justify-content:space-between; padding: 20px 24px; background:var(--panel); border:1px solid var(--line); border-radius: 14px }
-    .brand { font-weight:800; font-size:22px; letter-spacing:.2px }
+    header { display:flex; align-items:center; gap:16px; justify-content:space-between; padding: 20px 24px; background:var(--panel); border:1px solid var(--line); border-radius: 14px }
+    .brand { display:flex; align-items:center; height:36px; font-weight:800; font-size:18px; letter-spacing:.2px }
     .status { color:var(--ok); font-weight:700 }
+    .app-left { display:flex; align-items:center; gap:12px }
     main { margin-top: 22px }
     .section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:16px; margin-top:14px }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; box-shadow: 0 1px 2px rgba(15,23,42,0.06); transition: box-shadow .2s ease, transform .2s ease; text-decoration:none; color:inherit; cursor:pointer; min-height: 180px }
+    .card:hover { box-shadow: 0 6px 20px rgba(15,23,42,0.12); transform: translateY(-2px) }
+    .card-head { display:flex; align-items:center; gap:10px; margin-bottom:8px }
+    .status-dot { width:10px; height:10px; border-radius:999px; background:var(--muted) }
+    .status-dot.ok { background: var(--ok) }
+    .status-dot.bad { background: var(--bad) }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color:#374151; word-break: break-all }
-    .title { font-weight:800; margin:0 0 10px 0; font-size:18px }
-    .muted { color:var(--muted); font-size:14px }
+    .title { font-weight:800; margin:0; font-size:16px }
+    .muted { color:var(--muted); font-size:13px }
     .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-weight:800; font-size:13px }
     .pill.ok { background:var(--ok-bg); color:var(--ok) }
     .pill.bad { background:var(--bad-bg); color:var(--bad) }
     .pill .dot { width:8px; height:8px; border-radius:999px; background:var(--ok); display:inline-block }
     .pill.bad .dot { background:var(--bad) }
     .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
-    .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:10px; padding:10px 14px; font-weight:800; margin-top:8px }
+    .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:8px; padding:6px 10px; font-weight:700; font-size:13px; line-height:1; margin-top:6px }
+    .btn.outline { background:transparent; color:var(--primary); border:1px solid var(--primary) }
+    .actions { margin-top:auto; display:flex; justify-content:flex-end }
+    /* Google-like search bar */
+    .searchbar { width: 320px; max-width: 50vw; margin: 0; display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:999px; background:#fff }
+    .searchbar:focus-within { box-shadow: 0 1px 6px rgba(32,33,36,.28); border-color:#dfe1e5 }
+    .searchbar input { width:100%; height:100%; border:none; outline:none; font-size:14px; background:transparent; color:#111 }
+    .searchbar .icon { width:18px; height:18px; color:#9aa0a6 }
+    .topbar { display:flex; align-items:center; gap:16px; justify-content:space-between }
+    .rightbar { display:flex; align-items:center; gap:12px; margin-left:auto }
+    .gh-btn { width:36px; height:36px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; color:#000; background:#fff; border:1px solid var(--line) }
+    .counter { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 10px; border-radius:999px; background:var(--ok-bg); color:var(--ok); font-weight:800 }
+    .counter .icon { width:18px; height:18px }
   </style>
   </head>
 <body>
   <div class="wrap">
     <header>
       <div class="brand">Portal</div>
-      <div class="status">Admin</div>
+      <div class="rightbar">
+        <div class="searchbar" role="search">
+          <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M15.5 14h-.79l-.28-.27a6.471 6.471 0 0 0 1.57-4.23C15.99 6.01 13.48 3.5 10.49 3.5S5 6.01 5 9s2.51 5.5 5.5 5.5c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14Zm-5 0C8.01 14 6 11.99 6 9.5S8.01 5 10.5 5 15 7.01 15 9.5 12.99 14 10.5 14Z"/>
+          </svg>
+          <input id="search" type="text" placeholder="Search by name" aria-label="Search by name" oninput="filterCards(this.value)">
+        </div>
+        <a class="gh-btn" href="https://github.com/gosuda/portal" target="_blank" rel="noopener" aria-label="GitHub repository" title="gosuda/portal">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.37 7.86 10.88.58.1.79-.25.79-.56 0-.27-.01-1.16-.02-2.11-3.2.69-3.88-1.39-3.88-1.39-.53-1.35-1.29-1.71-1.29-1.71-1.05-.72.08-.7.08-.7 1.16.08 1.78 1.19 1.78 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.26-1.28-5.26-5.72 0-1.26.45-2.3 1.19-3.11-.12-.29-.52-1.45.11-3.02 0 0 .98-.31 3.2 1.19.93-.26 1.94-.39 2.94-.39s2.01.13 2.95.39c2.22-1.5 3.2-1.19 3.2-1.19.63 1.57.23 2.73.12 3.02.74.81 1.19 1.85 1.19 3.11 0 4.45-2.7 5.43-5.28 5.72.41.36.77 1.07.77 2.16 0 1.56-.01 2.81-.01 3.19 0 .31.21.67.8.56C20.22 21.36 23.5 17.08 23.5 12 23.5 5.73 18.27.5 12 .5Z"/>
+          </svg>
+        </a>
+        <div class="counter" aria-label="Active clients" title="Active clients">
+          <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3Zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C18 14.17 13.33 13 11 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h4v-2.5c0-2.33-4.67-3.5-7-3.5Z"/>
+          </svg>
+          <span>{{len .Rows}}</span>
+        </div>
+      </div>
     </header>
     <main>
-      <section class="section">
-        <div class="title">Server</div>
-        <div class="mono">Server ID: {{.NodeID}}</div>
-        {{if .Bootstraps}}
-          <div class="muted" style="margin-top:6px">Bootstrap URLs</div>
-          <div class="mono">{{range .Bootstraps}}<a href="{{.}}" target="_blank" rel="noreferrer noopener">{{.}}</a><br/>{{end}}</div>
-        {{end}}
-        <div class="muted" style="margin-top:6px">Active clients: {{len .Rows}}</div>
-      </section>
-      {{range .Rows}}
-      <section class="section" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}">
-        <div class="head">
-          <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
-          <div>
-            <span class="muted" style="margin-right:8px">{{.Kind}}</span>
-            {{if .Connected}}
-              <span class="pill ok"><span class="dot"></span>Connected</span>
-            {{else}}
-              <span class="pill bad"><span class="dot"></span>Disconnected</span>
-            {{end}}
+      
+
+      <div class="grid">
+        {{range .Rows}}
+        <a class="card {{if .Connected}}connected{{else}}disconnected{{end}}" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}" href="{{.Link}}">
+          <div class="card-head">
+            <span class="status-dot {{if .Connected}}ok{{else}}bad{{end}}"></span>
+            <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
           </div>
-        </div>
-        {{if .DNS}}<div class="muted">DNS Label: <span class="mono">{{.DNS}}</span></div>{{end}}
-        <div class="muted">Lease Identity</div>
-        <div class="mono">{{.Peer}}</div>
-        <div class="muted" style="margin-top:6px">Last seen: {{.LastSeen}}{{if .TTL}} - TTL: {{.TTL}}{{end}}</div>
-        <a class="btn" href="{{.Link}}">Open</a>
-      </section>
-      {{else}}
-      <section class="section">
-        <div class="title">No clients discovered</div>
-        <div class="muted">Start a client and ensure bootstrap URLs point at this server's /relay WebSocket endpoint.</div>
-      </section>
-      {{end}}
+          <div class="muted">Last seen: {{.LastSeen}}</div>
+        </a>
+        {{else}}
+        <article class="card">
+          <div class="title">No clients discovered</div>
+          <div class="muted">Start a client and ensure bootstrap URLs point at this server's /relay WebSocket endpoint.</div>
+        </article>
+        {{end}}
+      </div>
     </main>
   </div>
+  <script>
+    function filterCards(q) {
+      q = (q || '').toLowerCase().trim();
+      const cards = document.querySelectorAll('.grid .card');
+      cards.forEach(card => {
+        const name = (card.getAttribute('data-name') || '').toLowerCase();
+        const show = !q || name.includes(q);
+        card.style.display = show ? '' : 'none';
+      });
+    }
+  </script>
 </body>
 </html>`))
