@@ -36,4 +36,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/relayserver /usr/bin/relayserver
 
+EXPOSE 4017
+
 ENTRYPOINT ["/usr/bin/relayserver"]
