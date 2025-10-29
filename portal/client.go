@@ -551,24 +551,21 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	return resp.Code, secConn, nil
 }
 
-func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, name string, alpns []string) error {
+func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Lease) error {
+	lease = lease.CloneVT() // copy lease to avoid modifying the original lease
+
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
 		PublicKey: cred.PublicKey(),
 	}
+	lease.Identity = identity
+	lease.Expires = time.Now().Add(30 * time.Second).Unix()
 
 	log.Debug().
 		Str("lease_id", identity.Id).
-		Str("name", name).
-		Strs("alpns", alpns).
+		Str("name", lease.Name).
+		Strs("alpns", lease.Alpn).
 		Msg("[RelayClient] Registering lease")
-
-	lease := &rdverb.Lease{
-		Identity: identity,
-		Expires:  time.Now().Add(30 * time.Second).Unix(),
-		Name:     name,
-		Alpn:     alpns,
-	}
 
 	g.leasesMu.Lock()
 	g.leases[identity.Id] = &leaseWithCred{
@@ -606,9 +603,11 @@ func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 
 	resp, err := g.deleteLease(cred, identity)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		log.Error().Err(err).Str("lease_id", identity.Id).Msg("[RelayClient] Failed to deregister lease")
 		return err
 	}
 
+	log.Debug().Str("lease_id", identity.Id).Msg("[RelayClient] Lease unregistered successfully")
 	return nil
 }
 

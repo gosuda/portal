@@ -355,9 +355,15 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 		return nil, ErrListenerExists
 	}
 
-	// Create listener
+	lease := &rdverb.Lease{
+		Name: name,
+		Alpn: alpns,
+	}
+
+	// Create listener with lease metadata for re-registration
 	listener := &RDListener{
 		cred:   cred,
+		lease:  lease,
 		conns:  make(map[*RDConnection]struct{}),
 		connCh: make(chan *RDConnection, 100),
 		closed: false,
@@ -374,11 +380,15 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	// Register lease with all available relays
 	for _, relay := range g.relays {
 		go func(r *rdRelay) {
-			err := r.client.RegisterLease(cred, name, alpns)
+			err := r.client.RegisterLease(cred, listener.lease)
 			if err != nil {
 				log.Error().Err(err).Str("relay", r.addr).Msg("[SDK] Failed to register lease")
 			} else {
 				log.Debug().Str("relay", r.addr).Msg("[SDK] Lease registered successfully")
+				// Store lease info in listener for future re-registration
+				listener.mu.Lock()
+				listener.lease = lease
+				listener.mu.Unlock()
 			}
 		}(relay)
 	}
@@ -636,20 +646,18 @@ func (g *RDClient) reconnectRelay(relay *rdRelay, config *RDClientConfig) {
 				lease := l.lease
 				l.mu.Unlock()
 
-				if lease != nil {
-					err := relayClient.RegisterLease(cred, lease.Name, lease.Alpn)
-					if err != nil {
-						log.Error().
-							Err(err).
-							Str("relay", relay.addr).
-							Str("lease_id", cred.ID()).
-							Msg("[SDK] Failed to re-register lease after reconnection")
-					} else {
-						log.Debug().
-							Str("relay", relay.addr).
-							Str("lease_id", cred.ID()).
-							Msg("[SDK] Lease re-registered after reconnection")
-					}
+				err := relayClient.RegisterLease(cred, lease)
+				if err != nil {
+					log.Error().
+						Err(err).
+						Str("relay", relay.addr).
+						Str("lease_id", cred.ID()).
+						Msg("[SDK] Failed to re-register lease after reconnection")
+				} else {
+					log.Debug().
+						Str("relay", relay.addr).
+						Str("lease_id", cred.ID()).
+						Msg("[SDK] Lease re-registered after reconnection")
 				}
 			}(listener)
 		}
@@ -703,16 +711,17 @@ func (l *RDListener) Addr() net.Addr {
 // AddRelay adds a new relay server to the client
 func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// Check if relay already exists
 	if _, exists := g.relays[addr]; exists {
+		g.mu.Unlock()
 		return errors.New("relay already exists")
 	}
 
 	// Connect to relay
 	conn, err := dialer(context.Background(), addr)
 	if err != nil {
+		g.mu.Unlock()
 		return err
 	}
 
@@ -720,6 +729,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	relayClient := portal.NewRelayClient(conn)
 	if relayClient == nil {
 		conn.Close()
+		g.mu.Unlock()
 		return errors.New("failed to create relay client")
 	}
 
@@ -732,9 +742,41 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	}
 	g.relays[addr] = relay
 
+	// Register all existing leases with the new relay
+	for _, listener := range g.listeners {
+		go func(l *RDListener) {
+			l.mu.Lock()
+			cred := l.cred
+			lease := l.lease
+			l.mu.Unlock()
+
+			err := relayClient.RegisterLease(cred, lease)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("relay", addr).
+					Str("lease_id", cred.ID()).
+					Msg("[SDK] Failed to register lease with new relay")
+			} else {
+				log.Debug().
+					Str("relay", addr).
+					Str("lease_id", cred.ID()).
+					Msg("[SDK] Lease registered with new relay")
+			}
+		}(listener)
+	}
+
+	// Start listener worker for the new relay
+	g.waitGroup.Add(1)
+	go g.listenerWorker(relay)
+
+	g.mu.Unlock()
+
 	// Start health monitoring for this relay
 	g.waitGroup.Add(1)
 	go g.healthCheckWorker(relay, g.config)
+
+	log.Info().Str("relay", addr).Msg("[SDK] New relay added successfully")
 
 	return nil
 }
