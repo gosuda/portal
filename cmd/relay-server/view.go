@@ -367,6 +367,17 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .gh-btn { width:36px; height:36px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; color:#000; background:#fff; border:1px solid var(--line) }
     .counter { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 10px; border-radius:999px; background:var(--ok-bg); color:var(--ok); font-weight:800 }
     .counter .icon { width:18px; height:18px }
+
+    /* Responsive: prevent header overflow on small screens */
+    @media (max-width: 640px) {
+      .wrap { padding: 20px 14px }
+      header { flex-wrap: wrap; gap: 12px; padding: 16px }
+      .brand { font-size: 16px }
+      .rightbar { margin-left: 0; width: 100%; flex-wrap: wrap; gap: 8px }
+      .searchbar { flex: 1 1 100%; width: 100%; max-width: 100% }
+      .gh-btn { width: 32px; height: 32px }
+      .counter { height: 32px; padding: 0 8px; font-size: 12px }
+    }
   </style>
   </head>
 <body>
