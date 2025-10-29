@@ -1,5 +1,7 @@
 # RelayDNS
 
+> Run Locally, Publish Everywhere!
+
 RelayDNS is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
 
 ## Table of Contents
