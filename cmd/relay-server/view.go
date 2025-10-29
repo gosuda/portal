@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ import (
 )
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, alpn string, cancel context.CancelFunc) *http.Server {
+func serveHTTP(_ context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -107,7 +108,11 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 			http.Error(w, "lease not found or no ALPN registered", http.StatusNotFound)
 			return
 		}
-		targetALPN := alpns[0] // Use the first ALPN
+
+		if !slices.Contains(alpns, "http/1.1") {
+			http.Error(w, "no http/1.1 ALPN registered", http.StatusNotFound)
+			return
+		}
 
 		// Temporary credential for this proxy connection
 		cred := sdk.NewCredential()
@@ -123,7 +128,7 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		proxy := httputil.NewSingleHostReverseProxy(target)
 		proxy.Transport = &http.Transport{
 			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
-				conn, err := client.Dial(cred, leaseID, targetALPN)
+				conn, err := client.Dial(cred, leaseID, "http/1.1")
 				if err != nil {
 					return nil, err
 				}
@@ -186,7 +191,7 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		}
 	})
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		type info struct {
 			Status string `json:"status"`
 		}
