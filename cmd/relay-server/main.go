@@ -30,7 +30,7 @@ var (
 
 func init() {
 	flags := rootCmd.PersistentFlags()
-	flags.StringArrayVar(&flagBootstraps, "bootstraps", nil, "bootstrap addresses")
+	flags.StringArrayVar(&flagBootstraps, "bootstraps", []string{"ws://localhost:4017/relay"}, "bootstrap addresses")
 	flags.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flags.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
 }

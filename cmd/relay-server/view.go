@@ -48,9 +48,7 @@ func serveHTTP(_ context.Context, addr string, serv *relaydns.RelayServer, nodeI
 				// No TLS handling here; extend to wss if needed in future
 				bs = []string{fmt.Sprintf("%s://%s/relay", scheme, r.Host)}
 			}
-			proxyClient, proxyClientErr = sdk.NewClient(func(c *sdk.RDClientConfig) {
-				c.BootstrapServers = bs
-			})
+			proxyClient, proxyClientErr = sdk.NewClient(sdk.WithBootstrapServers(bs))
 		})
 		return proxyClient, proxyClientErr
 	}
