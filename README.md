@@ -1,8 +1,7 @@
-# Portal
+# PORTAL — Publicly Open Relay To Access Localhost
+> Run locally, host everywhere!
 
-> Run Locally, Publish Everywhere!
-
-Portal(Publicly Open Relay To Access Localhost) is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
+Portal is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
 
 ## Table of Contents
 
