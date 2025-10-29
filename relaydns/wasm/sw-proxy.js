@@ -53,7 +53,6 @@ function shouldProxy(url) {
         url.includes('localhost:8000') ||
         url.includes('/pkg/') ||
         url.includes('/sw-proxy.js') ||
-        url.includes('/relay') ||
         url.includes('/api/')) {
         return false;
     }
