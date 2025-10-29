@@ -193,7 +193,32 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		}
 	})
 
-	// Note: removed /api/leases; admin renders server-side for simplicity
+	// API: Get relay server info for E2EE WebSocket
+	mux.HandleFunc("/api/relay-info", func(w http.ResponseWriter, r *http.Request) {
+		// Build relay WebSocket URL from current request
+		scheme := "ws"
+		if r.TLS != nil {
+			scheme = "wss"
+		}
+		// Check X-Forwarded-Proto header (for reverse proxy)
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+			scheme = "wss"
+		}
+
+		relayUrl := fmt.Sprintf("%s://%s/relay", scheme, r.Host)
+
+		type relayInfo struct {
+			RelayUrl string `json:"relayUrl"`
+			NodeID   string `json:"nodeId"`
+		}
+		resp := relayInfo{
+			RelayUrl: relayUrl,
+			NodeID:   nodeID,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		type info struct {

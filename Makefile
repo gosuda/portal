@@ -16,6 +16,9 @@ build-wasm:
 	@echo "[wasm] copying service workers and E2EE proxy files..."
 	cp relaydns/wasm/sw-proxy.js cmd/relay-server/wasm/
 	cp relaydns/wasm/sw.js cmd/relay-server/wasm/
+	@echo "[wasm] copying SecureWebSocket E2EE files..."
+	cp relaydns/wasm/secure-websocket.js cmd/relay-server/wasm/
+	cp relaydns/wasm/secure-websocket-sw.js cmd/relay-server/wasm/
 
 # Build Go relay server (embeds WASM from cmd/relay-server/wasm)
 build-server:

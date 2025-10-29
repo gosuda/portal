@@ -183,10 +183,10 @@ export interface InitOutput {
   readonly relayclient_getCredentialId: (a: number) => [number, number];
   readonly relayclient_requestConnection: (a: number, b: number, c: number, d: number, e: number) => any;
   readonly init: () => void;
-  readonly wasm_bindgen__convert__closures_____invoke__hed2088bf6dd2c621: (a: number, b: number, c: any) => void;
-  readonly wasm_bindgen__closure__destroy__h8eb17c158a55b496: (a: number, b: number) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h75a085a52d492ff4: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__closure__destroy__h2dcad6e62f01cec1: (a: number, b: number) => void;
+  readonly wasm_bindgen__convert__closures_____invoke__hed2088bf6dd2c621: (a: number, b: number, c: any) => void;
+  readonly wasm_bindgen__closure__destroy__h8eb17c158a55b496: (a: number, b: number) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h404cda7fa36c69a6: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_malloc: (a: number, b: number) => number;
   readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

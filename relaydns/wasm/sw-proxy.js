@@ -4,34 +4,110 @@
 const CACHE_NAME = 'relaydns-proxy-v1';
 let proxyEngine = null;
 let wasmReady = false;
+let initializationPromise = null;
 
-// Install event - Load WASM here (only time importScripts is allowed)
+// Dynamic WASM initialization (can be called anytime, not just install)
+async function initializeProxyEngine() {
+    // If already initializing, wait for it
+    if (initializationPromise) {
+        return initializationPromise;
+    }
+
+    // If already initialized, return immediately
+    if (proxyEngine && wasmReady) {
+        return proxyEngine;
+    }
+
+    initializationPromise = (async () => {
+        try {
+            console.log('[SW-Proxy] Dynamically initializing ProxyEngine...');
+
+            // Check if wasm_bindgen is available (loaded during install)
+            if (typeof wasm_bindgen === 'undefined') {
+                console.log('[SW-Proxy] wasm_bindgen not available, loading via dynamic import...');
+
+                // Use dynamic import for ES6 modules
+                const wasmModule = await import('/pkg/relaydns_wasm.js');
+
+                // Make wasm_bindgen available globally
+                self.wasm_bindgen = wasmModule;
+
+                console.log('[SW-Proxy] ✓ WASM JS module loaded');
+            }
+
+            // Check if SecureWebSocket SW module is loaded
+            if (typeof ServiceWorkerWebSocketTunnel === 'undefined') {
+                console.log('[SW-Proxy] SecureWebSocket SW module not available, loading via fetch...');
+
+                const swWsResponse = await fetch('/secure-websocket-sw.js');
+                const swWsCode = await swWsResponse.text();
+
+                // Use indirect eval to execute in global scope
+                (1, eval)(swWsCode);
+                console.log('[SW-Proxy] ✓ SecureWebSocket SW module loaded');
+            }
+
+            // Initialize WASM module if not already done
+            if (!wasmReady) {
+                console.log('[SW-Proxy] Initializing WASM module...');
+
+                // wasm_bindgen is now the module object from dynamic import
+                const initWasm = self.wasm_bindgen.default || self.wasm_bindgen;
+                await initWasm('/pkg/relaydns_wasm_bg.wasm');
+
+                console.log('[SW-Proxy] ✓ WASM module initialized');
+            }
+
+            // Get relay URL from API
+            let relayUrl = 'ws://localhost:4017/relay'; // Default fallback
+            try {
+                const relayInfoResponse = await fetch('/api/relay-info');
+                if (relayInfoResponse.ok) {
+                    const relayInfo = await relayInfoResponse.json();
+                    if (relayInfo.relayUrl) {
+                        relayUrl = relayInfo.relayUrl;
+                        console.log('[SW-Proxy] Got relay URL from server:', relayUrl);
+                    }
+                }
+            } catch (e) {
+                console.warn('[SW-Proxy] Failed to fetch relay URL, using default:', e.message);
+            }
+
+            // Create ProxyEngine
+            console.log('[SW-Proxy] Creating ProxyEngine with URL:', relayUrl);
+            const ProxyEngine = self.wasm_bindgen.ProxyEngine;
+            proxyEngine = new ProxyEngine(relayUrl);
+            wasmReady = true;
+
+            console.log('[SW-Proxy] ✓ ProxyEngine ready');
+            return proxyEngine;
+
+        } catch (error) {
+            console.error('[SW-Proxy] Failed to initialize ProxyEngine:', error);
+            initializationPromise = null; // Reset so we can retry
+            wasmReady = false;
+            throw error;
+        }
+    })();
+
+    return initializationPromise;
+}
+
+// Install event - Skip importScripts since WASM is ES6 module
 self.addEventListener('install', (event) => {
     console.log('[SW-Proxy] Installing...');
 
     event.waitUntil(
         (async () => {
             try {
-                console.log('[SW-Proxy] Loading WASM module during install...');
+                console.log('[SW-Proxy] Service Worker installing...');
 
-                // importScripts can ONLY be called during install
-                self.importScripts('/pkg/relaydns_wasm_sw.js');
-                console.log('[SW-Proxy] ✓ WASM script loaded');
-
-                // Initialize WASM
-                console.log('[SW-Proxy] Initializing WASM...');
-                await wasm_bindgen('/pkg/relaydns_wasm_sw_bg.wasm');
-                console.log('[SW-Proxy] ✓ WASM initialized');
-
-                // Create proxy engine
-                console.log('[SW-Proxy] Creating ProxyEngine...');
-                proxyEngine = new wasm_bindgen.ProxyEngine('ws://localhost:4017/relay');
-                wasmReady = true;
-                console.log('[SW-Proxy] ✓ Proxy engine ready');
+                // Note: We cannot use importScripts with ES6 modules
+                // WASM will be loaded dynamically on first request via fetch + dynamic import
+                console.log('[SW-Proxy] WASM will be loaded dynamically on first request');
 
             } catch (error) {
-                console.error('[SW-Proxy] Failed to initialize WASM:', error);
-                throw error;
+                console.error('[SW-Proxy] Install error:', error);
             }
 
             // Skip waiting to activate immediately
@@ -64,9 +140,31 @@ function shouldProxy(url) {
 // Handle HTTP request through WASM proxy
 async function proxyHttpRequest(request) {
     try {
+        // Ensure ProxyEngine is initialized (lazy init if needed)
         if (!wasmReady || !proxyEngine) {
-            console.warn('[SW-Proxy] WASM not ready, falling back to direct fetch');
-            return fetch(request);
+            console.log('[SW-Proxy] ProxyEngine not ready, attempting lazy initialization...');
+            try {
+                await initializeProxyEngine();
+            } catch (initError) {
+                // Security: Never fallback to direct fetch - this would bypass E2EE!
+                console.error('[SW-Proxy] Failed to initialize ProxyEngine:', initError);
+                return new Response(
+                    JSON.stringify({
+                        error: 'E2EE ProxyEngine Initialization Failed',
+                        message: 'Could not initialize secure proxy. Please refresh the page.',
+                        code: 'PROXY_ENGINE_INIT_FAILED',
+                        details: initError.message
+                    }),
+                    {
+                        status: 503,
+                        statusText: 'Service Unavailable',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-E2EE-Status': 'init-failed'
+                        }
+                    }
+                );
+            }
         }
 
         console.log('[SW-Proxy] Proxying:', request.method, request.url);
@@ -113,9 +211,22 @@ async function proxyHttpRequest(request) {
 
     } catch (error) {
         console.error('[SW-Proxy] Proxy error:', error);
-        // Fallback to direct fetch on error
-        console.log('[SW-Proxy] Falling back to direct fetch');
-        return fetch(request);
+        // Security: Never fallback to direct fetch - return error instead
+        return new Response(
+            JSON.stringify({
+                error: 'E2EE Proxy Error',
+                message: error.message || 'Failed to proxy request through E2EE tunnel',
+                code: 'PROXY_ERROR'
+            }),
+            {
+                status: 502,
+                statusText: 'Bad Gateway',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-E2EE-Status': 'error'
+                }
+            }
+        );
     }
 }
 
@@ -137,13 +248,27 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('message', (event) => {
     const { type } = event.data || {};
 
+    // Try WebSocket handler first
+    if (typeof handleWebSocketMessage === 'function') {
+        const handled = handleWebSocketMessage(event);
+        if (handled instanceof Promise) {
+            // Async handler
+            return;
+        } else if (handled) {
+            // Synchronously handled
+            return;
+        }
+    }
+
+    // Standard message handling
     switch (type) {
         case 'GET_STATUS':
             event.ports[0]?.postMessage({
                 success: true,
                 status: {
                     wasmReady,
-                    hasEngine: !!proxyEngine
+                    hasEngine: !!proxyEngine,
+                    hasWebSocket: typeof handleWebSocketMessage === 'function'
                 }
             });
             break;

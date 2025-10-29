@@ -11,6 +11,8 @@ Cargo.lock
 !examples/*.js
 !sw.js
 !sw-proxy.js
+!secure-websocket.js
+!secure-websocket-sw.js
 
 # Keep HTML files
 !*.html
