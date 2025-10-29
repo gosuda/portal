@@ -34,6 +34,8 @@ RelayDNS implements a secure relay protocol that allows clients to register leas
 - 🌐 **Protocol Support**: Application-Layer Protocol Negotiation (ALPN)
 - 🚀 **High Performance**: Multiplexed connections using yamux
 - 🐳 **Docker Support**: Containerized deployment ready
+- 🌍 **Browser E2EE Proxy**: WASM-based Service Worker for automatic browser encryption
+- 📱 **Multi-Platform**: Go SDK for servers, WASM SDK for browsers
 
 ## Architecture
 
@@ -204,118 +206,123 @@ sequenceDiagram
 git clone https://github.com/gosuda/relaydns.git
 cd relaydns
 
-# Note: The main entry point appears to be in development
-# You can build individual packages for testing:
-go build ./relaydns
+# Build WASM SDK (includes E2EE Proxy Service Worker)
+make build-wasm
+
+# Build relay server (embeds WASM files)
+make build-server
+
+# Run relay server
+./bin/relayserver
 ```
 
 ### Docker Deployment
 
 ```bash
-# Build and run with Docker Compose
-docker-compose up -d
+# Build with Docker (multi-stage build)
+docker build -t relaydns-server .
 
-# Or build manually
-docker build -t relaydns .
-docker run -p 8080:8080 relaydns
+# Run server
+docker run -p 4017:4017 relaydns-server
+
+# Access:
+# - Admin UI: http://localhost:4017/
 ```
+
+See [DOCKER_BUILD_VERIFICATION.md](DOCKER_BUILD_VERIFICATION.md) for detailed build verification steps.
 
 ## Usage
 
-### Server Setup
+### Browser E2EE Proxy (Automatic)
 
-```go
-package main
+The simplest way to use RelayDNS is through the browser E2EE Proxy:
 
-import (
-    "github.com/gosuda/relaydns/relaydns"
-    "github.com/gosuda/relaydns/relaydns/core/cryptoops"
-)
+```javascript
+// 1. Open the E2EE Proxy test page
 
-func main() {
-    // Create server credential
-    cred, err := cryptoops.NewCredential()
-    if err != nil {
-        panic(err)
-    }
-    
-    // Create relay server
-    server := relaydns.NewRelayServer(cred, []string{"localhost:8080"})
-    
-    // Start the server
-    server.Start()
-    defer server.Stop()
-    
-    // Handle connections (implementation depends on your transport)
-    // For example, with HTTP/WebSocket:
-    // http.HandleFunc("/relay", handleRelayConnection)
-    // http.ListenAndServe(":8080", nil)
-}
+// 2. Service Worker automatically registers and intercepts ALL fetch() requests
+
+// 3. All your requests are now E2EE encrypted!
+fetch('https://api.github.com/zen')
+  .then(r => r.text())
+  .then(console.log);
+// ↑ Automatically encrypted via E2EE tunnel through relay server
 ```
 
-### Client Usage
+The Service Worker intercepts requests and automatically determines message types based on Content-Type:
+- `application/json` → Text/API type
+- `multipart/form-data` → File type (chunked streaming)
+- `application/octet-stream` → Binary type
+- `text/*` → Text type
+
+See [E2EE_PROXY_DEPLOYMENT.md](E2EE_PROXY_DEPLOYMENT.md) for deployment guide and [relaydns/wasm/](relaydns/wasm/) for WASM SDK documentation.
+
+### WASM SDK (JavaScript/Browser)
+
+For direct WASM usage without Service Worker:
+
+```javascript
+import init, { RelayClient } from '/pkg/relaydns_wasm.js';
+
+// Initialize WASM
+await init();
+
+// Connect to relay server
+const client = await RelayClient.connect('ws://localhost:4017/relay');
+
+// Register a service
+await client.registerLease('my-service', ['http/1.1', 'h2']);
+
+// Get server info
+const info = await client.getRelayInfo();
+console.log('Active leases:', info.leases);
+```
+
+See [relaydns/wasm/USAGE.md](relaydns/wasm/USAGE.md) for complete WASM SDK documentation.
+
+### Server Setup
+
+```bash
+# Run the relay server
+cd cmd/relay-server
+./relay-server
+
+# Server endpoints:
+# - Admin UI: http://localhost:4017/
+# - WebSocket relay: ws://localhost:4017/relay
+# - WASM SDK files: http://localhost:4017/pkg/
+# - Service Worker: http://localhost:4017/sw-proxy.js
+```
+
+### Go SDK (Client Usage)
 
 ```go
 package main
 
 import (
-    "context"
-    "github.com/gosuda/relaydns/relaydns"
-    "github.com/gosuda/relaydns/relaydns/core/cryptoops"
+    "github.com/gosuda/relaydns/sdk"
 )
 
 func main() {
-    // Create client credential
-    cred, err := cryptoops.NewCredential()
+    // Create client
+    client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
+        c.BootstrapServers = []string{"ws://localhost:4017/relay"}
+    })
     if err != nil {
         panic(err)
     }
-    
-    // Connect to relay server (implementation depends on your transport)
-    // This is a conceptual example - actual connection method may vary
-    // conn, err := net.Dial("tcp", "localhost:8080")
-    // if err != nil {
-    //     panic(err)
-    // }
-    
-    // Create relay client
-    client := relaydns.NewRelayClient(conn)
-    defer client.Close()
-    
-    // Register lease
-    err = client.RegisterLease(cred, "my-service", []string{"relay-v1"})
+
+    // Create credential
+    cred := sdk.NewCredential()
+
+    // Dial through relay
+    conn, err := client.Dial(cred, "target-lease-id", "http/1.1")
     if err != nil {
         panic(err)
     }
-    
-    // Get relay info
-    info, err := client.GetRelayInfo(context.Background())
-    if err != nil {
-        panic(err)
-    }
-    
-    // fmt.Printf("Relay Info: %+v\n", info)
-    
-    // Listen for incoming connections
-    go func() {
-        for incoming := range client.IncommingConnection() {
-            handleIncomingConnection(incoming)
-        }
-    }()
-    
-    // Request connection to another client
-    targetLeaseID := "target-client-id"
-    _, secureConn, err := client.RequestConnection(targetLeaseID, "relay-v1", cred)
-    if err != nil {
-        panic(err)
-    }
-    
-    // Use the secure connection
-    data := []byte("Hello, secure world!")
-    _, err = secureConn.Write(data)
-    if err != nil {
-        panic(err)
-    }
+
+    // Use conn as net.Conn
+    conn.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
 }
 ```
 
@@ -404,7 +411,17 @@ relaydns/
 │   ├── relay.go                # Server implementation
 │   ├── handlers.go             # Request handlers
 │   ├── lease.go                # Lease management
-│   └── helper.go               # Utility functions
+│   ├── helper.go               # Utility functions
+│   └── wasm/                   # WASM SDK (Rust)
+│       ├── src/
+│       │   ├── proxy_engine.rs # E2EE Proxy engine
+│       │   ├── relay_client.rs # WebSocket client
+│       │   ├── crypto.rs       # Ed25519 encryption
+│       │   └── adapters.rs     # HTTP/WS adapters
+│       ├── sw-proxy.js         # Service Worker (E2EE Proxy)
+│       └── sw.js               # Service Worker (caching)
+│       
+page
 ├── relaydns/core/              # Core components
 │   ├── cryptoops/              # Cryptographic operations
 │   │   ├── handshaker.go       # E2EE handshake
@@ -416,15 +433,28 @@ relaydns/
 ├── relaydns/internal/          # Internal utilities
 │   ├── randpool/               # CSPRNG implementation
 │   └── wsstream/               # WebSocket stream adapter
-└── sdk/                        # Client SDKs
-    └── go/                     # Go SDK
+├── cmd/                        # Executables
+│   ├── relay-server/           # Relay server
+│   │   ├── main.go
+│   │   ├── view.go             # HTTP routes & embed
+│   │   └── wasm/               # Embedded WASM files
+│   └── demo-app/               # Demo application
+├── sdk/                        # Client SDKs
+│   └── go/                     # Go SDK
+└── Makefile                    # Build automation
 ```
 
 ### Building
 
 ```bash
-# Build all components
-go build ./...
+# Build WASM SDK
+make build-wasm
+
+# Build relay server (with embedded WASM)
+make build-server
+
+# Build all
+make build
 
 # Run tests
 go test ./...
@@ -432,22 +462,29 @@ go test ./...
 # Generate protobuf files
 buf generate
 
-# Build Docker image
-docker build -t relaydns .
+# Build Docker image (multi-stage: Rust → Go → Runtime)
+docker build -t relaydns-server .
 ```
+
+See [relaydns/wasm/BUILDING.md](relaydns/wasm/BUILDING.md) for detailed WASM build instructions.
 
 ### Testing
 
 ```bash
-# Run unit tests
+# Go unit tests
 go test ./relaydns/...
 
-# Run integration tests
+# Go integration tests
 go test -tags=integration ./...
 
-# Run with coverage
+# Go with coverage
 go test -cover ./...
-```
+
+# WASM/Rust tests
+cd relaydns/wasm
+cargo test
+
+See [relaydns/wasm/INTEGRATION_TEST_GUIDE.md](relaydns/wasm/INTEGRATION_TEST_GUIDE.md) for detailed testing procedures.
 
 ## Contributing
 

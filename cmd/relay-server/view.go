@@ -171,16 +171,38 @@ func serveHTTP(ctx context.Context, addr string, serv *relaydns.RelayServer, nod
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// Serve embedded WASM pkg files at /pkg/
+	// Serve embedded WASM files
 	if sub, err := fs.Sub(wasmFS, "wasm"); err != nil {
-		log.Error().Err(err).Msg("[server] failed to init embedded wasm pkg FS")
+		log.Error().Err(err).Msg("[server] failed to init embedded wasm FS")
 	} else {
+		// Serve WASM binaries at /pkg/
 		mux.Handle("/pkg/", http.StripPrefix("/pkg/", http.FileServer(http.FS(sub))))
+
+		// Serve Service Worker files from embed
+		mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.Header().Set("Service-Worker-Allowed", "/")
+			data, err := fs.ReadFile(sub, "sw-proxy.js")
+			if err != nil {
+				log.Error().Err(err).Msg("[server] failed to read sw-proxy.js")
+				http.Error(w, "Service Worker not found", http.StatusNotFound)
+				return
+			}
+			w.Write(data)
+		})
+
+		mux.HandleFunc("/sw.js", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.Header().Set("Service-Worker-Allowed", "/")
+			data, err := fs.ReadFile(sub, "sw.js")
+			if err != nil {
+				log.Error().Err(err).Msg("[server] failed to read sw.js")
+				http.Error(w, "Service Worker not found", http.StatusNotFound)
+				return
+			}
+			w.Write(data)
+		})
 	}
-	mux.HandleFunc("/sw-proxy.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript")
-		http.ServeFile(w, r, "./relaydns/wasm/sw-proxy.js")
-	})
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -371,5 +393,13 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
       {{end}}
     </main>
   </div>
+  <script>
+    // Register E2EE Proxy Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw-proxy.js')
+        .then(reg => console.log('[Admin] Service Worker registered:', reg.scope))
+        .catch(err => console.error('[Admin] Service Worker registration failed:', err));
+    }
+  </script>
 </body>
 </html>`))

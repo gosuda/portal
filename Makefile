@@ -9,10 +9,13 @@ build: build-wasm build-server
 build-wasm:
 	@echo "[wasm] building with wasm-pack..."
 	cd relaydns/wasm && wasm-pack build --target web --out-dir pkg
-	@echo "[wasm] copying artifacts to embed dirs..."
+	@echo "[wasm] copying WASM artifacts to embed dirs..."
 	mkdir -p cmd/relay-server/wasm
 	rm -rf cmd/relay-server/wasm/* sdk/wasm/*
 	cp -R relaydns/wasm/pkg/. cmd/relay-server/wasm/
+	@echo "[wasm] copying service workers and E2EE proxy files..."
+	cp relaydns/wasm/sw-proxy.js cmd/relay-server/wasm/
+	cp relaydns/wasm/sw.js cmd/relay-server/wasm/
 
 # Build Go relay server (embeds WASM from cmd/relay-server/wasm)
 build-server:

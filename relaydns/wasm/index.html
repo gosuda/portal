@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>RelayDNS E2EE Proxy - Ready!</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; margin: 0; }
+        .container { max-width: 800px; margin: 50px auto; background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+        h1 { color: #333; margin: 0 0 10px 0; }
+        .subtitle { color: #666; margin-bottom: 30px; font-size: 18px; }
+        button { padding: 15px 30px; margin: 10px 5px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 600; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); transition: all 0.3s; }
+        .status { padding: 20px; margin: 20px 0; border-radius: 8px; font-size: 16px; }
+        .status.waiting { background: #fff3cd; color: #856404; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        input { padding: 12px; width: 100%; margin: 10px 0; border: 2px solid #ddd; border-radius: 6px; font-size: 16px; box-sizing: border-box; }
+        #log { background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 6px; margin-top: 20px; max-height: 400px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 14px; }
+        .log-success { color: #4CAF50; }
+        .log-error { color: #f44336; }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 14px; font-weight: 600; margin-left: 10px; }
+        .badge-green { background: #4CAF50; color: white; }
+        .badge-red { background: #f44336; color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 RelayDNS E2EE Network Proxy</h1>
+        <div class="subtitle">All network requests are encrypted end-to-end</div>
+
+        <div id="status" class="status waiting">⏳ Waiting for Service Worker...</div>
+
+        <h2>Test Request</h2>
+        <input id="testUrl" value="https://api.github.com/zen" placeholder="Enter URL">
+        <button onclick="testFetch()" id="testBtn">🌐 Make Request (через E2EE прокси)</button>
+
+        <div id="log"></div>
+    </div>
+
+    <script>
+        function log(msg, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'log-error' : (type === 'success' ? 'log-success' : '');
+            logDiv.innerHTML += `<div class="${className}">[${time}] ${msg}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(msg, type = 'waiting') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = msg;
+            statusDiv.className = `status ${type}`;
+        }
+
+        async function testFetch() {
+            const url = document.getElementById('testUrl').value;
+            try {
+                log(`→ Fetching: ${url}`, 'info');
+                updateStatus('Making request through E2EE tunnel...', 'waiting');
+
+                const start = Date.now();
+                const response = await fetch(url);
+                const duration = Date.now() - start;
+
+                log(`← ${response.status} ${response.statusText} (${duration}ms)`, 'success');
+
+                const text = await response.text();
+                log(`Response: ${text.substring(0, 200)}${text.length > 200 ? '...' : ''}`, 'info');
+
+                updateStatus(`✓ Request completed: ${response.status}`, 'success');
+
+            } catch (error) {
+                log(`✗ Error: ${error.message}`, 'error');
+                updateStatus(`✗ Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Initialize Service Worker automatically
+        (async () => {
+            try {
+                log('Registering Service Worker...', 'info');
+                updateStatus('🔄 Registering Service Worker...', 'waiting');
+
+                const registration = await navigator.serviceWorker.register('/sw-proxy.js');
+                log('✓ Service Worker registered', 'success');
+
+                // Wait for it to be ready
+                await navigator.serviceWorker.ready;
+                log('✓ Service Worker active', 'success');
+
+                // Check if WASM is ready
+                const channel = new MessageChannel();
+                const status = await new Promise((resolve) => {
+                    channel.port1.onmessage = (event) => resolve(event.data);
+                    registration.active.postMessage({ type: 'GET_STATUS' }, [channel.port2]);
+                    setTimeout(() => resolve({ success: false }), 2000);
+                });
+
+                if (status.success && status.status.wasmReady) {
+                    log('✓ WASM ProxyEngine ready!', 'success');
+                    log('✓ All external requests will be proxied through E2EE tunnel', 'success');
+                    updateStatus('✅ Ready! All requests will be encrypted end-to-end', 'success');
+                } else {
+                    log('⚠ WASM not ready yet, requests will be direct', 'info');
+                    updateStatus('⚠ Service Worker active, but WASM still loading...', 'waiting');
+
+                    // Retry after a moment
+                    setTimeout(async () => {
+                        const channel2 = new MessageChannel();
+                        const status2 = await new Promise((resolve) => {
+                            channel2.port1.onmessage = (event) => resolve(event.data);
+                            registration.active.postMessage({ type: 'GET_STATUS' }, [channel2.port2]);
+                            setTimeout(() => resolve({ success: false }), 2000);
+                        });
+
+                        if (status2.success && status2.status.wasmReady) {
+                            log('✓ WASM ProxyEngine now ready!', 'success');
+                            updateStatus('✅ Ready! E2EE proxy is active', 'success');
+                        }
+                    }, 3000);
+                }
+
+            } catch (error) {
+                log(`✗ Error: ${error.message}`, 'error');
+                updateStatus(`✗ Error: ${error.message}`, 'error');
+            }
+        })();
+    </script>
+</body>
+</html>

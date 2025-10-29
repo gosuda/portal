@@ -2,8 +2,18 @@
 /pkg
 /pkg-node
 Cargo.lock
+
+# Ignore build artifacts
 *.wasm
+
+# Ignore generated JS, but keep examples and service workers
 *.js
-!example.html
+!examples/*.js
+!sw.js
+!sw-proxy.js
+
+# Keep HTML files
+!*.html
+
 .DS_Store
 node_modules/

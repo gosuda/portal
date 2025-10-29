@@ -6,7 +6,6 @@ mod proto;
 mod protocol_codec;
 mod proxy_engine;
 mod relay_client;
-mod simple_mux;
 mod tunnel_manager;
 mod utils;
 mod ws_stream;
