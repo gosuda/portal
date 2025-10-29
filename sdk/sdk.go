@@ -54,16 +54,51 @@ func webSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error)
 }
 
 type RDClientConfig struct {
-	BootstrapServers []string
-	Dialer           func(context.Context, string) (io.ReadWriteCloser, error)
+	BootstrapServers    []string
+	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
+	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
+	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 3, 0 = infinite)
+	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
 }
 
 type Option func(*RDClientConfig)
 
+func WithBootstrapServers(servers []string) Option {
+	return func(c *RDClientConfig) {
+		c.BootstrapServers = servers
+	}
+}
+
+func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) Option {
+	return func(c *RDClientConfig) {
+		c.Dialer = dialer
+	}
+}
+
+func WithHealthCheckInterval(interval time.Duration) Option {
+	return func(c *RDClientConfig) {
+		c.HealthCheckInterval = interval
+	}
+}
+
+func WithReconnectMaxRetries(retries int) Option {
+	return func(c *RDClientConfig) {
+		c.ReconnectMaxRetries = retries
+	}
+}
+
+func WithReconnectInterval(interval time.Duration) Option {
+	return func(c *RDClientConfig) {
+		c.ReconnectInterval = interval
+	}
+}
+
 type rdRelay struct {
 	addr   string
 	client *relaydns.RelayClient
+	dialer func(context.Context, string) (io.ReadWriteCloser, error)
 	stop   chan struct{}
+	mu     sync.Mutex
 }
 
 var _ net.Conn = (*RDConnection)(nil)
@@ -136,6 +171,7 @@ type RDClient struct {
 
 	relays    map[string]*rdRelay
 	listeners map[string]*RDListener
+	config    *RDClientConfig
 
 	stopch    chan struct{}
 	waitGroup sync.WaitGroup // Track all listener workers
@@ -155,7 +191,10 @@ func NewClient(opt ...Option) (*RDClient, error) {
 	log.Debug().Msg("[SDK] Creating new RDClient")
 
 	config := &RDClientConfig{
-		Dialer: webSocketDialer(),
+		Dialer:              webSocketDialer(),
+		HealthCheckInterval: 10 * time.Second,
+		ReconnectMaxRetries: 9,
+		ReconnectInterval:   5 * time.Second,
 	}
 
 	for _, o := range opt {
@@ -165,6 +204,7 @@ func NewClient(opt ...Option) (*RDClient, error) {
 	client := &RDClient{
 		relays:    make(map[string]*rdRelay),
 		listeners: make(map[string]*RDListener),
+		config:    config,
 		stopch:    make(chan struct{}),
 	}
 
@@ -188,11 +228,17 @@ func NewClient(opt ...Option) (*RDClient, error) {
 		}
 
 		log.Debug().Str("server", server).Msg("[SDK] Successfully connected to bootstrap server")
-		client.relays[server] = &rdRelay{
+		relay := &rdRelay{
 			addr:   server,
 			client: relayClient,
+			dialer: config.Dialer,
 			stop:   make(chan struct{}),
 		}
+		client.relays[server] = relay
+
+		// Start health monitoring for this relay
+		client.waitGroup.Add(1)
+		go client.healthCheckWorker(relay, config)
 	}
 
 	// If no relays were successfully connected, return an error
@@ -448,6 +494,171 @@ func (g *RDClient) Close() error {
 	return nil
 }
 
+// healthCheckWorker periodically checks relay health and reconnects if needed
+func (g *RDClient) healthCheckWorker(relay *rdRelay, config *RDClientConfig) {
+	defer g.waitGroup.Done()
+
+	ticker := time.NewTicker(config.HealthCheckInterval)
+	defer ticker.Stop()
+
+	log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker started")
+
+	for {
+		select {
+		case <-g.stopch:
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker stopped")
+			return
+		case <-relay.stop:
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Relay stopped, health check worker exiting")
+			return
+		case <-ticker.C:
+			relay.mu.Lock()
+			client := relay.client
+			relay.mu.Unlock()
+
+			if client == nil {
+				log.Warn().Str("relay", relay.addr).Msg("[SDK] Relay client is nil, attempting reconnection")
+				g.reconnectRelay(relay, config)
+				continue
+			}
+
+			// Perform health check using Ping
+			_, err := client.Ping()
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("relay", relay.addr).
+					Msg("[SDK] Health check failed, attempting reconnection")
+				g.reconnectRelay(relay, config)
+			} else {
+				log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check passed")
+			}
+		}
+	}
+}
+
+// reconnectRelay attempts to reconnect to a relay server
+func (g *RDClient) reconnectRelay(relay *rdRelay, config *RDClientConfig) {
+	relay.mu.Lock()
+
+	// Close old client if exists
+	if relay.client != nil {
+		log.Debug().Str("relay", relay.addr).Msg("[SDK] Closing old relay client")
+		relay.client.Close()
+		relay.client = nil
+	}
+	relay.mu.Unlock()
+
+	maxRetries := config.ReconnectMaxRetries
+	if maxRetries == 0 {
+		maxRetries = -1 // Infinite retries
+	}
+
+	attempt := 0
+	for {
+		// Check if we should stop
+		select {
+		case <-g.stopch:
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Client stopped, abandoning reconnection")
+			return
+		case <-relay.stop:
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Relay stopped, abandoning reconnection")
+			return
+		default:
+		}
+
+		attempt++
+		if maxRetries > 0 && attempt > maxRetries {
+			log.Error().
+				Str("relay", relay.addr).
+				Int("attempts", attempt-1).
+				Msg("[SDK] Max reconnection attempts reached, giving up")
+			return
+		}
+
+		log.Debug().
+			Str("relay", relay.addr).
+			Int("attempt", attempt).
+			Msg("[SDK] Attempting to reconnect")
+
+		// Attempt to connect
+		conn, err := relay.dialer(context.Background(), relay.addr)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("relay", relay.addr).
+				Int("attempt", attempt).
+				Msg("[SDK] Reconnection attempt failed")
+
+			// Wait before next retry
+			select {
+			case <-g.stopch:
+				return
+			case <-relay.stop:
+				return
+			case <-time.After(config.ReconnectInterval):
+				continue
+			}
+		}
+
+		// Create new relay client
+		relayClient := relaydns.NewRelayClient(conn)
+		if relayClient == nil {
+			log.Error().Str("relay", relay.addr).Msg("[SDK] Failed to create relay client after reconnection")
+			conn.Close()
+
+			// Wait before next retry
+			select {
+			case <-g.stopch:
+				return
+			case <-relay.stop:
+				return
+			case <-time.After(config.ReconnectInterval):
+				continue
+			}
+		}
+
+		relay.mu.Lock()
+		relay.client = relayClient
+		relay.mu.Unlock()
+
+		log.Info().
+			Str("relay", relay.addr).
+			Int("attempt", attempt).
+			Msg("[SDK] Successfully reconnected to relay")
+
+		// Re-register all leases with the reconnected relay
+		g.mu.Lock()
+		for _, listener := range g.listeners {
+			go func(l *RDListener) {
+				l.mu.Lock()
+				cred := l.cred
+				lease := l.lease
+				l.mu.Unlock()
+
+				if lease != nil {
+					err := relayClient.RegisterLease(cred, lease.Name, lease.Alpn)
+					if err != nil {
+						log.Error().
+							Err(err).
+							Str("relay", relay.addr).
+							Str("lease_id", cred.ID()).
+							Msg("[SDK] Failed to re-register lease after reconnection")
+					} else {
+						log.Debug().
+							Str("relay", relay.addr).
+							Str("lease_id", cred.ID()).
+							Msg("[SDK] Lease re-registered after reconnection")
+					}
+				}
+			}(listener)
+		}
+		g.mu.Unlock()
+
+		return
+	}
+}
+
 // Implement net.Listener interface for RDListener
 func (l *RDListener) Accept() (net.Conn, error) {
 	conn, ok := <-l.connCh
@@ -513,11 +724,17 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	}
 
 	// Add relay
-	g.relays[addr] = &rdRelay{
+	relay := &rdRelay{
 		addr:   addr,
 		client: relayClient,
+		dialer: dialer,
 		stop:   make(chan struct{}),
 	}
+	g.relays[addr] = relay
+
+	// Start health monitoring for this relay
+	g.waitGroup.Add(1)
+	go g.healthCheckWorker(relay, g.config)
 
 	return nil
 }

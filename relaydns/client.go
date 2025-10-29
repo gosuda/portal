@@ -89,6 +89,10 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	return g
 }
 
+func (g *RelayClient) Ping() (time.Duration, error) {
+	return g.sess.Ping()
+}
+
 // Close는 서버와의 연결을 종료합니다.
 func (g *RelayClient) Close() error {
 	log.Debug().Msg("[RelayClient] Closing relay client")
