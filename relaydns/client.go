@@ -187,6 +187,7 @@ func (g *RelayClient) leaseListenWorker() {
 				default:
 					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
 					time.Sleep(500 * time.Millisecond) // waiting for reconnection
+					continue
 				}
 			}
 			log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Accepted incoming stream")
