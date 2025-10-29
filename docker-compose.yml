@@ -1,5 +1,5 @@
 services:
-  relayserver:
+  portal:
     build:
       context: .
       dockerfile: Dockerfile

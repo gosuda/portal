@@ -12,12 +12,12 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/gosuda/relaydns/relaydns"
-	"github.com/gosuda/relaydns/sdk"
+	"github.com/gosuda/portal/portal"
+	"github.com/gosuda/portal/sdk"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "relayserver",
+	Use:   "portal",
 	Short: "A lightweight, DNS-driven peer-to-peer proxy",
 	RunE:  runServer,
 }
@@ -48,7 +48,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	cred := sdk.NewCredential()
 
-	serv := relaydns.NewRelayServer(cred, flagBootstraps)
+	serv := portal.NewRelayServer(cred, flagBootstraps)
 	serv.Start()
 	defer serv.Stop()
 

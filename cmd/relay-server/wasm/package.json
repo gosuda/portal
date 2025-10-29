@@ -1,19 +1,19 @@
 {
-  "name": "relaydns-wasm",
+  "name": "portal-wasm",
   "type": "module",
   "collaborators": [
-    "RelayDNS Contributors"
+    "Portal Contributors"
   ],
-  "description": "WebAssembly client for RelayDNS",
+  "description": "WebAssembly client for Portal",
   "version": "0.1.0",
   "license": "MIT OR Apache-2.0",
   "files": [
-    "relaydns_wasm_bg.wasm",
-    "relaydns_wasm.js",
-    "relaydns_wasm.d.ts"
+    "portal_wasm_bg.wasm",
+    "portal_wasm.js",
+    "portal_wasm.d.ts"
   ],
-  "main": "relaydns_wasm.js",
-  "types": "relaydns_wasm.d.ts",
+  "main": "portal_wasm.js",
+  "types": "portal_wasm.d.ts",
   "sideEffects": [
     "./snippets/*"
   ]

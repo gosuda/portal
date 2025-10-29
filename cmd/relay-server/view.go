@@ -17,20 +17,20 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/relaydns/relaydns"
-	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
-	"github.com/gosuda/relaydns/sdk"
+	"github.com/gosuda/portal/portal"
+	"github.com/gosuda/portal/portal/utils/wsstream"
+	"github.com/gosuda/portal/sdk"
 )
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(_ context.Context, addr string, serv *relaydns.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
+func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
 
 	mux := http.NewServeMux()
 
-	// Per-peer HTTP reverse proxy over RelayDNS
+	// Per-peer HTTP reverse proxy over Portal
 	// Route: /peer/{leaseID}/*
 	var (
 		proxyClient     *sdk.RDClient
@@ -232,7 +232,7 @@ type adminPageData struct {
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the admin page
-func convertLeaseEntriesToRows(serv *relaydns.RelayServer) []leaseRow {
+func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	// Get all lease entries directly from the lease manager
 	leaseEntries := serv.GetAllLeaseEntries()
 
@@ -323,7 +323,7 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RelayDNS Admin</title>
+  <title>Portal Admin</title>
   <style>
     * { box-sizing: border-box }
     :root {
@@ -352,7 +352,7 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
 <body>
   <div class="wrap">
     <header>
-      <div class="brand">RelayDNS</div>
+      <div class="brand">Portal</div>
       <div class="status">Admin</div>
     </header>
     <main>

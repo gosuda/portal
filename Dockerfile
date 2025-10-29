@@ -11,13 +11,13 @@ COPY . .
 RUN apt-get update && apt-get install -y --no-install-recommends make && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/go/pkg/mod \
-    make build-server && install -D bin/relayserver /out/relayserver
+    make build-server && install -D bin/relay-server /out/relay-server
 
 # Stage 3: Minimal runtime image
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /out/relayserver /usr/bin/relayserver
+COPY --from=builder /out/relay-server /usr/bin/relay-server
 
 EXPOSE 4017
 
-ENTRYPOINT ["/usr/bin/relayserver"]
+ENTRYPOINT ["/usr/bin/relay-server"]

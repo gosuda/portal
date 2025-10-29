@@ -598,6 +598,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "portal-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chacha20poly1305",
+ "console_error_panic_hook",
+ "ed25519-dalek",
+ "futures",
+ "getrandom 0.2.16",
+ "hex",
+ "hkdf",
+ "js-sys",
+ "log",
+ "parking_lot",
+ "prost",
+ "prost-build",
+ "rand_core",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+ "wee_alloc",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -729,39 +762,6 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
-
-[[package]]
-name = "relaydns-wasm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chacha20poly1305",
- "console_error_panic_hook",
- "ed25519-dalek",
- "futures",
- "getrandom 0.2.16",
- "hex",
- "hkdf",
- "js-sys",
- "log",
- "parking_lot",
- "prost",
- "prost-build",
- "rand_core",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
- "web-sys",
- "wee_alloc",
- "x25519-dalek",
-]
 
 [[package]]
 name = "rustc_version"

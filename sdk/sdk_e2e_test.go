@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gosuda/relaydns/relaydns"
-	"github.com/gosuda/relaydns/relaydns/core/cryptoops"
-	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
+	"github.com/gosuda/portal/portal"
+	"github.com/gosuda/portal/portal/core/cryptoops"
+	"github.com/gosuda/portal/portal/utils/wsstream"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -40,7 +40,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 2. Start relay server
 	log.Info().Msg("[TEST] Step 2: Starting relay server")
-	relayServer := relaydns.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14017/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14017/relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
 
@@ -233,7 +233,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 		t.Fatalf("Failed to create relay server credential: %v", err)
 	}
 
-	relayServer := relaydns.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14018/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14018/relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
 
@@ -388,7 +388,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	// Try to dial to non-existent lease
 	relayServerCred := NewCredential()
 
-	relayServer := relaydns.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14019/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14019/relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
 

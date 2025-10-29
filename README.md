@@ -1,8 +1,8 @@
-# RelayDNS
+# Portal
 
 > Run Locally, Publish Everywhere!
 
-RelayDNS is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
+Portal(Publicly Open Relay To Access Localhost) is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ RelayDNS is a secure, encrypted relay service that enables end-to-end encrypted 
 
 ## Overview
 
-RelayDNS implements a secure relay protocol that allows clients to register leases and establish encrypted connections through a central server. The system uses modern cryptographic primitives to ensure:
+Portal implements a secure relay protocol that allows clients to register leases and establish encrypted connections through a central server. The system uses modern cryptographic primitives to ensure:
 
 - **End-to-end encryption**: All communication is encrypted using ChaCha20-Poly1305 AEAD
 - **Mutual authentication**: Ed25519 signatures verify client identities
@@ -205,8 +205,8 @@ sequenceDiagram
 
 ```bash
 # Clone the repository
-git clone https://github.com/gosuda/relaydns.git
-cd relaydns
+git clone https://github.com/gosuda/portal.git
+cd portal
 
 # Build WASM SDK (includes E2EE Proxy Service Worker)
 make build-wasm
@@ -222,10 +222,10 @@ make build-server
 
 ```bash
 # Build with Docker (multi-stage build)
-docker build -t relaydns-server .
+docker build -t portal-server .
 
 # Run server
-docker run -p 4017:4017 relaydns-server
+docker run -p 4017:4017 portal-server
 
 # Access:
 # - Admin UI: http://localhost:4017/
@@ -237,7 +237,7 @@ See [DOCKER_BUILD_VERIFICATION.md](DOCKER_BUILD_VERIFICATION.md) for detailed bu
 
 ### Browser E2EE Proxy (Automatic)
 
-The simplest way to use RelayDNS is through the browser E2EE Proxy:
+The simplest way to use Portal is through the browser E2EE Proxy:
 
 ```javascript
 // 1. Open the E2EE Proxy test page
@@ -257,14 +257,14 @@ The Service Worker intercepts requests and automatically determines message type
 - `application/octet-stream` → Binary type
 - `text/*` → Text type
 
-See [E2EE_PROXY_DEPLOYMENT.md](E2EE_PROXY_DEPLOYMENT.md) for deployment guide and [relaydns/wasm/](relaydns/wasm/) for WASM SDK documentation.
+See [E2EE_PROXY_DEPLOYMENT.md](E2EE_PROXY_DEPLOYMENT.md) for deployment guide and [portal/wasm/](portal/wasm/) for WASM SDK documentation.
 
 ### WASM SDK (JavaScript/Browser)
 
 For direct WASM usage without Service Worker:
 
 ```javascript
-import init, { RelayClient } from '/pkg/relaydns_wasm.js';
+import init, { RelayClient } from '/pkg/portal_wasm.js';
 
 // Initialize WASM
 await init();
@@ -280,7 +280,7 @@ const info = await client.getRelayInfo();
 console.log('Active leases:', info.leases);
 ```
 
-See [relaydns/wasm/USAGE.md](relaydns/wasm/USAGE.md) for complete WASM SDK documentation.
+See [portal/wasm/USAGE.md](portal/wasm/USAGE.md) for complete WASM SDK documentation.
 
 ### Server Setup
 
@@ -302,7 +302,7 @@ cd cmd/relay-server
 package main
 
 import (
-    "github.com/gosuda/relaydns/sdk"
+    "github.com/gosuda/portal/sdk"
 )
 
 func main() {
@@ -401,92 +401,6 @@ End-to-end encrypted messages use the following format:
 | Big Endian Uint32 | Random            | (variable length) | Poly1305 MAC      |
 +-------------------+-------------------+-------------------+-------------------+
 ```
-
-## Development
-
-### Project Structure
-
-```
-relaydns/
-├── relaydns/                    # Main package
-│   ├── client.go               # Client implementation
-│   ├── relay.go                # Server implementation
-│   ├── handlers.go             # Request handlers
-│   ├── lease.go                # Lease management
-│   ├── helper.go               # Utility functions
-│   └── wasm/                   # WASM SDK (Rust)
-│       ├── src/
-│       │   ├── proxy_engine.rs # E2EE Proxy engine
-│       │   ├── relay_client.rs # WebSocket client
-│       │   ├── crypto.rs       # Ed25519 encryption
-│       │   └── adapters.rs     # HTTP/WS adapters
-│       ├── sw-proxy.js         # Service Worker (E2EE Proxy)
-│       └── sw.js               # Service Worker (caching)
-│       
-page
-├── relaydns/core/              # Core components
-│   ├── cryptoops/              # Cryptographic operations
-│   │   ├── handshaker.go       # E2EE handshake
-│   │   ├── identity.go         # Identity management
-│   │   └── sig.go              # Signature operations
-│   └── proto/                  # Protocol definitions
-│       ├── rdsec/              # Security protocol
-│       └── rdverb/             # Relay protocol
-├── relaydns/internal/          # Internal utilities
-│   ├── randpool/               # CSPRNG implementation
-│   └── wsstream/               # WebSocket stream adapter
-├── cmd/                        # Executables
-│   ├── relay-server/           # Relay server
-│   │   ├── main.go
-│   │   ├── view.go             # HTTP routes & embed
-│   │   └── wasm/               # Embedded WASM files
-│   └── demo-app/               # Demo application
-├── sdk/                        # Client SDKs
-│   └── go/                     # Go SDK
-└── Makefile                    # Build automation
-```
-
-### Building
-
-```bash
-# Build WASM SDK
-make build-wasm
-
-# Build relay server (with embedded WASM)
-make build-server
-
-# Build all
-make build
-
-# Run tests
-go test ./...
-
-# Generate protobuf files
-buf generate
-
-# Build Docker image (multi-stage: Rust → Go → Runtime)
-docker build -t relaydns-server .
-```
-
-See [relaydns/wasm/BUILDING.md](relaydns/wasm/BUILDING.md) for detailed WASM build instructions.
-
-### Testing
-
-```bash
-# Go unit tests
-go test ./relaydns/...
-
-# Go integration tests
-go test -tags=integration ./...
-
-# Go with coverage
-go test -cover ./...
-
-# WASM/Rust tests
-cd relaydns/wasm
-cargo test
-
-See [relaydns/wasm/INTEGRATION_TEST_GUIDE.md](relaydns/wasm/INTEGRATION_TEST_GUIDE.md) for detailed testing procedures.
 
 ## Contributing
 

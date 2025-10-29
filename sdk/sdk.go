@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gosuda/relaydns/relaydns"
-	"github.com/gosuda/relaydns/relaydns/core/cryptoops"
-	"github.com/gosuda/relaydns/relaydns/core/proto/rdverb"
-	"github.com/gosuda/relaydns/relaydns/utils/wsstream"
+	"github.com/gosuda/portal/portal"
+	"github.com/gosuda/portal/portal/core/cryptoops"
+	"github.com/gosuda/portal/portal/core/proto/rdverb"
+	"github.com/gosuda/portal/portal/utils/wsstream"
 	"github.com/rs/zerolog/log"
 )
 
@@ -95,7 +95,7 @@ func WithReconnectInterval(interval time.Duration) Option {
 
 type rdRelay struct {
 	addr   string
-	client *relaydns.RelayClient
+	client *portal.RelayClient
 	dialer func(context.Context, string) (io.ReadWriteCloser, error)
 	stop   chan struct{}
 	mu     sync.Mutex
@@ -147,7 +147,7 @@ func (r *RDConnection) SetWriteDeadline(t time.Time) error {
 type rdAddr string
 
 func (a rdAddr) Network() string {
-	return "relaydns"
+	return "portal"
 }
 
 func (a rdAddr) String() string {
@@ -219,7 +219,7 @@ func NewClient(opt ...Option) (*RDClient, error) {
 			continue // Skip failed connections
 		}
 
-		relayClient := relaydns.NewRelayClient(conn)
+		relayClient := portal.NewRelayClient(conn)
 		if relayClient == nil {
 			log.Error().Str("server", server).Msg("[SDK] Failed to create relay client")
 			conn.Close()
@@ -602,7 +602,7 @@ func (g *RDClient) reconnectRelay(relay *rdRelay, config *RDClientConfig) {
 		}
 
 		// Create new relay client
-		relayClient := relaydns.NewRelayClient(conn)
+		relayClient := portal.NewRelayClient(conn)
 		if relayClient == nil {
 			log.Error().Str("relay", relay.addr).Msg("[SDK] Failed to create relay client after reconnection")
 			conn.Close()
@@ -717,7 +717,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	}
 
 	// Create relay client
-	relayClient := relaydns.NewRelayClient(conn)
+	relayClient := portal.NewRelayClient(conn)
 	if relayClient == nil {
 		conn.Close()
 		return errors.New("failed to create relay client")

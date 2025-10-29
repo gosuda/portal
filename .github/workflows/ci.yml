@@ -43,9 +43,9 @@ jobs:
       - name: Run goimports
         run: |
           go install golang.org/x/tools/cmd/goimports@latest
-          if [ -n "$(goimports -local github.com/gosuda/relaydns -l .)" ]; then
+          if [ -n "$(goimports -local github.com/gosuda/portal -l .)" ]; then
             echo "Go imports are not formatted:"
-            goimports -local github.com/gosuda/relaydns -d .
+            goimports -local github.com/gosuda/portal -d .
             exit 1
           fi
 
@@ -87,13 +87,13 @@ jobs:
 #        run: go mod download
 #
 #      - name: Build server binary
-#        run: go build -v -trimpath -o bin/relaydns-server ./cmd/server
+#        run: go build -v -trimpath -o bin/portal-server ./cmd/server
 #
 #      - name: Build example HTTP client
-#        run: go build -v -trimpath -o bin/relaydns-client ./sdk/go/examples/http-client
+#        run: go build -v -trimpath -o bin/portal-client ./sdk/go/examples/http-client
 #
 #      - name: Build example chat client
-#        run: go build -v -trimpath -o bin/relaydns-chat ./sdk/go/examples/chat
+#        run: go build -v -trimpath -o bin/portal-chat ./sdk/go/examples/chat
 #
 #      - name: Upload binaries
 #        uses: actions/upload-artifact@v4
@@ -209,7 +209,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
-          tags: relaydns-server:ci
+          tags: portal-server:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

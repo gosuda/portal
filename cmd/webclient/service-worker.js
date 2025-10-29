@@ -37,9 +37,9 @@ async function runWASM() {
     const { instance } = await WebAssembly.instantiate(wasm_file, go.importObject);
 
     // go.run()은 Go의 main()을 실행하고, 
-    // _relaydns_http 콜백이 등록되면 리턴합니다.
+    // _portal_http 콜백이 등록되면 리턴합니다.
     go.run(instance);
-    console.log("Service Worker: Go WASM 실행 완료. _relaydns_http가 준비되었습니다.");
+    console.log("Service Worker: Go WASM 실행 완료. _portal_http가 준비되었습니다.");
 }
 
 /**
@@ -103,18 +103,18 @@ self.addEventListener('fetch', (event) => {
       // WASM이 준비될 때까지 기다림
       await getWasmReady(); 
 
-      if (typeof _relaydns_http !== 'undefined') {
+      if (typeof _portal_http !== 'undefined') {
         // WASM이 준비되었고 핸들러 함수가 존재함
-        const resp = await _relaydns_http(event.request);
+        const resp = await _portal_http(event.request);
         return resp;
       } else {
         // getWasmReady()가 성공했는데도 함수가 없는 비정상 상황
-        console.error("Service Worker: WASM 로드는 성공했으나 _relaydns_http가 정의되지 않았습니다.");
+        console.error("Service Worker: WASM 로드는 성공했으나 _portal_http가 정의되지 않았습니다.");
         return new Response("WASM 핸들러를 사용할 수 없습니다.", { status: 500 });
       }
     } catch (err) {
       // 1. getWasmReady() 실패 (WASM 로드/실행 실패)
-      // 2. _relaydns_http(event.request) 실패 (Go 핸들러 내부 에러)
+      // 2. _portal_http(event.request) 실패 (Go 핸들러 내부 에러)
       console.error(`Service Worker: Go 핸들러 처리 실패 (네트워크로 폴백): ${err}`, event.request.url);
       
       // WASM 핸들러 실패 시 네트워크로 폴백

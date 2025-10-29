@@ -14,15 +14,15 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/gosuda/relaydns/sdk"
+	"github.com/gosuda/portal/sdk"
 )
 
 //go:embed static
 var staticFiles embed.FS
 
 var rootCmd = &cobra.Command{
-	Use:   "relaydns-paint",
-	Short: "RelayDNS collaborative paint (local HTTP backend + libp2p advertiser)",
+	Use:   "demo app",
+	Short: "demo app using portal relay",
 	RunE:  runPaint,
 }
 
@@ -182,8 +182,7 @@ func runPaint(cmd *cobra.Command, args []string) error {
 	defer client.Close()
 
 	// 3) Register lease and obtain a net.Listener that accepts relayed connections
-	alpns := []string{"paint"}
-	listener, err := client.Listen(cred, flagName, alpns)
+	listener, err := client.Listen(cred, flagName, []string{"http/1.1"})
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
