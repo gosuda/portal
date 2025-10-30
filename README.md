@@ -1,5 +1,7 @@
 # PORTAL — Publicly Open Relay To Access Localhost
-> Run locally, host everywhere!
+<p align="center">
+  <img src="portal.jpg" alt="Portal logo" width="540" />
+</p>
 
 Portal is a secure, encrypted relay service that enables end-to-end encrypted communication between clients through a central relay server. It provides mutual authentication, forward secrecy, and secure connection management with cryptographic identity verification.
 
