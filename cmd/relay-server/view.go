@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -23,8 +24,8 @@ import (
 	"github.com/gosuda/portal/sdk"
 )
 
-//go:embed favicon/*
-var faviconFS embed.FS
+//go:embed static
+var assetsFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
@@ -34,37 +35,32 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	mux := http.NewServeMux()
 
-	// Serve embedded favicons (ico/png/svg) if present
-	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		b, err := faviconFS.ReadFile("favicon/favicon.ico")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "image/x-icon")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
-	mux.HandleFunc("/favicon.png", func(w http.ResponseWriter, r *http.Request) {
-		b, err := faviconFS.ReadFile("favicon/favicon.png")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "image/png")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
-	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
-		b, err := faviconFS.ReadFile("favicon/favicon.svg")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
+	// Parse template once per server instance (no global var)
+	tmpl := template.Must(template.ParseFS(assetsFS, "static/index.html"))
+
+	// Serve static assets under /static/ (CSS, images)
+	if sub, err := fs.Sub(assetsFS, "static"); err == nil {
+		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
+	}
+
+	// Serve embedded favicons (ico/png/svg)
+	serveAsset := func(route, assetPath, contentType string) {
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+			b, err := assetsFS.ReadFile(assetPath)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			if contentType != "" {
+				w.Header().Set("Content-Type", contentType)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(b)
+		})
+	}
+	serveAsset("/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
+	serveAsset("/favicon.png", "static/favicon/favicon.png", "image/png")
+	serveAsset("/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
 
 	// Per-peer HTTP reverse proxy over Portal
 	// Route: /peer/{leaseID}/*
@@ -220,7 +216,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		log.Debug().Msg("render admin index")
-		if err := serverTmpl.Execute(w, data); err != nil {
+		if err := tmpl.Execute(w, data); err != nil {
 			log.Error().Err(err).Msg("[server] render admin index")
 		}
 	})
@@ -251,14 +247,16 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 }
 
 type leaseRow struct {
-	Peer      string
-	Name      string
-	Kind      string
-	Connected bool
-	DNS       string
-	LastSeen  string
-	TTL       string
-	Link      string
+	Peer        string
+	Name        string
+	Kind        string
+	Connected   bool
+	DNS         string
+	LastSeen    string
+	LastSeenISO string
+	TTL         string
+	Link        string
+	StaleRed    bool
 }
 
 type adminPageData struct {
@@ -297,11 +295,40 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			}
 		}
 
-		// Format last seen time
-		lastSeenStr := leaseEntry.LastSeen.Format("2006-01-02 15:04:05")
+		// Format last active as relative time (e.g., "1h 4m", "12m 5s", "8s")
+		since := now.Sub(leaseEntry.LastSeen)
+		if since < 0 {
+			since = 0
+		}
+		lastSeenStr := func(d time.Duration) string {
+			if d >= time.Hour {
+				h := int(d / time.Hour)
+				m := int((d % time.Hour) / time.Minute)
+				if m > 0 {
+					return fmt.Sprintf("%dh %dm", h, m)
+				}
+				return fmt.Sprintf("%dh", h)
+			}
+			if d >= time.Minute {
+				m := int(d / time.Minute)
+				s := int((d % time.Minute) / time.Second)
+				if s > 0 {
+					return fmt.Sprintf("%dm %ds", m, s)
+				}
+				return fmt.Sprintf("%dm", m)
+			}
+			s := int(d / time.Second)
+			return fmt.Sprintf("%ds", s)
+		}(since)
+		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
 
-		// Check if connection is still active by checking if the connection ID exists in the connections map
+		// Check if connection is still active
 		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
+
+		// Skip entries that have been disconnected for 3 minutes or more
+		if !connected && since >= 3*time.Minute {
+			continue
+		}
 
 		// Use name from lease if available
 		name := lease.Name
@@ -330,14 +357,16 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		link := fmt.Sprintf("/peer/%s", linkPath)
 
 		row := leaseRow{
-			Peer:      identityID,
-			Name:      name,
-			Kind:      kind,
-			Connected: connected,
-			DNS:       dnsLabel,
-			LastSeen:  lastSeenStr,
-			TTL:       ttlStr,
-			Link:      link,
+			Peer:        identityID,
+			Name:        name,
+			Kind:        kind,
+			Connected:   connected,
+			DNS:         dnsLabel,
+			LastSeen:    lastSeenStr,
+			LastSeenISO: lastSeenISO,
+			TTL:         ttlStr,
+			Link:        link,
+			StaleRed:    !connected && since >= 15*time.Second,
 		}
 
 		rows = append(rows, row)
@@ -353,129 +382,3 @@ var wsUpgrader = websocket.Upgrader{
 		return true
 	},
 }
-
-var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Portal</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-  <style>
-    * { box-sizing: border-box }
-    :root {
-      --bg:#fafbff; --panel:#ffffff; --ink:#0f172a; --muted:#6b7280; --line:#e9eef5;
-      --primary:#2563eb; --ok:#059669; --bad:#b91c1c; --ok-bg:#ecfdf5; --bad-bg:#fee2e2;
-    }
-    body { margin:0; background:var(--bg); color:var(--ink); font-family:sans-serif; font-size:16px; line-height:1.6 }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px }
-    header { display:flex; align-items:center; gap:16px; justify-content:space-between; padding: 20px 24px; background:var(--panel); border:1px solid var(--line); border-radius: 14px }
-    .brand { display:flex; align-items:center; height:36px; font-weight:800; font-size:22px; letter-spacing:.2px }
-    .status { color:var(--ok); font-weight:700 }
-    .app-left { display:flex; align-items:center; gap:12px }
-    main { margin-top: 22px }
-    .section { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:14px }
-    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:16px; margin-top:14px }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; box-shadow: 0 1px 2px rgba(15,23,42,0.06); transition: box-shadow .2s ease, transform .2s ease; text-decoration:none; color:inherit; cursor:pointer; min-height: 180px }
-    .card:hover { box-shadow: 0 6px 20px rgba(15,23,42,0.12); transform: translateY(-2px) }
-    .card-head { display:flex; align-items:center; gap:10px; margin-bottom:8px }
-    .chevron { margin-left:auto; width:16px; height:16px; color:var(--muted); opacity:.9; transition: transform .2s ease, color .2s ease, opacity .2s ease }
-    .card:hover .chevron { transform: translateX(2px); color:var(--primary); opacity:1 }
-    .status-dot { width:10px; height:10px; border-radius:999px; background:var(--muted) }
-    .status-dot.ok { background: var(--ok) }
-    .status-dot.bad { background: var(--bad) }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color:#374151; word-break: break-all }
-    .title { font-weight:800; margin:0; font-size:16px }
-    .muted { color:var(--muted); font-size:13px }
-    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; font-weight:800; font-size:13px }
-    .pill.ok { background:var(--ok-bg); color:var(--ok) }
-    .pill.bad { background:var(--bad-bg); color:var(--bad) }
-    .pill .dot { width:8px; height:8px; border-radius:999px; background:var(--ok); display:inline-block }
-    .pill.bad .dot { background:var(--bad) }
-    .head { display:flex; align-items:center; justify-content:space-between; gap:12px }
-    .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:8px; padding:6px 10px; font-weight:700; font-size:13px; line-height:1; margin-top:6px }
-    .btn.outline { background:transparent; color:var(--primary); border:1px solid var(--primary) }
-    .actions { margin-top:auto; display:flex; justify-content:flex-end }
-    .card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
-    /* Google-like search bar */
-    .searchbar { width: 320px; max-width: 50vw; margin: 0; display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:999px; background:#fff }
-    .searchbar:focus-within { box-shadow: 0 1px 6px rgba(32,33,36,.28); border-color:#dfe1e5 }
-    .searchbar input { width:100%; height:100%; border:none; outline:none; font-size:14px; background:transparent; color:#111 }
-    .searchbar .icon { width:18px; height:18px; color:#9aa0a6 }
-    .topbar { display:flex; align-items:center; gap:16px; justify-content:space-between }
-    .rightbar { display:flex; align-items:center; gap:12px; margin-left:auto }
-    .gh-btn { width:36px; height:36px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; color:#000; background:#fff; border:1px solid var(--line) }
-    .counter { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 10px; border-radius:999px; background:var(--ok-bg); color:var(--ok); font-weight:800 }
-    .counter .icon { width:18px; height:18px }
-
-    /* Responsive: prevent header overflow on small screens */
-    @media (max-width: 640px) {
-      .wrap { padding: 20px 14px }
-      header { flex-wrap: wrap; gap: 12px; padding: 16px }
-      .brand { font-size: 16px }
-      .rightbar { margin-left: 0; width: 100%; flex-wrap: wrap; gap: 8px }
-      .searchbar { flex: 1 1 100%; width: 100%; max-width: 100% }
-      .gh-btn { width: 32px; height: 32px }
-      .counter { height: 32px; padding: 0 8px; font-size: 12px }
-    }
-  </style>
-  </head>
-<body>
-  <div class="wrap">
-    <header>
-      <div class="brand">Portal</div>
-      <div class="rightbar">
-        <div class="searchbar" role="search">
-          <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M15.5 14h-.79l-.28-.27a6.471 6.471 0 0 0 1.57-4.23C15.99 6.01 13.48 3.5 10.49 3.5S5 6.01 5 9s2.51 5.5 5.5 5.5c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0 .41-.41.41-1.08 0-1.49L15.5 14Zm-5 0C8.01 14 6 11.99 6 9.5S8.01 5 10.5 5 15 7.01 15 9.5 12.99 14 10.5 14Z"/>
-          </svg>
-          <input id="search" type="text" placeholder="Search by name" aria-label="Search by name" oninput="filterCards(this.value)">
-        </div>
-        <a class="gh-btn" href="https://github.com/gosuda/portal" target="_blank" rel="noopener" aria-label="GitHub repository" title="gosuda/portal">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.37 7.86 10.88.58.1.79-.25.79-.56 0-.27-.01-1.16-.02-2.11-3.2.69-3.88-1.39-3.88-1.39-.53-1.35-1.29-1.71-1.29-1.71-1.05-.72.08-.7.08-.7 1.16.08 1.78 1.19 1.78 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.26-1.28-5.26-5.72 0-1.26.45-2.3 1.19-3.11-.12-.29-.52-1.45.11-3.02 0 0 .98-.31 3.2 1.19.93-.26 1.94-.39 2.94-.39s2.01.13 2.95.39c2.22-1.5 3.2-1.19 3.2-1.19.63 1.57.23 2.73.12 3.02.74.81 1.19 1.85 1.19 3.11 0 4.45-2.7 5.43-5.28 5.72.41.36.77 1.07.77 2.16 0 1.56-.01 2.81-.01 3.19 0 .31.21.67.8.56C20.22 21.36 23.5 17.08 23.5 12 23.5 5.73 18.27.5 12 .5Z"/>
-          </svg>
-        </a>
-        <div class="counter" aria-label="Active devices" title="Active devices">
-          <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <circle cx="12" cy="12" r="6"/>
-          </svg>
-          <span>{{len .Rows}}</span>
-        </div>
-      </div>
-    </header>
-    <main>
-      <div class="grid">
-        {{range .Rows}}
-        <a class="card {{if .Connected}}connected{{else}}disconnected{{end}}" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}" href="{{.Link}}" title="{{if .Name}}{{.Name}}{{else}}(unnamed){{end}} 열기">
-          <div class="card-head">
-            <span class="status-dot {{if .Connected}}ok{{else}}bad{{end}}"></span>
-            <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
-            <svg class="chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M9 6l6 6-6 6"/>
-            </svg>
-          </div>
-          <div class="muted">Last seen: {{.LastSeen}}</div>
-        </a>
-        {{else}}
-        <article class="card">
-          <div class="title">No clients discovered</div>
-          <div class="muted">Start a client and ensure bootstrap URLs point at this server's /relay WebSocket endpoint.</div>
-        </article>
-        {{end}}
-      </div>
-    </main>
-  </div>
-  <script>
-    function filterCards(q) {
-      q = (q || '').toLowerCase().trim();
-      const cards = document.querySelectorAll('.grid .card');
-      cards.forEach(card => {
-        const name = (card.getAttribute('data-name') || '').toLowerCase();
-        const show = !q || name.includes(q);
-        card.style.display = show ? '' : 'none';
-      });
-    }
-  </script>
-</body>
-</html>`))
