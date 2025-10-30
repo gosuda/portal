@@ -15,12 +15,12 @@ import (
 	"github.com/gosuda/portal/sdk"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/idna"
 )
 
 var (
 	bootstrapServers = []string{"ws://localhost:4017/relay"}
 	rdClient         *sdk.RDClient
-	initDone         chan struct{} = make(chan struct{}, 1)
 )
 
 var client = &http.Client{
@@ -45,10 +45,21 @@ type Proxy struct {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Proxying request to %s", r.URL.String())
-	r.URL.Host = "UOJ4VGIKICVKHXFURAE67GUHMMELUAUU3I37NCAAPHAAHBMPYDNQ"
+
+	host, err := idna.ToUnicode(r.URL.Hostname())
+	if err != nil {
+		host = r.URL.Hostname()
+	}
+	id := strings.Split(host, ".")[0]
+	id = strings.TrimSpace(id)
+	id = strings.ToUpper(id)
+
+	r = r.Clone(context.Background())
+	r.URL.Host = id
+
 	resp, err := client.Do(r)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to proxy request")
+		log.Error().Err(err).Msgf("Failed to proxy request to %s", r.URL.String())
 		return
 	}
 	defer resp.Body.Close()
