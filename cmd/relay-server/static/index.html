@@ -43,6 +43,7 @@
             </svg>
           </div>
           <div class="muted">Last seen <time class="lastseen" datetime="{{.LastSeenISO}}">{{.LastSeenISO}}</time><br/>Active ~{{.LastSeen}} ago</div>
+          <div class="muted idtext" style="margin-top:auto">{{.Peer}}</div>
         </a>
         {{else}}
         <article class="card">
