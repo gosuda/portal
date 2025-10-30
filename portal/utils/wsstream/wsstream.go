@@ -3,6 +3,7 @@ package wsstream
 import (
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/websocket"
 )
@@ -10,9 +11,13 @@ import (
 type WsStream struct {
 	Conn          *websocket.Conn
 	currentReader io.Reader
+	writeMu       sync.Mutex
+	readMu        sync.Mutex
 }
 
 func (g *WsStream) Read(p []byte) (n int, err error) {
+	g.readMu.Lock()
+	defer g.readMu.Unlock()
 	if g.currentReader == nil {
 		_, reader, err := g.Conn.NextReader()
 		if err != nil {
@@ -35,6 +40,8 @@ func (g *WsStream) Read(p []byte) (n int, err error) {
 }
 
 func (g *WsStream) Write(p []byte) (n int, err error) {
+	g.writeMu.Lock()
+	defer g.writeMu.Unlock()
 	err = g.Conn.WriteMessage(websocket.BinaryMessage, p)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "websocket: close ") {
