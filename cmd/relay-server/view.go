@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -22,6 +23,9 @@ import (
 	"github.com/gosuda/portal/sdk"
 )
 
+//go:embed favicon/*
+var faviconFS embed.FS
+
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
@@ -29,6 +33,38 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	}
 
 	mux := http.NewServeMux()
+
+	// Serve embedded favicons (ico/png/svg) if present
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.ico")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("/favicon.png", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.png")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.svg")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
 
 	// Per-peer HTTP reverse proxy over Portal
 	// Route: /peer/{leaseID}/*
@@ -323,7 +359,8 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Portal Admin</title>
+  <title>Portal</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <style>
     * { box-sizing: border-box }
     :root {
@@ -333,7 +370,7 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     body { margin:0; background:var(--bg); color:var(--ink); font-family:sans-serif; font-size:16px; line-height:1.6 }
     .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px }
     header { display:flex; align-items:center; gap:16px; justify-content:space-between; padding: 20px 24px; background:var(--panel); border:1px solid var(--line); border-radius: 14px }
-    .brand { display:flex; align-items:center; height:36px; font-weight:800; font-size:18px; letter-spacing:.2px }
+    .brand { display:flex; align-items:center; height:36px; font-weight:800; font-size:22px; letter-spacing:.2px }
     .status { color:var(--ok); font-weight:700 }
     .app-left { display:flex; align-items:center; gap:12px }
     main { margin-top: 22px }
@@ -342,6 +379,8 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; box-shadow: 0 1px 2px rgba(15,23,42,0.06); transition: box-shadow .2s ease, transform .2s ease; text-decoration:none; color:inherit; cursor:pointer; min-height: 180px }
     .card:hover { box-shadow: 0 6px 20px rgba(15,23,42,0.12); transform: translateY(-2px) }
     .card-head { display:flex; align-items:center; gap:10px; margin-bottom:8px }
+    .chevron { margin-left:auto; width:16px; height:16px; color:var(--muted); opacity:.9; transition: transform .2s ease, color .2s ease, opacity .2s ease }
+    .card:hover .chevron { transform: translateX(2px); color:var(--primary); opacity:1 }
     .status-dot { width:10px; height:10px; border-radius:999px; background:var(--muted) }
     .status-dot.ok { background: var(--ok) }
     .status-dot.bad { background: var(--bad) }
@@ -357,6 +396,7 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
     .btn { display:inline-block; background:var(--primary); color:#fff; text-decoration:none; border-radius:8px; padding:6px 10px; font-weight:700; font-size:13px; line-height:1; margin-top:6px }
     .btn.outline { background:transparent; color:var(--primary); border:1px solid var(--primary) }
     .actions { margin-top:auto; display:flex; justify-content:flex-end }
+    .card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
     /* Google-like search bar */
     .searchbar { width: 320px; max-width: 50vw; margin: 0; display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:999px; background:#fff }
     .searchbar:focus-within { box-shadow: 0 1px 6px rgba(32,33,36,.28); border-color:#dfe1e5 }
@@ -396,23 +436,24 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
             <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.37 7.86 10.88.58.1.79-.25.79-.56 0-.27-.01-1.16-.02-2.11-3.2.69-3.88-1.39-3.88-1.39-.53-1.35-1.29-1.71-1.29-1.71-1.05-.72.08-.7.08-.7 1.16.08 1.78 1.19 1.78 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.26-1.28-5.26-5.72 0-1.26.45-2.3 1.19-3.11-.12-.29-.52-1.45.11-3.02 0 0 .98-.31 3.2 1.19.93-.26 1.94-.39 2.94-.39s2.01.13 2.95.39c2.22-1.5 3.2-1.19 3.2-1.19.63 1.57.23 2.73.12 3.02.74.81 1.19 1.85 1.19 3.11 0 4.45-2.7 5.43-5.28 5.72.41.36.77 1.07.77 2.16 0 1.56-.01 2.81-.01 3.19 0 .31.21.67.8.56C20.22 21.36 23.5 17.08 23.5 12 23.5 5.73 18.27.5 12 .5Z"/>
           </svg>
         </a>
-        <div class="counter" aria-label="Active clients" title="Active clients">
+        <div class="counter" aria-label="Active devices" title="Active devices">
           <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5s-3 1.34-3 3 1.34 3 3 3Zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5 5 6.34 5 8s1.34 3 3 3Zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5C18 14.17 13.33 13 11 13Zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h4v-2.5c0-2.33-4.67-3.5-7-3.5Z"/>
+            <circle cx="12" cy="12" r="6"/>
           </svg>
           <span>{{len .Rows}}</span>
         </div>
       </div>
     </header>
     <main>
-      
-
       <div class="grid">
         {{range .Rows}}
-        <a class="card {{if .Connected}}connected{{else}}disconnected{{end}}" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}" href="{{.Link}}">
+        <a class="card {{if .Connected}}connected{{else}}disconnected{{end}}" id="peer-{{.Peer}}" data-peer="{{.Peer}}" data-name="{{.Name}}" href="{{.Link}}" title="{{if .Name}}{{.Name}}{{else}}(unnamed){{end}} 열기">
           <div class="card-head">
             <span class="status-dot {{if .Connected}}ok{{else}}bad{{end}}"></span>
             <div class="title">{{if .Name}}{{.Name}}{{else}}(unnamed){{end}}</div>
+            <svg class="chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9 6l6 6-6 6"/>
+            </svg>
           </div>
           <div class="muted">Last seen: {{.LastSeen}}</div>
         </a>
