@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/gosuda/portal/portal"
 	"github.com/gosuda/portal/portal/core/cryptoops"
+	"github.com/gosuda/portal/portal/core/proto/rdsec"
 	"github.com/gosuda/portal/portal/core/proto/rdverb"
 	"github.com/gosuda/portal/portal/utils/wsstream"
 	"github.com/rs/zerolog/log"
@@ -94,11 +95,12 @@ func WithReconnectInterval(interval time.Duration) Option {
 }
 
 type rdRelay struct {
-	addr   string
-	client *portal.RelayClient
-	dialer func(context.Context, string) (io.ReadWriteCloser, error)
-	stop   chan struct{}
-	mu     sync.Mutex
+	addr     string
+	client   *portal.RelayClient
+	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
+	stop     chan struct{}
+	stopOnce sync.Once // Ensure stop channel is closed only once
+	mu       sync.Mutex
 }
 
 var _ net.Conn = (*RDConnection)(nil)
@@ -174,6 +176,7 @@ type RDClient struct {
 	config    *RDClientConfig
 
 	stopch    chan struct{}
+	stopOnce  sync.Once      // Ensure stopch is closed only once
 	waitGroup sync.WaitGroup // Track all listener workers
 }
 
@@ -211,34 +214,12 @@ func NewClient(opt ...Option) (*RDClient, error) {
 	// Initialize relays from bootstrap servers
 	var connectionErrors []error
 	for _, server := range config.BootstrapServers {
-		log.Debug().Str("server", server).Msg("[SDK] Connecting to bootstrap server")
-		conn, err := config.Dialer(context.Background(), server)
+		err := client.AddRelay(server, config.Dialer)
 		if err != nil {
 			log.Error().Err(err).Str("server", server).Msg("[SDK] Failed to connect to bootstrap server")
 			connectionErrors = append(connectionErrors, err)
-			continue // Skip failed connections
 		}
-
-		relayClient := portal.NewRelayClient(conn)
-		if relayClient == nil {
-			log.Error().Str("server", server).Msg("[SDK] Failed to create relay client")
-			conn.Close()
-			connectionErrors = append(connectionErrors, ErrFailedToCreateClient)
-			continue
-		}
-
 		log.Debug().Str("server", server).Msg("[SDK] Successfully connected to bootstrap server")
-		relay := &rdRelay{
-			addr:   server,
-			client: relayClient,
-			dialer: config.Dialer,
-			stop:   make(chan struct{}),
-		}
-		client.relays[server] = relay
-
-		// Start health monitoring for this relay
-		client.waitGroup.Add(1)
-		go client.healthCheckWorker(relay, config)
 	}
 
 	// If no relays were successfully connected, return an error
@@ -356,6 +337,10 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	}
 
 	lease := &rdverb.Lease{
+		Identity: &rdsec.Identity{
+			Id:        cred.ID(),
+			PublicKey: cred.PublicKey(),
+		},
 		Name: name,
 		Alpn: alpns,
 	}
@@ -472,32 +457,46 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 }
 
 func (g *RDClient) Close() error {
+	log.Debug().Msg("[SDK] Closing RDClient")
 	var errs []error
 
-	// Signal all goroutines to stop
-	close(g.stopch)
+	// Signal all goroutines to stop (only once)
+	g.stopOnce.Do(func() {
+		close(g.stopch)
+	})
 
 	g.mu.Lock()
+	listeners := make([]*RDListener, 0, len(g.listeners))
 	for _, listener := range g.listeners {
-		if err := listener.Close(); err != nil {
-			errs = append(errs, err)
-		}
+		listeners = append(listeners, listener)
 	}
-	g.listeners = make(map[string]*RDListener)
-
-	// Stop all relays
-	for _, server := range g.relays {
-		close(server.stop) // Signal relay goroutines to stop
-		if err := server.client.Close(); err != nil {
-			errs = append(errs, err)
-		}
+	relays := make([]*rdRelay, 0, len(g.relays))
+	for _, relay := range g.relays {
+		relays = append(relays, relay)
 	}
-	g.relays = make(map[string]*rdRelay)
 	g.mu.Unlock()
 
+	// Close all listeners first
+	for _, listener := range listeners {
+		if err := listener.Close(); err != nil {
+			log.Error().Err(err).Msg("[SDK] Error closing listener")
+			errs = append(errs, err)
+		}
+	}
+
+	// Stop all relays
+	for _, relay := range relays {
+		if err := g.RemoveRelay(relay.addr); err != nil && err != ErrRelayNotFound {
+			log.Error().Err(err).Str("relay", relay.addr).Msg("[SDK] Error removing relay")
+			errs = append(errs, err)
+		}
+	}
+
 	// Wait for all listener workers to finish
+	log.Debug().Msg("[SDK] Waiting for all workers to finish")
 	g.waitGroup.Wait()
 
+	log.Debug().Msg("[SDK] RDClient closed successfully")
 	if len(errs) > 0 {
 		return errs[0]
 	}
@@ -505,10 +504,10 @@ func (g *RDClient) Close() error {
 }
 
 // healthCheckWorker periodically checks relay health and reconnects if needed
-func (g *RDClient) healthCheckWorker(relay *rdRelay, config *RDClientConfig) {
+func (g *RDClient) healthCheckWorker(relay *rdRelay) {
 	defer g.waitGroup.Done()
 
-	ticker := time.NewTicker(config.HealthCheckInterval)
+	ticker := time.NewTicker(g.config.HealthCheckInterval)
 	defer ticker.Stop()
 
 	log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker started")
@@ -516,19 +515,28 @@ func (g *RDClient) healthCheckWorker(relay *rdRelay, config *RDClientConfig) {
 	for {
 		select {
 		case <-g.stopch:
-			log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker stopped")
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker stopped (client closing)")
 			return
 		case <-relay.stop:
-			log.Debug().Str("relay", relay.addr).Msg("[SDK] Relay stopped, health check worker exiting")
+			log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker stopped (relay stopped)")
 			return
 		case <-ticker.C:
+			// Check if client is still active
+			select {
+			case <-g.stopch:
+				return
+			case <-relay.stop:
+				return
+			default:
+			}
+
 			relay.mu.Lock()
 			client := relay.client
 			relay.mu.Unlock()
 
 			if client == nil {
 				log.Warn().Str("relay", relay.addr).Msg("[SDK] Relay client is nil, attempting reconnection")
-				g.reconnectRelay(relay, config)
+				g.reconnectRelay(relay)
 				continue
 			}
 
@@ -539,132 +547,83 @@ func (g *RDClient) healthCheckWorker(relay *rdRelay, config *RDClientConfig) {
 					Err(err).
 					Str("relay", relay.addr).
 					Msg("[SDK] Health check failed, attempting reconnection")
-				g.reconnectRelay(relay, config)
-			} else {
-				log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check passed")
+				g.reconnectRelay(relay)
+				// Continue monitoring instead of returning
+				continue
 			}
 		}
 	}
 }
 
 // reconnectRelay attempts to reconnect to a relay server
-func (g *RDClient) reconnectRelay(relay *rdRelay, config *RDClientConfig) {
-	relay.mu.Lock()
+func (g *RDClient) reconnectRelay(relay *rdRelay) {
+	addr := relay.addr
+	dialer := relay.dialer
 
-	// Close old client if exists
-	if relay.client != nil {
-		log.Debug().Str("relay", relay.addr).Msg("[SDK] Closing old relay client")
-		relay.client.Close()
-		relay.client = nil
-	}
-	relay.mu.Unlock()
+	log.Debug().Str("relay", addr).Msg("[SDK] Starting reconnection process")
 
-	maxRetries := config.ReconnectMaxRetries
-	if maxRetries == 0 {
-		maxRetries = -1 // Infinite retries
+	// Remove the failed relay
+	if err := g.RemoveRelay(addr); err != nil && err != ErrRelayNotFound {
+		log.Error().Err(err).Str("relay", addr).Msg("[SDK] Error removing relay during reconnection")
 	}
 
-	attempt := 0
-	for {
-		// Check if we should stop
-		select {
-		case <-g.stopch:
-			log.Debug().Str("relay", relay.addr).Msg("[SDK] Client stopped, abandoning reconnection")
-			return
-		case <-relay.stop:
-			log.Debug().Str("relay", relay.addr).Msg("[SDK] Relay stopped, abandoning reconnection")
-			return
-		default:
-		}
+	// Start reconnection in a goroutine
+	g.waitGroup.Add(1)
+	go func() {
+		defer g.waitGroup.Done()
 
-		attempt++
-		if maxRetries > 0 && attempt > maxRetries {
-			log.Error().
-				Str("relay", relay.addr).
-				Int("attempts", attempt-1).
-				Msg("[SDK] Max reconnection attempts reached, giving up")
-			return
-		}
+		retries := 0
+		maxRetries := g.config.ReconnectMaxRetries
 
-		log.Debug().
-			Str("relay", relay.addr).
-			Int("attempt", attempt).
-			Msg("[SDK] Attempting to reconnect")
+		for {
+			// Check if client is shutting down
+			select {
+			case <-g.stopch:
+				log.Debug().Str("relay", addr).Msg("[SDK] Reconnection cancelled (client closing)")
+				return
+			default:
+			}
 
-		// Attempt to connect
-		conn, err := relay.dialer(context.Background(), relay.addr)
-		if err != nil {
+			// Attempt reconnection
+			err := g.AddRelay(addr, dialer)
+			if err == nil {
+				log.Info().Str("relay", addr).Msg("[SDK] Reconnection successful")
+				return
+			}
+
+			if err == ErrRelayExists {
+				log.Debug().Str("relay", addr).Msg("[SDK] Relay already exists, reconnection complete")
+				return
+			}
+
+			retries++
+
+			// Check retry limit (0 or negative means infinite retries)
+			if maxRetries > 0 && retries >= maxRetries {
+				log.Error().
+					Err(err).
+					Str("relay", addr).
+					Int("retries", retries).
+					Msg("[SDK] Reconnection failed after max retries")
+				return
+			}
+
 			log.Warn().
 				Err(err).
-				Str("relay", relay.addr).
-				Int("attempt", attempt).
-				Msg("[SDK] Reconnection attempt failed")
+				Str("relay", addr).
+				Int("attempt", retries).
+				Msg("[SDK] Reconnection failed, retrying")
 
-			// Wait before next retry
+			// Wait before next retry with context awareness
 			select {
 			case <-g.stopch:
+				log.Debug().Str("relay", addr).Msg("[SDK] Reconnection cancelled during wait")
 				return
-			case <-relay.stop:
-				return
-			case <-time.After(config.ReconnectInterval):
-				continue
+			case <-time.After(g.config.ReconnectInterval):
+				// Continue to next retry
 			}
 		}
-
-		// Create new relay client
-		relayClient := portal.NewRelayClient(conn)
-		if relayClient == nil {
-			log.Error().Str("relay", relay.addr).Msg("[SDK] Failed to create relay client after reconnection")
-			conn.Close()
-
-			// Wait before next retry
-			select {
-			case <-g.stopch:
-				return
-			case <-relay.stop:
-				return
-			case <-time.After(config.ReconnectInterval):
-				continue
-			}
-		}
-
-		relay.mu.Lock()
-		relay.client = relayClient
-		relay.mu.Unlock()
-
-		log.Info().
-			Str("relay", relay.addr).
-			Int("attempt", attempt).
-			Msg("[SDK] Successfully reconnected to relay")
-
-		// Re-register all leases with the reconnected relay
-		g.mu.Lock()
-		for _, listener := range g.listeners {
-			go func(l *RDListener) {
-				l.mu.Lock()
-				cred := l.cred
-				lease := l.lease
-				l.mu.Unlock()
-
-				err := relayClient.RegisterLease(cred, lease)
-				if err != nil {
-					log.Error().
-						Err(err).
-						Str("relay", relay.addr).
-						Str("lease_id", cred.ID()).
-						Msg("[SDK] Failed to re-register lease after reconnection")
-				} else {
-					log.Debug().
-						Str("relay", relay.addr).
-						Str("lease_id", cred.ID()).
-						Msg("[SDK] Lease re-registered after reconnection")
-				}
-			}(listener)
-		}
-		g.mu.Unlock()
-
-		return
-	}
+	}()
 }
 
 // Implement net.Listener interface for RDListener
@@ -692,8 +651,7 @@ func (l *RDListener) Close() error {
 	// Close all active connections
 	for conn := range l.conns {
 		if err := conn.Close(); err != nil {
-			// Log error but continue closing other connections
-			// In a real implementation, you might want to collect errors
+			log.Error().Err(err).Msg("[SDK] Error closing connection")
 		}
 		delete(l.conns, conn)
 	}
@@ -711,17 +669,16 @@ func (l *RDListener) Addr() net.Addr {
 // AddRelay adds a new relay server to the client
 func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
 	g.mu.Lock()
+	defer g.mu.Unlock()
 
 	// Check if relay already exists
 	if _, exists := g.relays[addr]; exists {
-		g.mu.Unlock()
-		return errors.New("relay already exists")
+		return ErrRelayExists
 	}
 
 	// Connect to relay
 	conn, err := dialer(context.Background(), addr)
 	if err != nil {
-		g.mu.Unlock()
 		return err
 	}
 
@@ -729,8 +686,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	relayClient := portal.NewRelayClient(conn)
 	if relayClient == nil {
 		conn.Close()
-		g.mu.Unlock()
-		return errors.New("failed to create relay client")
+		return ErrRelayNotFound
 	}
 
 	// Add relay
@@ -744,12 +700,9 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 
 	// Register all existing leases with the new relay
 	for _, listener := range g.listeners {
-		go func(l *RDListener) {
-			l.mu.Lock()
-			cred := l.cred
-			lease := l.lease
-			l.mu.Unlock()
-
+		cred := listener.cred // immutable
+		lease := listener.lease.CloneVT()
+		go func(cred *cryptoops.Credential, lease *rdverb.Lease) {
 			err := relayClient.RegisterLease(cred, lease)
 			if err != nil {
 				log.Error().
@@ -763,18 +716,16 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 					Str("lease_id", cred.ID()).
 					Msg("[SDK] Lease registered with new relay")
 			}
-		}(listener)
+		}(cred, lease)
 	}
 
 	// Start listener worker for the new relay
 	g.waitGroup.Add(1)
 	go g.listenerWorker(relay)
 
-	g.mu.Unlock()
-
 	// Start health monitoring for this relay
 	g.waitGroup.Add(1)
-	go g.healthCheckWorker(relay, g.config)
+	go g.healthCheckWorker(relay)
 
 	log.Info().Str("relay", addr).Msg("[SDK] New relay added successfully")
 
@@ -784,24 +735,36 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 // RemoveRelay removes a relay server from the client
 func (g *RDClient) RemoveRelay(addr string) error {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	relay, exists := g.relays[addr]
 	if !exists {
-		return errors.New("relay not found")
+		g.mu.Unlock()
+		return ErrRelayNotFound
 	}
 
-	// Signal relay to stop
-	close(relay.stop)
+	// Remove from map immediately to prevent duplicate removals
+	delete(g.relays, addr)
+	g.mu.Unlock()
+
+	log.Debug().Str("relay", addr).Msg("[SDK] Removing relay")
+
+	// Signal relay to stop (only once)
+	relay.stopOnce.Do(func() {
+		close(relay.stop)
+	})
 
 	// Close relay client
-	if err := relay.client.Close(); err != nil {
-		return err
+	relay.mu.Lock()
+	client := relay.client
+	relay.mu.Unlock()
+
+	if client != nil {
+		if err := client.Close(); err != nil {
+			log.Error().Err(err).Str("relay", addr).Msg("[SDK] Error closing relay client")
+			return err
+		}
 	}
 
-	// Remove from map
-	delete(g.relays, addr)
-
+	log.Debug().Str("relay", addr).Msg("[SDK] Relay removed successfully")
 	return nil
 }
 

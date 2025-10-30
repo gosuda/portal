@@ -44,8 +44,9 @@ type RelayClient struct {
 	leases   map[string]*leaseWithCred
 	leasesMu sync.Mutex
 
-	stopCh    chan struct{}
-	waitGroup sync.WaitGroup
+	stopClientCh chan struct{}
+	stopOnce     sync.Once // Ensure stopClientCh is closed only once
+	waitGroup    sync.WaitGroup
 
 	incommingConnCh chan *IncommingConn
 }
@@ -76,7 +77,7 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 		conn:            conn,
 		sess:            sess,
 		leases:          make(map[string]*leaseWithCred),
-		stopCh:          make(chan struct{}),
+		stopClientCh:    make(chan struct{}),
 		incommingConnCh: make(chan *IncommingConn),
 	}
 
@@ -96,8 +97,10 @@ func (g *RelayClient) Ping() (time.Duration, error) {
 func (g *RelayClient) Close() error {
 	log.Debug().Msg("[RelayClient] Closing relay client")
 
-	// Signal workers to stop
-	close(g.stopCh)
+	// Signal workers to stop (only once)
+	g.stopOnce.Do(func() {
+		close(g.stopClientCh)
+	})
 
 	var errs []error
 
@@ -137,7 +140,7 @@ func (g *RelayClient) leaseUpdateWorker() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-g.stopCh:
+		case <-g.stopClientCh:
 			return
 		case <-ticker.C:
 			clear(updateRequired)
@@ -163,11 +166,12 @@ func (g *RelayClient) leaseUpdateWorker() {
 
 func (g *RelayClient) leaseListenWorker() {
 	defer g.waitGroup.Done()
+	defer close(g.incommingConnCh)
 	log.Debug().Msg("[RelayClient] Lease listen worker started")
 
 	for {
 		select {
-		case <-g.stopCh:
+		case <-g.stopClientCh:
 			log.Debug().Msg("[RelayClient] Lease listen worker stopped")
 			return
 		default:
@@ -181,7 +185,7 @@ func (g *RelayClient) leaseListenWorker() {
 			if err != nil {
 				// Check if we're supposed to stop
 				select {
-				case <-g.stopCh:
+				case <-g.stopClientCh:
 					return
 				default:
 					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
