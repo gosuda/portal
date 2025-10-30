@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -22,6 +23,9 @@ import (
 	"github.com/gosuda/portal/sdk"
 )
 
+//go:embed favicon/*
+var faviconFS embed.FS
+
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
@@ -29,6 +33,38 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	}
 
 	mux := http.NewServeMux()
+
+	// Serve embedded favicons (ico/png/svg) if present
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.ico")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("/favicon.png", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.png")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
+	mux.HandleFunc("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		b, err := faviconFS.ReadFile("favicon/favicon.svg")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
 
 	// Per-peer HTTP reverse proxy over Portal
 	// Route: /peer/{leaseID}/*
@@ -323,7 +359,8 @@ var serverTmpl = template.Must(template.New("admin-index").Parse(`<!doctype html
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Portal Admin</title>
+  <title>Portal</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <style>
     * { box-sizing: border-box }
     :root {
