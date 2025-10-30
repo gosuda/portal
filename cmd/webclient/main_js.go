@@ -30,6 +30,7 @@ var client = &http.Client{
 		MaxIdleConnsPerHost: 100,
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			address = strings.TrimSuffix(address, ":80")
+			address = strings.TrimSuffix(address, ":443")
 			cred := sdk.NewCredential()
 			conn, err := rdClient.Dial(cred, address, "http/1.1")
 			if err != nil {
@@ -56,6 +57,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	r = r.Clone(context.Background())
 	r.URL.Host = id
+	r.URL.Scheme = "http"
 
 	resp, err := client.Do(r)
 	if err != nil {
