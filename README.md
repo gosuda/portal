@@ -1,4 +1,4 @@
-# PORTAL — Publicly Open Relay To Access Localhost
+# PORTAL — Public Open Relay To Access Localhost
 <p align="center">
   <img src="portal.jpg" alt="Portal logo" width="540" />
 </p>

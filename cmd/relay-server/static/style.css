@@ -46,23 +46,26 @@ main { margin-top: 22px }
 .actions { margin-top:auto; display:flex; justify-content:flex-end }
 .card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px }
 
-.searchbar { width:320px; max-width:50vw; margin:0; display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:var(--radius-pill); background:#fff }
+.searchbar { flex:1 1 320px; width:320px; min-width:80px; max-width:50vw; margin:0; display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border:1px solid var(--line); border-radius:var(--radius-pill); background:#fff }
 .searchbar:focus-within { box-shadow: 0 1px 6px rgba(32,33,36,.28); border-color:#dfe1e5 }
-.searchbar input { width:100%; height:100%; border:none; outline:none; font-size:14px; background:transparent; color:#111 }
+.searchbar input { width:100%; min-width:0; height:100%; border:none; outline:none; font-size:14px; background:transparent; color:#111 }
 .searchbar .icon { width:18px; height:18px; color:#9aa0a6 }
 .topbar { display:flex; align-items:center; gap:var(--gap); justify-content:space-between }
-.rightbar { display:flex; align-items:center; gap:12px; margin-left:auto }
+.rightbar { display:flex; align-items:center; gap:12px; margin-left:auto; min-width:0 }
 .gh-btn { width:36px; height:36px; border-radius:var(--radius-pill); display:inline-flex; align-items:center; justify-content:center; color:#000; background:#fff; border:1px solid var(--line); transition: box-shadow var(--transition), transform var(--transition) }
 .gh-btn:hover { box-shadow:var(--shadow) }
 .counter { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 10px; border-radius:var(--radius-pill); background:var(--ok-bg); color:var(--ok); font-weight:800 }
 .counter .icon { width:18px; height:18px }
 
+/* Wrap long IDs at card bottom */
+.idtext { word-break: break-all; overflow-wrap: anywhere }
+
 @media (max-width: 640px) {
   .wrap { padding: 20px 14px }
-  header { flex-wrap: wrap; gap: 12px; padding: 16px }
-  .brand { font-size: 16px }
-  .rightbar { margin-left: 0; width: 100%; flex-wrap: wrap; gap: 8px }
-  .searchbar { flex: 1 1 100%; width: 100%; max-width: 100% }
+  header { flex-wrap: nowrap; gap: 8px; padding: 16px }
+  .brand { white-space: nowrap }
+  .rightbar { margin-left: auto; width: auto; flex-wrap: nowrap; gap: 8px; min-width: 0 }
+  .searchbar { flex: 1 1 auto; width: auto; min-width: 60px; max-width: none }
   .gh-btn { width: 32px; height: 32px }
   .counter { height: 32px; padding: 0 8px; font-size: 12px }
 }
