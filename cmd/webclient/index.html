@@ -1,11 +1,145 @@
 <!DOCTYPE html>
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portal WebClient</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        }
+        h1 {
+            margin-top: 0;
+            text-align: center;
+        }
+        #status {
+            padding: 15px;
+            margin: 20px 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            text-align: center;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .success {
+            color: #4ade80;
+        }
+        .error {
+            color: #f87171;
+        }
+        button {
+            background: rgba(255, 255, 255, 0.3);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            display: block;
+            margin: 20px auto;
+        }
+        button:hover {
+            background: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
 </head>
 <body>
-    <h1>Portal WebClient</h1>
-    <hr/>
+    <div class="container">
+        <h1>🚀 Portal WebClient</h1>
+        <div id="status">
+            <div class="loading"></div>
+            <span id="status-text">Service Worker 등록 중...</span>
+        </div>
+        <button id="start-btn" disabled>테스트 페이지로 이동</button>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status');
+        const statusText = document.getElementById('status-text');
+        const startBtn = document.getElementById('start-btn');
+
+        function updateStatus(text, type = 'loading') {
+            statusText.textContent = text;
+            statusEl.className = type;
+            if (type === 'loading') {
+                statusEl.innerHTML = '<div class="loading"></div><span id="status-text">' + text + '</span>';
+            }
+        }
+
+        async function registerServiceWorker() {
+            try {
+                if (!('serviceWorker' in navigator)) {
+                    throw new Error('이 브라우저는 Service Worker를 지원하지 않습니다.');
+                }
+
+                updateStatus('Service Worker 등록 중...');
+                
+                // Register service worker
+                const registration = await navigator.serviceWorker.register('/service-worker.js', {
+                    scope: '/'
+                });
+
+                updateStatus('Service Worker 활성화 대기 중...');
+
+                // Wait for service worker to be ready
+                await navigator.serviceWorker.ready;
+
+                updateStatus('✅ Service Worker 활성화 완료!', 'success');
+                
+                // Enable the start button
+                startBtn.disabled = false;
+                startBtn.onclick = () => {
+                    window.location.href = '/';
+                };
+
+                console.log('Service Worker registered successfully:', registration);
+            } catch (error) {
+                console.error('Service Worker registration failed:', error);
+                updateStatus('❌ Service Worker 등록 실패: ' + error.message, 'error');
+            }
+        }
+
+        // Start registration
+        registerServiceWorker();
+
+        // Handle service worker updates
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            console.log('Service Worker controller changed');
+            updateStatus('🔄 Service Worker 업데이트됨. 새로고침 중...', 'success');
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        });
+    </script>
 </body>
 </html>
