@@ -36,7 +36,7 @@ func init() {
 	flags := rootCmd.PersistentFlags()
 	flags.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
 	flags.IntVar(&flagPort, "port", 8092, "local paint HTTP port")
-	flags.StringVar(&flagName, "name", "example-paint", "backend display name")
+	flags.StringVar(&flagName, "name", "demo-app", "backend display name")
 }
 
 func main() {
