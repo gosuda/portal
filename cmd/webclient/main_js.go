@@ -91,16 +91,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Context().Value("http.request.mode").(string) == "navigate" &&
 		IsHTMLContentType(resp.Header.Get("Content-Type")) {
+		log.Debug().Msgf("HTML content received")
+
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			w.Write([]byte("502: Failed to read response body"))
 			return
 		}
-		log.Debug().Msgf("HTML content received: %s", body)
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body)
 	} else {
+		log.Debug().Msgf("Non-HTML content received")
+
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
 	}
