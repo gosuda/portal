@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -109,14 +110,23 @@ func generateConnID() string {
 	return hex.EncodeToString(b)
 }
 
-func (m *WebSocketManager) CreateConnection(url string, protocols []string) (*WSConnection, string, error) {
+func (m *WebSocketManager) CreateConnection(uri string, protocols []string) (*WSConnection, string, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, "", err
+	}
+	id := getLeaseID(u.Hostname())
+
+	u.Scheme = "ws"
+	u.Host = id
+
 	// Parse URL to extract host for rdDialer
 	dialer := websocket.Dialer{
 		NetDialContext: rdDialer,
 		Subprotocols:   protocols,
 	}
 
-	conn, resp, err := dialer.Dial(url, nil)
+	conn, resp, err := dialer.Dial(u.String(), nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -224,6 +234,17 @@ func IsHTMLContentType(contentType string) bool {
 	return mediaType == "text/html"
 }
 
+func getLeaseID(hostname string) string {
+	host, err := idna.ToUnicode(hostname)
+	if err != nil {
+		host = hostname
+	}
+	id := strings.Split(host, ".")[0]
+	id = strings.TrimSpace(id)
+	id = strings.ToUpper(id)
+	return id
+}
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Handle WebSocket polyfill endpoints
 	if strings.HasPrefix(r.URL.Path, "/sw-cgi/websocket/") {
@@ -233,16 +254,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Msgf("Proxying request to %s", r.URL.String())
 
-	host, err := idna.ToUnicode(r.URL.Hostname())
-	if err != nil {
-		host = r.URL.Hostname()
-	}
-	id := strings.Split(host, ".")[0]
-	id = strings.TrimSpace(id)
-	id = strings.ToUpper(id)
-
 	r = r.Clone(context.Background())
-	r.URL.Host = id
+	r.URL.Host = getLeaseID(r.URL.Hostname())
 	r.URL.Scheme = "http"
 
 	resp, err := client.Do(r)
