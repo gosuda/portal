@@ -28,7 +28,7 @@
                 setTimeout(() => {
                     showStatus('Reloading page...', 'loading');
                     location.reload();
-                }, 500);
+                }, 1000);
             } catch (error) {
                 showStatus('Service Worker registration failed: ' + error.message, 'error');
             }
