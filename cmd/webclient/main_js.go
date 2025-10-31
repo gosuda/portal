@@ -86,8 +86,8 @@ func main() {
 	}
 	defer rdClient.Close()
 
-	// Expose HTTP handler to JavaScript as _portal_proxy
-	js.Global().Set("_portal_proxy", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	// Expose HTTP handler to JavaScript as __go_jshttp
+	js.Global().Set("__go_jshttp", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) < 1 {
 			return js.Global().Get("Promise").Call("reject",
 				js.Global().Get("Error").New("required parameter JSRequest missing"))
@@ -97,9 +97,9 @@ func main() {
 		return httpjs.ServeHTTPAsyncWithStreaming(&Proxy{}, jsReq)
 	}))
 
-	println("Portal proxy handler registered as _portal_proxy")
+	log.Info().Msg("Portal proxy handler registered as __go_jshttp")
 
-	if runtime.Compiler == "tinygo" || runtime.GOARCH != "wasm" {
+	if runtime.Compiler == "tinygo" {
 		return
 	}
 	// Wait
