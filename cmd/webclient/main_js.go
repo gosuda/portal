@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"mime"
 	"net"
@@ -81,6 +82,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := client.Do(r)
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to proxy request to %s", r.URL.String())
+		http.Error(w, fmt.Sprintf("Failed to proxy request to %s, err: %v", r.URL.String(), err), http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
@@ -89,18 +91,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header()[key] = value
 	}
 
-	if r.Context().Value("http.request.mode").(string) == "navigate" &&
-		IsHTMLContentType(resp.Header.Get("Content-Type")) {
-		log.Debug().Msgf("HTML content received")
-
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	} else {
-		log.Debug().Msgf("Non-HTML content received")
-
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func main() {
