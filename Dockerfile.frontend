@@ -1,0 +1,22 @@
+FROM golang:1 AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+RUN GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o bin/main.wasm ./cmd/webclient
+
+FROM nginx
+
+COPY --from=builder /src/cmd/webclient/index.html /usr/share/nginx/html/index.html
+COPY --from=builder /src/cmd/webclient/service-worker.js /usr/share/nginx/html/service-worker.js
+COPY --from=builder /src/cmd/webclient/wasm_exec.js /usr/share/nginx/html/wasm_exec.js
+COPY --from=builder /src/bin/main.wasm /usr/share/nginx/html/main.wasm
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
