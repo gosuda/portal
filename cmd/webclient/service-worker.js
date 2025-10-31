@@ -63,6 +63,8 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+runWASM();
+
 async function proxy_handler(event) {
   console.log('Service Worker: Fetch event:', event.request);
   if (typeof _portal_proxy != 'undefined') {
