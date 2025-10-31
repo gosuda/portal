@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Polyfill Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.connecting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status.open {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.closed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            background-color: #f9f9f9;
+            margin: 10px 0;
+        }
+        .message {
+            padding: 5px;
+            margin: 5px 0;
+            border-left: 3px solid #007bff;
+            background-color: white;
+        }
+        .message.sent {
+            border-left-color: #28a745;
+        }
+        .message.received {
+            border-left-color: #007bff;
+        }
+        .message.error {
+            border-left-color: #dc3545;
+            background-color: #fff5f5;
+        }
+        input, button {
+            padding: 10px;
+            margin: 5px;
+        }
+        input[type="text"] {
+            width: 60%;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Polyfill Test</h1>
+    
+    <div class="controls">
+        <div>
+            <label for="wsUrl">WebSocket URL:</label><br>
+            <input type="text" id="wsUrl" value="ws://localhost:8080/ws" placeholder="ws://localhost:8080/ws">
+        </div>
+        <div>
+            <button id="connectBtn" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+    </div>
+    
+    <div id="status" class="status connecting">Not Connected</div>
+    
+    <div>
+        <h3>Messages</h3>
+        <div id="messages"></div>
+    </div>
+    
+    <div class="controls">
+        <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+        <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+    </div>
+    
+    <script>
+        let ws = null;
+        
+        function updateStatus(state, text) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'status ' + state;
+            statusDiv.textContent = text;
+        }
+        
+        function addMessage(text, type = 'received') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + type;
+            messageDiv.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            
+            try {
+                updateStatus('connecting', 'Connecting...');
+                addMessage('Attempting to connect to: ' + url, 'sent');
+                
+                ws = new WebSocket(url);
+                
+                ws.onopen = function(event) {
+                    updateStatus('open', 'Connected');
+                    addMessage('Connection opened', 'received');
+                    
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                };
+                
+                ws.onmessage = function(event) {
+                    addMessage('Received: ' + event.data, 'received');
+                };
+                
+                ws.onerror = function(event) {
+                    addMessage('Error occurred: ' + (event.error || 'Unknown error'), 'error');
+                };
+                
+                ws.onclose = function(event) {
+                    updateStatus('closed', 'Disconnected');
+                    addMessage(`Connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`, 'received');
+                    
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('messageInput').disabled = true;
+                    document.getElementById('sendBtn').disabled = true;
+                };
+                
+            } catch (error) {
+                addMessage('Failed to create WebSocket: ' + error.message, 'error');
+                updateStatus('closed', 'Connection Failed');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close(1000, 'User initiated close');
+            }
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (message && ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(message);
+                    addMessage('Sent: ' + message, 'sent');
+                    input.value = '';
+                } catch (error) {
+                    addMessage('Failed to send: ' + error.message, 'error');
+                }
+            }
+        }
+        
+        // Allow Enter key to send message
+        document.getElementById('messageInput').addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // Log WebSocket implementation being used
+        window.addEventListener('load', function() {
+            console.log('WebSocket implementation:', window.WebSocket);
+        });
+    </script>
+</body>
+</html>

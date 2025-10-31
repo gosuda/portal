@@ -5,7 +5,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/html"
+
+	_ "embed"
 )
+
+//go:embed polyfill.js
+var polyfillJS []byte
 
 func InjectHTML(body []byte) []byte {
 	doc, err := html.Parse(bytes.NewReader(body))
@@ -39,7 +44,7 @@ func InjectHTML(body []byte) []byte {
 		// Add the script content
 		scriptContent := &html.Node{
 			Type: html.TextNode,
-			Data: `var PORTAL_VERSION = "v1.0.0";`,
+			Data: string(polyfillJS),
 		}
 		script.AppendChild(scriptContent)
 
