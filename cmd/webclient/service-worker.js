@@ -81,7 +81,7 @@ async function proxy_handler(event) {
   }
 
   console.log('Service Worker: _portal_proxy is not defined. Fetch event ignored.');
-  event.respondWith(fetch(event.request));
+  event.respondWith(new Response('Service Worker: Failed to process request, please refresh the page.', { status: 500 }));
 }
 
 self.addEventListener('fetch', proxy_handler);
