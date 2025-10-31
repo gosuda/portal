@@ -134,9 +134,36 @@
                 return;
             }
             
+            // Decode data from base64
+            let data;
+            try {
+                const binaryString = atob(message.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                // Use messageType from server to determine if text or binary
+                if (message.messageType === 'text') {
+                    // Decode as text
+                    const decoder = new TextDecoder('utf-8');
+                    data = decoder.decode(bytes);
+                } else {
+                    // Binary message - respect binaryType setting
+                    if (this.binaryType === 'blob') {
+                        data = new Blob([bytes]);
+                    } else {
+                        data = bytes.buffer;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to decode message:', e);
+                return;
+            }
+            
             // Create MessageEvent
             const event = new MessageEvent('message', {
-                data: message.data,
+                data: data,
                 origin: new URL(this.url).origin
             });
             

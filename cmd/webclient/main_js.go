@@ -18,8 +18,8 @@ import (
 	"syscall/js"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/gosuda/portal/cmd/webclient/httpjs"
-	"github.com/gosuda/portal/cmd/webclient/wsjs"
 	"github.com/gosuda/portal/sdk"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -31,21 +31,23 @@ var (
 	rdClient         *sdk.RDClient
 )
 
+var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
+	address = strings.TrimSuffix(address, ":80")
+	address = strings.TrimSuffix(address, ":443")
+	cred := sdk.NewCredential()
+	conn, err := rdClient.Dial(cred, address, "http/1.1")
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
 var client = &http.Client{
 	Timeout: time.Second * 30,
 	Transport: &http.Transport{
 		MaxIdleConns:        1000,
 		MaxIdleConnsPerHost: 100,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			address = strings.TrimSuffix(address, ":80")
-			address = strings.TrimSuffix(address, ":443")
-			cred := sdk.NewCredential()
-			conn, err := rdClient.Dial(cred, address, "http/1.1")
-			if err != nil {
-				return nil, err
-			}
-			return conn, nil
-		},
+		DialContext:         rdDialer,
 	},
 }
 
@@ -60,11 +62,16 @@ type WebSocketManager struct {
 
 type WSConnection struct {
 	id          string
-	conn        *wsjs.Conn
-	messageChan chan []byte
+	conn        *websocket.Conn
+	messageChan chan wsMessage
 	closeChan   chan struct{}
 	closeOnce   sync.Once
 	mu          sync.Mutex
+}
+
+type wsMessage struct {
+	data   []byte
+	isText bool
 }
 
 type ConnectRequest struct {
@@ -85,10 +92,11 @@ type SendRequest struct {
 }
 
 type StreamMessage struct {
-	Type   string `json:"type"` // "message", "close"
-	Data   string `json:"data,omitempty"`
-	Code   int    `json:"code,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	Type        string `json:"type"` // "message", "close"
+	Data        string `json:"data,omitempty"`
+	MessageType string `json:"messageType,omitempty"` // "text", "binary"
+	Code        int    `json:"code,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 func NewWebSocketManager() *WebSocketManager {
@@ -101,16 +109,28 @@ func generateConnID() string {
 	return hex.EncodeToString(b)
 }
 
-func (m *WebSocketManager) CreateConnection(url string) (*WSConnection, error) {
-	conn, err := wsjs.Dial(url)
+func (m *WebSocketManager) CreateConnection(url string, protocols []string) (*WSConnection, string, error) {
+	// Parse URL to extract host for rdDialer
+	dialer := websocket.Dialer{
+		NetDialContext: rdDialer,
+		Subprotocols:   protocols,
+	}
+
+	conn, resp, err := dialer.Dial(url, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+
+	// Get negotiated protocol
+	negotiatedProtocol := ""
+	if resp != nil && resp.Header != nil {
+		negotiatedProtocol = resp.Header.Get("Sec-WebSocket-Protocol")
 	}
 
 	wsConn := &WSConnection{
 		id:          generateConnID(),
 		conn:        conn,
-		messageChan: make(chan []byte, 100),
+		messageChan: make(chan wsMessage, 100),
 		closeChan:   make(chan struct{}),
 	}
 
@@ -119,7 +139,7 @@ func (m *WebSocketManager) CreateConnection(url string) (*WSConnection, error) {
 	// Start message receiver
 	go wsConn.receiveMessages()
 
-	return wsConn, nil
+	return wsConn, negotiatedProtocol, nil
 }
 
 func (m *WebSocketManager) GetConnection(id string) (*WSConnection, bool) {
@@ -138,21 +158,31 @@ func (c *WSConnection) receiveMessages() {
 	defer c.Close()
 
 	for {
-		msg, err := c.conn.NextMessage()
+		messageType, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			log.Error().Err(err).Str("connId", c.id).Msg("Error receiving message")
 			return
 		}
 
+		// Only handle binary and text messages
+		if messageType != websocket.BinaryMessage && messageType != websocket.TextMessage {
+			continue
+		}
+
+		wsMsg := wsMessage{
+			data:   msg,
+			isText: messageType == websocket.TextMessage,
+		}
+
 		select {
-		case c.messageChan <- msg:
+		case c.messageChan <- wsMsg:
 		case <-c.closeChan:
 			return
 		}
 	}
 }
 
-func (c *WSConnection) Send(data []byte) error {
+func (c *WSConnection) Send(data []byte, isText bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -160,13 +190,18 @@ func (c *WSConnection) Send(data []byte) error {
 	case <-c.closeChan:
 		return fmt.Errorf("connection closed")
 	default:
-		return c.conn.Send(data)
+		messageType := websocket.BinaryMessage
+		if isText {
+			messageType = websocket.TextMessage
+		}
+		return c.conn.WriteMessage(messageType, data)
 	}
 }
 
 func (c *WSConnection) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closeChan)
+		c.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		c.conn.Close()
 	})
 }
@@ -268,9 +303,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Info().Str("url", req.URL).Msg("Creating WebSocket connection")
+	log.Info().Str("url", req.URL).Strs("protocols", req.Protocols).Msg("Creating WebSocket connection")
 
-	wsConn, err := p.wsManager.CreateConnection(req.URL)
+	wsConn, protocol, err := p.wsManager.CreateConnection(req.URL, req.Protocols)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create WebSocket connection")
 		http.Error(w, fmt.Sprintf("Failed to connect: %v", err), http.StatusBadGateway)
@@ -279,7 +314,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	resp := ConnectResponse{
 		ConnID:   wsConn.id,
-		Protocol: "", // TODO: handle protocol negotiation
+		Protocol: protocol,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -294,6 +329,12 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request, connID stri
 	}
 
 	log.Info().Str("connId", connID).Msg("Starting message stream")
+
+	// Cleanup on exit
+	defer func() {
+		p.wsManager.RemoveConnection(connID)
+		wsConn.Close()
+	}()
 
 	// Set headers for streaming
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -312,9 +353,16 @@ func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request, connID stri
 	for {
 		select {
 		case msg := <-wsConn.messageChan:
+			// Use message type from WebSocket frame
+			messageType := "binary"
+			if msg.isText {
+				messageType = "text"
+			}
+
 			streamMsg := StreamMessage{
-				Type: "message",
-				Data: base64.StdEncoding.EncodeToString(msg),
+				Type:        "message",
+				Data:        base64.StdEncoding.EncodeToString(msg.data),
+				MessageType: messageType,
 			}
 			if err := encoder.Encode(streamMsg); err != nil {
 				log.Error().Err(err).Msg("Failed to encode message")
@@ -362,21 +410,25 @@ func (p *Proxy) handleSend(w http.ResponseWriter, r *http.Request, connID string
 
 	var data []byte
 	var err error
+	var isText bool
 
-	if req.Type == "binary" {
+	switch req.Type {
+	case "binary":
 		data, err = base64.StdEncoding.DecodeString(req.Data)
 		if err != nil {
 			http.Error(w, "Invalid base64 data", http.StatusBadRequest)
 			return
 		}
-	} else if req.Type == "text" {
+		isText = false
+	case "text":
 		data = []byte(req.Data)
-	} else {
+		isText = true
+	default:
 		http.Error(w, "Invalid message type", http.StatusBadRequest)
 		return
 	}
 
-	if err := wsConn.Send(data); err != nil {
+	if err := wsConn.Send(data, isText); err != nil {
 		log.Error().Err(err).Msg("Failed to send message")
 		http.Error(w, fmt.Sprintf("Failed to send: %v", err), http.StatusInternalServerError)
 		return
