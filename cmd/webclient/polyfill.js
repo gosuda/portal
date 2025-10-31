@@ -25,7 +25,7 @@
             this._connId = null;
             this._sendQueue = [];
             this._isSending = false;
-            this._streamAbortController = null;
+            this._pollInterval = null;
             this._isClosed = false;
             
             // Initialize connection
@@ -63,66 +63,52 @@
                 }
                 this.dispatchEvent(new Event('open'));
                 
-                // Start receiving messages
-                this._startStream();
+                // Start polling for messages
+                this._startPolling();
                 
             } catch (error) {
                 this._handleError(error);
             }
         }
         
-        async _startStream() {
+        _startPolling() {
             if (!this._connId || this._isClosed) return;
             
-            try {
-                this._streamAbortController = new AbortController();
-                
-                const response = await fetch(`/sw-cgi/websocket/stream/${this._connId}`, {
-                    method: 'GET',
-                    signal: this._streamAbortController.signal
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`Stream failed: ${response.status}`);
+            // Poll every 100ms
+            this._pollInterval = setInterval(async () => {
+                if (this._isClosed) {
+                    clearInterval(this._pollInterval);
+                    return;
                 }
                 
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                
-                while (!this._isClosed) {
-                    const { done, value } = await reader.read();
+                try {
+                    const response = await fetch(`/sw-cgi/websocket/poll/${this._connId}`, {
+                        method: 'GET'
+                    });
                     
-                    if (done) {
-                        // Connection closed by server
-                        this._handleClose(1000, 'Connection closed by server');
-                        break;
+                    if (!response.ok) {
+                        throw new Error(`Poll failed: ${response.status}`);
                     }
                     
-                    // Decode chunk
-                    buffer += decoder.decode(value, { stream: true });
+                    const result = await response.json();
                     
-                    // Process complete messages (assuming newline-delimited JSON)
-                    let newlineIndex;
-                    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-                        const line = buffer.slice(0, newlineIndex);
-                        buffer = buffer.slice(newlineIndex + 1);
-                        
-                        if (line.trim()) {
-                            try {
-                                const message = JSON.parse(line);
-                                this._handleMessage(message);
-                            } catch (e) {
-                                console.error('Failed to parse message:', e);
-                            }
+                    if (result.messages && Array.isArray(result.messages)) {
+                        for (const message of result.messages) {
+                            this._handleMessage(message);
                         }
                     }
-                }
-                
-            } catch (error) {
-                if (error.name !== 'AbortError') {
+                    
+                } catch (error) {
+                    console.error('Polling error:', error);
                     this._handleError(error);
                 }
+            }, 100);
+        }
+        
+        _stopPolling() {
+            if (this._pollInterval) {
+                clearInterval(this._pollInterval);
+                this._pollInterval = null;
             }
         }
         
@@ -194,10 +180,8 @@
             this._isClosed = true;
             this.readyState = WebSocket.CLOSED;
             
-            // Abort stream
-            if (this._streamAbortController) {
-                this._streamAbortController.abort();
-            }
+            // Stop polling
+            this._stopPolling();
             
             // Create CloseEvent
             const event = new CloseEvent('close', {

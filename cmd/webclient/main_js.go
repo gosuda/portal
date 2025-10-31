@@ -62,12 +62,15 @@ type WebSocketManager struct {
 }
 
 type WSConnection struct {
-	id          string
-	conn        *websocket.Conn
-	messageChan chan wsMessage
-	closeChan   chan struct{}
-	closeOnce   sync.Once
-	mu          sync.Mutex
+	id           string
+	conn         *websocket.Conn
+	messageChan  chan wsMessage
+	closeChan    chan struct{}
+	closeOnce    sync.Once
+	mu           sync.Mutex
+	messageQueue []StreamMessage
+	queueMu      sync.Mutex
+	isClosed     bool
 }
 
 type wsMessage struct {
@@ -138,16 +141,18 @@ func (m *WebSocketManager) CreateConnection(uri string, protocols []string) (*WS
 	}
 
 	wsConn := &WSConnection{
-		id:          generateConnID(),
-		conn:        conn,
-		messageChan: make(chan wsMessage, 100),
-		closeChan:   make(chan struct{}),
+		id:           generateConnID(),
+		conn:         conn,
+		messageChan:  make(chan wsMessage, 100),
+		closeChan:    make(chan struct{}),
+		messageQueue: make([]StreamMessage, 0),
 	}
 
 	m.connections.Store(wsConn.id, wsConn)
 
-	// Start message receiver
+	// Start message receiver and queue manager
 	go wsConn.receiveMessages()
+	go wsConn.manageQueue()
 
 	return wsConn, negotiatedProtocol, nil
 }
@@ -171,6 +176,9 @@ func (c *WSConnection) receiveMessages() {
 		messageType, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			log.Error().Err(err).Str("connId", c.id).Msg("Error receiving message")
+			c.queueMu.Lock()
+			c.isClosed = true
+			c.queueMu.Unlock()
 			return
 		}
 
@@ -190,6 +198,57 @@ func (c *WSConnection) receiveMessages() {
 			return
 		}
 	}
+}
+
+func (c *WSConnection) manageQueue() {
+	for {
+		select {
+		case msg := <-c.messageChan:
+			c.queueMu.Lock()
+
+			// Use message type from WebSocket frame
+			messageType := "binary"
+			if msg.isText {
+				messageType = "text"
+			}
+
+			streamMsg := StreamMessage{
+				Type:        "message",
+				Data:        base64.StdEncoding.EncodeToString(msg.data),
+				MessageType: messageType,
+			}
+			c.messageQueue = append(c.messageQueue, streamMsg)
+			c.queueMu.Unlock()
+
+		case <-c.closeChan:
+			c.queueMu.Lock()
+			c.isClosed = true
+			c.messageQueue = append(c.messageQueue, StreamMessage{
+				Type:   "close",
+				Code:   1000,
+				Reason: "Connection closed",
+			})
+			c.queueMu.Unlock()
+			return
+		}
+	}
+}
+
+func (c *WSConnection) GetMessages() []StreamMessage {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+
+	messages := make([]StreamMessage, len(c.messageQueue))
+	copy(messages, c.messageQueue)
+	c.messageQueue = c.messageQueue[:0]
+
+	return messages
+}
+
+func (c *WSConnection) IsClosed() bool {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+	return c.isClosed
 }
 
 func (c *WSConnection) Send(data []byte, isText bool) error {
@@ -294,9 +353,9 @@ func (p *Proxy) handleWebSocketPolyfill(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if strings.HasPrefix(path, "/sw-cgi/websocket/stream/") && r.Method == http.MethodGet {
-		connID := strings.TrimPrefix(path, "/sw-cgi/websocket/stream/")
-		p.handleStream(w, r, connID)
+	if strings.HasPrefix(path, "/sw-cgi/websocket/poll/") && r.Method == http.MethodGet {
+		connID := strings.TrimPrefix(path, "/sw-cgi/websocket/poll/")
+		p.handlePoll(w, r, connID)
 		return
 	}
 
@@ -334,70 +393,35 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (p *Proxy) handleStream(w http.ResponseWriter, r *http.Request, connID string) {
+func (p *Proxy) handlePoll(w http.ResponseWriter, r *http.Request, connID string) {
 	wsConn, ok := p.wsManager.GetConnection(connID)
 	if !ok {
 		http.Error(w, "Connection not found", http.StatusNotFound)
 		return
 	}
 
-	log.Info().Str("connId", connID).Msg("Starting message stream")
+	// Get queued messages
+	messages := wsConn.GetMessages()
 
-	// Cleanup on exit
-	defer func() {
-		p.wsManager.RemoveConnection(connID)
-		wsConn.Close()
-	}()
-
-	// Set headers for streaming
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	// Send messages as newline-delimited JSON
-	encoder := json.NewEncoder(w)
-	for {
-		select {
-		case msg := <-wsConn.messageChan:
-			// Use message type from WebSocket frame
-			messageType := "binary"
-			if msg.isText {
-				messageType = "text"
+	// Check if connection is closed and cleanup if needed
+	if wsConn.IsClosed() && len(messages) > 0 {
+		// Check if close message is in the queue
+		for _, msg := range messages {
+			if msg.Type == "close" {
+				defer func() {
+					p.wsManager.RemoveConnection(connID)
+					wsConn.Close()
+				}()
+				break
 			}
-
-			streamMsg := StreamMessage{
-				Type:        "message",
-				Data:        base64.StdEncoding.EncodeToString(msg.data),
-				MessageType: messageType,
-			}
-			if err := encoder.Encode(streamMsg); err != nil {
-				log.Error().Err(err).Msg("Failed to encode message")
-				return
-			}
-			flusher.Flush()
-
-		case <-wsConn.closeChan:
-			streamMsg := StreamMessage{
-				Type:   "close",
-				Code:   1000,
-				Reason: "Connection closed",
-			}
-			encoder.Encode(streamMsg)
-			flusher.Flush()
-			return
-
-		case <-r.Context().Done():
-			log.Info().Str("connId", connID).Msg("Stream context cancelled")
-			return
 		}
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"messages": messages,
+	})
 }
 
 func (p *Proxy) handleSend(w http.ResponseWriter, r *http.Request, connID string) {
