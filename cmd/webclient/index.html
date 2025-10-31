@@ -18,23 +18,6 @@
 
                     showStatus('Registering Service Worker...', 'loading');
 
-                    let reloadOnce = true;
-
-                    navigator.serviceWorker.addEventListener('message', (event) => {
-                        console.log(event.data);
-                        if (event.data && event.data.type === 'RELOAD_PAGE') {
-                            if (reloadOnce) {
-                                reloadOnce = false;
-                                window.location.reload();
-                            }
-                        }
-
-                        if (event.data && event.data.type === 'UPDATE_MSG') {
-                            showStatus(event.data.msg, 'info');
-                        }
-                    }
-                    );
-
                     // Register service worker
                     const registration = await navigator.serviceWorker.register('/service-worker.js', {
                         scope: '/'
@@ -43,6 +26,23 @@
                 } catch (error) {
                     showStatus('Service Worker registration failed: ' + error.message, 'error');
                 }
+
+                const reloadFn = async () => {
+                    const resp = await fetch('/e8c2c70c-ec4a-40b2-b8af-d5638264f831');
+                    const text = await resp.text();
+                    if (text === 'ACK-e8c2c70c-ec4a-40b2-b8af-d5638264f831') {
+                        showStatus('Service Worker is ready.', 'success');
+                        window.location.reload();
+                    } else if (text === 'NAK-e8c2c70c-ec4a-40b2-b8af-d5638264f831'){
+                        setTimeout(reloadFn, 100);
+                    } else {
+                        showStatus('Something went wrong.', 'error');
+                        setTimeout(()=>{
+                            window.location.reload();
+                        }, 1000);
+                    }
+                }
+                reloadFn();
             }
 
             function showStatus(message, status) {

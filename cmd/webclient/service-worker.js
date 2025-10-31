@@ -17,6 +17,8 @@ async function init() {
 }
 
 async function runWASM() {
+    if (typeof __go_jshttp !== 'undefined') return;
+
     const go = new Go();
     const cache = await caches.open("WASM_Cache_v1");
     let wasm_file;
@@ -42,33 +44,33 @@ self.addEventListener('install', (e) => {
     e.waitUntil(LoadCache());
 });
 
-async function sendMsg(data) {
-    const clients = await self.clients.matchAll({ type: 'window' });
-    clients.forEach(client => {
-        client.postMessage({ type: 'RELOAD_PAGE' });
-    });
-}
-
 self.addEventListener('activate', async (e) => {
-    await sendMsg({ type: 'UPDATE_MSG', msg: 'Please wait while starting the WebAssembly module...' });
     await init();
     await self.clients.claim();
-
-    setInterval(async () => {
-        if (typeof __go_jshttp == 'undefined') return;
-
-        console.log("Reloading page...")
-        sendMsg({ type: 'RELOAD_PAGE' });
-    }, 1000);
 });
 
 self.addEventListener('fetch', async (e) => {
     console.log(e.request);
+    const url = new URL(e.request.url);
+
+    if (url.origin !== self.location.origin) {
+        e.respondWith(fetch(e.request));
+        return;
+    }
 
     if (typeof __go_jshttp == 'undefined') {
         await init();
     }
 
+    if (url.pathname === '/e8c2c70c-ec4a-40b2-b8af-d5638264f831') {
+        if (typeof __go_jshttp == 'undefined') {
+            e.respondWith(new Response("NAK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 500 }))
+            return;
+        }
+        e.respondWith(new Response("ACK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 200 }));
+        return;
+    }
+    
     if (__go_jshttp) {
         e.respondWith((async () => {
             try {
