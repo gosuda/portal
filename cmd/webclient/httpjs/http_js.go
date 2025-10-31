@@ -3,6 +3,7 @@ package httpjs
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -365,8 +366,11 @@ func JSRequestToHTTPRequest(jsReq js.Value) (*http.Request, error) {
 		bodyReader = bytes.NewReader([]byte{})
 	}
 
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, "http.request.mode", jsReq.Get("mode").String())
+
 	// Create HTTP request
-	httpReq, err := http.NewRequest(method, url, bodyReader)
+	httpReq, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
 		return nil, err
 	}

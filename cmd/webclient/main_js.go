@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -44,6 +45,24 @@ var client = &http.Client{
 type Proxy struct {
 }
 
+// IsHTMLContentType checks if the Content-Type header indicates HTML content
+// It properly handles media type parsing with parameters like charset
+func IsHTMLContentType(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+
+	// Parse the media type and parameters
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		// If parsing fails, do a simple case-insensitive check for "text/html"
+		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
+	}
+
+	// Check if the media type is HTML
+	return mediaType == "text/html"
+}
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Proxying request to %s", r.URL.String())
 
@@ -69,8 +88,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for key, value := range resp.Header {
 		w.Header()[key] = value
 	}
-	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	if r.Context().Value("http.request.mode").(string) == "navigate" &&
+		IsHTMLContentType(resp.Header.Get("Content-Type")) {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			w.Write([]byte("502: Failed to read response body"))
+			return
+		}
+		log.Debug().Msgf("HTML content received: %s", body)
+		w.WriteHeader(resp.StatusCode)
+		w.Write(body)
+	} else {
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}
 }
 
 func main() {
