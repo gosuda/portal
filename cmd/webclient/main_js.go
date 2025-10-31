@@ -118,8 +118,9 @@ func main() {
 		jsReq := args[0]
 		return httpjs.ServeHTTPAsyncWithStreaming(&Proxy{}, jsReq)
 	}))
-
 	log.Info().Msg("Portal proxy handler registered as __go_jshttp")
+
+	go serverWorker(rdClient)
 
 	if runtime.Compiler == "tinygo" {
 		return
@@ -127,4 +128,35 @@ func main() {
 	// Wait
 	ch := make(chan bool)
 	<-ch
+}
+
+func serverWorker(client *sdk.RDClient) {
+	time.Sleep(time.Second)
+
+	cred := sdk.NewCredential()
+	ln, err := client.Listen(cred, "WASM-Client-WebServer-"+cred.ID()[:8], []string{"http/1.1"})
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to start listener")
+		return
+	}
+	defer ln.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head>
+	<title>WASM Client Server</title>
+</head>
+<body>
+	<h1>Hello, World! This server is running in a WASM client</h1>
+	<p>Server ID: ` + cred.ID() + `</p>
+</body>
+</html>`))
+	})
+
+	if err := http.Serve(ln, mux); err != nil {
+		log.Error().Err(err).Msg("Failed to start server")
+	}
 }

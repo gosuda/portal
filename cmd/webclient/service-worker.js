@@ -1,7 +1,9 @@
 // const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/misc/wasm/wasm_exec.js";
+global = {};
 const wasm_exec_URL = "/wasm_exec.js";
 const wasm_URL = "/main.wasm";
 importScripts(wasm_exec_URL);
+
 
 async function runWASM() {
     const go = new Go();
@@ -36,16 +38,21 @@ self.addEventListener('activate', (e) => {
     e.waitUntil(Activate());
 });
 
-self.addEventListener('fetch', (e) => {
+self.addEventListener('fetch', async (e) => {
     console.log(e.request);
-    if (typeof __go_jshttp != 'undefined') {
-        e.respondWith((async () => {
+
+    if (typeof __go_jshttp == 'undefined') {
+        await runWASM();
+    }
+
+    if (__go_jshttp) {
+        e.respondWith((async () => {    
             try {
                 const resp = await __go_jshttp(e.request);
                 return resp;
             } catch {
                 __go_jshttp = undefined;
-                runWASM();
+                await runWASM();
                 const resp = await __go_jshttp(e.request);
                 return resp;
             }
@@ -53,7 +60,5 @@ self.addEventListener('fetch', (e) => {
         return;
     }
 
-    console.log("__go_jshttp not found");
-    runWASM();
-    e.respondWith(fetch(e.request));
+    e.respondWith(new Response("Sorry, Service Worker failed to process the request. Please refresh the page."));
 });
