@@ -71,16 +71,10 @@
             }
         }
         
-        _startPolling() {
-            if (!this._connId || this._isClosed) return;
-            
-            // Poll every 100ms
-            this._pollInterval = setInterval(async () => {
-                if (this._isClosed) {
-                    clearInterval(this._pollInterval);
-                    return;
-                }
-                
+        async _startPolling() {
+            // Long polling: continuously fetch messages
+            // Server will wait up to 5 seconds before responding
+            while (!this._isClosed) {
                 try {
                     const response = await fetch(`/sw-cgi/websocket/poll/${this._connId}`, {
                         method: 'GET'
@@ -99,16 +93,12 @@
                     }
                     
                 } catch (error) {
-                    console.error('Polling error:', error);
-                    this._handleError(error);
+                    if (!this._isClosed) {
+                        console.error('Polling error:', error);
+                        this._handleError(error);
+                    }
+                    break;
                 }
-            }, 100);
-        }
-        
-        _stopPolling() {
-            if (this._pollInterval) {
-                clearInterval(this._pollInterval);
-                this._pollInterval = null;
             }
         }
         
@@ -179,9 +169,6 @@
             
             this._isClosed = true;
             this.readyState = WebSocket.CLOSED;
-            
-            // Stop polling
-            this._stopPolling();
             
             // Create CloseEvent
             const event = new CloseEvent('close', {

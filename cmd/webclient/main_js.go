@@ -400,9 +400,36 @@ func (p *Proxy) handlePoll(w http.ResponseWriter, r *http.Request, connID string
 		return
 	}
 
-	// Get queued messages
-	messages := wsConn.GetMessages()
+	// Long polling: wait up to 5 seconds for messages
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
 
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	var messages []StreamMessage
+
+	for {
+		select {
+		case <-timeout.C:
+			// Timeout - return empty or existing messages
+			messages = wsConn.GetMessages()
+			goto respond
+
+		case <-ticker.C:
+			// Check for messages periodically
+			messages = wsConn.GetMessages()
+			if len(messages) > 0 {
+				goto respond
+			}
+
+		case <-r.Context().Done():
+			// Client disconnected
+			return
+		}
+	}
+
+respond:
 	// Check if connection is closed and cleanup if needed
 	if wsConn.IsClosed() && len(messages) > 0 {
 		// Check if close message is in the queue
