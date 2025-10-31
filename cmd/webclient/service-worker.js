@@ -70,7 +70,7 @@ self.addEventListener('fetch', async (e) => {
         e.respondWith(new Response("ACK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 200 }));
         return;
     }
-    
+
     if (__go_jshttp) {
         e.respondWith((async () => {
             try {

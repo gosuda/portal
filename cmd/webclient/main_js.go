@@ -91,6 +91,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header()[key] = value
 	}
 
+	if IsHTMLContentType(resp.Header.Get("Content-Type")) {
+		w.WriteHeader(resp.StatusCode)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to read response body")
+			return
+		}
+		body = InjectHTML(body)
+		w.Write(body)
+		return
+	}
+
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
