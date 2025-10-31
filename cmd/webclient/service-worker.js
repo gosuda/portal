@@ -69,6 +69,10 @@ async function sleep(ms) {
 }
 
 async function proxy_handler(event) {
+  if (!_portal_proxy) {
+    await runWASM();
+  }
+
   console.log('Service Worker: Fetch event:', event.request);
   if (typeof _portal_proxy != 'undefined') {
     event.respondWith((async () => {
@@ -86,10 +90,7 @@ async function proxy_handler(event) {
   }
   console.log('Service Worker: _portal_proxy is not defined. Fetch event ignored.');
 
-  _portal_proxy = undefined;
-  await runWASM();
-  await sleep(100);
-  await proxy_handler(event);
+  event.respondWith(fetch(event.request));
 }
 
 self.addEventListener('fetch', proxy_handler);
