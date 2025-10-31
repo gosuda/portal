@@ -354,7 +354,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		if linkPath == "" || linkPath == "(unnamed)" {
 			linkPath = identityID
 		}
-		link := fmt.Sprintf("/peer/%s", linkPath)
+		link := fmt.Sprintf("https://%s.securl.click/", linkPath)
 
 		row := leaseRow{
 			Peer:        identityID,
