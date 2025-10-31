@@ -1,9 +1,20 @@
 // const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/misc/wasm/wasm_exec.js";
-global = {};
 const wasm_exec_URL = "/wasm_exec.js";
 const wasm_URL = "/main.wasm";
 importScripts(wasm_exec_URL);
 
+let loading = false;
+
+async function init() {
+    if (loading) return;
+    loading = true;
+    try {
+        await runWASM();
+    } catch (error) {
+        console.error("Error initializing WASM:", error);
+    }
+    loading = false;
+}
 
 async function runWASM() {
     const go = new Go();
@@ -31,28 +42,41 @@ self.addEventListener('install', (e) => {
     e.waitUntil(LoadCache());
 });
 
-self.addEventListener('activate', (e) => {
-    async function Activate() {
-        await runWASM();
-    }
-    e.waitUntil(Activate());
+async function sendMsg(data) {
+    const clients = await self.clients.matchAll({ type: 'window' });
+    clients.forEach(client => {
+        client.postMessage({ type: 'RELOAD_PAGE' });
+    });
+}
+
+self.addEventListener('activate', async (e) => {
+    await sendMsg({ type: 'UPDATE_MSG', msg: 'Please wait while starting the WebAssembly module...' });
+    await init();
+    await self.clients.claim();
+
+    setInterval(async () => {
+        if (typeof __go_jshttp == 'undefined') return;
+
+        console.log("Reloading page...")
+        sendMsg({ type: 'RELOAD_PAGE' });
+    }, 1000);
 });
 
 self.addEventListener('fetch', async (e) => {
     console.log(e.request);
 
     if (typeof __go_jshttp == 'undefined') {
-        await runWASM();
+        await init();
     }
 
     if (__go_jshttp) {
-        e.respondWith((async () => {    
+        e.respondWith((async () => {
             try {
                 const resp = await __go_jshttp(e.request);
                 return resp;
             } catch {
                 __go_jshttp = undefined;
-                await runWASM();
+                await init();
                 const resp = await __go_jshttp(e.request);
                 return resp;
             }

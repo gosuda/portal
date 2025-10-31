@@ -1,46 +1,57 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Portal Proxy</title>
-</head>
-<body>
-    <h1>Portal Proxy</h1>
-    <hr/>
-    <p id="status">Please wait for the service worker to register...</p>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Portal Proxy</title>
+    </head>
+    <body>
+        <h1>Portal Proxy</h1>
+        <hr/>
+        <p id="status">Please wait for the service worker to register...</p>
+        <script>
+            async function registerServiceWorker() {
+                try {
+                    if (!('serviceWorker'in navigator)) {
+                        throw new Error('This browser does not support Service Worker.');
+                    }
 
-    <script>
-        async function registerServiceWorker() {
-            try {
-                if (!('serviceWorker' in navigator)) {
-                    throw new Error('This browser does not support Service Worker.');
+                    showStatus('Registering Service Worker...', 'loading');
+
+                    let reloadOnce = true;
+
+                    navigator.serviceWorker.addEventListener('message', (event) => {
+                        console.log(event.data);
+                        if (event.data && event.data.type === 'RELOAD_PAGE') {
+                            if (reloadOnce) {
+                                reloadOnce = false;
+                                window.location.reload();
+                            }
+                        }
+
+                        if (event.data && event.data.type === 'UPDATE_MSG') {
+                            showStatus(event.data.msg, 'info');
+                        }
+                    }
+                    );
+
+                    // Register service worker
+                    const registration = await navigator.serviceWorker.register('/service-worker.js', {
+                        scope: '/'
+                    });
+                    showStatus('Service Worker registered successfully, Wait a moment...', 'success');
+                } catch (error) {
+                    showStatus('Service Worker registration failed: ' + error.message, 'error');
                 }
-
-                showStatus('Registering Service Worker...', 'loading');
-                
-                // Register service worker
-                const registration = await navigator.serviceWorker.register('/service-worker.js', {
-                    scope: '/'
-                });
-                showStatus('Service Worker registered successfully', 'success');
-
-                setTimeout(() => {
-                    showStatus('Reloading page...', 'loading');
-                    location.reload();
-                }, 1000);
-            } catch (error) {
-                showStatus('Service Worker registration failed: ' + error.message, 'error');
             }
-        }
 
-        function showStatus(message, status) {
-            const statusElement = document.getElementById('status');
-            statusElement.textContent = message;
-            statusElement.className = status;
-        }
+            function showStatus(message, status) {
+                const statusElement = document.getElementById('status');
+                statusElement.textContent = message;
+                statusElement.className = status;
+            }
 
-        registerServiceWorker();
-    </script>
-</body>
+            registerServiceWorker();
+        </script>
+    </body>
 </html>
