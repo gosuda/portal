@@ -348,13 +348,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		// Create link for the lease
-		// Use name if available, otherwise fall back to identity ID
-		linkPath := name
-		if linkPath == "" || linkPath == "(unnamed)" {
-			linkPath = identityID
-		}
-		link := fmt.Sprintf("https://%s.securl.click/", linkPath)
+		link := fmt.Sprintf("https://%s.securl.click/", identityID)
 
 		row := leaseRow{
 			Peer:        identityID,
