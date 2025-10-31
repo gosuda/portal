@@ -20,7 +20,7 @@ COPY --from=builder /src/bin/main.wasm /usr/share/nginx/html/main.wasm
 # Create nginx config for SPA routing
 RUN echo 'server { \
     listen 80; \
-    server_name localhost; \
+    server_name _; \
     root /usr/share/nginx/html; \
     index index.html; \
     \
