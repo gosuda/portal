@@ -1,6 +1,9 @@
 (function() {
     'use strict';
     
+    // Capture reference to current script for later removal
+    const currentScript = document.currentScript;
+    
     // Save original WebSocket
     const NativeWebSocket = window.WebSocket;
     
@@ -343,4 +346,10 @@
     window.WebSocket.CLOSED = NativeWebSocket.CLOSED;
     
     console.log('[WebSocket Polyfill] Initialized');
+    
+    // Remove the polyfill script tag after initialization
+    if (currentScript && currentScript.parentNode) {
+        currentScript.parentNode.removeChild(currentScript);
+        console.log('[WebSocket Polyfill] Script tag removed');
+    }
 })();
