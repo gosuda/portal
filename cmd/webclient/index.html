@@ -6,27 +6,66 @@
         <title>Portal Proxy Gateway</title>
     </head>
     <body>
+        <script>
+            // In-app browser detection and redirect handler
+            (function() {
+                const userAgent = navigator.userAgent.toLowerCase();
+                const finalUrl = window.location.href;
+                
+                // Detect various in-app browsers
+                const isKakao = /kakaotalk/i.test(userAgent);
+                const isNaver = /naver/i.test(userAgent);
+                const isFacebook = /fb|fbav|fban/i.test(userAgent);
+                const isInstagram = /instagram/i.test(userAgent);
+                const isLine = /line/i.test(userAgent);
+                const isInAppBrowser = isKakao || isNaver || isFacebook || isInstagram || isLine;
+                const isAndroid = /android/.test(userAgent);
+                const isIOS = /ipad|iphone|ipod/.test(userAgent);
+                
+                if (!isInAppBrowser) {
+                    return; // Not in-app browser, proceed normally
+                }
+                
+                // Handle redirection to external browser
+                if (isAndroid) {
+                    if (isKakao) {
+                        location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(finalUrl);
+                    } else {
+                        // Use Intent to open in Chrome or default browser
+                        const intentUrl = 'intent://' + finalUrl.replace(/^https?:\/\//, '') + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
+                        location.href = intentUrl;
+                    }
+                    return; // Stop execution
+                } else if (isIOS) {
+                    if (isKakao) {
+                        location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(finalUrl);
+                        // Set up auto-close listener for iOS KakaoTalk
+                        document.addEventListener("visibilitychange", () => {
+                            if(document.visibilityState == "visible") {
+                                location.href = 'kakaoweb://closeBrowser';
+                            }
+                        });
+                    } else {
+                        // For other iOS in-app browsers, try to open in Safari
+                        // Display a message to user with a link
+                        document.body.innerHTML = `
+                            <div style="padding: 20px; text-align: center; font-family: sans-serif;">
+                                <h2>Open in External Browser</h2>
+                                <p>This page needs to be opened in an external browser.</p>
+                                <p><a href="${finalUrl}" target="_blank" style="display: inline-block; margin: 20px 0; padding: 15px 30px; background: #007AFF; color: white; text-decoration: none; border-radius: 8px; font-size: 16px;">Open in Safari</a></p>
+                                <p style="font-size: 14px; color: #666;">Or select "Open in Safari" or "Open in External Browser" from the menu in the upper right corner.</p>
+                            </div>
+                        `;
+                    }
+                    return; // Stop execution
+                }
+            })();
+        </script>
         <h1>Portal Proxy Gateway</h1>
         <hr/>
         <p id="status">Please wait for the service worker to register...</p>
         <script>
             async function registerServiceWorker() {
-                try {
-                    if (!('serviceWorker'in navigator)) {
-                        throw new Error('This browser does not support Service Worker.');
-                    }
-
-                    showStatus('Registering Service Worker...', 'loading');
-
-                    // Register service worker
-                    const registration = await navigator.serviceWorker.register('/service-worker.js', {
-                        scope: '/'
-                    });
-                    showStatus('Service Worker registered successfully, Wait a moment...', 'success');
-                } catch (error) {
-                    showStatus('Service Worker registration failed: ' + error.message, 'error');
-                }
-
                 const reloadFn = async () => {
                     const resp = await fetch('/e8c2c70c-ec4a-40b2-b8af-d5638264f831');
                     const text = await resp.text();
@@ -42,7 +81,23 @@
                         }, 1000);
                     }
                 }
-                reloadFn();
+
+                try {
+                    if (!('serviceWorker'in navigator)) {
+                        throw new Error('This browser does not support Service Worker.');
+                    }
+
+                    showStatus('Registering Service Worker...', 'loading');
+
+                    // Register service worker
+                    const registration = await navigator.serviceWorker.register('/service-worker.js', {
+                        scope: '/'
+                    });
+                    showStatus('Service Worker registered successfully, Wait a moment...', 'success');
+                    setTimeout(reloadFn, 100);
+                } catch (error) {
+                    showStatus('Service Worker registration failed: ' + error.message, 'error');
+                }
             }
 
             function showStatus(message, status) {
