@@ -18,9 +18,9 @@ import (
 	"golang.org/x/crypto/hkdf"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/gosuda/portal/portal/core/proto/rdsec"
-	"github.com/gosuda/portal/portal/utils/randpool"
 	"github.com/valyala/bytebufferpool"
+	"gosuda.org/portal/portal/core/proto/rdsec"
+	"gosuda.org/portal/portal/utils/randpool"
 )
 
 var _lengthBufferPool = sync.Pool{

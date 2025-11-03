@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gosuda/portal/portal"
-	"github.com/gosuda/portal/portal/core/cryptoops"
-	"github.com/gosuda/portal/portal/utils/wsstream"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/core/cryptoops"
+	"gosuda.org/portal/portal/utils/wsstream"
 )
 
 func init() {

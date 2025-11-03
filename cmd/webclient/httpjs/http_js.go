@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall/js"
 
-	"github.com/gosuda/portal/cmd/webclient/streamjs"
+	"gosuda.org/portal/cmd/webclient/streamjs"
 )
 
 var (

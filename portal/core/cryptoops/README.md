@@ -383,7 +383,7 @@ func releaseBuffer(buffer *bytebufferpool.ByteBuffer) {
 Cryptographically secure random numbers are critical:
 
 ```go
-import "github.com/gosuda/portal/portal/internal/randpool"
+import "gosuda.org/portal/portal/internal/randpool"
 
 // Generate random nonce
 nonce := make([]byte, nonceSize)

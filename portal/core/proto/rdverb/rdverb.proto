@@ -4,7 +4,7 @@ package rdverb;
 
 import "portal/core/proto/rdsec/rdsec.proto";
 
-option go_package = "github.com/gosuda/portal/portal/core/proto/rdverb;rdverb";
+option go_package = "gosuda.org/portal/portal/core/proto/rdverb;rdverb";
 
 enum PacketType {
   PACKET_TYPE_RELAY_INFO_REQUEST = 0;

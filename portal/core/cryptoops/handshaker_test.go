@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal/portal/core/proto/rdsec"
 	"golang.org/x/crypto/curve25519"
+	"gosuda.org/portal/portal/core/proto/rdsec"
 )
 
 // pipeConn creates a bidirectional pipe for testing using TCP loopback

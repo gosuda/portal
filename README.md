@@ -206,7 +206,7 @@ sequenceDiagram
 
 ```bash
 # Clone the repository
-git clone https://github.com/gosuda/portal.git
+git clone https://gosuda.org/portal.git
 cd portal
 
 # Build WASM SDK (includes E2EE Proxy Service Worker)
@@ -303,7 +303,7 @@ cd cmd/relay-server
 package main
 
 import (
-    "github.com/gosuda/portal/sdk"
+    "gosuda.org/portal/sdk"
 )
 
 func main() {

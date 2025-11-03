@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/gosuda/portal/portal/core/proto/rdverb"
 	"github.com/valyala/bytebufferpool"
+	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
 func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {

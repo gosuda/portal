@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package rdsec;
 
-option go_package = "github.com/gosuda/portal/portal/core/proto/rdsec;rdsec";
+option go_package = "gosuda.org/portal/portal/core/proto/rdsec;rdsec";
 
 message Identity {
   string id = 1;

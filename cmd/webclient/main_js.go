@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gosuda/portal/cmd/webclient/httpjs"
-	"github.com/gosuda/portal/sdk"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/idna"
+	"gosuda.org/portal/cmd/webclient/httpjs"
+	"gosuda.org/portal/sdk"
 )
 
 var (

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal/portal/core/proto/rdsec"
-	"github.com/gosuda/portal/portal/core/proto/rdverb"
+	"gosuda.org/portal/portal/core/proto/rdsec"
+	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
 func TestLeaseManager_NameConflict(t *testing.T) {

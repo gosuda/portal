@@ -19,9 +19,9 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
-	"github.com/gosuda/portal/portal"
-	"github.com/gosuda/portal/portal/utils/wsstream"
-	"github.com/gosuda/portal/sdk"
+	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/utils/wsstream"
+	"gosuda.org/portal/sdk"
 )
 
 //go:embed static

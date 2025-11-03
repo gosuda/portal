@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/portal/portal/core/cryptoops"
-	"github.com/gosuda/portal/portal/core/proto/rdsec"
-	"github.com/gosuda/portal/portal/core/proto/rdverb"
 	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
+	"gosuda.org/portal/portal/core/cryptoops"
+	"gosuda.org/portal/portal/core/proto/rdsec"
+	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
 var (

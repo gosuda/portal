@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 
-	"github.com/gosuda/portal/portal/core/proto/rdsec"
+	"gosuda.org/portal/portal/core/proto/rdsec"
 )
 
 func ValidateIdentity(identity *rdsec.Identity) bool {
