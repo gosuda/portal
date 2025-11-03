@@ -4,70 +4,164 @@ const wasm_URL = "/main.wasm";
 importScripts(wasm_exec_URL);
 
 let loading = false;
+let initError = null;
+
+// Send error to all clients
+async function notifyClientsOfError(error) {
+    const clients = await self.clients.matchAll();
+    const errorMessage = {
+        type: 'SW_ERROR',
+        error: {
+            name: error.name,
+            message: error.message,
+            stack: error.stack
+        }
+    };
+
+    for (const client of clients) {
+        client.postMessage(errorMessage);
+    }
+}
 
 async function init() {
     if (loading) return;
     loading = true;
     try {
         await runWASM();
+        initError = null;
     } catch (error) {
-        console.error("Error initializing WASM:", error);
+        console.error("[SW] Error initializing WASM:", error);
+        initError = error;
+        await notifyClientsOfError(error);
+        throw error; // Re-throw to prevent further processing
+    } finally {
+        loading = false;
     }
-    loading = false;
 }
 
 async function runWASM() {
-    if (typeof __go_jshttp !== 'undefined') return;
-
-    const go = new Go();
-    const cache = await caches.open("WASM_Cache_v1");
-    let wasm_file;
-    const cache_wasm = await cache.match(wasm_URL);
-    if (cache_wasm) {
-        wasm_file = await cache_wasm.arrayBuffer();
-    } else {
-        wasm_file = await (await fetch(wasm_URL)).arrayBuffer();
+    if (typeof __go_jshttp !== 'undefined') {
+        return;
     }
-    const instance = await WebAssembly.instantiate(wasm_file, go.importObject);
-    go.run(instance.instance);
+
+    try {
+        const go = new Go();
+
+        const cache = await caches.open("WASM_Cache_v1");
+
+        let wasm_file;
+        const cache_wasm = await cache.match(wasm_URL);
+
+        if (cache_wasm) {
+            wasm_file = await cache_wasm.arrayBuffer();
+        } else {
+            const response = await fetch(wasm_URL);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch WASM: ${response.status} ${response.statusText}`);
+            }
+            wasm_file = await response.arrayBuffer();
+        }
+
+        const instance = await WebAssembly.instantiate(wasm_file, go.importObject);
+
+        go.run(instance.instance);
+
+    } catch (error) {
+        console.error('[SW] WASM initialization failed:', error);
+        throw new Error(`WASM Initialization: ${error.message}`);
+    }
 }
 
 self.addEventListener('install', (e) => {
     self.skipWaiting();
     async function LoadCache() {
-        const cache = await caches.open("WASM_Cache_v1");
-        await cache.addAll([
-            wasm_URL,
-            wasm_exec_URL,
-        ]);
+        try {
+            const cache = await caches.open("WASM_Cache_v1");
+            await cache.addAll([
+                wasm_URL,
+                wasm_exec_URL,
+            ]);
+        } catch (error) {
+            console.error('[SW] Cache loading failed:', error);
+            throw new Error(`Cache Loading: ${error.message}`);
+        }
     }
     e.waitUntil(LoadCache());
 });
 
-self.addEventListener('activate', async (e) => {
-    await init();
-    await self.clients.claim();
+self.addEventListener('activate', (e) => {
+    e.waitUntil((async () => {
+        try {
+            // Claim clients first to take control immediately
+            await self.clients.claim();
+
+            // Then initialize WASM in background (don't block activation)
+            init().catch(error => {
+                console.error('[SW] WASM initialization failed after activation:', error);
+                notifyClientsOfError(error);
+            });
+
+        } catch (error) {
+            console.error('[SW] Activation failed:', error);
+            await notifyClientsOfError(error);
+        }
+    })());
 });
 
-self.addEventListener('fetch', async (e) => {
-    console.log(e.request);
+self.addEventListener('fetch', (e) => {
     const url = new URL(e.request.url);
 
+    // Skip non-origin requests
     if (url.origin !== self.location.origin) {
         e.respondWith(fetch(e.request));
         return;
     }
 
-    if (typeof __go_jshttp == 'undefined') {
-        await init();
+    // Health check endpoint - check WASM status
+    if (url.pathname === '/e8c2c70c-ec4a-40b2-b8af-d5638264f831') {
+        e.respondWith((async () => {
+
+            // Try to initialize if not ready
+            if (typeof __go_jshttp === 'undefined' && !loading) {
+                try {
+                    await init();
+                } catch (error) {
+                    console.error('[SW] Health check init failed:', error);
+                }
+            }
+
+            // Return status based on WASM availability
+            if (typeof __go_jshttp !== 'undefined') {
+                return new Response("ACK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 200 });
+            } else {
+                return new Response("NAK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 503 });
+            }
+        })());
+        return;
     }
 
-    if (url.pathname === '/e8c2c70c-ec4a-40b2-b8af-d5638264f831') {
-        if (typeof __go_jshttp == 'undefined') {
-            e.respondWith(new Response("NAK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 500 }))
-            return;
-        }
-        e.respondWith(new Response("ACK-e8c2c70c-ec4a-40b2-b8af-d5638264f831", { status: 200 }));
+    // Serve portal.mp4 from cache or fetch from origin
+    if (url.pathname === '/portal.mp4') {
+        e.respondWith((async () => {
+            try {
+                // Try to get from cache first
+                const cache = await caches.open("WASM_Cache_v1");
+                const cachedResponse = await cache.match('/portal.mp4');
+                if (cachedResponse) {
+                    return cachedResponse;
+                }
+
+                // Fetch from network and cache it
+                const response = await fetch(e.request);
+                if (response.ok) {
+                    cache.put('/portal.mp4', response.clone());
+                }
+                return response;
+            } catch (error) {
+                console.error('Failed to fetch portal.mp4:', error);
+                return new Response('Not Found', { status: 404 });
+            }
+        })());
         return;
     }
 
