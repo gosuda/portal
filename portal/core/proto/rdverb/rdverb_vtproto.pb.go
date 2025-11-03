@@ -61,8 +61,10 @@ func (m *RelayInfo) CloneVT() *RelayInfo {
 		r.Address = tmpContainer
 	}
 	if rhs := m.Leases; rhs != nil {
-		tmpContainer := make([]string, len(rhs))
-		copy(tmpContainer, rhs)
+		tmpContainer := make([]*Lease, len(rhs))
+		for k, v := range rhs {
+			tmpContainer[k] = v.CloneVT()
+		}
 		r.Leases = tmpContainer
 	}
 	if len(m.unknownFields) > 0 {
@@ -315,8 +317,16 @@ func (this *RelayInfo) EqualVT(that *RelayInfo) bool {
 	}
 	for i, vx := range this.Leases {
 		vy := that.Leases[i]
-		if vx != vy {
-			return false
+		if p, q := vx, vy; p != q {
+			if p == nil {
+				p = &Lease{}
+			}
+			if q == nil {
+				q = &Lease{}
+			}
+			if !p.EqualVT(q) {
+				return false
+			}
 		}
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -616,9 +626,12 @@ func (m *RelayInfo) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	}
 	if len(m.Leases) > 0 {
 		for iNdEx := len(m.Leases) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.Leases[iNdEx])
-			copy(dAtA[i:], m.Leases[iNdEx])
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Leases[iNdEx])))
+			size, err := m.Leases[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 			i--
 			dAtA[i] = 0x1a
 		}
@@ -1184,9 +1197,12 @@ func (m *RelayInfo) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
 	}
 	if len(m.Leases) > 0 {
 		for iNdEx := len(m.Leases) - 1; iNdEx >= 0; iNdEx-- {
-			i -= len(m.Leases[iNdEx])
-			copy(dAtA[i:], m.Leases[iNdEx])
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Leases[iNdEx])))
+			size, err := m.Leases[iNdEx].MarshalToSizedBufferVTStrict(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 			i--
 			dAtA[i] = 0x1a
 		}
@@ -1715,8 +1731,8 @@ func (m *RelayInfo) SizeVT() (n int) {
 		}
 	}
 	if len(m.Leases) > 0 {
-		for _, s := range m.Leases {
-			l = len(s)
+		for _, e := range m.Leases {
+			l = e.SizeVT()
 			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 		}
 	}
@@ -2105,7 +2121,7 @@ func (m *RelayInfo) UnmarshalVT(dAtA []byte) error {
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Leases", wireType)
 			}
-			var stringLen uint64
+			var msglen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -2115,23 +2131,25 @@ func (m *RelayInfo) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				msglen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
+			if msglen < 0 {
 				return protohelpers.ErrInvalidLength
 			}
-			postIndex := iNdEx + intStringLen
+			postIndex := iNdEx + msglen
 			if postIndex < 0 {
 				return protohelpers.ErrInvalidLength
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Leases = append(m.Leases, string(dAtA[iNdEx:postIndex]))
+			m.Leases = append(m.Leases, &Lease{})
+			if err := m.Leases[len(m.Leases)-1].UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -3310,7 +3328,7 @@ func (m *RelayInfo) UnmarshalVTUnsafe(dAtA []byte) error {
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Leases", wireType)
 			}
-			var stringLen uint64
+			var msglen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -3320,27 +3338,25 @@ func (m *RelayInfo) UnmarshalVTUnsafe(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				msglen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
+			if msglen < 0 {
 				return protohelpers.ErrInvalidLength
 			}
-			postIndex := iNdEx + intStringLen
+			postIndex := iNdEx + msglen
 			if postIndex < 0 {
 				return protohelpers.ErrInvalidLength
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			var stringValue string
-			if intStringLen > 0 {
-				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			m.Leases = append(m.Leases, &Lease{})
+			if err := m.Leases[len(m.Leases)-1].UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
-			m.Leases = append(m.Leases, stringValue)
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

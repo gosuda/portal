@@ -40,7 +40,7 @@ message Packet {
 message RelayInfo {
   rdsec.Identity identity = 1;
   repeated string address = 2;
-  repeated string leases = 3;
+  repeated Lease leases = 3;
 }
 
 message RelayInfoRequest {}

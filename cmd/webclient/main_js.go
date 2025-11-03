@@ -33,6 +33,11 @@ var (
 )
 
 var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
+	lease, err := rdClient.LookUpName(address)
+	if err == nil && lease != nil {
+		address = lease.Identity.Id
+	}
+
 	address = strings.TrimSuffix(address, ":80")
 	address = strings.TrimSuffix(address, ":443")
 	cred := sdk.NewCredential()

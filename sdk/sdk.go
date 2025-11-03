@@ -7,7 +7,7 @@ import (
 	"io"
 	"net"
 	"regexp"
-	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -262,11 +262,14 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 				return
 			}
 
-			if slices.Contains(info.Leases, leaseID) {
-				log.Debug().Str("relay", relay.addr).Str("lease_id", leaseID).Msg("[SDK] Found lease on relay")
-				availableRelaysMu.Lock()
-				availableRelays = append(availableRelays, relay)
-				availableRelaysMu.Unlock()
+			for _, lease := range info.Leases {
+				if lease.Identity.Id == leaseID {
+					log.Debug().Str("relay", relay.addr).Str("lease_id", leaseID).Msg("[SDK] Found lease on relay")
+					availableRelaysMu.Lock()
+					availableRelays = append(availableRelays, relay)
+					availableRelaysMu.Unlock()
+					break
+				}
 			}
 		}(relay)
 	}
@@ -779,4 +782,28 @@ func (g *RDClient) GetRelays() []string {
 	}
 
 	return relays
+}
+
+func (g *RDClient) LookUpName(name string) (*rdverb.Lease, error) {
+	var relays []*rdRelay
+
+	g.mu.Lock()
+	for _, server := range g.relays {
+		relays = append(relays, server)
+	}
+	g.mu.Unlock()
+
+	for _, relay := range relays {
+		info, err := relay.client.GetRelayInfo()
+		if err != nil {
+			continue
+		}
+
+		for _, lease := range info.Leases {
+			if strings.EqualFold(lease.Name, name) {
+				return lease, nil
+			}
+		}
+	}
+	return nil, ErrNoAvailableRelay
 }

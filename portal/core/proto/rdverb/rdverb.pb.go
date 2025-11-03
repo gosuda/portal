@@ -203,7 +203,7 @@ type RelayInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Identity      *rdsec.Identity        `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
 	Address       []string               `protobuf:"bytes,2,rep,name=address,proto3" json:"address,omitempty"`
-	Leases        []string               `protobuf:"bytes,3,rep,name=leases,proto3" json:"leases,omitempty"`
+	Leases        []*Lease               `protobuf:"bytes,3,rep,name=leases,proto3" json:"leases,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -252,7 +252,7 @@ func (x *RelayInfo) GetAddress() []string {
 	return nil
 }
 
-func (x *RelayInfo) GetLeases() []string {
+func (x *RelayInfo) GetLeases() []*Lease {
 	if x != nil {
 		return x.Leases
 	}
@@ -718,11 +718,11 @@ const file_portal_core_proto_rdverb_rdverb_proto_rawDesc = "" +
 	"%portal/core/proto/rdverb/rdverb.proto\x12\x06rdverb\x1a#portal/core/proto/rdsec/rdsec.proto\"J\n" +
 	"\x06Packet\x12&\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x12.rdverb.PacketTypeR\x04type\x12\x18\n" +
-	"\apayload\x18\x02 \x01(\fR\apayload\"j\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\"y\n" +
 	"\tRelayInfo\x12+\n" +
 	"\bidentity\x18\x01 \x01(\v2\x0f.rdsec.IdentityR\bidentity\x12\x18\n" +
-	"\aaddress\x18\x02 \x03(\tR\aaddress\x12\x16\n" +
-	"\x06leases\x18\x03 \x03(\tR\x06leases\"\x12\n" +
+	"\aaddress\x18\x02 \x03(\tR\aaddress\x12%\n" +
+	"\x06leases\x18\x03 \x03(\v2\r.rdverb.LeaseR\x06leases\"\x12\n" +
 	"\x10RelayInfoRequest\"E\n" +
 	"\x11RelayInfoResponse\x120\n" +
 	"\n" +
@@ -803,19 +803,20 @@ var file_portal_core_proto_rdverb_rdverb_proto_goTypes = []any{
 var file_portal_core_proto_rdverb_rdverb_proto_depIdxs = []int32{
 	0,  // 0: rdverb.Packet.type:type_name -> rdverb.PacketType
 	13, // 1: rdverb.RelayInfo.identity:type_name -> rdsec.Identity
-	3,  // 2: rdverb.RelayInfoResponse.relay_info:type_name -> rdverb.RelayInfo
-	13, // 3: rdverb.Lease.identity:type_name -> rdsec.Identity
-	6,  // 4: rdverb.LeaseUpdateRequest.lease:type_name -> rdverb.Lease
-	1,  // 5: rdverb.LeaseUpdateResponse.code:type_name -> rdverb.ResponseCode
-	13, // 6: rdverb.LeaseDeleteRequest.identity:type_name -> rdsec.Identity
-	1,  // 7: rdverb.LeaseDeleteResponse.code:type_name -> rdverb.ResponseCode
-	13, // 8: rdverb.ConnectionRequest.client_identity:type_name -> rdsec.Identity
-	1,  // 9: rdverb.ConnectionResponse.code:type_name -> rdverb.ResponseCode
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	6,  // 2: rdverb.RelayInfo.leases:type_name -> rdverb.Lease
+	3,  // 3: rdverb.RelayInfoResponse.relay_info:type_name -> rdverb.RelayInfo
+	13, // 4: rdverb.Lease.identity:type_name -> rdsec.Identity
+	6,  // 5: rdverb.LeaseUpdateRequest.lease:type_name -> rdverb.Lease
+	1,  // 6: rdverb.LeaseUpdateResponse.code:type_name -> rdverb.ResponseCode
+	13, // 7: rdverb.LeaseDeleteRequest.identity:type_name -> rdsec.Identity
+	1,  // 8: rdverb.LeaseDeleteResponse.code:type_name -> rdverb.ResponseCode
+	13, // 9: rdverb.ConnectionRequest.client_identity:type_name -> rdsec.Identity
+	1,  // 10: rdverb.ConnectionResponse.code:type_name -> rdverb.ResponseCode
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_portal_core_proto_rdverb_rdverb_proto_init() }
