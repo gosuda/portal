@@ -39,6 +39,41 @@ type Credential struct {
 }
 ```
 
+#### Identity Derivation Algorithm
+
+The ID field is deterministically derived from the Ed25519 public key using a secure hashing process:
+
+```go
+var _id_magic = []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID")
+var _base32_encoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
+
+func DeriveID(publickey ed25519.PublicKey) string {
+    h := hmac.New(sha256.New, _id_magic)
+    h.Write(publickey)
+    hash := h.Sum(nil)
+    return _base32_encoding.EncodeToString(hash[:16])
+}
+```
+
+**Algorithm Steps:**
+1. **HMAC-SHA256**: Compute HMAC-SHA256(publicKey, "RDVERB_PROTOCOL_VER_01_SHA256_ID")
+   - Input: 32-byte Ed25519 public key
+   - HMAC Key: Protocol-specific magic string
+   - Output: 32-byte hash
+2. **Truncation**: Take first 128 bits (16 bytes) of hash
+3. **Base32 Encoding**: Encode with custom alphabet (no padding)
+   - Alphabet: `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`
+   - Padding: None
+   - Output: 26-character alphanumeric string
+
+**Security Properties:**
+- **Deterministic**: Same public key → same ID (enables caching and verification)
+- **One-way**: Computationally infeasible to derive public key from ID
+- **Collision-resistant**: 128-bit security provides ~10³⁸ unique IDs
+- **Protocol-bound**: HMAC key prevents cross-protocol ID collision attacks
+- **Compact**: 26 characters enable efficient URL encoding and database indexing
+
+
 ### 2. X25519 Key Exchange (Curve25519)
 - **Purpose**: Ephemeral session key agreement
 - **Key Size**: 32 bytes (256 bits)
@@ -272,10 +307,11 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 ### 1. Authentication
 - **Mutual**: Both parties authenticate each other's long-term identities
 - **Signature-based**: Ed25519 signatures over handshake payloads
-- **Identity binding**: Public keys are cryptographically bound to identity IDs
-  ```go
-  id := Base32Encode(HMAC_SHA256(publicKey, "RDVERB_PROTOCOL_VER_01_SHA256_ID"))
-  ```
+- **Identity binding**: Public keys are cryptographically bound to identity IDs via HMAC-SHA256
+  - HMAC key: `"RDVERB_PROTOCOL_VER_01_SHA256_ID"`
+  - Output: First 128 bits of HMAC-SHA256(publicKey, magic)
+  - Encoding: Base32 (custom alphabet, no padding)
+  - Result: 26-character deterministic ID
 
 ### 2. Forward Secrecy
 - **Ephemeral Keys**: Fresh X25519 keypair per connection

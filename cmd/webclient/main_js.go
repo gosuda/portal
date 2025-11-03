@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	bootstrapServers = []string{"ws://localhost:4017/relay", "wss://portal.gosuda.org/relay", "wss://220-71-14-177.sslip.io/relay"}
+	bootstrapServers = []string{"wss://portal.gosuda.org/relay"}
 	rdClient         *sdk.RDClient
 )
 

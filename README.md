@@ -180,6 +180,30 @@ sequenceDiagram
 - **HKDF-SHA256**: Key derivation for session keys
 - **HMAC-SHA256**: Identity derivation from public keys
 
+### Identity Derivation
+
+Each peer's identity ID is derived from their Ed25519 public key using a deterministic process:
+
+```go
+func DeriveID(publickey ed25519.PublicKey) string {
+    // HMAC-SHA256 with protocol-specific key
+    h := hmac.New(sha256.New, []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID"))
+    h.Write(publickey)  // 32-byte Ed25519 public key
+    hash := h.Sum(nil)   // 32-byte SHA256 output
+    
+    // Take first 128 bits and encode with Base32 (no padding)
+    encoding := base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
+    return encoding.EncodeToString(hash[:16])
+}
+```
+
+**Properties:**
+- **Deterministic**: Same public key always produces same ID
+- **Collision-resistant**: 128-bit security against birthday attacks
+- **Protocol-bound**: HMAC key prevents cross-protocol ID reuse
+- **Human-readable**: Base32 encoding produces 26-character alphanumeric IDs
+- **Compact**: Fixed-length IDs enable efficient storage and routing
+
 ### Security Properties
 
 - **Mutual Authentication**: Both parties verify each other's identities
