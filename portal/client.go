@@ -17,6 +17,7 @@ import (
 var (
 	ErrInvalidResponse    = errors.New("invalid response")
 	ErrConnectionRejected = errors.New("connection rejected")
+	ErrRemoteIDMismatch   = errors.New("remote ID mismatch")
 )
 
 type IncommingConn struct {
@@ -544,6 +545,12 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 		log.Error().Err(err).Str("lease_id", leaseID).Msg("[RelayClient] Client handshake failed")
 		stream.Close()
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
+	}
+
+	if secConn.RemoteID() != leaseID {
+		log.Warn().Str("lease_id", leaseID).Msg("[RelayClient] Remote ID mismatch")
+		stream.Close()
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, ErrRemoteIDMismatch
 	}
 
 	log.Debug().
