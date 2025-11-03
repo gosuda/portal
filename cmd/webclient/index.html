@@ -179,6 +179,9 @@
             if (isAndroid) {
                 if (isKakao) {
                     location.href = 'kakaotalk://web/openExternal?url=' + encodeURIComponent(finalUrl);
+                    setTimeout(() => {
+                        location.href = 'kakaotalk://inappbrowser/close';
+                    }, 10);
                 } else {
                     // Use Intent to open in Chrome or default browser
                     const intentUrl = 'intent://' + finalUrl.replace(/^https?:\/\//, '') + '#Intent;scheme=https;action=android.intent.action.VIEW;end';
