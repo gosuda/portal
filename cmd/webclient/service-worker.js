@@ -1,10 +1,31 @@
 // const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/misc/wasm/wasm_exec.js";
 const wasm_exec_URL = "/wasm_exec.js";
-const wasm_URL = "/main.wasm";
+const manifest_URL = "/manifest.json";
+
 importScripts(wasm_exec_URL);
 
 let loading = false;
 let initError = null;
+let wasmManifest = null;
+let currentCacheVersion = null;
+
+// Fetch manifest to get current WASM filename
+async function fetchManifest() {
+    if (wasmManifest) return wasmManifest;
+    
+    try {
+        const response = await fetch(manifest_URL);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch manifest: ${response.status}`);
+        }
+        wasmManifest = await response.json();
+        currentCacheVersion = `WASM_Cache_${wasmManifest.hash}`;
+        return wasmManifest;
+    } catch (error) {
+        console.error('[SW] Failed to fetch manifest:', error);
+        throw error;
+    }
+}
 
 // Send error to all clients
 async function notifyClientsOfError(error) {
@@ -45,9 +66,12 @@ async function runWASM() {
     }
 
     try {
+        const manifest = await fetchManifest();
+        const wasm_URL = `/${manifest.wasmFile}`;
+        
         const go = new Go();
 
-        const cache = await caches.open("WASM_Cache_v1");
+        const cache = await caches.open(currentCacheVersion);
 
         let wasm_file;
         const cache_wasm = await cache.match(wasm_URL);
@@ -76,10 +100,14 @@ self.addEventListener('install', (e) => {
     self.skipWaiting();
     async function LoadCache() {
         try {
-            const cache = await caches.open("WASM_Cache_v1");
+            const manifest = await fetchManifest();
+            const wasm_URL = `/${manifest.wasmFile}`;
+            const cache = await caches.open(currentCacheVersion);
+            
             await cache.addAll([
                 wasm_URL,
                 wasm_exec_URL,
+                manifest_URL,
             ]);
         } catch (error) {
             console.error('[SW] Cache loading failed:', error);
@@ -92,6 +120,18 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
     e.waitUntil((async () => {
         try {
+            // Delete old caches
+            const manifest = await fetchManifest();
+            const cacheNames = await caches.keys();
+            await Promise.all(
+                cacheNames.map(cacheName => {
+                    if (cacheName !== currentCacheVersion && cacheName.startsWith('WASM_Cache_')) {
+                        console.log('[SW] Deleting old cache:', cacheName);
+                        return caches.delete(cacheName);
+                    }
+                })
+            );
+
             // Claim clients first to take control immediately
             await self.clients.claim();
 
@@ -144,8 +184,9 @@ self.addEventListener('fetch', (e) => {
     if (url.pathname === '/portal.mp4') {
         e.respondWith((async () => {
             try {
+                await fetchManifest();
                 // Try to get from cache first
-                const cache = await caches.open("WASM_Cache_v1");
+                const cache = await caches.open(currentCacheVersion);
                 const cachedResponse = await cache.match('/portal.mp4');
                 if (cachedResponse) {
                     return cachedResponse;
