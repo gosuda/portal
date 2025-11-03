@@ -15,7 +15,8 @@ var _base32_encoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").Wi
 func DeriveID(publickey ed25519.PublicKey) string {
 	h := hmac.New(sha256.New, _id_magic)
 	h.Write(publickey)
-	return _base32_encoding.EncodeToString(h.Sum(nil))
+	hash := h.Sum(nil)
+	return _base32_encoding.EncodeToString(hash[:16])
 }
 
 type Credential struct {

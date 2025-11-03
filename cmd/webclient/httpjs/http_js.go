@@ -429,7 +429,8 @@ func HTTPResponseToJSResponse(httpResp *http.Response) js.Value {
 	jsOptions.Set("headers", jsHeaders)
 
 	// Create and return JS Response
-	return _Response.New(jsBody, jsOptions)
+	jsResp := _Response.New(jsBody, jsOptions)
+	return jsResp
 }
 
 // ServeHTTPAsyncWithStreaming handles an HTTP request asynchronously and returns a streaming JS Response
@@ -451,9 +452,10 @@ func ServeHTTPAsyncWithStreaming(handler http.Handler, jsReq js.Value) js.Value 
 
 			// Create custom ResponseWriter that writes to pipe
 			respWriter := &streamingResponseWriter{
-				pipeWriter: pw,
-				header:     make(http.Header),
-				statusCode: 200,
+				pipeWriter:      pw,
+				header:          make(http.Header),
+				statusCode:      200,
+				wroteHeaderChan: make(chan struct{}, 1),
 			}
 
 			// Serve HTTP in goroutine
@@ -468,7 +470,14 @@ func ServeHTTPAsyncWithStreaming(handler http.Handler, jsReq js.Value) js.Value 
 				}()
 
 				handler.ServeHTTP(respWriter, httpReq)
+
+				if !respWriter.wroteHeader {
+					respWriter.WriteHeader(http.StatusBadGateway)
+					http.Error(respWriter, "Bad Gateway\n\nUpstream server error", http.StatusBadGateway)
+				}
 			}()
+
+			<-respWriter.wroteHeaderChan
 
 			// Create http.Response with streaming body
 			httpResp := &http.Response{
@@ -489,10 +498,11 @@ func ServeHTTPAsyncWithStreaming(handler http.Handler, jsReq js.Value) js.Value 
 
 // streamingResponseWriter implements http.ResponseWriter for streaming responses
 type streamingResponseWriter struct {
-	pipeWriter  *io.PipeWriter
-	header      http.Header
-	statusCode  int
-	wroteHeader bool
+	pipeWriter      *io.PipeWriter
+	header          http.Header
+	statusCode      int
+	wroteHeader     bool
+	wroteHeaderChan chan struct{}
 }
 
 func (w *streamingResponseWriter) Header() http.Header {
@@ -510,5 +520,6 @@ func (w *streamingResponseWriter) WriteHeader(statusCode int) {
 	if !w.wroteHeader {
 		w.statusCode = statusCode
 		w.wroteHeader = true
+		close(w.wroteHeaderChan)
 	}
 }
