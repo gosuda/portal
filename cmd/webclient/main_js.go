@@ -21,9 +21,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/gosuda/portal/cmd/webclient/httpjs"
-	"github.com/gosuda/portal/portal/core/cryptoops"
 	"github.com/gosuda/portal/sdk"
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/idna"
@@ -32,229 +30,17 @@ import (
 var (
 	bootstrapServers = []string{"ws://localhost:4017/relay", "wss://portal.gosuda.org/relay"}
 	rdClient         *sdk.RDClient
-
-	// Connection pool for reusing encrypted channels with yamux multiplexing
-	muxSessions     sync.Map // map[string]*muxSession
-	muxSessionsLock sync.Mutex
 )
-
-const (
-	// poolCleanupInterval is how often to clean up stale mux sessions
-	poolCleanupInterval = 1 * time.Minute
-	// poolIdleTimeout is how long a mux session can be idle before cleanup
-	poolIdleTimeout = 5 * time.Minute
-)
-
-// muxSession wraps a yamux session over an encrypted connection
-type muxSession struct {
-	session   *yamux.Session
-	leaseID   string
-	cred      *cryptoops.Credential
-	refCount  int
-	lastUsed  time.Time
-	mu        sync.Mutex
-	closed    bool
-}
-
-// getOrCreateMuxSession gets an existing yamux session or creates a new one with E2EE handshake
-func getOrCreateMuxSession(ctx context.Context, leaseID string) (*muxSession, error) {
-	// Try to get existing session from pool
-	if val, ok := muxSessions.Load(leaseID); ok {
-		session := val.(*muxSession)
-		session.mu.Lock()
-		defer session.mu.Unlock()
-
-		// Check if session is still alive
-		if !session.closed && !session.session.IsClosed() {
-			session.refCount++
-			session.lastUsed = time.Now()
-
-			log.Info().
-				Str("leaseID", leaseID).
-				Int("refCount", session.refCount).
-				Msg("[WebClient] Reusing existing mux session (no key exchange)")
-
-			return session, nil
-		}
-
-		// Session is dead, remove it
-		log.Warn().Str("leaseID", leaseID).Msg("[WebClient] Existing mux session is closed, creating new one")
-		muxSessions.Delete(leaseID)
-	}
-
-	// Create new session with double-checked locking
-	muxSessionsLock.Lock()
-	defer muxSessionsLock.Unlock()
-
-	// Double-check after acquiring lock
-	if val, ok := muxSessions.Load(leaseID); ok {
-		session := val.(*muxSession)
-		session.mu.Lock()
-		defer session.mu.Unlock()
-		if !session.closed && !session.session.IsClosed() {
-			session.refCount++
-			session.lastUsed = time.Now()
-			return session, nil
-		}
-		muxSessions.Delete(leaseID)
-	}
-
-	log.Info().
-		Str("leaseID", leaseID).
-		Msg("[WebClient] Creating new encrypted channel with E2EE key exchange")
-
-	// Create new credential for this connection
-	cred := sdk.NewCredential()
-
-	// Establish encrypted connection (this does the expensive key exchange)
-	rdConn, err := rdClient.Dial(cred, leaseID, "http/1.1")
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial: %w", err)
-	}
-
-	// Create yamux client session on top of the encrypted connection
-	yamuxConfig := yamux.DefaultConfig()
-	yamuxConfig.Logger = nil // Disable yamux logging
-	yamuxSession, err := yamux.Client(rdConn, yamuxConfig)
-	if err != nil {
-		rdConn.Close()
-		return nil, fmt.Errorf("failed to create yamux session: %w", err)
-	}
-
-	session := &muxSession{
-		session:  yamuxSession,
-		leaseID:  leaseID,
-		cred:     cred,
-		refCount: 1,
-		lastUsed: time.Now(),
-		closed:   false,
-	}
-
-	muxSessions.Store(leaseID, session)
-
-	log.Info().
-		Str("leaseID", leaseID).
-		Msg("[WebClient] Yamux session created successfully over encrypted channel")
-
-	return session, nil
-}
-
-// openStream opens a new stream on the mux session
-func (m *muxSession) openStream() (net.Conn, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.closed || m.session.IsClosed() {
-		return nil, fmt.Errorf("mux session is closed")
-	}
-
-	stream, err := m.session.OpenStream()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open yamux stream: %w", err)
-	}
-
-	log.Debug().
-		Str("leaseID", m.leaseID).
-		Uint32("streamID", stream.StreamID()).
-		Msg("[WebClient] Opened new stream on existing mux session")
-
-	return stream, nil
-}
-
-// release decrements the reference count
-func (m *muxSession) release() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.refCount--
-	m.lastUsed = time.Now()
-
-	log.Debug().
-		Str("leaseID", m.leaseID).
-		Int("refCount", m.refCount).
-		Msg("[WebClient] Released mux session reference")
-}
-
-// close closes the mux session
-func (m *muxSession) close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.closed {
-		return nil
-	}
-
-	m.closed = true
-	return m.session.Close()
-}
-
-// cleanupIdleMuxSessions periodically cleans up idle mux sessions
-func cleanupIdleMuxSessions() {
-	ticker := time.NewTicker(poolCleanupInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now()
-		var toDelete []string
-
-		muxSessions.Range(func(key, value interface{}) bool {
-			leaseID := key.(string)
-			session := value.(*muxSession)
-
-			session.mu.Lock()
-			idle := now.Sub(session.lastUsed)
-			shouldDelete := (session.refCount == 0 && idle > poolIdleTimeout) || session.closed || session.session.IsClosed()
-			session.mu.Unlock()
-
-			if shouldDelete {
-				toDelete = append(toDelete, leaseID)
-			}
-
-			return true
-		})
-
-		for _, leaseID := range toDelete {
-			if val, ok := muxSessions.LoadAndDelete(leaseID); ok {
-				session := val.(*muxSession)
-				session.close()
-				log.Info().
-					Str("leaseID", leaseID).
-					Msg("[WebClient] Cleaned up idle mux session")
-			}
-		}
-	}
-}
 
 var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
 	address = strings.TrimSuffix(address, ":80")
 	address = strings.TrimSuffix(address, ":443")
-
-	// Get or create mux session (does key exchange only once)
-	session, err := getOrCreateMuxSession(ctx, address)
+	cred := sdk.NewCredential()
+	conn, err := rdClient.Dial(cred, address, "http/1.1")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get mux session: %w", err)
+		return nil, err
 	}
-
-	// Open a new stream on the mux session (no key exchange, just new yamux stream)
-	stream, err := session.openStream()
-	if err != nil {
-		// If stream opening fails, try to create a new session
-		log.Warn().Err(err).Str("leaseID", address).Msg("[WebClient] Failed to open stream, removing stale session")
-		muxSessions.Delete(address)
-
-		// Retry with a fresh session
-		session, err = getOrCreateMuxSession(ctx, address)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get mux session after retry: %w", err)
-		}
-
-		stream, err = session.openStream()
-		if err != nil {
-			return nil, fmt.Errorf("failed to open stream after retry: %w", err)
-		}
-	}
-
-	return stream, nil
+	return conn, nil
 }
 
 var client = &http.Client{
@@ -727,10 +513,6 @@ func main() {
 		panic(err)
 	}
 	defer rdClient.Close()
-
-	// Start cleanup goroutine for idle mux sessions
-	go cleanupIdleMuxSessions()
-	log.Info().Msg("[WebClient] Started mux session cleanup goroutine")
 
 	// Initialize WebSocket manager
 	wsManager := NewWebSocketManager()
