@@ -785,6 +785,7 @@ func (g *RDClient) GetRelays() []string {
 }
 
 func (g *RDClient) LookUpName(name string) (*rdverb.Lease, error) {
+	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
 	var relays []*rdRelay
 
 	g.mu.Lock()
@@ -796,11 +797,13 @@ func (g *RDClient) LookUpName(name string) (*rdverb.Lease, error) {
 	for _, relay := range relays {
 		info, err := relay.client.GetRelayInfo()
 		if err != nil {
+			log.Error().Err(err).Str("relay", relay.addr).Msg("[SDK] Error getting relay info")
 			continue
 		}
 
 		for _, lease := range info.Leases {
 			if strings.EqualFold(lease.Name, name) {
+				log.Debug().Str("name", name).Str("id", lease.Identity.Id).Msg("[SDK] Found lease")
 				return lease, nil
 			}
 		}
