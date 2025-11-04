@@ -784,7 +784,7 @@ func (g *RDClient) GetRelays() []string {
 	return relays
 }
 
-func (g *RDClient) LookUpName(name string) (*rdverb.Lease, error) {
+func (g *RDClient) LookupName(name string) (*rdverb.Lease, error) {
 	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
 	var relays []*rdRelay
 
