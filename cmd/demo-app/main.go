@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 
 	"gosuda.org/portal/sdk"
 )
@@ -20,27 +20,21 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
-var rootCmd = &cobra.Command{
-	Use:   "demo app",
-	Short: "demo app using portal relay",
-	RunE:  runPaint,
-}
-
 var (
 	flagServerURL string
 	flagPort      int
 	flagName      string
 )
 
-func init() {
-	flags := rootCmd.PersistentFlags()
-	flags.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
-	flags.IntVar(&flagPort, "port", 8092, "local paint HTTP port")
-	flags.StringVar(&flagName, "name", "demo-app", "backend display name")
-}
-
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	// Define flags equivalent to previous Cobra flags
+	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	flag.IntVar(&flagPort, "port", 8092, "local paint HTTP port")
+	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
+
+	flag.Parse()
+
+	if err := runPaint(); err != nil {
 		log.Fatal().Err(err).Msg("execute paint command")
 	}
 }
@@ -168,7 +162,7 @@ func (c *Canvas) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runPaint(cmd *cobra.Command, args []string) error {
+func runPaint() error {
 	// 1) Create credential for this paint app
 	cred := sdk.NewCredential()
 

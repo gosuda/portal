@@ -2,25 +2,20 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
 )
-
-var rootCmd = &cobra.Command{
-	Use:   "portal",
-	Short: "A lightweight, DNS-driven peer-to-peer proxy",
-	RunE:  runServer,
-}
 
 var (
 	flagBootstraps   []string
@@ -30,34 +25,43 @@ var (
 	flagPortalDomain string
 )
 
-func init() {
-	// Get default values from environment variables
+func main() {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+
+	// Defaults from environment
 	defaultStaticDir := os.Getenv("STATIC_DIR")
 	if defaultStaticDir == "" {
 		defaultStaticDir = "./dist"
 	}
-
 	defaultPortalDomain := os.Getenv("PORTAL_DOMAIN")
 	if defaultPortalDomain == "" {
 		defaultPortalDomain = "portal.gosuda.org"
 	}
+	var flagBootstrapsCSV string
+	flag.StringVar(&flagBootstrapsCSV, "bootstraps", "ws://localhost:4017/relay", "bootstrap addresses (comma-separated)")
+	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
+	flag.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
+	flag.StringVar(&flagStaticDir, "static-dir", defaultStaticDir, "static files directory for portal frontend (env: STATIC_DIR)")
+	flag.StringVar(&flagPortalDomain, "portal-domain", defaultPortalDomain, "portal domain for frontend serving (env: PORTAL_DOMAIN)")
 
-	flags := rootCmd.PersistentFlags()
-	flags.StringArrayVar(&flagBootstraps, "bootstraps", []string{"ws://localhost:4017/relay"}, "bootstrap addresses")
-	flags.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flags.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
-	flags.StringVar(&flagStaticDir, "static-dir", defaultStaticDir, "static files directory for portal frontend (env: STATIC_DIR)")
-	flags.StringVar(&flagPortalDomain, "portal-domain", defaultPortalDomain, "portal domain for frontend serving (env: PORTAL_DOMAIN)")
-}
+	flag.Parse()
 
-func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
-	if err := rootCmd.Execute(); err != nil {
+	// Parse bootstrap list
+	parts := strings.Split(flagBootstrapsCSV, ",")
+	flagBootstraps = make([]string, 0, len(parts))
+	for _, p := range parts {
+		s := strings.TrimSpace(p)
+		if s != "" {
+			flagBootstraps = append(flagBootstraps, s)
+		}
+	}
+
+	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
-func runServer(cmd *cobra.Command, args []string) error {
+func runServer() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

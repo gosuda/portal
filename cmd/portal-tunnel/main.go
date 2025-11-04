@@ -2,69 +2,68 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 	"gosuda.org/portal/sdk"
 )
 
 var (
-	flagRelayURL  string
-	flagLocalPort int
-	flagName      string
-	flagLocalHost string
+	flagRelayURL string
+	flagHost     string
+	flagPort     string
+	flagName     string
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "portal-tunnel",
-	Short: "Expose local services through Portal relay (like cloudflared tunnel)",
-	Long: `Portal Tunnel exposes your local services to the internet through a secure Portal relay.
-
-Example:
-  portal-tunnel expose 8080 --name my-service
-  portal-tunnel expose 3000 --name api --relay ws://my-relay.com/relay
-`,
-}
-
-var exposeCmd = &cobra.Command{
-	Use:   "expose [local-port]",
-	Short: "Expose a local port through the relay",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runExpose,
-}
-
-func init() {
-	exposeCmd.Flags().StringVar(&flagRelayURL, "relay", "ws://localhost:4017/relay", "Portal relay server URL")
-	exposeCmd.Flags().StringVar(&flagName, "name", "", "Service name (will be generated if not provided)")
-	exposeCmd.Flags().StringVar(&flagLocalHost, "local-host", "localhost", "Local host to proxy to")
-
-	rootCmd.AddCommand(exposeCmd)
-}
-
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		log.Fatal().Err(err).Msg("Failed to execute command")
+	if len(os.Args) < 2 {
+		printTunnelUsage()
+		os.Exit(2)
+	}
+
+	switch os.Args[1] {
+	case "expose":
+		fs := flag.NewFlagSet("expose", flag.ExitOnError)
+		fs.StringVar(&flagRelayURL, "relay", "ws://localhost:4017/relay", "Portal relay server URL")
+		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to")
+		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to")
+		fs.StringVar(&flagName, "name", "", "Service name (will be generated if not provided)")
+		_ = fs.Parse(os.Args[2:])
+
+		if err := runExpose(); err != nil {
+			log.Fatal().Err(err).Msg("Failed to expose")
+		}
+	case "-h", "--help", "help":
+		printTunnelUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
+		printTunnelUsage()
+		os.Exit(2)
 	}
 }
 
-func runExpose(cmd *cobra.Command, args []string) error {
-	// Parse local port
-	var port string = args[0]
-	localAddr := fmt.Sprintf("%s:%s", flagLocalHost, port)
+func printTunnelUsage() {
+	fmt.Println("portal-tunnel — Expose local services through Portal relay")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  portal-tunnel expose [port PORT] [--relay URL] [--name NAME] [--host HOST]")
+}
 
-	// Test local service connectivity
-	log.Info().Msgf("Testing connection to local service at %s...", localAddr)
-	testConn, err := net.Dial("tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("cannot connect to local service at %s: %w", localAddr, err)
+func runExpose() error {
+	localAddr := net.JoinHostPort(flagHost, flagPort)
+
+	// Always wait until the local service is available
+	log.Info().Msgf("Waiting for local service at %s (interval=%v)...", localAddr, time.Second)
+	if err := waitForLocalService(localAddr, 0, time.Second); err != nil {
+		return err
 	}
-	testConn.Close()
 	log.Info().Msgf("✓ Local service is reachable at %s", localAddr)
 
 	// Create credential
@@ -99,17 +98,12 @@ func runExpose(cmd *cobra.Command, args []string) error {
 	defer listener.Close()
 
 	log.Info().Msg("")
-	log.Info().Msg("┌─────────────────────────────────────────────────────────────┐")
-	log.Info().Msgf("│  🌐 Service is now publicly accessible!                     │")
-	log.Info().Msg("├─────────────────────────────────────────────────────────────┤")
-	log.Info().Msgf("│  Access via:                                                │")
-	log.Info().Msgf("│    - Name:     /peer/%s                              │", padRight(flagName, 30))
-	log.Info().Msgf("│    - Lease ID: /peer/%s    │", padRight(leaseID[:26], 30))
-	log.Info().Msg("│                                                             │")
-	log.Info().Msgf("│  Example:                                                   │")
+	log.Info().Msg("=== Service is now publicly accessible ===")
+	log.Info().Msg("Access via:")
+	log.Info().Msgf("- Name:     /peer/%s", flagName)
+	log.Info().Msgf("- Lease ID: /peer/%s", leaseID)
 	relayHost := extractHost(flagRelayURL)
-	log.Info().Msgf("│    http://%s/peer/%s                 │", padRight(relayHost, 20), padRight(flagName, 20))
-	log.Info().Msg("└─────────────────────────────────────────────────────────────┘")
+	log.Info().Msgf("- Example:  http://%s/peer/%s", relayHost, flagName)
 	log.Info().Msg("")
 	log.Info().Msg("Press Ctrl+C to stop...")
 	log.Info().Msg("")
@@ -203,13 +197,6 @@ func proxyConnection(relayConn net.Conn, localAddr string, connNum int) error {
 	return err
 }
 
-func padRight(s string, length int) string {
-	if len(s) >= length {
-		return s
-	}
-	return s + string(make([]byte, length-len(s)))
-}
-
 func extractHost(wsURL string) string {
 	// Simple extraction: ws://host:port/path -> host:port
 	// Remove ws:// or wss://
@@ -232,4 +219,24 @@ func extractHost(wsURL string) string {
 	}
 
 	return host
+}
+
+// waitForLocalService tries to connect repeatedly until success or timeout.
+// If timeout == 0, it waits indefinitely.
+func waitForLocalService(localAddr string, timeout, interval time.Duration) error {
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	for {
+		conn, err := net.DialTimeout("tcp", localAddr, 2*time.Second)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for local service at %s: %w", localAddr, err)
+		}
+		time.Sleep(interval)
+	}
 }
