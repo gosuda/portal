@@ -37,14 +37,6 @@ func main() {
 		fs.StringVar(&flagName, "name", "", "Service name (will be generated if not provided)")
 		_ = fs.Parse(os.Args[2:])
 
-		// Backward-compat: allow positional [local-port] if --local-port not provided
-		if flagPort == "0" || flagPort == "" {
-			extra := fs.Args()
-			if len(extra) == 1 {
-				flagPort = extra[0]
-			}
-		}
-
 		if err := runExpose(); err != nil {
 			log.Fatal().Err(err).Msg("Failed to expose")
 		}
