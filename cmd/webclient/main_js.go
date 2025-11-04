@@ -36,7 +36,7 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 	address = strings.TrimSuffix(address, ":80")
 	address = strings.TrimSuffix(address, ":443")
 
-	lease, err := rdClient.LookUpName(address)
+	lease, err := rdClient.LookupName(address)
 	if err == nil && lease != nil {
 		address = lease.Identity.Id
 		log.Debug().Str("name", address).Str("id", lease.Identity.Id).Msg("[SDK] Found lease")
