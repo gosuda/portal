@@ -34,6 +34,11 @@ build-server:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 
+# Build Portal Tunnel CLI (cloudflared-style tunnel)
+build-tunnel:
+	@echo "[tunnel] building Portal Tunnel CLI..."
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/portal-tunnel ./cmd/portal-tunnel
+
 clean:
 	rm -rf bin
 	rm -rf cmd/relay-server/wasm
