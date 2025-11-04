@@ -2,22 +2,37 @@ FROM golang:1 AS builder
 
 WORKDIR /src
 
+# Install make and binaryen (for wasm-opt) to use Makefile
+RUN apt-get update && apt-get install -y --no-install-recommends binaryen make && rm -rf /var/lib/apt/lists/*
+
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
 
+# Download dependencies
+RUN go mod download
+
+# Copy the rest of the source code
 COPY . .
-# Install make to use Makefile and build the server
-RUN apt-get update && apt-get install -y --no-install-recommends make && rm -rf /var/lib/apt/lists/*
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-    make build-server && install -D bin/relay-server /out/relay-server
+# Build WASM and server
+RUN make build-wasm
 
-# Stage 3: Minimal runtime image
+# Build server
+RUN make build-server
+
 FROM gcr.io/distroless/static-debian12:nonroot
 
-COPY --from=builder /out/relay-server /usr/bin/relay-server
+# Copy server binary
+COPY --from=builder /src/bin/relay-server /usr/bin/relay-server
 
+# Copy static files for portal frontend
+COPY --from=builder /src/dist /app/dist
+
+# Set default environment variables
+ENV STATIC_DIR=/app/dist
+ENV PORTAL_DOMAIN=portal.gosuda.org
+
+# Expose ports
+# 4017: relay server and portal frontend
 EXPOSE 4017
 
 ENTRYPOINT ["/usr/bin/relay-server"]

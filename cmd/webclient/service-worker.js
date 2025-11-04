@@ -12,7 +12,7 @@ let currentCacheVersion = null;
 // Fetch manifest to get current WASM filename
 async function fetchManifest() {
     if (wasmManifest) return wasmManifest;
-    
+
     try {
         const response = await fetch(manifest_URL);
         if (!response.ok) {
@@ -67,8 +67,9 @@ async function runWASM() {
 
     try {
         const manifest = await fetchManifest();
-        const wasm_URL = `/${manifest.wasmFile}`;
-        
+        // Use content-addressed path: /static/<sha256>.wasm
+        const wasm_URL = `/static/${manifest.wasmFile}`;
+
         const go = new Go();
 
         const cache = await caches.open(currentCacheVersion);
@@ -101,9 +102,10 @@ self.addEventListener('install', (e) => {
     async function LoadCache() {
         try {
             const manifest = await fetchManifest();
-            const wasm_URL = `/${manifest.wasmFile}`;
+            // Use content-addressed path: /static/<sha256>.wasm
+            const wasm_URL = `/static/${manifest.wasmFile}`;
             const cache = await caches.open(currentCacheVersion);
-            
+
             await cache.addAll([
                 wasm_URL,
                 wasm_exec_URL,

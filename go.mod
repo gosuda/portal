@@ -3,6 +3,7 @@ module gosuda.org/portal
 go 1.25.3
 
 require (
+	github.com/andybalholm/brotli v1.2.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/yamux v0.1.2
 	github.com/planetscale/vtprotobuf v0.6.0

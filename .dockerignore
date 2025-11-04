@@ -1,0 +1,3 @@
+dist/
+bin/
+docker-compose.override.yaml

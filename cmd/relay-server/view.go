@@ -3,17 +3,10 @@ package main
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"html/template"
-	"io/fs"
-	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,11 +14,25 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/wsstream"
-	"gosuda.org/portal/sdk"
 )
 
 //go:embed static
 var assetsFS embed.FS
+
+func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
+	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+		b, err := assetsFS.ReadFile(assetPath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+	})
+}
 
 // serveHTTP builds the HTTP mux and returns the server.
 func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
@@ -33,151 +40,24 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		addr = ":0"
 	}
 
-	mux := http.NewServeMux()
-
 	// Parse template once per server instance (no global var)
 	tmpl := template.Must(template.ParseFS(assetsFS, "static/index.html"))
 
-	// Serve static assets under /static/ (CSS, images)
-	if sub, err := fs.Sub(assetsFS, "static"); err == nil {
-		mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
-	}
+	// Create admin UI mux
+	adminMux := http.NewServeMux()
 
-	// Serve embedded favicons (ico/png/svg)
-	serveAsset := func(route, assetPath, contentType string) {
-		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-			b, err := assetsFS.ReadFile(assetPath)
-			if err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			if contentType != "" {
-				w.Header().Set("Content-Type", contentType)
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(b)
-		})
-	}
-	serveAsset("/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
-	serveAsset("/favicon.png", "static/favicon/favicon.png", "image/png")
-	serveAsset("/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
+	// Serve embedded favicons (ico/png/svg) for admin UI
+	serveAsset(adminMux, "/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
+	serveAsset(adminMux, "/favicon.png", "static/favicon/favicon.png", "image/png")
+	serveAsset(adminMux, "/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
 
-	// Per-peer HTTP reverse proxy over Portal
-	// Route: /peer/{leaseID}/*
-	var (
-		proxyClient     *sdk.RDClient
-		proxyClientOnce sync.Once
-		proxyClientErr  error
-	)
-	// Lazily initialize a client that connects to provided bootstraps or current server
-	initProxyClient := func(r *http.Request) (*sdk.RDClient, error) {
-		proxyClientOnce.Do(func() {
-			bs := bootstraps
-			if len(bs) == 0 {
-				// Derive bootstrap from current request host
-				// Assume same host/port as admin with path /relay
-				scheme := "ws"
-				// No TLS handling here; extend to wss if needed in future
-				bs = []string{fmt.Sprintf("%s://%s/relay", scheme, r.Host)}
-			}
-			proxyClient, proxyClientErr = sdk.NewClient(sdk.WithBootstrapServers(bs))
-		})
-		return proxyClient, proxyClientErr
-	}
-
-	mux.HandleFunc("/peer/", func(w http.ResponseWriter, r *http.Request) {
-		// Expect path /peer/{nameOrID}[/{rest}]
-		path := strings.TrimPrefix(r.URL.Path, "/peer/")
-		if path == "" {
-			http.NotFound(w, r)
-			return
-		}
-		parts := strings.SplitN(path, "/", 2)
-		nameOrID := parts[0]
-		rest := "/"
-		if len(parts) == 2 && parts[1] != "" {
-			rest = "/" + parts[1]
-		}
-
-		// Redirect /peer/my-title to /peer/my-title/ for proper relative path resolution
-		// This ensures that relative paths like "style.css" resolve to "/peer/my-title/style.css"
-		// instead of "/peer/style.css"
-		if len(parts) == 1 && !strings.HasSuffix(r.URL.Path, "/") {
-			redirectURL := r.URL.Path + "/"
-			if r.URL.RawQuery != "" {
-				redirectURL += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, redirectURL, http.StatusMovedPermanently)
-			return
-		}
-
-		// URL decode the name (handles Unicode like 한글 → %ED%95%9C%EA%B8%80)
-		decodedName, err := url.QueryUnescape(nameOrID)
-		if err != nil {
-			log.Warn().Err(err).Str("name", nameOrID).Msg("[server] Failed to decode peer name")
-			decodedName = nameOrID // Fallback to original if decode fails
-		}
-
-		// Try to find lease by name first, then by ID
-		leaseID := ""
-		leaseEntries := serv.GetAllLeaseEntries()
-		for _, entry := range leaseEntries {
-			if entry.Lease.Name == decodedName {
-				leaseID = string(entry.Lease.Identity.Id)
-				break
-			}
-		}
-		// If not found by name, assume it's an ID
-		if leaseID == "" {
-			leaseID = decodedName
-		}
-
-		// Get ALPN from lease metadata
-		alpns := serv.GetLeaseALPNs(leaseID)
-		if len(alpns) == 0 {
-			http.Error(w, "lease not found or no ALPN registered", http.StatusNotFound)
-			return
-		}
-
-		if !slices.Contains(alpns, "http/1.1") {
-			http.Error(w, "no http/1.1 ALPN registered", http.StatusNotFound)
-			return
-		}
-
-		// Temporary credential for this proxy connection
-		cred := sdk.NewCredential()
-
-		client, err := initProxyClient(r)
-		if err != nil {
-			http.Error(w, "proxy client init: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Create a reverse proxy whose transport dials via SDK client
-		target, _ := url.Parse("http://relay-peer")
-		proxy := httputil.NewSingleHostReverseProxy(target)
-		proxy.Transport = &http.Transport{
-			DialContext: func(c context.Context, network, address string) (net.Conn, error) {
-				conn, err := client.Dial(cred, leaseID, "http/1.1")
-				if err != nil {
-					return nil, err
-				}
-				return conn, nil
-			},
-		}
-
-		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, e error) {
-			log.Error().Err(e).Str("lease", leaseID).Msg("[server] proxy error")
-			http.Error(rw, "upstream error", http.StatusBadGateway)
-		}
-
-		// Use default Director; adjust path on a shallow clone
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = rest
-		proxy.ServeHTTP(w, r2)
+	// Static assets for admin UI
+	adminMux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/static/")
+		serveAdminStatic(w, r, path)
 	})
 
-	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+	adminMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -198,8 +78,8 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		}
 	})
 
-	// Index page
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// Admin UI index page
+	adminMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
@@ -215,24 +95,31 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		log.Debug().Msg("render admin index")
 		if err := tmpl.Execute(w, data); err != nil {
-			log.Error().Err(err).Msg("[server] render admin index")
+			log.Error().Err(err).Msg("[server] error rendering admin index")
 		}
 	})
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		type info struct {
-			Status string `json:"status"`
+	adminMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{\"status\":\"ok\"}"))
+	})
+
+	// Create portal frontend mux
+	portalMux := createPortalMux()
+
+	// Top-level handler that routes based on host
+	topHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPortalSubdomain(r.Host) {
+			portalMux.ServeHTTP(w, r)
+		} else {
+			adminMux.ServeHTTP(w, r)
 		}
-		resp := info{Status: "ok"}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: topHandler,
 	}
 
 	go func() {
@@ -348,7 +235,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("https://%s.portal.gosuda.org/", lease.Name)
+		link := fmt.Sprintf("https://%s.%s/", lease.Name, portalDomain)
 
 		row := leaseRow{
 			Peer:        identityID,
@@ -370,8 +257,6 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 }
 
 var wsUpgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
