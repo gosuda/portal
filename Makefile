@@ -39,9 +39,6 @@ build-tunnel:
 	@echo "[tunnel] building Portal Tunnel CLI..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/portal-tunnel ./cmd/portal-tunnel
 
-# Build all binaries
-build-all: build-protoc build-wasm build-server build-tunnel
-
 clean:
 	rm -rf bin
 	rm -rf cmd/relay-server/wasm
