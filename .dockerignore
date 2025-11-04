@@ -1,3 +1,36 @@
 dist/
 bin/
 docker-compose.override.yaml
+
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github/
+
+# Documentation
+docs/
+*.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Go
+*.test
+*.prof
+vendor/
