@@ -8,10 +8,12 @@
 *.so
 *.dylib
 bin/
+dist/
 chat
 
 # Test binary, built with `go test -c`
 *.test
+*.wasm
 
 # Code coverage profiles and other test artifacts
 *.out
@@ -30,3 +32,7 @@ profile.cov
 # .vscode/
 
 /target
+
+# Docker Compose Override
+docker-compose.override.yml
+docker-compose.override.yaml

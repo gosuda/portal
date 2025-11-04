@@ -14,28 +14,45 @@ build-protoc:
 	  portal/core/proto/rdsec/rdsec.proto \
 	  portal/core/proto/rdverb/rdverb.proto
 
-# Build WASM artifacts and copy to both embed dir and SDK dir (no external scripts)
+# Build WASM artifacts with wasm-opt optimization and generate manifest
 build-wasm:
-	@echo "[wasm] building with wasm-pack..."
-	cd portal/wasm && wasm-pack build --target web --out-dir pkg
-	@echo "[wasm] copying WASM artifacts to embed dirs..."
-	mkdir -p cmd/relay-server/wasm
-	rm -rf cmd/relay-server/wasm/* sdk/wasm/*
-	cp -R portal/wasm/pkg/. cmd/relay-server/wasm/
-	@echo "[wasm] copying service workers and E2EE proxy files..."
-	cp portal/wasm/sw-proxy.js cmd/relay-server/wasm/
-	cp portal/wasm/sw.js cmd/relay-server/wasm/
-	@echo "[wasm] copying SecureWebSocket E2EE files..."
-	cp portal/wasm/secure-websocket.js cmd/relay-server/wasm/
-	cp portal/wasm/secure-websocket-sw.js cmd/relay-server/wasm/
+	@echo "[wasm] building webclient WASM..."
+	@mkdir -p dist
+	
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o dist/portal.wasm ./cmd/webclient
+	
+	@echo "[wasm] optimizing with wasm-opt..."
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -Oz --enable-bulk-memory dist/portal.wasm -o dist/portal.wasm.tmp && \
+		mv dist/portal.wasm.tmp dist/portal.wasm; \
+		echo "[wasm] optimization complete"; \
+	else \
+		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
+		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
+	fi
+	
+	@echo "[wasm] calculating SHA256 hash..."
+	@WASM_HASH=$$(shasum -a 256 dist/portal.wasm | awk '{print $$1}'); \
+	echo "[wasm] SHA256: $$WASM_HASH"; \
+	cp dist/portal.wasm dist/$$WASM_HASH.wasm; \
+	echo "{\"wasmFile\":\"$$WASM_HASH.wasm\",\"hash\":\"$$WASM_HASH\"}" > dist/manifest.json; \
+	echo "[wasm] manifest created"
+	
+	@echo "[wasm] copying additional resources..."
+	@cp cmd/webclient/wasm_exec.js dist/wasm_exec.js
+	@cp cmd/webclient/service-worker.js dist/service-worker.js
+	@cp cmd/webclient/index.html dist/portal.html
+	@cp cmd/webclient/portal.mp4 dist/portal.mp4
+	
+	@echo "[wasm] build complete"
 
-# Build Go relay server (embeds WASM from cmd/relay-server/wasm)
+# Build Go relay server (embeds WASM from cmd/relay-server/static)
 build-server:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 
 clean:
 	rm -rf bin
-	rm -rf cmd/relay-server/wasm
+	rm -rf dist
 	rm -rf sdk/wasm
 	rm -rf portal/wasm/pkg
