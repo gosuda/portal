@@ -348,7 +348,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("https://%s.securl.click/", identityID)
+		link := fmt.Sprintf("https://%s.portal.gosuda.org/", lease.Name)
 
 		row := leaseRow{
 			Peer:        identityID,

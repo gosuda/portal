@@ -250,7 +250,7 @@ func (g *RelayServer) relayInfo() *rdverb.RelayInfo {
 	return &rdverb.RelayInfo{
 		Identity: g.identity,
 		Address:  g.address,
-		Leases:   leaseIds,
+		Leases:   g.leaseManager.GetAllLeases(),
 	}
 }
 
