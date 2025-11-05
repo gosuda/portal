@@ -107,7 +107,7 @@ jobs:
             - linux/arm/v7
           context: .
           push: false
-          tags: ["portal:latest"]
+          tags: "portal:latest"
 
 #  lint:
 #    name: Lint
