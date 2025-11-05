@@ -66,6 +66,12 @@ jobs:
           go-version: "stable"
           check-latest: true
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Cache Go modules
         uses: actions/cache@v3
         with:
@@ -93,9 +99,16 @@ jobs:
         run: make build
 
       - name: Build Docker image
-        run: |
-          docker build -t relaydns:test .
-
+        uses: docker/build-push-action@v6
+        with:
+          platforms:
+            - linux/amd64
+            - linux/arm64
+            - linux/arm/v7
+          context: .
+          push: false
+          tags:
+            - portal:latest
 #  lint:
 #    name: Lint
 #    runs-on: ubuntu-latest
