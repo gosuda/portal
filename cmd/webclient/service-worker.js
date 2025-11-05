@@ -1,4 +1,4 @@
-// const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/misc/wasm/wasm_exec.js";
+// const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/lib/wasm/wasm_exec.js";
 const wasm_exec_URL = "/wasm_exec.js";
 const manifest_URL = "/manifest.json";
 
