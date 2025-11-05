@@ -58,7 +58,7 @@ type RDClientConfig struct {
 	BootstrapServers    []string
 	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
 	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
-	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 3, 0 = infinite)
+	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
 }
 
@@ -196,7 +196,7 @@ func NewClient(opt ...Option) (*RDClient, error) {
 	config := &RDClientConfig{
 		Dialer:              webSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
-		ReconnectMaxRetries: 9,
+		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
 	}
 
