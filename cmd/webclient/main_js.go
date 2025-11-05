@@ -372,6 +372,12 @@ func (p *Proxy) handleWebSocketPolyfill(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if strings.HasPrefix(path, "/sw-cgi/websocket/disconnect/") && r.Method == http.MethodPost {
+		connID := strings.TrimPrefix(path, "/sw-cgi/websocket/disconnect/")
+		p.handleDisconnect(w, r, connID)
+		return
+	}
+
 	http.Error(w, "Not found", http.StatusNotFound)
 }
 
@@ -505,6 +511,27 @@ func (p *Proxy) handleSend(w http.ResponseWriter, r *http.Request, connID string
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+}
+
+func (p *Proxy) handleDisconnect(w http.ResponseWriter, r *http.Request, connID string) {
+	log.Info().Str("connId", connID).Msg("Handling disconnect request")
+
+	wsConn, ok := p.wsManager.GetConnection(connID)
+	if !ok {
+		// Connection already removed or doesn't exist - this is OK
+		log.Debug().Str("connId", connID).Msg("Connection not found (already disconnected)")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Close the WebSocket connection
+	wsConn.Close()
+
+	// Remove from manager
+	p.wsManager.RemoveConnection(connID)
+
+	log.Info().Str("connId", connID).Msg("WebSocket connection disconnected successfully")
 	w.WriteHeader(http.StatusOK)
 }
 
