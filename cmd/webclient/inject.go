@@ -25,9 +25,10 @@ func InjectHTML(body []byte) []byte {
 	var crawler func(*html.Node)
 	crawler = func(node *html.Node) {
 		if node.Type == html.ElementNode {
-			if node.Data == "head" {
+			switch node.Data {
+			case "head":
 				head = node
-			} else if node.Data == "body" {
+			case "body":
 				bodyNode = node
 			}
 		}

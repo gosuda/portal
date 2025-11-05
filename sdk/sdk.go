@@ -400,7 +400,7 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 		case <-server.stop:
 			log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker stopped")
 			return
-		case conn, ok := <-server.client.IncommingConnection():
+		case conn, ok := <-server.client.IncomingConnection():
 			if !ok {
 				log.Debug().Str("relay", server.addr).Msg("[SDK] Incoming connection channel closed")
 				return // Channel closed

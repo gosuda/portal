@@ -1,3 +1,6 @@
+// Package portal provides client-side functionality for establishing and managing
+// relay connections. It handles secure communication channels, lease management,
+// and connection multiplexing through the relay server.
 package portal
 
 import (
@@ -15,49 +18,81 @@ import (
 )
 
 var (
-	ErrInvalidResponse    = errors.New("invalid response")
+	// ErrInvalidResponse is returned when the relay server sends an unexpected or malformed response
+	ErrInvalidResponse = errors.New("invalid response")
+	// ErrConnectionRejected is returned when the relay server rejects a connection request
 	ErrConnectionRejected = errors.New("connection rejected")
-	ErrRemoteIDMismatch   = errors.New("remote ID mismatch")
+	// ErrRemoteIDMismatch is returned when the remote peer's ID doesn't match the expected lease ID
+	ErrRemoteIDMismatch = errors.New("remote ID mismatch")
 )
 
-type IncommingConn struct {
+// IncomingConn represents an incoming connection from a remote client.
+// It wraps a secure connection with the associated lease ID that was used
+// for the connection request.
+type IncomingConn struct {
 	*cryptoops.SecureConnection
 	leaseID string
 }
 
-func (i *IncommingConn) LeaseID() string {
+// LeaseID returns the lease ID associated with this incoming connection
+func (i *IncomingConn) LeaseID() string {
 	return i.leaseID
 }
 
-func (i *IncommingConn) LocalID() string {
+// LocalID returns the local identity ID from the secure connection
+func (i *IncomingConn) LocalID() string {
 	return i.SecureConnection.LocalID()
 }
 
-func (i *IncommingConn) RemoteID() string {
+// RemoteID returns the remote peer's identity ID from the secure connection
+func (i *IncomingConn) RemoteID() string {
 	return i.SecureConnection.RemoteID()
 }
 
+// RelayClient manages a connection to a relay server and handles:
+// - Lease registration and renewal
+// - Incoming connection requests
+// - Secure connection establishment
+//
+// The client uses yamux for connection multiplexing, allowing multiple
+// concurrent streams over a single underlying connection.
+//
+// Thread-safety: All public methods are safe for concurrent use.
 type RelayClient struct {
 	conn io.ReadWriteCloser
 
+	// sess is the yamux session for multiplexing streams
 	sess *yamux.Session
 
+	// leases maps lease IDs to their credentials for handling incoming connections
 	leases   map[string]*leaseWithCred
 	leasesMu sync.Mutex
 
+	// stopClientCh signals background workers to shut down
 	stopClientCh chan struct{}
 	stopOnce     sync.Once // Ensure stopClientCh is closed only once
 	waitGroup    sync.WaitGroup
 
-	incommingConnCh chan *IncommingConn
+	// incomingConnCh delivers incoming connections to the application
+	incomingConnCh chan *IncomingConn
 }
 
+// leaseWithCred pairs a lease with its associated credentials.
+// This is used internally to verify and sign messages for lease operations.
 type leaseWithCred struct {
 	Lease *rdverb.Lease
 	Cred  *cryptoops.Credential
 }
 
-// NewRelayClient는 새로운 RelayClient 인스턴스를 생성합니다.
+// NewRelayClient creates a new relay client from an established connection.
+// It initializes the yamux session for stream multiplexing and starts background
+// workers for lease renewal and incoming connection handling.
+//
+// The client starts two goroutines:
+// - leaseUpdateWorker: Periodically renews leases before they expire
+// - leaseListenWorker: Accepts and handles incoming connection requests
+//
+// Returns nil if yamux session creation fails.
 func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	log.Debug().Msg("[RelayClient] Creating new relay client")
 
@@ -68,18 +103,21 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to create yamux session")
 		// If session creation fails, close the connection and return nil
-		conn.Close()
+		err = conn.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close connection")
+		}
 		return nil
 	}
 
 	log.Debug().Msg("[RelayClient] Yamux session created successfully")
 
 	g := &RelayClient{
-		conn:            conn,
-		sess:            sess,
-		leases:          make(map[string]*leaseWithCred),
-		stopClientCh:    make(chan struct{}),
-		incommingConnCh: make(chan *IncommingConn),
+		conn:           conn,
+		sess:           sess,
+		leases:         make(map[string]*leaseWithCred),
+		stopClientCh:   make(chan struct{}),
+		incomingConnCh: make(chan *IncomingConn),
 	}
 
 	g.waitGroup.Add(2) // One for leaseUpdateWorker, one for leaseListenWorker
@@ -90,11 +128,16 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	return g
 }
 
+// Ping sends a ping to the relay server and measures the round-trip latency.
+// It uses yamux's built-in ping mechanism.
 func (g *RelayClient) Ping() (time.Duration, error) {
 	return g.sess.Ping()
 }
 
-// Close는 서버와의 연결을 종료합니다.
+// Close gracefully shuts down the relay client.
+// It signals all background workers to stop, waits for them to finish,
+// then closes the yamux session and underlying connection.
+// This method is safe to call multiple times.
 func (g *RelayClient) Close() error {
 	log.Debug().Msg("[RelayClient] Closing relay client")
 
@@ -131,7 +174,9 @@ func (g *RelayClient) Close() error {
 	return nil
 }
 
-// leaseUpdateWorker는 리스 업데이트를 처리하는 워커입니다.
+// leaseUpdateWorker is a background goroutine that periodically renews leases
+// before they expire. It checks every 5 seconds and renews any lease that
+// will expire within the next 30 seconds.
 func (g *RelayClient) leaseUpdateWorker() {
 	defer g.waitGroup.Done()
 
@@ -144,10 +189,12 @@ func (g *RelayClient) leaseUpdateWorker() {
 		case <-g.stopClientCh:
 			return
 		case <-ticker.C:
+			// Clear the map for the next update cycle
 			clear(updateRequired)
 
 			g.leasesMu.Lock()
 			for _, lease := range g.leases {
+				// Check if lease expires within 30 seconds
 				if lease.Lease.Expires < int64(time.Now().Add(30*time.Second).Unix()) {
 					updateRequired[lease] = struct{}{}
 				}
@@ -158,16 +205,22 @@ func (g *RelayClient) leaseUpdateWorker() {
 				lease.Lease.Expires = time.Now().Add(30 * time.Second).Unix()
 				// Check if session is available before updating lease
 				if g.sess != nil {
-					g.updateLease(lease.Cred, lease.Lease)
+					_, err := g.updateLease(lease.Cred, lease.Lease)
+					if err != nil {
+						log.Error().Err(err).Msg("[RelayClient] Failed to update lease")
+					}
 				}
 			}
 		}
 	}
 }
 
+// leaseListenWorker is a background goroutine that accepts incoming connection
+// requests from the relay server. It blocks on AcceptStream() and spawns a
+// new goroutine to handle each connection request.
 func (g *RelayClient) leaseListenWorker() {
 	defer g.waitGroup.Done()
-	defer close(g.incommingConnCh)
+	defer close(g.incomingConnCh)
 	log.Debug().Msg("[RelayClient] Lease listen worker started")
 
 	for {
@@ -200,19 +253,32 @@ func (g *RelayClient) leaseListenWorker() {
 	}
 }
 
+// handleConnectionRequestStream processes an incoming connection request from a client.
+// It performs the following steps:
+// 1. Reads and validates the connection request packet
+// 2. Looks up the requested lease ID
+// 3. Sends an accept/reject response
+// 4. If accepted, performs server-side cryptographic handshake
+// 5. Sends the established secure connection to the incoming channel
 func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Handling connection request stream")
 
 	pkt, err := readPacket(stream)
 	if err != nil {
 		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
 	if pkt.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST {
 		log.Warn().Str("packet_type", pkt.Type.String()).Msg("[RelayClient] Unexpected packet type")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
@@ -220,7 +286,10 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	err = req.UnmarshalVT(pkt.Payload)
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to unmarshal connection request")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
@@ -242,7 +311,10 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	respPayload, err := resp.MarshalVT()
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to marshal response")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
@@ -252,12 +324,18 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to write response packet")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
 	if !ok {
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
@@ -266,7 +344,10 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 	secConn, err := handshaker.ServerHandshake(stream, lease.Lease.Alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayClient] Server handshake failed")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return
 	}
 
@@ -276,29 +357,27 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 		Str("remote_id", secConn.RemoteID()).
 		Msg("[RelayClient] Secure connection established, sending to incoming channel")
 
-	g.incommingConnCh <- &IncommingConn{
+	g.incomingConnCh <- &IncomingConn{
 		SecureConnection: secConn,
 		leaseID:          req.LeaseId,
 	}
 }
 
-// GetRelayInfo는 서버의 릴레이 정보를 요청합니다.
+// GetRelayInfo requests relay server information including supported protocols,
+// server version, and other metadata.
 func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
-	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return nil, err
 	}
 	defer stream.Close()
 
-	// 요청 패킷 생성
 	req := &rdverb.RelayInfoRequest{}
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
 		return nil, err
 	}
 
-	// 요청 전송
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_RELAY_INFO_REQUEST,
 		Payload: reqPayload,
@@ -307,7 +386,6 @@ func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
 		return nil, err
 	}
 
-	// 응답 수신
 	respPacket, err := readPacket(stream)
 	if err != nil {
 		return nil, err
@@ -326,18 +404,18 @@ func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
 	return resp.RelayInfo, nil
 }
 
-// updateLease는 서버에 리스 업데이트를 요청합니다.
+// updateLease sends a lease update request to the relay server.
+// The request is signed with the provided credentials to prove ownership.
+// A nonce and timestamp are included to prevent replay attacks.
 func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
-	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 	defer stream.Close()
 
-	// 요청 생성
 	timestamp := time.Now().Unix()
-	nonce := make([]byte, 12) // 12바이트 nonce
+	nonce := make([]byte, 12) // 12-byte nonce for replay protection
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -348,7 +426,6 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 		Timestamp: timestamp,
 	}
 
-	// 요청 직렬화 및 서명
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
@@ -364,7 +441,6 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
-	// 요청 전송
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_LEASE_UPDATE_REQUEST,
 		Payload: signedData,
@@ -373,7 +449,6 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
-	// 응답 수신
 	respPacket, err := readPacket(stream)
 	if err != nil {
 		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
@@ -395,18 +470,17 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 	return resp.Code, nil
 }
 
-// deleteLease는 서버에 리스 삭제를 요청합니다.
+// deleteLease sends a lease deletion request to the relay server.
+// The request is signed with the provided credentials to prove ownership.
 func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
-	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 	defer stream.Close()
 
-	// 요청 생성
 	timestamp := time.Now().Unix()
-	nonce := make([]byte, 12) // 12바이트 nonce
+	nonce := make([]byte, 12)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -417,7 +491,6 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 		Timestamp: timestamp,
 	}
 
-	// 요청 직렬화 및 서명
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
@@ -433,7 +506,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
-	// 요청 전송
+	// Send deletion request
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_LEASE_DELETE_REQUEST,
 		Payload: signedData,
@@ -442,7 +515,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
-	// 응답 수신
+	// Receive deletion response
 	respPacket, err := readPacket(stream)
 	if err != nil {
 		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
@@ -462,11 +535,23 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 	return resp.Code, nil
 }
 
-// requestConnection은 다른 클라이언트로의 연결을 요청합니다.
+// RequestConnection initiates a connection to a remote peer through the relay.
+// It performs the following steps:
+// 1. Opens a new yamux stream to the relay server
+// 2. Sends a connection request for the specified lease ID
+// 3. Waits for accept/reject response from the remote peer
+// 4. If accepted, performs client-side cryptographic handshake
+// 5. Verifies the remote peer's ID matches the lease ID
+//
+// Parameters:
+//   - leaseID: The ID of the lease to connect to
+//   - alpn: Application-Layer Protocol Negotiation string
+//   - clientCred: Client's cryptographic credentials for the handshake
+//
+// Returns the response code, established secure connection (if successful), and any error.
 func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
 	log.Debug().Str("lease_id", leaseID).Str("alpn", alpn).Msg("[RelayClient] Requesting connection")
 
-	// 새 스트림 열기
 	stream, err := g.sess.OpenStream()
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to open stream for connection request")
@@ -478,7 +563,6 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 		PublicKey: clientCred.PublicKey(),
 	}
 
-	// 요청 생성
 	req := &rdverb.ConnectionRequest{
 		LeaseId:        leaseID,
 		ClientIdentity: clientIdentity,
@@ -487,11 +571,13 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to marshal connection request")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
-	// 요청 전송
 	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Sending connection request")
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST,
@@ -499,22 +585,30 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	})
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to write connection request packet")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
-	// 응답 수신
 	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Waiting for connection response")
 	respPacket, err := readPacket(stream)
 	if err != nil {
 		log.Error().Str("lease_id", leaseID).Err(err).Msg("[RelayClient] Failed to read connection response")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE {
 		log.Warn().Str("packet_type", respPacket.Type.String()).Msg("[RelayClient] Unexpected response packet type")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, ErrInvalidResponse
 	}
 
@@ -522,7 +616,10 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
 		log.Error().Str("lease_id", leaseID).Err(err).Msg("[RelayClient] Failed to unmarshal connection response")
-		stream.Close()
+		err = stream.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
+		}
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
@@ -531,7 +628,6 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 		Str("response_code", resp.Code.String()).
 		Msg("[RelayClient] Connection response received")
 
-	// 거절된 경우 스트림을 닫고 오류 코드 반환
 	if resp.Code != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		log.Warn().Str("lease_id", leaseID).Str("code", resp.Code.String()).Msg("[RelayClient] Connection rejected")
 		stream.Close()
@@ -547,6 +643,7 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
+	// Verify the remote peer's ID matches the expected lease ID
 	if secConn.RemoteID() != leaseID {
 		log.Warn().Str("lease_id", leaseID).Msg("[RelayClient] Remote ID mismatch")
 		stream.Close()
@@ -562,8 +659,13 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	return resp.Code, secConn, nil
 }
 
+// RegisterLease registers a new lease with the relay server.
+// The lease allows remote clients to connect to this client via the relay.
+//
+// The lease is cloned to avoid modifying the caller's original lease object.
+// On registration failure, the lease is automatically removed from the local cache.
 func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Lease) error {
-	lease = lease.CloneVT() // copy lease to avoid modifying the original lease
+	lease = lease.CloneVT() // Clone to avoid modifying the original lease
 
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
@@ -602,6 +704,8 @@ func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Le
 	return nil
 }
 
+// DeregisterLease removes a lease from the relay server.
+// It removes the lease from the local cache immediately, then notifies the server.
 func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 	identity := &rdsec.Identity{
 		Id:        cred.ID(),
@@ -622,6 +726,8 @@ func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 	return nil
 }
 
-func (g *RelayClient) IncommingConnection() <-chan *IncommingConn {
-	return g.incommingConnCh
+// IncomingConnection returns a receive-only channel for incoming connections.
+// The channel is closed when the relay client is shut down.
+func (g *RelayClient) IncomingConnection() <-chan *IncomingConn {
+	return g.incomingConnCh
 }

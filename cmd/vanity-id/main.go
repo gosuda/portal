@@ -105,7 +105,7 @@ func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *
 		}
 
 		// Generate random seed using randpool
-		randpool.CSPRNG_RAND(seed[:])
+		randpool.Rand(seed[:])
 
 		// Generate private key from seed (this is 64 bytes: 32 byte seed + 32 byte public key)
 		privateKey := ed25519.NewKeyFromSeed(seed[:])

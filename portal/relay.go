@@ -132,7 +132,7 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 		Uint32("stream_id", stream.StreamID()).
 		Msg("[RelayServer] Handling stream")
 
-	var hijacked bool = false
+	var hijacked bool
 	defer func() {
 		stream_id := stream.StreamID()
 		if !hijacked {
@@ -241,12 +241,6 @@ func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
 }
 
 func (g *RelayServer) relayInfo() *rdverb.RelayInfo {
-	leases := g.leaseManager.GetAllLeases()
-	var leaseIds []string
-	for _, lease := range leases {
-		leaseIds = append(leaseIds, string(lease.Identity.Id))
-	}
-
 	return &rdverb.RelayInfo{
 		Identity: g.identity,
 		Address:  g.address,
