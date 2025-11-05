@@ -23,12 +23,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Cache buildx
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-${{ hashFiles('**/Dockerfile') }}
-
       - name: Log in to Container Registry
         uses: docker/login-action@v3
         with:
@@ -56,5 +50,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache
+
