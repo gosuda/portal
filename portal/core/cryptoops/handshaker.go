@@ -167,7 +167,7 @@ func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
 
 	binary.BigEndian.PutUint32(buffer.B[:4], uint32(cipherSize))
 
-	randpool.CSPRNG_RAND(buffer.B[4 : 4+sc.encryptor.NonceSize()])
+	randpool.Rand(buffer.B[4 : 4+sc.encryptor.NonceSize()])
 
 	sc.encryptor.Seal(
 		buffer.B[4+sc.encryptor.NonceSize():][:0], // len(0), cap(len(p)+Overhead)

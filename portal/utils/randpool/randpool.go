@@ -27,7 +27,7 @@ type chacha20rng struct {
 	used uint64
 }
 
-var _chacha20rngPool sync.Pool = sync.Pool{
+var _chacha20rngPool = sync.Pool{
 	New: func() interface{} {
 		var initdata [12 + 32]byte // 12 byte nonce, 32 byte key
 		_, err := rand.Read(initdata[:])
@@ -50,7 +50,7 @@ func _chacha20rng() *chacha20rng {
 	return _chacha20rngPool.Get().(*chacha20rng)
 }
 
-func _CHACHA20_RAND(dst []byte) {
+func chacha20rand(dst []byte) {
 	c := _chacha20rng()
 	c.used += uint64(len(dst))
 	c.c.XORKeyStream(dst, dst)
@@ -60,6 +60,6 @@ func _CHACHA20_RAND(dst []byte) {
 	}
 }
 
-func CSPRNG_RAND(dst []byte) {
-	_CHACHA20_RAND(dst)
+func Rand(dst []byte) {
+	chacha20rand(dst)
 }

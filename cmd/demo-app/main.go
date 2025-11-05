@@ -79,7 +79,10 @@ func (c *Canvas) register(conn *websocket.Conn) {
 
 	// Send history to new client
 	for _, msg := range c.history {
-		conn.WriteJSON(msg)
+		err := conn.WriteJSON(msg)
+		if err != nil {
+			log.Error().Err(err).Msg("write to client")
+		}
 	}
 }
 
@@ -88,7 +91,10 @@ func (c *Canvas) unregister(conn *websocket.Conn) {
 	defer c.mu.Unlock()
 	if _, ok := c.clients[conn]; ok {
 		delete(c.clients, conn)
-		conn.Close()
+		err := conn.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("close client")
+		}
 	}
 }
 
@@ -109,7 +115,10 @@ func (c *Canvas) broadcast(msg DrawMessage) {
 		err := client.WriteJSON(msg)
 		if err != nil {
 			log.Error().Err(err).Msg("write to client")
-			client.Close()
+			err = client.Close()
+			if err != nil {
+				log.Error().Err(err).Msg("close client")
+			}
 			delete(c.clients, client)
 		}
 	}
@@ -119,7 +128,10 @@ func (c *Canvas) closeAll() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for client := range c.clients {
-		client.Close()
+		err := client.Close()
+		if err != nil {
+			log.Error().Err(err).Msg("close client")
+		}
 	}
 	c.clients = make(map[*websocket.Conn]bool)
 }
