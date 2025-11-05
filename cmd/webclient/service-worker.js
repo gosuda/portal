@@ -239,10 +239,11 @@ self.addEventListener("fetch", (e) => {
       _lastReload = Date.now();
       loading = false;
     } else {
+      // send auto refresh page
       e.respondWith(
         new Response(
-          "Sorry, Service Worker failed to process the request. Please refresh the page.",
-          { status: 500 }
+          "<html><head><meta http-equiv='refresh' content='0'></head><body><h1>Sorry, Service Worker failed to process the request. Please refresh the page.</h1></body></html>",
+          { status: 500, headers: { "Content-Type": "text/html" } }
         )
       );
       return;
