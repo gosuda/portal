@@ -1,6 +1,7 @@
+const BASE_PATH = new URL('./', self.location).pathname;
 // const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/lib/wasm/wasm_exec.js";
-const wasm_exec_URL = "/wasm_exec.js";
-const manifest_URL = "/manifest.json";
+const wasm_exec_URL = BASE_PATH + "wasm_exec.js";
+const manifest_URL = BASE_PATH + "manifest.json";
 
 importScripts(wasm_exec_URL);
 
@@ -68,8 +69,8 @@ async function runWASM() {
 
   try {
     const manifest = await fetchManifest();
-    // Use content-addressed path: /static/<sha256>.wasm
-    const wasm_URL = `/static/${manifest.wasmFile}`;
+    // Use content-addressed path under scope: <BASE_PATH>/static/<sha256>.wasm
+    const wasm_URL = `${BASE_PATH}static/${manifest.wasmFile}`;
 
     const go = new Go();
 
@@ -204,7 +205,7 @@ self.addEventListener("fetch", (e) => {
   }
 
   // Serve portal.mp4 from cache or fetch from origin
-  if (url.pathname === "/portal.mp4") {
+  if (url.pathname === BASE_PATH + "portal.mp4") {
     console.log("[SW] Fetching portal.mp4");
     e.respondWith(
       (async () => {
@@ -212,7 +213,7 @@ self.addEventListener("fetch", (e) => {
           await fetchManifest();
           // Try to get from cache first
           const cache = await caches.open(currentCacheVersion);
-          const cachedResponse = await cache.match("/portal.mp4");
+          const cachedResponse = await cache.match(BASE_PATH + "portal.mp4");
           if (cachedResponse) {
             console.log("[SW] Found portal.mp4 in cache");
             return cachedResponse;
@@ -222,7 +223,7 @@ self.addEventListener("fetch", (e) => {
           const response = await fetch(e.request);
           if (response.ok) {
             console.log("[SW] Caching portal.mp4");
-            cache.put("/portal.mp4", response.clone());
+            cache.put(BASE_PATH + "portal.mp4", response.clone());
           }
           return response;
         } catch (error) {
@@ -242,7 +243,7 @@ self.addEventListener("fetch", (e) => {
       // send auto refresh page
       e.respondWith(
         new Response(
-          "<html><head><meta http-equiv='refresh' content='0'></head><body><h1>Sorry, Service Worker failed to process the request. Please refresh the page.</h1></body></html>",
+          "<html><head><meta http-equiv='refresh' content='0'></head><body>Service Worker failed to process the request. Please refresh the page.</body></html>",
           { status: 500, headers: { "Content-Type": "text/html" } }
         )
       );

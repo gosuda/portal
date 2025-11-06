@@ -20,8 +20,8 @@ import (
 // staticDir is the directory where static files are located
 var staticDir = "./dist"
 
-// portalDomain is the domain for portal frontend (e.g., "portal.gosuda.org")
-var portalDomain = "portal.gosuda.org"
+// portalDomain is the domain for portal frontend.
+var portalDomain = "localhost"
 
 // wasmCache stores pre-compressed WASM files in memory
 type wasmCacheEntry struct {
@@ -419,8 +419,20 @@ func getContentType(ext string) string {
 
 // isPortalSubdomain checks if the host is a portal subdomain (*.{portalDomain})
 func isPortalSubdomain(host string) bool {
-	// Check if it ends with .{portalDomain} or is exactly {portalDomain}
-	return strings.HasSuffix(host, "."+portalDomain)
+	if portalDomain == "" {
+		return false
+	}
+	// Trim port from request host
+	if i := strings.Index(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	// Allow optional ":port" in portalDomain for local dev
+	base := portalDomain
+	if j := strings.Index(base, ":"); j >= 0 {
+		base = base[:j]
+	}
+	// Check if it ends with .{base}
+	return strings.HasSuffix(host, "."+base)
 }
 
 // isHexString checks if a string contains only hexadecimal characters

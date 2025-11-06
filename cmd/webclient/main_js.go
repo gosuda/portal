@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	bootstrapServers = []string{"wss://portal.gosuda.org/relay"}
+	bootstrapServers string = "ws://localhost:4017/relay"
 	rdClient         *sdk.RDClient
 )
 
@@ -538,9 +538,10 @@ func (p *Proxy) handleDisconnect(w http.ResponseWriter, r *http.Request, connID 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
+	var bootstrapServerList = strings.Split(bootstrapServers, ",")
 
 	rdClient, err = sdk.NewClient(
-		sdk.WithBootstrapServers(bootstrapServers),
+		sdk.WithBootstrapServers(bootstrapServerList),
 		sdk.WithDialer(WebSocketDialerJS()),
 	)
 	if err != nil {

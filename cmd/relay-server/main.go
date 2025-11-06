@@ -35,7 +35,7 @@ func main() {
 	}
 	defaultPortalDomain := os.Getenv("PORTAL_DOMAIN")
 	if defaultPortalDomain == "" {
-		defaultPortalDomain = "portal.gosuda.org"
+		defaultPortalDomain = "localhost"
 	}
 	var flagBootstrapsCSV string
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", "ws://localhost:4017/relay", "bootstrap addresses (comma-separated)")

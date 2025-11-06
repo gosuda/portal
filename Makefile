@@ -1,9 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: build build-wasm build-server clean
+.PHONY: run build build-wasm build-server clean
+
+run:
+	./bin/relay-server
 
 # Convenience target: build wasm then server
-build: build-protoc build-wasm build-server
+build: build-protoc build-wasm build-server build-tunnel
 
 build-protoc:
 	protoc -I . \
@@ -14,12 +17,20 @@ build-protoc:
 	  portal/core/proto/rdsec/rdsec.proto \
 	  portal/core/proto/rdverb/rdverb.proto
 
+BOOTSTRAPS ?= ""
+
 # Build WASM artifacts with wasm-opt optimization and generate manifest
 build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p dist
-	
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o dist/portal.wasm ./cmd/webclient
+
+	# Prepare optional link flags for bootstrap injection
+	@WASM_LDFLAGS=""; \
+	if [ -n "$(BOOTSTRAPS)" ]; then \
+		WASM_LDFLAGS="-X main.bootstrapServersCSV=$(BOOTSTRAPS)"; \
+		echo "[wasm] injecting bootstraps: $(BOOTSTRAPS)"; \
+	fi; \
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w $$WASM_LDFLAGS" -o dist/portal.wasm ./cmd/webclient
 	
 	@echo "[wasm] optimizing with wasm-opt..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
@@ -59,5 +70,3 @@ build-tunnel:
 clean:
 	rm -rf bin
 	rm -rf dist
-	rm -rf sdk/wasm
-	rm -rf portal/wasm/pkg

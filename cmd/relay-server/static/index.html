@@ -90,6 +90,21 @@
         });
       } catch (_) { }
     })();
+    (function () {
+      try {
+        var port = window.location.port;
+        if (!port) return; // default ports (80/443)
+        document.querySelectorAll('a.card[href^="//"]').forEach(function (a) {
+          try {
+            var u = new URL(a.href);
+            if (!u.port) { // only if not already set
+              u.port = port;
+              a.href = u.toString();
+            }
+          } catch (_) { }
+        });
+      } catch (_) { }
+    })();
   </script>
 </body>
 

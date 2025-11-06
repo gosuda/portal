@@ -14,7 +14,8 @@ RUN go mod download
 COPY . .
 
 # Build WASM and server
-RUN make build-wasm
+ARG BOOTSTRAPS=""
+RUN make build-wasm BOOTSTRAPS="$BOOTSTRAPS"
 
 # Build server
 RUN make build-server
@@ -29,7 +30,7 @@ COPY --from=builder /src/dist /app/dist
 
 # Set default environment variables
 ENV STATIC_DIR=/app/dist
-ENV PORTAL_DOMAIN=portal.gosuda.org
+ENV PORTAL_DOMAIN=localhost
 
 # Expose ports
 # 4017: relay server and portal frontend
