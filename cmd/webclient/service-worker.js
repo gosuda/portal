@@ -243,7 +243,6 @@ self.addEventListener("fetch", (e) => {
 
   e.respondWith(
     (async () => {
-      // WASM 초기화 대기
       if (typeof __go_jshttp === "undefined" && !loading) {
         try {
           await init();
@@ -254,16 +253,17 @@ self.addEventListener("fetch", (e) => {
             statusText: 'Service Unavailable'
           });
         }
+
+        let waitCount = 0;
+        while (loading && waitCount < 50) {
+            if (typeof __go_jshttp !== "undefined") {
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 100));
+            waitCount++;
+        }
       }
 
-      // 로딩 중이면 대기 (최대 5초)
-      let waitCount = 0;
-      while (loading && waitCount < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        waitCount++;
-      }
-
-      // 여전히 undefined면 새로고침 시도
       if (typeof __go_jshttp === "undefined") {
         if (Date.now() - _lastReload > 1000) {
           _lastReload = Date.now();
@@ -280,7 +280,6 @@ self.addEventListener("fetch", (e) => {
         }
       }
 
-      // 요청 처리
       try {
         const resp = await __go_jshttp(e.request);
         return resp;
