@@ -320,21 +320,30 @@
 
         const waitForController = () => {
           return new Promise((resolve, reject) => {
-            if (navigator.serviceWorker.controller) {
-              console.log("[Portal] Service Worker already active");
-              resolve();
+            const checkController = () => {
+              if (navigator.serviceWorker.controller) {
+                resolve();
+                return true;
+              }
+              return false;
+            };
+
+            if (checkController()) {
               return;
             }
 
             let timeoutId;
+            let pollIntervalId;
+
             const onControllerChange = () => {
-              console.log("[Portal] Service Worker activated");
-              clearTimeout(timeoutId);
-              navigator.serviceWorker.removeEventListener(
-                "controllerchange",
-                onControllerChange
-              );
-              resolve();
+              if (checkController()) {
+                clearTimeout(timeoutId);
+                clearInterval(pollIntervalId);
+                navigator.serviceWorker.removeEventListener(
+                  "controllerchange",
+                  onControllerChange
+                );
+              }
             };
 
             navigator.serviceWorker.addEventListener(
@@ -342,15 +351,32 @@
               onControllerChange
             );
 
+            pollIntervalId = setInterval(() => {
+              if (checkController()) {
+                clearTimeout(timeoutId);
+                clearInterval(pollIntervalId);
+                navigator.serviceWorker.removeEventListener(
+                  "controllerchange",
+                  onControllerChange
+                );
+              }
+            }, 100);
+
             timeoutId = setTimeout(() => {
+              clearInterval(pollIntervalId);
               navigator.serviceWorker.removeEventListener(
                 "controllerchange",
                 onControllerChange
               );
-              reject(new Error("Service Worker activation timeout"));
-              setTimeout(() => {
-                location.reload();
-              }, 500);
+
+              if (navigator.serviceWorker.controller) {
+                resolve();
+              } else {
+                reject(new Error("Service Worker activation timeout"));
+                setTimeout(() => {
+                  location.reload();
+                }, 500);
+              }
             }, 3000);
           });
         };
@@ -366,22 +392,31 @@
             "/service-worker.js",
             {
               scope: "/",
+              updateViaCache: "none",
             }
           );
 
-          console.log("[Portal] Service Worker registered");
+          if (!navigator.serviceWorker.controller && registration.active) {
+            registration.active.postMessage({ type: "CLAIM_CLIENTS" });
+          }
 
           updateLoadingText("Activating Service Worker...");
 
           await navigator.serviceWorker.ready;
-          console.log("[Portal] Service Worker ready");
 
-          updateLoadingText("Waiting for activation...");
-
-          await waitForController();
+          if (!navigator.serviceWorker.controller) {
+            updateLoadingText("Waiting for activation...");
+            try {
+              await Promise.race([
+                waitForController(),
+                new Promise((resolve) => setTimeout(resolve, 500))
+              ]);
+            } catch (error) {
+              // Ignore timeout, proceed anyway
+            }
+          }
 
           updateLoadingText("Connecting to Portal Network...");
-          console.log("[Portal] Checking WASM initialization...");
 
           setTimeout(checkWASMReady, 100);
         } catch (error) {

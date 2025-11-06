@@ -28,23 +28,48 @@ import (
 )
 
 var (
-	bootstrapServers string = "ws://localhost:4017/relay"
-	rdClient         *sdk.RDClient
+	// Default bootstrap server, can be overridden at build time with -ldflags
+	// Example: make build-wasm BOOTSTRAPS=wss://portal.gosuda.org/relay
+	bootstrapServersCSV string = "ws://localhost:4017/relay"
+	rdClient            *sdk.RDClient
 )
 
 var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
+	originalAddr := address
 	address = strings.TrimSuffix(address, ":80")
 	address = strings.TrimSuffix(address, ":443")
 
+	// Decode URL-encoded address (e.g., %ED%8E%98%EC%9D%B8%ED%8A%B8 -> 페인트)
+	decodedAddr, err := url.QueryUnescape(address)
+	if err != nil {
+		log.Debug().Err(err).Str("address", address).Msg("[Dialer] Failed to unescape address")
+		decodedAddr = address
+	}
+	address = decodedAddr
+
+	// Convert Punycode to Unicode (e.g., xn--lu5bu9rfta -> 페인트)
+	unicodeAddr, err := idna.ToUnicode(address)
+	if err != nil {
+		log.Debug().Err(err).Str("address", address).Msg("[Dialer] Failed to convert punycode")
+		unicodeAddr = address
+	} else if unicodeAddr != address {
+		log.Debug().Str("punycode", address).Str("unicode", unicodeAddr).Msg("[Dialer] Converted punycode to unicode")
+	}
+	address = unicodeAddr
+
 	lease, err := rdClient.LookupName(address)
 	if err == nil && lease != nil {
+		log.Debug().Str("name", address).Str("id", lease.Identity.Id).Msg("[Dialer] Found lease")
 		address = lease.Identity.Id
-		log.Debug().Str("name", address).Str("id", lease.Identity.Id).Msg("[SDK] Found lease")
+	} else {
+		log.Debug().Err(err).Str("name", address).Msg("[Dialer] Lease lookup failed")
 	}
 
+	log.Debug().Str("original_addr", originalAddr).Str("final_addr", address).Msg("[Dialer] Attempting dial")
 	cred := sdk.NewCredential()
 	conn, err := rdClient.Dial(cred, address, "http/1.1")
 	if err != nil {
+		log.Error().Err(err).Str("address", address).Msg("[Dialer] Dial failed")
 		return nil, err
 	}
 	return conn, nil
@@ -301,10 +326,18 @@ func IsHTMLContentType(contentType string) bool {
 }
 
 func getLeaseID(hostname string) string {
-	host, err := idna.ToUnicode(hostname)
+	// First, decode URL-encoded characters (e.g., %ED%8E%98%EC%9D%B8%ED%8A%B8 -> 페인트)
+	decoded, err := url.QueryUnescape(hostname)
 	if err != nil {
-		host = hostname
+		decoded = hostname
 	}
+
+	// Then, convert punycode to unicode (e.g., xn--v9jub -> 日本語)
+	host, err := idna.ToUnicode(decoded)
+	if err != nil {
+		host = decoded
+	}
+
 	id := strings.Split(host, ".")[0]
 	id = strings.TrimSpace(id)
 	id = strings.ToUpper(id)
@@ -321,7 +354,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Info().Msgf("Proxying request to %s", r.URL.String())
 
 	r = r.Clone(context.Background())
-	r.URL.Host = getLeaseID(r.URL.Hostname())
+
+	// Decode hostname properly for Korean/multi-language domains
+	decodedHost := getLeaseID(r.URL.Hostname())
+	r.URL.Host = decodedHost
 	r.URL.Scheme = "http"
 
 	resp, err := client.Do(r)
@@ -538,7 +574,9 @@ func (p *Proxy) handleDisconnect(w http.ResponseWriter, r *http.Request, connID 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
-	var bootstrapServerList = strings.Split(bootstrapServers, ",")
+
+	var bootstrapServerList = strings.Split(bootstrapServersCSV, ",")
+	log.Info().Strs("servers", bootstrapServerList).Msg("Initializing RDClient with bootstrap servers")
 
 	rdClient, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstrapServerList),

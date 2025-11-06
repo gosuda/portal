@@ -110,15 +110,12 @@ async function runWASM() {
 }
 
 self.addEventListener("install", (e) => {
-  console.log("[SW] Install event");
   async function LoadCache() {
-    console.log("[SW] Loading cache");
     try {
       const manifest = await fetchManifest();
       // Use content-addressed path: /static/<sha256>.wasm
       const wasm_URL = `/static/${manifest.wasmFile}`;
       const cache = await caches.open(currentCacheVersion);
-
       await cache.addAll([wasm_URL, wasm_exec_URL, manifest_URL]);
     } catch (error) {
       console.error("[SW] Cache loading failed:", error);
@@ -134,7 +131,6 @@ self.addEventListener("activate", (e) => {
     (async () => {
       try {
         // Delete old caches
-        const manifest = await fetchManifest();
         const cacheNames = await caches.keys();
         await Promise.all(
           cacheNames.map((cacheName) => {
@@ -142,7 +138,6 @@ self.addEventListener("activate", (e) => {
               cacheName !== currentCacheVersion &&
               cacheName.startsWith("WASM_Cache_")
             ) {
-              console.log("[SW] Deleting old cache:", cacheName);
               return caches.delete(cacheName);
             }
           })
@@ -165,6 +160,20 @@ self.addEventListener("activate", (e) => {
       }
     })()
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "CLAIM_CLIENTS") {
+    self.clients.claim().then(() => {
+      self.clients.matchAll().then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({ type: "CLAIMED" });
+        });
+      });
+    }).catch((error) => {
+      console.error("[SW] Manual clients.claim() failed:", error);
+    });
+  }
 });
 
 self.addEventListener("fetch", (e) => {
@@ -206,7 +215,6 @@ self.addEventListener("fetch", (e) => {
 
   // Serve portal.mp4 from cache or fetch from origin
   if (url.pathname === BASE_PATH + "portal.mp4") {
-    console.log("[SW] Fetching portal.mp4");
     e.respondWith(
       (async () => {
         try {
@@ -215,14 +223,12 @@ self.addEventListener("fetch", (e) => {
           const cache = await caches.open(currentCacheVersion);
           const cachedResponse = await cache.match(BASE_PATH + "portal.mp4");
           if (cachedResponse) {
-            console.log("[SW] Found portal.mp4 in cache");
             return cachedResponse;
           }
 
           // Fetch from network and cache it
           const response = await fetch(e.request);
           if (response.ok) {
-            console.log("[SW] Caching portal.mp4");
             cache.put(BASE_PATH + "portal.mp4", response.clone());
           }
           return response;
@@ -235,28 +241,51 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  if (typeof __go_jshttp === "undefined") {
-    if (Date.now() - _lastReload > 1000) {
-      _lastReload = Date.now();
-      loading = false;
-    } else {
-      // send auto refresh page
-      e.respondWith(
-        new Response(
-          "<html><head><meta http-equiv='refresh' content='0'></head><body>Service Worker failed to process the request. Please refresh the page.</body></html>",
-          { status: 500, headers: { "Content-Type": "text/html" } }
-        )
-      );
-      return;
-    }
-  }
-
   e.respondWith(
     (async () => {
+      // WASM 초기화 대기
+      if (typeof __go_jshttp === "undefined" && !loading) {
+        try {
+          await init();
+        } catch (error) {
+          console.error('[SW] Init failed:', error);
+          return new Response("WASM initialization failed. Please refresh the page.", {
+            status: 503,
+            statusText: 'Service Unavailable'
+          });
+        }
+      }
+
+      // 로딩 중이면 대기 (최대 5초)
+      let waitCount = 0;
+      while (loading && waitCount < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        waitCount++;
+      }
+
+      // 여전히 undefined면 새로고침 시도
+      if (typeof __go_jshttp === "undefined") {
+        if (Date.now() - _lastReload > 1000) {
+          _lastReload = Date.now();
+          loading = false;
+          return new Response(
+            "<html><head><meta http-equiv='refresh' content='0'></head><body><h1>Initializing WASM... Please wait.</h1></body></html>",
+            { status: 503, headers: { "Content-Type": "text/html" } }
+          );
+        } else {
+          return new Response(
+            "<html><head><meta http-equiv='refresh' content='0'></head><body><h1>Sorry, Service Worker failed to process the request. Please refresh the page.</h1></body></html>",
+            { status: 503, headers: { "Content-Type": "text/html" } }
+          );
+        }
+      }
+
+      // 요청 처리
       try {
         const resp = await __go_jshttp(e.request);
         return resp;
-      } catch {
+      } catch (error) {
+        console.error('[SW] Request handling error:', error);
         __go_jshttp = undefined;
         await init();
         const resp = await __go_jshttp(e.request);
@@ -264,5 +293,4 @@ self.addEventListener("fetch", (e) => {
       }
     })()
   );
-  return;
 });
