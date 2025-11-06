@@ -30,7 +30,9 @@ COPY --from=builder /src/dist /app/dist
 
 # Set default environment variables
 ENV STATIC_DIR=/app/dist
-ENV PORTAL_DOMAIN=localhost
+ENV PORTAL_UI_URL=http://localhost:4017
+ENV POSTAL_FRONTEND_URL=http://*.localhost:4017
+ENV BOOTSTRAP_URIS=ws://localhost:4017/relay,wss://some.app:21762/relay
 
 # Expose ports
 # 4017: relay server and portal frontend

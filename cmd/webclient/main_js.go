@@ -28,11 +28,44 @@ import (
 )
 
 var (
-	// Default bootstrap server, can be overridden at build time with -ldflags
-	// Example: make build-wasm BOOTSTRAPS=wss://portal.gosuda.org/relay
-	bootstrapServersCSV string = "ws://localhost:4017/relay"
-	rdClient            *sdk.RDClient
+	rdClient *sdk.RDClient
 )
+
+// getBootstrapServers retrieves bootstrap servers from global JavaScript variable
+func getBootstrapServers() []string {
+	// Try to get bootstrap servers from window.__BOOTSTRAP_SERVERS__
+	bootstrapsValue := js.Global().Get("__BOOTSTRAP_SERVERS__")
+
+	if bootstrapsValue.IsUndefined() || bootstrapsValue.IsNull() {
+		log.Warn().Msg("__BOOTSTRAP_SERVERS__ not found in global scope, using default")
+		return []string{"ws://localhost:4017/relay"}
+	}
+
+	// Handle string (comma-separated)
+	if bootstrapsValue.Type() == js.TypeString {
+		bootstrapsStr := bootstrapsValue.String()
+		if bootstrapsStr == "" {
+			return []string{"ws://localhost:4017/relay"}
+		}
+		servers := strings.Split(bootstrapsStr, ",")
+		for i := range servers {
+			servers[i] = strings.TrimSpace(servers[i])
+		}
+		return servers
+	}
+
+	// Handle array
+	if bootstrapsValue.Type() == js.TypeObject && bootstrapsValue.Length() > 0 {
+		servers := make([]string, bootstrapsValue.Length())
+		for i := 0; i < bootstrapsValue.Length(); i++ {
+			servers[i] = bootstrapsValue.Index(i).String()
+		}
+		return servers
+	}
+
+	log.Warn().Msg("Invalid __BOOTSTRAP_SERVERS__ format, using default")
+	return []string{"ws://localhost:4017/relay"}
+}
 
 var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
 	originalAddr := address
@@ -355,7 +388,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	r = r.Clone(context.Background())
 
-	// Decode hostname properly for Korean/multi-language domains
+	// Decode hostname properly for IDN domains
 	decodedHost := getLeaseID(r.URL.Hostname())
 	r.URL.Host = decodedHost
 	r.URL.Scheme = "http"
@@ -575,8 +608,10 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
 
-	var bootstrapServerList = strings.Split(bootstrapServersCSV, ",")
-	log.Info().Strs("servers", bootstrapServerList).Msg("Initializing RDClient with bootstrap servers")
+	// Get bootstrap servers from global JavaScript variable
+	bootstrapServerList := getBootstrapServers()
+
+	log.Info().Strs("servers", bootstrapServerList).Msg("Initializing RDClient with bootstrap servers from global variable")
 
 	rdClient, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstrapServerList),

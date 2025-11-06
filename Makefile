@@ -17,20 +17,12 @@ build-protoc:
 	  portal/core/proto/rdsec/rdsec.proto \
 	  portal/core/proto/rdverb/rdverb.proto
 
-BOOTSTRAPS ?= ""
-
 # Build WASM artifacts with wasm-opt optimization and generate manifest
 build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p dist
 
-	# Prepare optional link flags for bootstrap injection
-	@WASM_LDFLAGS=""; \
-	if [ -n "$(BOOTSTRAPS)" ]; then \
-		WASM_LDFLAGS="-X main.bootstrapServersCSV=$(BOOTSTRAPS)"; \
-		echo "[wasm] injecting bootstraps: $(BOOTSTRAPS)"; \
-	fi; \
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w $$WASM_LDFLAGS" -o dist/portal.wasm ./cmd/webclient
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o dist/portal.wasm ./cmd/webclient
 	
 	@echo "[wasm] optimizing with wasm-opt..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
@@ -48,8 +40,7 @@ build-wasm:
 	echo "[wasm] cleaning old hash files..."; \
 	find dist -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
 	cp dist/portal.wasm dist/$$WASM_HASH.wasm; \
-	echo "{\"wasmFile\":\"$$WASM_HASH.wasm\",\"hash\":\"$$WASM_HASH\"}" > dist/manifest.json; \
-	echo "[wasm] manifest created"
+	echo "[wasm] content-addressed WASM: $$WASM_HASH.wasm"
 	
 	@echo "[wasm] copying additional resources..."
 	@cp cmd/webclient/wasm_exec.js dist/wasm_exec.js

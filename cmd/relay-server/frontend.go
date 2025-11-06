@@ -5,6 +5,8 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -20,8 +22,17 @@ import (
 // staticDir is the directory where static files are located
 var staticDir = "./dist"
 
-// portalDomain is the domain for portal frontend.
-var portalDomain = "localhost"
+// portalHost is the host for portal frontend.
+var portalHost = "localhost"
+
+// portalUIURL is the base URL for portal frontend
+var portalUIURL = "http://localhost:4017"
+
+// portalFrontendPattern is the wildcard pattern for portal frontend URLs (e.g., *.localhost:4017)
+var portalFrontendPattern = ""
+
+// bootstrapURIs stores the relay bootstrap server URIs
+var bootstrapURIs = "ws://localhost:4017/relay"
 
 // wasmCache stores pre-compressed WASM files in memory
 type wasmCacheEntry struct {
@@ -142,6 +153,19 @@ func createPortalMux() *http.ServeMux {
 	// Static file handler for /static/
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/static/")
+		servePortalStaticFile(w, r, path)
+	})
+
+	// Static file handler for /frontend/ (for unified caching)
+	mux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
+
+		// Special handling for manifest.json - generate dynamically
+		if path == "manifest.json" {
+			serveDynamicManifest(w, r)
+			return
+		}
+
 		servePortalStaticFile(w, r, path)
 	})
 
@@ -287,9 +311,7 @@ func servePortalStatic(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case "service-worker.js":
-		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-		w.Header().Set("Content-Type", "application/javascript")
-		serveStaticFileWithFallback(w, r, path, "application/javascript")
+		serveDynamicServiceWorker(w, r)
 		return
 
 	case "wasm_exec.js":
@@ -417,22 +439,30 @@ func getContentType(ext string) string {
 	}
 }
 
-// isPortalSubdomain checks if the host is a portal subdomain (*.{portalDomain})
+// isPortalSubdomain checks if the host matches the portal frontend pattern
 func isPortalSubdomain(host string) bool {
-	if portalDomain == "" {
+	// If we have a frontend pattern, use it
+	if portalFrontendPattern != "" {
+		return matchesWildcardPattern(host, portalFrontendPattern)
+	}
+
+	// Fallback to checking if it ends with .{portalHost}
+	if portalHost == "" {
 		return false
 	}
-	// Trim port from request host
-	if i := strings.Index(host, ":"); i >= 0 {
-		host = host[:i]
+	return strings.HasSuffix(host, "."+portalHost)
+}
+
+// matchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)
+func matchesWildcardPattern(host, pattern string) bool {
+	// Handle wildcard pattern (e.g., *.localhost:4017)
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := strings.TrimPrefix(pattern, "*")
+		return strings.HasSuffix(host, suffix)
 	}
-	// Allow optional ":port" in portalDomain for local dev
-	base := portalDomain
-	if j := strings.Index(base, ":"); j >= 0 {
-		base = base[:j]
-	}
-	// Check if it ends with .{base}
-	return strings.HasSuffix(host, "."+base)
+
+	// Exact match
+	return host == pattern
 }
 
 // isHexString checks if a string contains only hexadecimal characters
@@ -443,4 +473,160 @@ func isHexString(s string) bool {
 		}
 	}
 	return true
+}
+
+// serveDynamicManifest generates and serves manifest.json dynamically
+func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
+	// Find the content-addressed WASM file
+	wasmCacheMu.RLock()
+	var wasmHash string
+	var wasmFile string
+	for filename, entry := range wasmCache {
+		wasmHash = entry.hash
+		wasmFile = filename
+		break // Use the first (and should be only) WASM file
+	}
+	wasmCacheMu.RUnlock()
+
+	// Fallback: scan directory if cache is empty
+	if wasmHash == "" {
+		entries, err := os.ReadDir(staticDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				// Look for content-addressed WASM files: <64-char-hex>.wasm
+				if strings.HasSuffix(name, ".wasm") && len(name) == 69 {
+					hash := strings.TrimSuffix(name, ".wasm")
+					if isHexString(hash) && len(hash) == 64 {
+						wasmHash = hash
+						wasmFile = name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Generate WASM URL
+	wasmURL := portalUIURL + "/frontend/" + wasmFile
+
+	// Create manifest structure
+	manifest := map[string]string{
+		"wasmFile":   wasmFile,
+		"wasmUrl":    wasmURL,
+		"hash":       wasmHash,
+		"bootstraps": bootstrapURIs,
+	}
+
+	// Set headers for no caching
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Content-Type", "application/json")
+
+	// Encode and send
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(manifest); err != nil {
+		log.Error().Err(err).Msg("Failed to encode manifest")
+	}
+
+	log.Debug().
+		Str("wasmFile", wasmFile).
+		Str("wasmUrl", wasmURL).
+		Str("hash", wasmHash).
+		Str("bootstraps", bootstrapURIs).
+		Msg("Served dynamic manifest")
+}
+
+// serveDynamicServiceWorker serves service-worker.js with injected manifest and config
+func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
+	// Read the service-worker.js template
+	fullPath := filepath.Join(staticDir, "service-worker.js")
+	content, err := os.ReadFile(fullPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read service-worker.js")
+		http.NotFound(w, r)
+		return
+	}
+
+	// Find the content-addressed WASM file
+	wasmCacheMu.RLock()
+	var wasmHash string
+	var wasmFile string
+	for filename, entry := range wasmCache {
+		wasmHash = entry.hash
+		wasmFile = filename
+		break
+	}
+	wasmCacheMu.RUnlock()
+
+	// Fallback: scan directory if cache is empty
+	if wasmHash == "" {
+		entries, err := os.ReadDir(staticDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasSuffix(name, ".wasm") && len(name) == 69 {
+					hash := strings.TrimSuffix(name, ".wasm")
+					if isHexString(hash) && len(hash) == 64 {
+						wasmHash = hash
+						wasmFile = name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Generate WASM URL
+	wasmURL := portalUIURL + "/frontend/" + wasmFile
+
+	// Create manifest object
+	manifestData := map[string]string{
+		"wasmFile":   wasmFile,
+		"wasmUrl":    wasmURL,
+		"hash":       wasmHash,
+		"bootstraps": bootstrapURIs,
+	}
+
+	// Convert manifest to JSON string
+	manifestJSON, err := json.Marshal(manifestData)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal manifest for service worker")
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Replace placeholders
+	result := string(content)
+	result = strings.ReplaceAll(result, "<PORTAL_UI_URL>", portalUIURL)
+	result = strings.ReplaceAll(result, "\"<WASM_MANIFEST>\"", string(manifestJSON))
+
+	// Inject __BOOTSTRAP_SERVERS__ as a global variable in service worker
+	bootstrapServersLine := fmt.Sprintf("self.__BOOTSTRAP_SERVERS__ = %q;\n", bootstrapURIs)
+
+	// Insert after the wasmManifest line (after line that sets wasmManifest)
+	manifestLine := "let wasmManifest = JSON.parse(wasmManifestString);"
+	result = strings.Replace(result, manifestLine, manifestLine+"\n"+bootstrapServersLine, 1)
+
+	// Set headers for no caching
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.Header().Set("Content-Type", "application/javascript")
+
+	// Send response
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(result))
+
+	log.Debug().
+		Str("portalUIURL", portalUIURL).
+		Str("wasmHash", wasmHash).
+		Msg("Served dynamic service-worker.js")
 }
