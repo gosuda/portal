@@ -141,6 +141,13 @@ func cacheWasmFile(name, fullPath string) error {
 	return nil
 }
 
+// setCORSHeaders sets CORS headers for static file serving
+func setCORSHeaders(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
+}
+
 // createPortalMux creates a new HTTP mux for portal frontend
 func createPortalMux() *http.ServeMux {
 	// Initialize WASM cache on startup
@@ -152,12 +159,22 @@ func createPortalMux() *http.ServeMux {
 
 	// Static file handler for /static/
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/static/")
 		servePortalStaticFile(w, r, path)
 	})
 
 	// Static file handler for /frontend/ (for unified caching)
 	mux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
 
 		// Special handling for manifest.json - generate dynamically
@@ -171,6 +188,11 @@ func createPortalMux() *http.ServeMux {
 
 	// Root handler for portal frontend
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		if r.URL.Path == "/" {
 			serveStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
 			return
@@ -212,6 +234,7 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, path string) {
 	}
 
 	// Set immutable cache headers for content-addressed files
+	setCORSHeaders(w)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/wasm")
 
@@ -266,6 +289,8 @@ func serveAdminStatic(w http.ResponseWriter, r *http.Request, path string) {
 	}
 
 	// Try to read from embedded FS
+	setCORSHeaders(w)
+
 	fullPath := filepath.Join("static", path)
 	data, err := assetsFS.ReadFile(fullPath)
 	if err != nil {
@@ -334,6 +359,8 @@ func servePortalStatic(w http.ResponseWriter, r *http.Request) {
 
 // serveStaticFile reads and serves a file from the static directory
 func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, contentType string) {
+	setCORSHeaders(w)
+
 	fullPath := filepath.Join(staticDir, path)
 
 	file, err := os.Open(fullPath)
@@ -374,6 +401,8 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 // serveStaticFileWithFallback reads and serves a file from the static directory
 // If the file is not found, it falls back to portal.html for SPA routing
 func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path string, contentType string) {
+	setCORSHeaders(w)
+
 	fullPath := filepath.Join(staticDir, path)
 
 	file, err := os.Open(fullPath)
@@ -477,6 +506,8 @@ func isHexString(s string) bool {
 
 // serveDynamicManifest generates and serves manifest.json dynamically
 func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+
 	// Find the content-addressed WASM file
 	wasmCacheMu.RLock()
 	var wasmHash string
@@ -543,6 +574,8 @@ func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
 
 // serveDynamicServiceWorker serves service-worker.js with injected manifest and config
 func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+
 	// Read the service-worker.js template
 	fullPath := filepath.Join(staticDir, "service-worker.js")
 	content, err := os.ReadFile(fullPath)

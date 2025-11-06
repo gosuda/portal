@@ -53,12 +53,22 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	// Static assets for admin UI (embedded files)
 	adminMux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/static/")
 		serveAdminStatic(w, r, path)
 	})
 
 	// Portal frontend files (for unified caching)
 	adminMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
 
 		// Special handling for manifest.json - generate dynamically

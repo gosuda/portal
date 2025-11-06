@@ -14,8 +14,7 @@ RUN go mod download
 COPY . .
 
 # Build WASM and server
-ARG BOOTSTRAPS=""
-RUN make build-wasm BOOTSTRAPS="$BOOTSTRAPS"
+RUN make build-wasm
 
 # Build server
 RUN make build-server
@@ -32,7 +31,7 @@ COPY --from=builder /src/dist /app/dist
 ENV STATIC_DIR=/app/dist
 ENV PORTAL_UI_URL=http://localhost:4017
 ENV POSTAL_FRONTEND_URL=http://*.localhost:4017
-ENV BOOTSTRAP_URIS=ws://localhost:4017/relay,wss://some.app:21762/relay
+ENV BOOTSTRAP_URIS=ws://localhost:4017/relay
 
 # Expose ports
 # 4017: relay server and portal frontend
