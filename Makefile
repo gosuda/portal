@@ -1,9 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: build build-wasm build-server clean
+.PHONY: run build build-wasm build-server clean
+
+run:
+	./bin/relay-server
 
 # Convenience target: build wasm then server
-build: build-protoc build-wasm build-server
+build: build-protoc build-wasm build-server build-tunnel
 
 build-protoc:
 	protoc -I . \
@@ -18,7 +21,7 @@ build-protoc:
 build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p dist
-	
+
 	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o dist/portal.wasm ./cmd/webclient
 	
 	@echo "[wasm] optimizing with wasm-opt..."
@@ -34,9 +37,10 @@ build-wasm:
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 dist/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
+	echo "[wasm] cleaning old hash files..."; \
+	find dist -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
 	cp dist/portal.wasm dist/$$WASM_HASH.wasm; \
-	echo "{\"wasmFile\":\"$$WASM_HASH.wasm\",\"hash\":\"$$WASM_HASH\"}" > dist/manifest.json; \
-	echo "[wasm] manifest created"
+	echo "[wasm] content-addressed WASM: $$WASM_HASH.wasm"
 	
 	@echo "[wasm] copying additional resources..."
 	@cp cmd/webclient/wasm_exec.js dist/wasm_exec.js
@@ -59,5 +63,3 @@ build-tunnel:
 clean:
 	rm -rf bin
 	rm -rf dist
-	rm -rf sdk/wasm
-	rm -rf portal/wasm/pkg

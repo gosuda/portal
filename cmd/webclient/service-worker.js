@@ -1,31 +1,21 @@
-// const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/lib/wasm/wasm_exec.js";
-const wasm_exec_URL = "/wasm_exec.js";
-const manifest_URL = "/manifest.json";
+//const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/lib/wasm/wasm_exec.js";
+let BASE_PATH = "<PORTAL_UI_URL>";
+let wasmManifestString = '"<WASM_MANIFEST>"';
+let wasmManifest = JSON.parse(wasmManifestString);
 
+let wasm_exec_URL = BASE_PATH + "/frontend/wasm_exec.js";
+if (new URL(BASE_PATH).protocol === "http:") {
+  wasm_exec_URL = "/frontend/wasm_exec.js";
+}
 importScripts(wasm_exec_URL);
 
 let loading = false;
 let initError = null;
-let wasmManifest = null;
-let currentCacheVersion = null;
 let _lastReload = Date.now();
 
 // Fetch manifest to get current WASM filename
 async function fetchManifest() {
-  if (wasmManifest) return wasmManifest;
-
-  try {
-    const response = await fetch(manifest_URL);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch manifest: ${response.status}`);
-    }
-    wasmManifest = await response.json();
-    currentCacheVersion = `WASM_Cache_${wasmManifest.hash}`;
-    return wasmManifest;
-  } catch (error) {
-    console.error("[SW] Failed to fetch manifest:", error);
-    throw error;
-  }
+  return wasmManifest;
 }
 
 // Send error to all clients
@@ -68,27 +58,23 @@ async function runWASM() {
 
   try {
     const manifest = await fetchManifest();
-    // Use content-addressed path: /static/<sha256>.wasm
-    const wasm_URL = `/static/${manifest.wasmFile}`;
+    // Use unified cache path from manifest (full URL)
+    let wasm_URL;
+    if (manifest.wasmUrl && new URL(manifest.wasmUrl).protocol !== "http:") {
+      wasm_URL = manifest.wasmUrl;
+    } else {
+      wasm_URL = `/frontend/${manifest.wasmFile}`;
+    }
 
     const go = new Go();
 
-    const cache = await caches.open(currentCacheVersion);
-
-    let wasm_file;
-    const cache_wasm = await cache.match(wasm_URL);
-
-    if (cache_wasm) {
-      wasm_file = await cache_wasm.arrayBuffer();
-    } else {
-      const response = await fetch(wasm_URL);
-      if (!response.ok) {
-        throw new Error(
-          `Failed to fetch WASM: ${response.status} ${response.statusText}`
-        );
-      }
-      wasm_file = await response.arrayBuffer();
+    const response = await fetch(wasm_URL);
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch WASM: ${response.status} ${response.statusText}`
+      );
     }
+    const wasm_file = await response.arrayBuffer();
 
     const instance = await WebAssembly.instantiate(wasm_file, go.importObject);
 
@@ -98,10 +84,12 @@ async function runWASM() {
       loading = false;
     };
 
-    go.run(instance.instance).then(onExit).catch((error) => {
-      console.error("[SW] Go Program Error:", error);
-      onExit();
-    });
+    go.run(instance.instance)
+      .then(onExit)
+      .catch((error) => {
+        console.error("[SW] Go Program Error:", error);
+        onExit();
+      });
   } catch (error) {
     console.error("[SW] WASM initialization failed:", error);
     throw new Error(`WASM Initialization: ${error.message}`);
@@ -109,22 +97,7 @@ async function runWASM() {
 }
 
 self.addEventListener("install", (e) => {
-  console.log("[SW] Install event");
-  async function LoadCache() {
-    console.log("[SW] Loading cache");
-    try {
-      const manifest = await fetchManifest();
-      // Use content-addressed path: /static/<sha256>.wasm
-      const wasm_URL = `/static/${manifest.wasmFile}`;
-      const cache = await caches.open(currentCacheVersion);
-
-      await cache.addAll([wasm_URL, wasm_exec_URL, manifest_URL]);
-    } catch (error) {
-      console.error("[SW] Cache loading failed:", error);
-      throw new Error(`Cache Loading: ${error.message}`);
-    }
-  }
-  e.waitUntil(LoadCache());
+  e.waitUntil(init());
   self.skipWaiting();
 });
 
@@ -132,21 +105,6 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     (async () => {
       try {
-        // Delete old caches
-        const manifest = await fetchManifest();
-        const cacheNames = await caches.keys();
-        await Promise.all(
-          cacheNames.map((cacheName) => {
-            if (
-              cacheName !== currentCacheVersion &&
-              cacheName.startsWith("WASM_Cache_")
-            ) {
-              console.log("[SW] Deleting old cache:", cacheName);
-              return caches.delete(cacheName);
-            }
-          })
-        );
-
         // Claim clients first to take control immediately
         await self.clients.claim();
 
@@ -164,6 +122,23 @@ self.addEventListener("activate", (e) => {
       }
     })()
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "CLAIM_CLIENTS") {
+    self.clients
+      .claim()
+      .then(() => {
+        self.clients.matchAll().then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({ type: "CLAIMED" });
+          });
+        });
+      })
+      .catch((error) => {
+        console.error("[SW] Manual clients.claim() failed:", error);
+      });
+  }
 });
 
 self.addEventListener("fetch", (e) => {
@@ -203,59 +178,37 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Serve portal.mp4 from cache or fetch from origin
-  if (url.pathname === "/portal.mp4") {
-    console.log("[SW] Fetching portal.mp4");
-    e.respondWith(
-      (async () => {
-        try {
-          await fetchManifest();
-          // Try to get from cache first
-          const cache = await caches.open(currentCacheVersion);
-          const cachedResponse = await cache.match("/portal.mp4");
-          if (cachedResponse) {
-            console.log("[SW] Found portal.mp4 in cache");
-            return cachedResponse;
-          }
-
-          // Fetch from network and cache it
-          const response = await fetch(e.request);
-          if (response.ok) {
-            console.log("[SW] Caching portal.mp4");
-            cache.put("/portal.mp4", response.clone());
-          }
-          return response;
-        } catch (error) {
-          console.error("[SW] Failed to fetch portal.mp4:", error);
-          return new Response("Not Found", { status: 404 });
-        }
-      })()
-    );
-    return;
-  }
-
-  if (typeof __go_jshttp === "undefined") {
-    if (Date.now() - _lastReload > 1000) {
-      _lastReload = Date.now();
-      loading = false;
-    } else {
-      // send auto refresh page
-      e.respondWith(
-        new Response(
-          "<html><head><meta http-equiv='refresh' content='0'></head><body><h1>Sorry, Service Worker failed to process the request. Please refresh the page.</h1></body></html>",
-          { status: 500, headers: { "Content-Type": "text/html" } }
-        )
-      );
-      return;
-    }
-  }
-
   e.respondWith(
     (async () => {
+      if (typeof __go_jshttp === "undefined" && !loading) {
+        try {
+          await init();
+        } catch (error) {
+          console.error("[SW] Init failed:", error);
+          return new Response(
+            "WASM initialization failed. Please refresh the page.",
+            {
+              status: 503,
+              statusText: "Service Unavailable",
+            }
+          );
+        }
+
+        let waitCount = 0;
+        while (loading && waitCount < 50) {
+          if (typeof __go_jshttp !== "undefined") {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          waitCount++;
+        }
+      }
+
       try {
         const resp = await __go_jshttp(e.request);
         return resp;
-      } catch {
+      } catch (error) {
+        console.error("[SW] Request handling error:", error);
         __go_jshttp = undefined;
         await init();
         const resp = await __go_jshttp(e.request);
@@ -263,5 +216,4 @@ self.addEventListener("fetch", (e) => {
       }
     })()
   );
-  return;
 });

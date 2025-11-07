@@ -51,10 +51,33 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	serveAsset(adminMux, "/favicon.png", "static/favicon/favicon.png", "image/png")
 	serveAsset(adminMux, "/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
 
-	// Static assets for admin UI
+	// Static assets for admin UI (embedded files)
 	adminMux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/static/")
 		serveAdminStatic(w, r, path)
+	})
+
+	// Portal frontend files (for unified caching)
+	adminMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
+
+		// Special handling for manifest.json - generate dynamically
+		if path == "manifest.json" {
+			serveDynamicManifest(w, r)
+			return
+		}
+
+		servePortalStaticFile(w, r, path)
 	})
 
 	adminMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
@@ -235,7 +258,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("//%s.%s/", lease.Name, portalDomain)
+		link := fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
 
 		row := leaseRow{
 			Peer:        identityID,
