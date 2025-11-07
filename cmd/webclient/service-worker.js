@@ -216,15 +216,26 @@ self.addEventListener("fetch", (e) => {
             }
           );
         }
+      }
 
-        let waitCount = 0;
-        while (loading && waitCount < 50) {
-          if (typeof __go_jshttp !== "undefined") {
-            break;
+      // Wait for WASM to be ready (increased timeout for Safari)
+      let waitCount = 0;
+      const maxWait = 100; // 10 seconds (100 × 100ms)
+      while (typeof __go_jshttp === "undefined" && waitCount < maxWait) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        waitCount++;
+      }
+
+      // If still not ready after timeout, return error
+      if (typeof __go_jshttp === "undefined") {
+        console.error("[SW] WASM not ready after timeout");
+        return new Response(
+          "WASM initialization timeout. Please refresh the page.",
+          {
+            status: 503,
+            statusText: "Service Unavailable",
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          waitCount++;
-        }
+        );
       }
 
       try {
@@ -234,6 +245,18 @@ self.addEventListener("fetch", (e) => {
         console.error("[SW] Request handling error:", error);
         __go_jshttp = undefined;
         await init();
+
+        // Wait again after reinit
+        waitCount = 0;
+        while (typeof __go_jshttp === "undefined" && waitCount < maxWait) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          waitCount++;
+        }
+
+        if (typeof __go_jshttp === "undefined") {
+          throw new Error("WASM reinitialization failed");
+        }
+
         const resp = await __go_jshttp(e.request);
         return resp;
       }

@@ -41,6 +41,7 @@
       this._connId = null;
       this._isClosed = false;
       this._wsKey = generateWebSocketKey();
+      this._frameBuffer = new Uint8Array(0);
 
       // Setup Service Worker message listener
       this._setupMessageListener();
@@ -236,88 +237,96 @@
 
       if (this.readyState !== WebSocket.OPEN) return;
 
-      // Simple frame parsing - check if this is a complete frame
-      if (data.length < 2) return;
+      // Append incoming data to frame buffer
+      const newBuffer = new Uint8Array(this._frameBuffer.length + data.length);
+      newBuffer.set(this._frameBuffer);
+      newBuffer.set(data, this._frameBuffer.length);
+      this._frameBuffer = newBuffer;
 
-      const byte1 = data[0];
-      const byte2 = data[1];
+      // Process all complete frames in buffer
+      while (this._frameBuffer.length >= 2) {
+        const byte1 = this._frameBuffer[0];
+        const byte2 = this._frameBuffer[1];
 
-      const fin = (byte1 & 0x80) !== 0;
-      const opcode = byte1 & 0x0F;
-      const masked = (byte2 & 0x80) !== 0;
-      let payloadLen = byte2 & 0x7F;
+        const fin = (byte1 & 0x80) !== 0;
+        const opcode = byte1 & 0x0F;
+        const masked = (byte2 & 0x80) !== 0;
+        let payloadLen = byte2 & 0x7F;
 
-      let offset = 2;
+        let offset = 2;
 
-      // Handle extended payload length
-      if (payloadLen === 126) {
-        if (data.length < 4) return; // Need more data
-        payloadLen = (data[2] << 8) | data[3];
-        offset = 4;
-      } else if (payloadLen === 127) {
-        if (data.length < 10) return; // Need more data
-        // For simplicity, assuming payload < 2^32
-        payloadLen = (data[6] << 24) | (data[7] << 16) | (data[8] << 8) | data[9];
-        offset = 10;
-      }
-
-      // Server messages should not be masked
-      if (masked) {
-        offset += 4; // Skip mask key
-      }
-
-      if (data.length < offset + payloadLen) {
-        // Incomplete frame, buffer it
-        // TODO: Implement frame buffering
-        return;
-      }
-
-      const payload = data.slice(offset, offset + payloadLen);
-
-      // Handle different opcodes
-      if (opcode === 0x01) {
-        // Text frame
-        const text = new TextDecoder().decode(payload);
-        const event = new MessageEvent("message", {
-          data: text,
-          origin: new URL(this.url).origin,
-        });
-        if (this.onmessage) {
-          this.onmessage(event);
+        // Handle extended payload length
+        if (payloadLen === 126) {
+          if (this._frameBuffer.length < 4) return; // Need more data
+          payloadLen = (this._frameBuffer[2] << 8) | this._frameBuffer[3];
+          offset = 4;
+        } else if (payloadLen === 127) {
+          if (this._frameBuffer.length < 10) return; // Need more data
+          // For simplicity, assuming payload < 2^32
+          payloadLen = (this._frameBuffer[6] << 24) | (this._frameBuffer[7] << 16) | (this._frameBuffer[8] << 8) | this._frameBuffer[9];
+          offset = 10;
         }
-        this.dispatchEvent(event);
-      } else if (opcode === 0x02) {
-        // Binary frame
-        let eventData;
-        if (this.binaryType === "blob") {
-          eventData = new Blob([payload]);
-        } else {
-          eventData = payload.buffer;
+
+        // Server messages should not be masked
+        if (masked) {
+          offset += 4; // Skip mask key
         }
-        const event = new MessageEvent("message", {
-          data: eventData,
-          origin: new URL(this.url).origin,
-        });
-        if (this.onmessage) {
-          this.onmessage(event);
+
+        if (this._frameBuffer.length < offset + payloadLen) {
+          // Incomplete frame, wait for more data
+          return;
         }
-        this.dispatchEvent(event);
-      } else if (opcode === 0x08) {
-        // Close frame
-        let code = 1000;
-        let reason = "";
-        if (payload.length >= 2) {
-          code = (payload[0] << 8) | payload[1];
-          if (payload.length > 2) {
-            reason = new TextDecoder().decode(payload.slice(2));
+
+        const payload = this._frameBuffer.slice(offset, offset + payloadLen);
+
+        // Remove processed frame from buffer
+        this._frameBuffer = this._frameBuffer.slice(offset + payloadLen);
+
+        // Handle different opcodes
+        if (opcode === 0x01) {
+          // Text frame
+          const text = new TextDecoder().decode(payload);
+          const event = new MessageEvent("message", {
+            data: text,
+            origin: new URL(this.url).origin,
+          });
+          if (this.onmessage) {
+            this.onmessage(event);
           }
+          this.dispatchEvent(event);
+        } else if (opcode === 0x02) {
+          // Binary frame
+          let eventData;
+          if (this.binaryType === "blob") {
+            eventData = new Blob([payload]);
+          } else {
+            eventData = payload.buffer;
+          }
+          const event = new MessageEvent("message", {
+            data: eventData,
+            origin: new URL(this.url).origin,
+          });
+          if (this.onmessage) {
+            this.onmessage(event);
+          }
+          this.dispatchEvent(event);
+        } else if (opcode === 0x08) {
+          // Close frame
+          let code = 1000;
+          let reason = "";
+          if (payload.length >= 2) {
+            code = (payload[0] << 8) | payload[1];
+            if (payload.length > 2) {
+              reason = new TextDecoder().decode(payload.slice(2));
+            }
+          }
+          this._handleDataClose({ code, reason });
+        } else if (opcode === 0x09) {
+          // Ping - send pong
+          this._sendPong(payload);
+        } else if (opcode === 0x0A) {
+          // Pong - ignore
         }
-        this._handleDataClose({ code, reason });
-      } else if (opcode === 0x09) {
-        // Ping - send pong
-        this._sendPong(payload);
-      } else if (opcode === 0x0A) {
-        // Pong - ignore
       }
     }
 
