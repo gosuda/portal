@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -389,8 +388,8 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 		}
 	}
 
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, file)
+	// Use http.ServeContent for proper Range request support (required for Safari video playback)
+	http.ServeContent(w, r, path, fileInfo.ModTime(), file)
 
 	log.Debug().
 		Str("path", path).
@@ -433,8 +432,8 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 		}
 	}
 
-	w.WriteHeader(http.StatusOK)
-	io.Copy(w, file)
+	// Use http.ServeContent for proper Range request support (required for Safari video playback)
+	http.ServeContent(w, r, path, fileInfo.ModTime(), file)
 
 	log.Debug().
 		Str("path", path).

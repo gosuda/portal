@@ -110,7 +110,7 @@ func NewReadableStream(r io.ReadCloser) *ReadableStream {
 	underlyingSource.Set("start", onStart)
 	underlyingSource.Set("pull", onPull)
 	underlyingSource.Set("cancel", onCancel)
-	underlyingSource.Set("type", "bytes")
+	// underlyingSource.Set("type", "bytes") // Safari does not support ReadableByteStreamController
 
 	// 9. JS ReadableStream 인스턴스 생성
 	stream := _ReadableStream.New(underlyingSource)
