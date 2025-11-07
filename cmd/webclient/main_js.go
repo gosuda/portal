@@ -614,14 +614,35 @@ func (p *Proxy) handleDisconnect(w http.ResponseWriter, r *http.Request, connID 
 // SDK Connection handlers for Service Worker messaging
 
 func handleSDKConnect(data js.Value) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("[SDK Connect] Recovered from panic")
+		}
+	}()
+
+	// Safely extract fields with validation
+	if data.Get("leaseName").Type() == js.TypeUndefined || data.Get("clientId").Type() == js.TypeUndefined {
+		log.Warn().Msg("[SDK Connect] Missing required fields")
+		return
+	}
+
 	leaseName := data.Get("leaseName").String()
 	clientId := data.Get("clientId").String()
 
 	log.Info().Str("leaseName", leaseName).Str("clientId", clientId).Msg("[SDK Connect] Connecting")
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Str("clientId", clientId).Msg("[SDK Connect] Goroutine recovered from panic")
+			}
+		}()
+		// Convert leaseName (may be punycode) to uppercase unicode
+		normalizedLeaseName := getLeaseID(leaseName)
+		log.Debug().Str("original", leaseName).Str("normalized", normalizedLeaseName).Msg("[SDK Connect] Normalized lease name")
+
 		// Lookup lease by name to get lease ID
-		lease, err := rdClient.LookupName(leaseName)
+		lease, err := rdClient.LookupName(normalizedLeaseName)
 		if err != nil {
 			log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
 			js.Global().Call("__sdk_post_message", map[string]interface{}{
@@ -716,6 +737,18 @@ func handleSDKConnect(data js.Value) {
 }
 
 func handleSDKSend(data js.Value) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("[SDK Send] Recovered from panic")
+		}
+	}()
+
+	// Safely extract fields with validation
+	if data.Get("connId").Type() == js.TypeUndefined || data.Get("clientId").Type() == js.TypeUndefined || data.Get("data").Type() == js.TypeUndefined {
+		log.Warn().Msg("[SDK Send] Missing required fields")
+		return
+	}
+
 	connID := data.Get("connId").String()
 	clientId := data.Get("clientId").String()
 	payload := data.Get("data")
@@ -767,6 +800,18 @@ func handleSDKSend(data js.Value) {
 }
 
 func handleSDKClose(data js.Value) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("[SDK Close] Recovered from panic")
+		}
+	}()
+
+	// Safely extract fields with validation
+	if data.Get("connId").Type() == js.TypeUndefined || data.Get("clientId").Type() == js.TypeUndefined {
+		log.Warn().Msg("[SDK Close] Missing required fields")
+		return
+	}
+
 	connID := data.Get("connId").String()
 	clientId := data.Get("clientId").String()
 

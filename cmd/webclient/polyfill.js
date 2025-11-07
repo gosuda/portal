@@ -83,8 +83,15 @@
       try {
         // Extract hostname from URL
         const urlObj = new URL(this.url);
-        const hostname = urlObj.hostname;
-        const leaseName = hostname.split('.')[0].toUpperCase();
+        let hostname = urlObj.hostname;
+
+        // Normalize punycode to lowercase (punycode is case-insensitive per RFC 3492)
+        // This ensures XN--CW4B85OB9G becomes xn--cw4b85ob9g before processing
+        hostname = hostname.toLowerCase();
+
+        // Extract first label (keep lowercase for punycode conversion in Go backend)
+        // Go backend will convert punycode->unicode and then uppercase
+        const leaseName = hostname.split('.')[0];
 
         console.log("[WebSocket Polyfill] Lease name:", leaseName);
 
