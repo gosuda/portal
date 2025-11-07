@@ -12,6 +12,7 @@ Portal is an open hosting network that transforms your local project into a publ
 - [Overview](#overview)
 - [Features](#features)
 - [Quick Start](#quick-start)
+- [Architecture](#architecture)
 - [Contributing](#contributing)
 - [License](#license)
 
