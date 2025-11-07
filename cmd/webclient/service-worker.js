@@ -124,6 +124,17 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// Helper function to broadcast message to all clients
+async function broadcastToClients(message) {
+  const clients = await self.clients.matchAll();
+  clients.forEach((client) => {
+    client.postMessage(message);
+  });
+}
+
+// Expose to WASM
+self.__sdk_post_message = broadcastToClients;
+
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "CLAIM_CLIENTS") {
     self.clients
@@ -138,6 +149,18 @@ self.addEventListener("message", (event) => {
       .catch((error) => {
         console.error("[SW] Manual clients.claim() failed:", error);
       });
+    return;
+  }
+
+  // Handle SDK messages (SDK_CONNECT, SDK_SEND, SDK_CLOSE)
+  if (event.data && event.data.type && event.data.type.startsWith("SDK_")) {
+    if (typeof __sdk_message_handler === "undefined") {
+      console.error("[SW] SDK message handler not available");
+      return;
+    }
+
+    // Call WASM message handler
+    __sdk_message_handler(event.data.type, event.data);
   }
 });
 

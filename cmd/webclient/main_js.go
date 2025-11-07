@@ -29,6 +29,10 @@ import (
 
 var (
 	rdClient *sdk.RDClient
+
+	// SDK connection manager for Service Worker messaging
+	sdkConnections   = make(map[string]io.ReadWriteCloser)
+	sdkConnectionsMu sync.RWMutex
 )
 
 // getBootstrapServers retrieves bootstrap servers from global JavaScript variable
@@ -604,6 +608,190 @@ func (p *Proxy) handleDisconnect(w http.ResponseWriter, r *http.Request, connID 
 	w.WriteHeader(http.StatusOK)
 }
 
+// SDK Connection handlers for Service Worker messaging
+
+func handleSDKConnect(data js.Value) {
+	leaseName := data.Get("leaseName").String()
+	clientId := data.Get("clientId").String()
+
+	log.Info().Str("leaseName", leaseName).Str("clientId", clientId).Msg("[SDK Connect] Connecting")
+
+	go func() {
+		// Lookup lease by name to get lease ID
+		lease, err := rdClient.LookupName(leaseName)
+		if err != nil {
+			log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
+			js.Global().Call("__sdk_post_message", map[string]interface{}{
+				"type":     "SDK_CONNECT_ERROR",
+				"clientId": clientId,
+				"error":    err.Error(),
+			})
+			return
+		}
+
+		leaseID := lease.GetIdentity().GetId()
+		log.Info().Str("leaseName", leaseName).Str("leaseID", leaseID).Msg("[SDK Connect] Lease found")
+
+		// Create E2EE connection using SDK with lease ID
+		cred := sdk.NewCredential()
+		conn, err := rdClient.Dial(cred, leaseID, "http/1.1")
+		if err != nil {
+			log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed")
+
+			// Send error to client
+			js.Global().Call("__sdk_post_message", map[string]interface{}{
+				"type":     "SDK_CONNECT_ERROR",
+				"clientId": clientId,
+				"error":    err.Error(),
+			})
+			return
+		}
+
+		// Generate connection ID
+		connID := generateConnID()
+
+		// Store connection
+		sdkConnectionsMu.Lock()
+		sdkConnections[connID] = conn
+		sdkConnectionsMu.Unlock()
+
+		log.Info().Str("leaseName", leaseName).Str("connId", connID).Msg("[SDK Connect] Connected")
+
+		// Send success to client
+		js.Global().Call("__sdk_post_message", map[string]interface{}{
+			"type":     "SDK_CONNECT_SUCCESS",
+			"clientId": clientId,
+			"connId":   connID,
+		})
+
+		// Start reading from connection
+		go func() {
+			buffer := make([]byte, 32*1024)
+			for {
+				n, err := conn.Read(buffer)
+				if err != nil {
+					if err != io.EOF {
+						log.Error().Err(err).Str("connId", connID).Msg("[SDK Connect] Read error")
+					}
+
+					// Remove connection
+					sdkConnectionsMu.Lock()
+					delete(sdkConnections, connID)
+					sdkConnectionsMu.Unlock()
+
+					// Send close to client
+					code := 1000
+					if err != io.EOF {
+						code = 1006
+					}
+					js.Global().Call("__sdk_post_message", map[string]interface{}{
+						"type":     "SDK_DATA_CLOSE",
+						"clientId": clientId,
+						"connId":   connID,
+						"code":     code,
+					})
+					return
+				}
+
+				// Copy data to JavaScript Uint8Array
+				data := make([]byte, n)
+				copy(data, buffer[:n])
+
+				uint8Array := js.Global().Get("Uint8Array").New(n)
+				js.CopyBytesToJS(uint8Array, data)
+
+				// Send data to client
+				js.Global().Call("__sdk_post_message", map[string]interface{}{
+					"type":     "SDK_DATA",
+					"clientId": clientId,
+					"connId":   connID,
+					"data":     uint8Array,
+				})
+			}
+		}()
+	}()
+}
+
+func handleSDKSend(data js.Value) {
+	connID := data.Get("connId").String()
+	clientId := data.Get("clientId").String()
+	payload := data.Get("data")
+
+	// Get connection
+	sdkConnectionsMu.RLock()
+	conn, ok := sdkConnections[connID]
+	sdkConnectionsMu.RUnlock()
+
+	if !ok {
+		log.Warn().Str("connId", connID).Msg("[SDK Send] Connection not found")
+		js.Global().Call("__sdk_post_message", map[string]interface{}{
+			"type":     "SDK_SEND_ERROR",
+			"clientId": clientId,
+			"connId":   connID,
+			"error":    "connection not found",
+		})
+		return
+	}
+
+	// Convert payload to bytes
+	var bytes []byte
+	if payload.InstanceOf(js.Global().Get("Uint8Array")) {
+		length := payload.Get("length").Int()
+		bytes = make([]byte, length)
+		js.CopyBytesToGo(bytes, payload)
+	} else if payload.InstanceOf(js.Global().Get("ArrayBuffer")) {
+		uint8Array := js.Global().Get("Uint8Array").New(payload)
+		length := uint8Array.Get("length").Int()
+		bytes = make([]byte, length)
+		js.CopyBytesToGo(bytes, uint8Array)
+	} else {
+		log.Warn().Str("connId", connID).Msg("[SDK Send] Unsupported data type")
+		return
+	}
+
+	go func() {
+		_, err := conn.Write(bytes)
+		if err != nil {
+			log.Error().Err(err).Str("connId", connID).Msg("[SDK Send] Write failed")
+			js.Global().Call("__sdk_post_message", map[string]interface{}{
+				"type":     "SDK_SEND_ERROR",
+				"clientId": clientId,
+				"connId":   connID,
+				"error":    err.Error(),
+			})
+		}
+	}()
+}
+
+func handleSDKClose(data js.Value) {
+	connID := data.Get("connId").String()
+	clientId := data.Get("clientId").String()
+
+	// Get and remove connection
+	sdkConnectionsMu.Lock()
+	conn, ok := sdkConnections[connID]
+	if ok {
+		delete(sdkConnections, connID)
+	}
+	sdkConnectionsMu.Unlock()
+
+	if !ok {
+		log.Warn().Str("connId", connID).Msg("[SDK Close] Connection not found")
+		return
+	}
+
+	log.Info().Str("connId", connID).Msg("[SDK Close] Closing connection")
+	conn.Close()
+
+	// Send close confirmation to client
+	js.Global().Call("__sdk_post_message", map[string]interface{}{
+		"type":     "SDK_DATA_CLOSE",
+		"clientId": clientId,
+		"connId":   connID,
+		"code":     1000,
+	})
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
@@ -639,6 +827,31 @@ func main() {
 		return httpjs.ServeHTTPAsyncWithStreaming(proxy, jsReq)
 	}))
 	log.Info().Msg("Portal proxy handler registered as __go_jshttp")
+
+	// Expose SDK connection handler for Service Worker messaging
+	js.Global().Set("__sdk_message_handler", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if len(args) < 2 {
+			log.Warn().Msg("[SDK Message] Invalid arguments")
+			return nil
+		}
+
+		messageType := args[0].String()
+		data := args[1]
+
+		switch messageType {
+		case "SDK_CONNECT":
+			handleSDKConnect(data)
+		case "SDK_SEND":
+			handleSDKSend(data)
+		case "SDK_CLOSE":
+			handleSDKClose(data)
+		default:
+			log.Warn().Str("type", messageType).Msg("[SDK Message] Unknown message type")
+		}
+
+		return nil
+	}))
+	log.Info().Msg("SDK message handler registered as __sdk_message_handler")
 
 	if runtime.Compiler == "tinygo" {
 		return
