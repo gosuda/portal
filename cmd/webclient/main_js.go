@@ -369,6 +369,9 @@ func getLeaseID(hostname string) string {
 		decoded = hostname
 	}
 
+	// Normalize punycode to lowercase before conversion (punycode is case-insensitive)
+	decoded = strings.ToLower(decoded)
+
 	// Then, convert punycode to unicode (e.g., xn--v9jub -> 日本語)
 	host, err := idna.ToUnicode(decoded)
 	if err != nil {
