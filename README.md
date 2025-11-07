@@ -4,8 +4,7 @@
   <img src="/portal.jpg" alt="Portal logo" width="540" />
 </p>
 
-Portal is an open hosting network that transforms your local project into a public web endpoint.
-[See more](https://gosuda.org/portal/)
+Portal is an open hosting network that transforms your local project into a public web endpoint. [See more](https://gosuda.org/portal/)
 
 ## Table of Contents
 
@@ -36,7 +35,12 @@ This enables developers to publish local services globally without managing serv
 
 ## Quick Start
 
-WIP
+### Portal Hosting
+You can publish Portal for relay apps.
+
+### App Publishing
+You can Pubishing own app through portal.
+See [portal-toys](https://github.com/gosuda/portal-toys)
 
 ## Architecture
 
