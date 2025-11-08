@@ -26,7 +26,7 @@ This enables developers to publish local services globally without managing serv
 - 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network.
 - 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication, including browser sessions via a WASM-based Service Worker proxy.
 - 🚀 **High Performance**: Multiplexed connections using yamux
-- ⚙️ **Simple Setting**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
+- ⚙️ **Simple Setup**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
 - 🤖 **AI Friendly**: Instantly publish AI-generated websites or applications.
 
 ## Quick Start
