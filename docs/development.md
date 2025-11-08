@@ -1,42 +1,45 @@
-# 개발 원칙 및 운영 가이드
+# Development Principles and Operational Guide
 
-이 문서는 Portal 프로젝트의 핵심 방향과 범위를 명확히 정의하여 불필요한 기능 추가나 방향 이탈을 방지하고, 일관된 사용자 경험을 유지하기 위한 목적을 갖습니다.
-
----
-
-## 1. 사용성 불변 원칙
-Portal 개발자는 자신이 구현한 기능이 기존 사용성에 변화를 주지 않도록 해야 합니다. 여기서 사용성의 변화란 다음을 모두 포함합니다.
-
-- Portal 사용 과정의 변경
-- Portal 배포 방식의 변경
-- SDK 개발 환경의 변경
-- 코드베이스의 복잡성 증가
-- 그 외
+This document defines the core principles and operational scope of the Portal project.  
+It aims to prevent unnecessary feature expansion or direction drift, and to maintain a consistent user experience.
 
 ---
 
-## 2. 변경 시 사전 합의 절차
-기능 개발이 사용성에 변화를 줄 경우, 변경 전 구성원에게 문서를 통해 변경 사유를 충분히 설명하고 사전 동의를 구해야 합니다.
+## 1. Usability Invariance Principle
+Portal developers must ensure that any new feature does not alter existing usability.  
+A "change in usability" includes, but is not limited to:
 
-- 기능 변경에 한해, 제안자를 제외한 1명 이상의 리뷰어 동의가 있을 때만 머지할 수 있습니다.
-
----
-
-## 3. 테스트 및 품질 보증
-Portal 개발자는 완성되지 않은 실험적 기능을 마스터 브랜치에 직접 반영해서는 안 됩니다. 모든 신규 기능은 개인 브랜치에서 충분한 테스트와 검증을 마친 후에만 머지할 수 있습니다.
-
----
-
-## 4. 프로젝트의 철학과 범위
-Portal은 개인이 로컬에서 실행하는 서비스를 세상에 공개하기 위한 중계 계층이며, End-to-End Encryption 을 제공합니다. 그 외의 목표는 현재 단계에서 다루지 않습니다.
-
-- 기능 추가를 제안할 경우 위와 마찬가지로 구성원에게 충분한 설명과 합의가 필요합니다.
-- 합의된 기능은 추후 로드맵에 반영하여 관리합니다.
+- Modifications to the Portal usage flow  
+- Changes to the deployment or configuration process  
+- Alterations to the SDK development environment  
+- Increases in codebase complexity  
+- Any similar impacts that may affect the user experience
 
 ---
 
-## 5. 의견 충돌 시 원칙
-상기 내용과 관련해 개발자 간 의견 차이가 발생할 경우,  
-건전한 토론을 통해 합의점을 도출합니다.
+## 2. Prior Agreement for Changes
+If a feature impacts usability, the proposer must provide a clear written rationale and obtain prior agreement from the team before proceeding.
+
+- A merge is permitted only when at least one reviewer (other than the proposer) approves the change.
+
+---
+
+
+## 3. Testing and Quality Assurance
+Unfinished or experimental features must not be merged directly into the main branch.  
+All new features must be fully tested and verified in a personal branch before merging.
+
+---
+
+## 4. Project Philosophy and Scope
+Portal serves as a relay layer that allows individuals to publicly expose locally running services, with built-in end-to-end encryption.
+
+- When proposing new features, include sufficient justification and follow the agreement process described above.  
+- Approved features must be documented and tracked in the project roadmap.
+
+---
+
+## 5. Principles for Resolving Disagreements
+If differences of opinion arise, resolve them through constructive discussion and consensus.
 
 ---
