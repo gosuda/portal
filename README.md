@@ -4,7 +4,7 @@
   <img src="/portal.jpg" alt="Portal logo" width="540" />
 </p>
 
-Portal is an open hosting network that transforms your local project into a public web endpoint. [See more](https://gosuda.org/portal/)
+Portal is an open hosting network that transforms your local project into a public web endpoint. [See more.](https://gosuda.org/portal/)
 
 ## Table of Contents
 
@@ -23,23 +23,34 @@ This enables developers to publish local services globally without managing serv
 
 ## Features
 
-- 🔐 **End-to-End Encryption**: Client-to-client communication is fully encrypted
-- 🔑 **Cryptographic Identity**: Ed25519-based identity system with verifiable signatures
-- 🔄 **Connection Relay**: Secure connection forwarding through central server
-- ⏰ **Lease Management**: Time-based lease system with automatic cleanup
-- 🌐 **Protocol Support**: Application-Layer Protocol Negotiation (ALPN)
+- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network.
+- 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication, including browser sessions via a WASM-based Service Worker proxy.
 - 🚀 **High Performance**: Multiplexed connections using yamux
-- 🐳 **Docker Support**: Containerized deployment ready
-- 🌍 **Browser E2EE Proxy**: WASM-based Service Worker for automatic browser encryption
-- 📱 **Multi-Platform**: Go SDK for servers, WASM SDK for browsers
+- ⚙️ **Simple Setting**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
+- 🤖 **AI Friendly**: Instantly publish AI-generated websites or applications.
 
 ## Quick Start
+You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
 
 ### Portal Hosting
-You can publish Portal for relay apps.
+Run Portal with Docker Compose.
+
+1. Copy env file
+  - `cp .env.example .env`
+2. Start services
+  - `docker compose up`
+3. Open in browser
+  - `http://localhost:4017`
+4. Domain setup (optional)
+   - Point DNS to this server:
+     - `A` record for `portal.example.com` → server IP
+     - `A` (wildcard) for `*.example.com` (or `*.portal.example.com`) → server IP
+   - Edit `.env` for your domain:
+     - `PORTAL_UI_URL=https://portal.example.com`
+     - `POSTAL_FRONTEND_URL=https://*.example.com`
+     - `BOOTSTRAP_URIS=wss://portal.example.com/relay`
 
 ### App Publishing
-You can Pubishing own app through portal.
 See [portal-toys](https://github.com/gosuda/portal-toys)
 
 ## Architecture
