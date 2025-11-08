@@ -33,22 +33,28 @@ This enables developers to publish local services globally without managing serv
 You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
 
 ### Portal Hosting
-Run Portal with Docker Compose.
+Run Portal with Docker Compose:
 
-1. Copy env file
-  - `cp .env.example .env`
-2. Start services
-  - `docker compose up`
-3. Open in browser
-  - `http://localhost:4017`
-4. Domain setup (optional)
-   - Point DNS to this server:
-     - `A` record for `portal.example.com` → server IP
-     - `A` (wildcard) for `*.example.com` (or `*.portal.example.com`) → server IP
-   - Edit `.env` for your domain:
-     - `PORTAL_UI_URL=https://portal.example.com`
-     - `POSTAL_FRONTEND_URL=https://*.example.com`
-     - `BOOTSTRAP_URIS=wss://portal.example.com/relay`
+```bash
+# 1. Copy environment file
+cp .env.example .env
+
+# 2. Start services
+docker compose up
+
+# 3. Open in browser (default web interface)
+http://localhost:4017
+
+# 4. Domain setup (optional)
+# Point DNS to this server:
+#   A record for portal.example.com → server IP
+#   A (wildcard) for *.example.com (or *.portal.example.com) → server IP
+#
+# Then edit .env for your domain:
+PORTAL_UI_URL=https://portal.example.com
+POSTAL_FRONTEND_URL=https://*.example.com
+BOOTSTRAP_URIS=wss://portal.example.com/relay
+```
 
 ### App Publishing
 See [portal-toys](https://github.com/gosuda/portal-toys)
