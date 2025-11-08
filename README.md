@@ -32,7 +32,7 @@ This enables developers to publish local services globally without managing serv
 ## Quick Start
 You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
 
-### Portal Hosting
+### Running the Portal Network
 Run Portal with Docker Compose:
 
 ```bash
@@ -56,7 +56,7 @@ POSTAL_FRONTEND_URL=https://*.example.com
 BOOTSTRAP_URIS=wss://portal.example.com/relay
 ```
 
-### App Publishing
+### Running a Portal App
 See [portal-toys](https://github.com/gosuda/portal-toys)
 
 ## Architecture
