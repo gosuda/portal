@@ -124,6 +124,17 @@ self.addEventListener("activate", (e) => {
   );
 });
 
+// Helper function to broadcast message to all clients
+async function broadcastToClients(message) {
+  const clients = await self.clients.matchAll();
+  clients.forEach((client) => {
+    client.postMessage(message);
+  });
+}
+
+// Expose to WASM
+self.__sdk_post_message = broadcastToClients;
+
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "CLAIM_CLIENTS") {
     self.clients
@@ -138,6 +149,18 @@ self.addEventListener("message", (event) => {
       .catch((error) => {
         console.error("[SW] Manual clients.claim() failed:", error);
       });
+    return;
+  }
+
+  // Handle SDK messages (SDK_CONNECT, SDK_SEND, SDK_CLOSE)
+  if (event.data && event.data.type && event.data.type.startsWith("SDK_")) {
+    if (typeof __sdk_message_handler === "undefined") {
+      console.error("[SW] SDK message handler not available");
+      return;
+    }
+
+    // Call WASM message handler
+    __sdk_message_handler(event.data.type, event.data);
   }
 });
 
@@ -193,15 +216,26 @@ self.addEventListener("fetch", (e) => {
             }
           );
         }
+      }
 
-        let waitCount = 0;
-        while (loading && waitCount < 50) {
-          if (typeof __go_jshttp !== "undefined") {
-            break;
+      // Wait for WASM to be ready (increased timeout for Safari)
+      let waitCount = 0;
+      const maxWait = 100; // 10 seconds (100 × 100ms)
+      while (typeof __go_jshttp === "undefined" && waitCount < maxWait) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        waitCount++;
+      }
+
+      // If still not ready after timeout, return error
+      if (typeof __go_jshttp === "undefined") {
+        console.error("[SW] WASM not ready after timeout");
+        return new Response(
+          "WASM initialization timeout. Please refresh the page.",
+          {
+            status: 503,
+            statusText: "Service Unavailable",
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          waitCount++;
-        }
+        );
       }
 
       try {
@@ -211,6 +245,18 @@ self.addEventListener("fetch", (e) => {
         console.error("[SW] Request handling error:", error);
         __go_jshttp = undefined;
         await init();
+
+        // Wait again after reinit
+        waitCount = 0;
+        while (typeof __go_jshttp === "undefined" && waitCount < maxWait) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          waitCount++;
+        }
+
+        if (typeof __go_jshttp === "undefined") {
+          throw new Error("WASM reinitialization failed");
+        }
+
         const resp = await __go_jshttp(e.request);
         return resp;
       }
