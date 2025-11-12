@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -174,6 +175,14 @@ type Metadata struct {
 	Thumbnail   string   `json:"thumbnail"`
 	Owner       string   `json:"owner"`
 	Country     string   `json:"country"`
+}
+
+func (m Metadata) isEmpty() bool {
+	return m.Description == "" &&
+		len(m.Tags) == 0 &&
+		m.Thumbnail == "" &&
+		m.Owner == "" &&
+		m.Country == ""
 }
 
 type MetadataOption func(*Metadata)
@@ -362,11 +371,19 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 		return nil, ErrInvalidName
 	}
 
-	metadataValue := ""
-
+	var metadata Metadata
 	for _, option := range options {
-		metadata := &Metadata{}
-		option(metadata)
+		option(&metadata)
+	}
+
+	metadataValue := ""
+	if !metadata.isEmpty() {
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
+			return nil, ErrInvalidMetadata
+		}
+		metadataValue = string(metadataJSON)
 	}
 
 	g.mu.Lock()
