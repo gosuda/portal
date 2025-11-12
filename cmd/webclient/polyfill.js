@@ -7,6 +7,17 @@
   // Save original WebSocket
   const NativeWebSocket = window.WebSocket;
 
+  // Conditional logging helper - only log when localhost is in URL
+  const isLocalhost = window.location.hostname === 'localhost' ||
+                      window.location.hostname === '127.0.0.1' ||
+                      window.location.hostname.endsWith('.localhost');
+
+  function debugLog(...args) {
+    if (isLocalhost) {
+      console.log(...args);
+    }
+  }
+
   // Generate unique client ID
   function generateClientId() {
     return `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -19,35 +30,133 @@
     return btoa(String.fromCharCode(...bytes));
   }
 
-  // WebSocket polyfill using Service Worker E2EE
-  class WebSocketPolyfill {
+  // Helper to validate WebSocket constructor arguments (mimics native behavior)
+  function validateWebSocketArgs(url, protocols) {
+    if (!url) {
+      throw new DOMException("Failed to construct 'WebSocket': 1 argument required, but only 0 present.");
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(url, window.location.href);
+    } catch (e) {
+      throw new DOMException(`Failed to construct 'WebSocket': The URL '${url}' is invalid.`);
+    }
+
+    if (parsedUrl.protocol !== 'ws:' && parsedUrl.protocol !== 'wss:') {
+      throw new DOMException(`Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '${parsedUrl.protocol.slice(0, -1)}' is not allowed.`);
+    }
+
+    let normalizedProtocols = protocols;
+    if (protocols !== undefined && protocols !== null) {
+      if (typeof protocols === 'string') {
+        normalizedProtocols = [protocols];
+      } else if (Array.isArray(protocols)) {
+        normalizedProtocols = protocols;
+      } else {
+        throw new DOMException("Failed to construct 'WebSocket': The subprotocol '" + protocols + "' is invalid.");
+      }
+
+      const seen = new Set();
+      for (const protocol of normalizedProtocols) {
+        if (typeof protocol !== 'string') {
+          throw new DOMException("Failed to construct 'WebSocket': The subprotocol '" + protocol + "' is invalid.");
+        }
+        if (protocol === '') {
+          throw new DOMException("Failed to construct 'WebSocket': The subprotocol '' is invalid.");
+        }
+        if (seen.has(protocol)) {
+          throw new DOMException(`Failed to construct 'WebSocket': The subprotocol '${protocol}' is duplicated.`);
+        }
+        seen.add(protocol);
+      }
+    }
+
+    return { parsedUrl, normalizedProtocols };
+  }
+
+  // WebSocket polyfill using Service Worker E2EE - extends EventTarget for native event handling
+  class WebSocketPolyfill extends EventTarget {
+    // WebSocket ready state constants (matching native WebSocket)
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
     constructor(url, protocols) {
-      this.url = url;
-      this.protocols = protocols;
-      this.readyState = WebSocket.CONNECTING;
-      this.bufferedAmount = 0;
-      this.extensions = "";
-      this.protocol = "";
+      super(); // Initialize EventTarget
+
+      // Validate arguments using native-like validation
+      const { parsedUrl, normalizedProtocols } = validateWebSocketArgs(url, protocols);
+
+      // Store original URL and protocols
+      this._url = parsedUrl.href;
+      this._protocols = normalizedProtocols;
+      this._parsedUrl = parsedUrl;
+
+      // Define read-only properties to match native WebSocket
+      Object.defineProperty(this, 'url', {
+        get: () => this._url,
+        enumerable: true,
+        configurable: true
+      });
+
+      Object.defineProperty(this, 'readyState', {
+        get: () => this._readyState,
+        enumerable: true,
+        configurable: true
+      });
+
+      Object.defineProperty(this, 'bufferedAmount', {
+        get: () => this._bufferedAmount,
+        enumerable: true,
+        configurable: true
+      });
+
+      Object.defineProperty(this, 'extensions', {
+        get: () => this._extensions,
+        enumerable: true,
+        configurable: true
+      });
+
+      Object.defineProperty(this, 'protocol', {
+        get: () => this._protocol,
+        enumerable: true,
+        configurable: true
+      });
+
+      // Internal state
+      this._readyState = WebSocketPolyfill.CONNECTING;
+      this._bufferedAmount = 0;
+      this._extensions = "";
+      this._protocol = "";
       this.binaryType = "blob";
 
-      // Event handlers
+      // Event handlers (use native-like pattern)
       this.onopen = null;
       this.onmessage = null;
       this.onerror = null;
       this.onclose = null;
 
-      // Internal state
+      // Internal connection state
       this._clientId = generateClientId();
       this._connId = null;
       this._isClosed = false;
       this._wsKey = generateWebSocketKey();
       this._frameBuffer = new Uint8Array(0);
 
-      // Setup Service Worker message listener
+      // Setup and connect
       this._setupMessageListener();
-
-      // Initialize connection
       this._connect();
+    }
+
+    // Helper to send messages to Service Worker
+    _postToServiceWorker(message) {
+      navigator.serviceWorker.controller.postMessage({
+        clientId: this._clientId,
+        connId: this._connId,
+        ...message
+      });
     }
 
     _setupMessageListener() {
@@ -80,11 +189,10 @@
     }
 
     async _connect() {
-      console.log("[WebSocket Polyfill] Connecting via Service Worker SDK to:", this.url);
+      debugLog("[WebSocket Polyfill] Connecting via Service Worker SDK to:", this._url);
       try {
-        // Extract hostname from URL
-        const urlObj = new URL(this.url);
-        let hostname = urlObj.hostname;
+        // Extract and normalize hostname (already parsed in constructor)
+        let hostname = this._parsedUrl.hostname;
 
         // Normalize punycode to lowercase (punycode is case-insensitive per RFC 3492)
         // This ensures XN--CW4B85OB9G becomes xn--cw4b85ob9g before processing
@@ -94,12 +202,12 @@
         // Go backend will convert punycode->unicode and then uppercase
         const leaseName = hostname.split('.')[0];
 
-        console.log("[WebSocket Polyfill] Lease name:", leaseName);
+        debugLog("[WebSocket Polyfill] Lease name:", leaseName);
 
         // Wait for Service Worker to be ready
         await navigator.serviceWorker.ready;
 
-        // Send connect message to Service Worker
+        // Send connect message to Service Worker (note: connId not set yet, so we manually include clientId)
         navigator.serviceWorker.controller.postMessage({
           type: "SDK_CONNECT",
           clientId: this._clientId,
@@ -115,17 +223,16 @@
     _handleConnectSuccess(data) {
       this._connId = data.connId;
 
-      console.log("[WebSocket Polyfill] E2EE connection established, sending WebSocket upgrade");
+      debugLog("[WebSocket Polyfill] E2EE connection established, sending WebSocket upgrade");
 
       // Send WebSocket HTTP Upgrade request
       this._sendWebSocketUpgrade();
     }
 
     _sendWebSocketUpgrade() {
-      // Parse URL to get path
-      const urlObj = new URL(this.url);
-      const path = urlObj.pathname || "/";
-      const host = urlObj.host;
+      // Parse URL to get path with query parameters
+      const path = (this._parsedUrl.pathname || "/") + (this._parsedUrl.search || "");
+      const host = this._parsedUrl.host;
 
       // Build HTTP Upgrade request
       let upgradeRequest = `GET ${path} HTTP/1.1\r\n`;
@@ -135,25 +242,23 @@
       upgradeRequest += `Sec-WebSocket-Key: ${this._wsKey}\r\n`;
       upgradeRequest += `Sec-WebSocket-Version: 13\r\n`;
 
-      if (this.protocols) {
-        const protocolStr = Array.isArray(this.protocols)
-          ? this.protocols.join(', ')
-          : this.protocols;
+      if (this._protocols) {
+        const protocolStr = Array.isArray(this._protocols)
+          ? this._protocols.join(', ')
+          : this._protocols;
         upgradeRequest += `Sec-WebSocket-Protocol: ${protocolStr}\r\n`;
       }
 
       upgradeRequest += `\r\n`;
 
-      console.log("[WebSocket Polyfill] Sending upgrade request:", upgradeRequest);
+      debugLog("[WebSocket Polyfill] Sending upgrade request:", upgradeRequest);
 
       // Convert to bytes and send
       const encoder = new TextEncoder();
       const bytes = encoder.encode(upgradeRequest);
 
-      navigator.serviceWorker.controller.postMessage({
+      this._postToServiceWorker({
         type: "SDK_SEND",
-        clientId: this._clientId,
-        connId: this._connId,
         data: bytes,
       });
 
@@ -191,7 +296,7 @@
 
         // Parse HTTP response
         const headers = text.substring(0, headerEndIndex);
-        console.log("[WebSocket Polyfill] Received upgrade response:", headers);
+        debugLog("[WebSocket Polyfill] Received upgrade response:", headers);
 
         // Check if upgrade was successful
         if (!headers.includes('HTTP/1.1 101') && !headers.includes('HTTP/1.0 101')) {
@@ -202,19 +307,16 @@
         // Extract protocol if present
         const protocolMatch = headers.match(/Sec-WebSocket-Protocol:\s*(\S+)/i);
         if (protocolMatch) {
-          this.protocol = protocolMatch[1];
+          this._protocol = protocolMatch[1];
         }
 
         // Upgrade successful!
         this._waitingForUpgrade = false;
-        this.readyState = WebSocket.OPEN;
+        this._readyState = WebSocketPolyfill.OPEN;
 
-        console.log("[WebSocket Polyfill] WebSocket connection established");
+        debugLog("[WebSocket Polyfill] WebSocket connection established");
 
-        // Fire onopen event
-        if (this.onopen) {
-          this.onopen(new Event("open"));
-        }
+        // Fire onopen event (dispatchEvent will handle both onopen and listeners)
         this.dispatchEvent(new Event("open"));
 
         // If there's any data after the headers, process it as WebSocket frames
@@ -235,7 +337,7 @@
       // For now, assume data is the payload (we'll implement frame parsing if needed)
       // WebSocket frames from server are not masked
 
-      if (this.readyState !== WebSocket.OPEN) return;
+      if (this._readyState !== WebSocketPolyfill.OPEN) return;
 
       // Append incoming data to frame buffer
       const newBuffer = new Uint8Array(this._frameBuffer.length + data.length);
@@ -288,11 +390,8 @@
           const text = new TextDecoder().decode(payload);
           const event = new MessageEvent("message", {
             data: text,
-            origin: new URL(this.url).origin,
+            origin: this._parsedUrl.origin,
           });
-          if (this.onmessage) {
-            this.onmessage(event);
-          }
           this.dispatchEvent(event);
         } else if (opcode === 0x02) {
           // Binary frame
@@ -304,11 +403,8 @@
           }
           const event = new MessageEvent("message", {
             data: eventData,
-            origin: new URL(this.url).origin,
+            origin: this._parsedUrl.origin,
           });
-          if (this.onmessage) {
-            this.onmessage(event);
-          }
           this.dispatchEvent(event);
         } else if (opcode === 0x08) {
           // Close frame
@@ -333,10 +429,8 @@
     _sendPong(payload) {
       // Send pong frame
       const frame = this._createWebSocketFrame(0x0A, payload);
-      navigator.serviceWorker.controller.postMessage({
+      this._postToServiceWorker({
         type: "SDK_SEND",
-        clientId: this._clientId,
-        connId: this._connId,
         data: frame,
       });
     }
@@ -396,7 +490,7 @@
       const code = data.code || 1000;
       const reason = data.reason || "";
 
-      console.log(
+      debugLog(
         "[WebSocket Polyfill] Connection closed, code:",
         code,
         "reason:",
@@ -404,7 +498,7 @@
       );
 
       this._isClosed = true;
-      this.readyState = WebSocket.CLOSED;
+      this._readyState = WebSocketPolyfill.CLOSED;
 
       const event = new CloseEvent("close", {
         code: code,
@@ -412,9 +506,7 @@
         wasClean: code === 1000,
       });
 
-      if (this.onclose) {
-        this.onclose(event);
-      }
+      // dispatchEvent will handle both onclose and event listeners
       this.dispatchEvent(event);
     }
 
@@ -429,9 +521,7 @@
       const event = new Event("error");
       event.error = error;
 
-      if (this.onerror) {
-        this.onerror(event);
-      }
+      // dispatchEvent will handle both onerror and event listeners
       this.dispatchEvent(event);
 
       // Close connection after error
@@ -441,8 +531,8 @@
     }
 
     send(data) {
-      if (this.readyState !== WebSocket.OPEN) {
-        throw new Error("WebSocket is not open");
+      if (this._readyState !== WebSocketPolyfill.OPEN) {
+        throw new DOMException("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.");
       }
 
       if (!this._connId) {
@@ -469,10 +559,8 @@
           data.arrayBuffer().then(arrayBuffer => {
             const bytes = new Uint8Array(arrayBuffer);
             const frame = this._createWebSocketFrame(0x02, bytes);
-            navigator.serviceWorker.controller.postMessage({
+            this._postToServiceWorker({
               type: "SDK_SEND",
-              clientId: this._clientId,
-              connId: this._connId,
               data: frame,
             });
           });
@@ -485,10 +573,8 @@
         const frame = this._createWebSocketFrame(opcode, bytes);
 
         // Send to Service Worker
-        navigator.serviceWorker.controller.postMessage({
+        this._postToServiceWorker({
           type: "SDK_SEND",
-          clientId: this._clientId,
-          connId: this._connId,
           data: frame,
         });
       } catch (error) {
@@ -498,20 +584,20 @@
     }
 
     close(code = 1000, reason = "") {
-      if (this._isClosed || this.readyState === WebSocket.CLOSING) {
+      if (this._isClosed || this._readyState === WebSocketPolyfill.CLOSING) {
         return;
       }
 
-      console.log(
+      debugLog(
         "[WebSocket Polyfill] Client initiated close, code:",
         code,
         "reason:",
         reason
       );
 
-      this.readyState = WebSocket.CLOSING;
+      this._readyState = WebSocketPolyfill.CLOSING;
 
-      if (this._connId && this.readyState === WebSocket.OPEN) {
+      if (this._connId && this._readyState === WebSocketPolyfill.OPEN) {
         // Send WebSocket close frame
         const reasonBytes = new TextEncoder().encode(reason);
         const payload = new Uint8Array(2 + reasonBytes.length);
@@ -521,20 +607,16 @@
 
         const frame = this._createWebSocketFrame(0x08, payload);
 
-        navigator.serviceWorker.controller.postMessage({
+        this._postToServiceWorker({
           type: "SDK_SEND",
-          clientId: this._clientId,
-          connId: this._connId,
           data: frame,
         });
       }
 
       // Close SDK connection
       if (this._connId) {
-        navigator.serviceWorker.controller.postMessage({
+        this._postToServiceWorker({
           type: "SDK_CLOSE",
-          clientId: this._clientId,
-          connId: this._connId,
         });
       }
 
@@ -542,35 +624,20 @@
       this._handleDataClose({ code, reason });
     }
 
-    // EventTarget implementation
-    addEventListener(type, listener) {
-      if (!this._listeners) {
-        this._listeners = {};
-      }
-      if (!this._listeners[type]) {
-        this._listeners[type] = [];
-      }
-      this._listeners[type].push(listener);
-    }
-
-    removeEventListener(type, listener) {
-      if (!this._listeners || !this._listeners[type]) {
-        return;
-      }
-      const index = this._listeners[type].indexOf(listener);
-      if (index !== -1) {
-        this._listeners[type].splice(index, 1);
-      }
-    }
-
+    // Override dispatchEvent to handle onXXX handlers (EventTarget provides addEventListener/removeEventListener)
     dispatchEvent(event) {
-      if (!this._listeners || !this._listeners[event.type]) {
-        return true;
+      // Call onXXX handler first (matches native WebSocket behavior)
+      const handlerName = 'on' + event.type;
+      if (typeof this[handlerName] === 'function') {
+        try {
+          this[handlerName].call(this, event);
+        } catch (e) {
+          console.error('Error in event handler:', e);
+        }
       }
-      this._listeners[event.type].forEach((listener) => {
-        listener.call(this, event);
-      });
-      return true;
+
+      // Use native EventTarget.dispatchEvent for event listeners
+      return super.dispatchEvent(event);
     }
   }
 
@@ -594,17 +661,17 @@
     }
   }
 
-  // Replace WebSocket with polyfill
-  window.WebSocket = function (url, protocols) {
+  // Replace WebSocket with a simple factory function (zero overhead after construction)
+  window.WebSocket = function WebSocket(url, protocols) {
     // Use polyfill for same-origin, native for cross-origin
     if (isSameOrigin(url)) {
-      console.log(
+      debugLog(
         "[WebSocket Polyfill] Using E2EE polyfill for same-origin connection:",
         url
       );
       return new WebSocketPolyfill(url, protocols);
     } else {
-      console.log(
+      debugLog(
         "[WebSocket Polyfill] Using native WebSocket for cross-origin connection:",
         url
       );
@@ -612,17 +679,18 @@
     }
   };
 
-  // Copy static properties
-  window.WebSocket.CONNECTING = NativeWebSocket.CONNECTING;
-  window.WebSocket.OPEN = NativeWebSocket.OPEN;
-  window.WebSocket.CLOSING = NativeWebSocket.CLOSING;
-  window.WebSocket.CLOSED = NativeWebSocket.CLOSED;
+  // Copy static constants from WebSocketPolyfill
+  // Essential for: WebSocket.CONNECTING, WebSocket.OPEN, WebSocket.CLOSING, WebSocket.CLOSED
+  window.WebSocket.CONNECTING = WebSocketPolyfill.CONNECTING; // 0
+  window.WebSocket.OPEN = WebSocketPolyfill.OPEN;             // 1
+  window.WebSocket.CLOSING = WebSocketPolyfill.CLOSING;       // 2
+  window.WebSocket.CLOSED = WebSocketPolyfill.CLOSED;         // 3
 
-  console.log("[WebSocket Polyfill] Initialized with E2EE and WebSocket protocol support");
+  debugLog("[WebSocket Polyfill] Initialized with E2EE and WebSocket protocol support");
 
   // Remove the polyfill script tag after initialization
   if (currentScript && currentScript.parentNode) {
     currentScript.parentNode.removeChild(currentScript);
-    console.log("[WebSocket Polyfill] Script tag removed");
+    debugLog("[WebSocket Polyfill] Script tag removed");
   }
 })();
