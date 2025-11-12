@@ -316,12 +316,12 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, metadata ...Metadata) (*RDListener, error) {
+func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, metadata *Metadata) (*RDListener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
 		Strs("alpns", alpns).
-		Int("metadata_count", len(metadata)).
+		Bool("has_metadata", metadata != nil).
 		Msg("[SDK] Creating listener")
 
 	// Validate name is URL-safe
@@ -332,15 +332,10 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 		return nil, ErrInvalidName
 	}
 
-	if len(metadata) > 1 {
-		log.Error().Msg("[SDK] Too many metadata arguments")
-		return nil, ErrInvalidMetadata
-	}
-
 	metadataValue := ""
 
-	if len(metadata) > 0 {
-		metadataJSON, err := json.Marshal(metadata[0])
+	if metadata != nil {
+		metadataJSON, err := json.Marshal(metadata)
 		if err != nil {
 			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
 			return nil, ErrInvalidMetadata

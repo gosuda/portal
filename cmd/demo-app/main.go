@@ -188,7 +188,7 @@ func runPaint() error {
 	defer client.Close()
 
 	// 3) Register lease and obtain a net.Listener that accepts relayed connections
-	metadata := sdk.Metadata{
+	metadata := &sdk.Metadata{
 		Description: "Portal demo paint app",
 		Tags:        []string{"demo", "paint"},
 		Owner:       "PortalApp Developer",

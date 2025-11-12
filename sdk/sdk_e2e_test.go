@@ -102,7 +102,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 5. Register listener on app side
 	log.Info().Msg("[TEST] Step 5: Registering app listener")
-	appListener, err := appClient.Listen(appCred, "test-app", []string{"http/1.1"})
+	appListener, err := appClient.Listen(appCred, "test-app", []string{"http/1.1"}, nil)
 	if err != nil {
 		t.Fatalf("Failed to create app listener: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	}
 	defer appClient.Close()
 
-	appListener, err := appClient.Listen(appCred, "multi-test-app", []string{"http/1.1"})
+	appListener, err := appClient.Listen(appCred, "multi-test-app", []string{"http/1.1"}, nil)
 	if err != nil {
 		t.Fatalf("Failed to create app listener: %v", err)
 	}
