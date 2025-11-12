@@ -406,6 +406,110 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	return nil
 }
 
+func (g *RelayServer) handleUDPRegisterRequest(ctx *StreamContext, packet *rdverb.Packet) error {
+	var signedPayload rdsec.SignedPayload
+	err := signedPayload.UnmarshalVT(packet.Payload)
+	if err != nil {
+		return err
+	}
+
+	var req rdverb.UDPRegisterRequest
+	err = req.UnmarshalVT(signedPayload.Data)
+	if err != nil {
+		return err
+	}
+
+	// Verify the signature - need to get identity from lease
+	leaseEntry, exists := g.leaseManager.GetLeaseByID(req.LeaseId)
+	if !exists {
+		log.Warn().Str("lease_id", req.LeaseId).Msg("[RelayServer] Lease not found for UDP registration")
+		var resp rdverb.UDPRegisterResponse
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	if !cryptoops.VerifySignedPayload(&signedPayload, leaseEntry.Lease.Identity) {
+		log.Warn().Str("lease_id", req.LeaseId).Msg("[RelayServer] Invalid signature for UDP registration")
+		var resp rdverb.UDPRegisterResponse
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	var resp rdverb.UDPRegisterResponse
+
+	// Check if UDP relay is available
+	if g.udpRelay == nil {
+		log.Warn().Msg("[RelayServer] UDP relay not available")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	// Create UDP session
+	session, err := g.udpRelay.CreateSession(req.LeaseId)
+	if err != nil {
+		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayServer] Failed to create UDP session")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+
+		response, err := resp.MarshalVT()
+		if err != nil {
+			return err
+		}
+
+		return writePacket(ctx.Stream, &rdverb.Packet{
+			Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE,
+			Payload: response,
+		})
+	}
+
+	// Success
+	resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
+	resp.UdpPort = int32(g.udpRelay.GetPort())
+	resp.SessionToken = SessionTokenToString(session.SessionToken)
+
+	log.Info().
+		Str("lease_id", req.LeaseId).
+		Int32("udp_port", resp.UdpPort).
+		Str("session_token", resp.SessionToken).
+		Msg("[RelayServer] UDP session created successfully")
+
+	response, err := resp.MarshalVT()
+	if err != nil {
+		return err
+	}
+
+	return writePacket(ctx.Stream, &rdverb.Packet{
+		Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE,
+		Payload: response,
+	})
+}
+
 // Helper function to read packet from stream
 func readPacket(stream io.Reader) (*rdverb.Packet, error) {
 	var size [4]byte

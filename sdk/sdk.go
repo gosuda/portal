@@ -810,3 +810,45 @@ func (g *RDClient) LookupName(name string) (*rdverb.Lease, error) {
 	}
 	return nil, ErrNoAvailableRelay
 }
+
+// RequestUDPSession requests a UDP session from the relay server for the given lease
+func (g *RDClient) RequestUDPSession(cred *cryptoops.Credential, leaseID string) ([16]byte, int, error) {
+	log.Debug().Str("lease_id", leaseID).Msg("[SDK] Requesting UDP session")
+
+	var sessionToken [16]byte
+
+	g.mu.Lock()
+	relays := make([]*rdRelay, 0, len(g.relays))
+	for _, relay := range g.relays {
+		relays = append(relays, relay)
+	}
+	g.mu.Unlock()
+
+	if len(relays) == 0 {
+		return sessionToken, 0, ErrNoAvailableRelay
+	}
+
+	// Try first relay
+	relay := relays[0]
+
+	// Request UDP session
+	code, udpPort, token, err := relay.client.RequestUDPSession(cred, leaseID)
+	if err != nil {
+		log.Error().Err(err).Str("relay", relay.addr).Msg("[SDK] Failed to request UDP session")
+		return sessionToken, 0, err
+	}
+
+	if code != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		log.Warn().Str("code", code.String()).Msg("[SDK] UDP session request rejected")
+		return sessionToken, 0, fmt.Errorf("UDP session request rejected: %s", code.String())
+	}
+
+	copy(sessionToken[:], token)
+
+	log.Info().
+		Str("lease_id", leaseID).
+		Int("udp_port", udpPort).
+		Msg("[SDK] UDP session created successfully")
+
+	return sessionToken, udpPort, nil
+}

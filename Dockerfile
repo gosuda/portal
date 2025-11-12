@@ -16,7 +16,7 @@ COPY . .
 # Build WASM and server
 RUN make build-wasm
 
-# Build server
+# Build server binary
 RUN make build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -34,7 +34,9 @@ ENV POSTAL_FRONTEND_URL=http://*.localhost:4017
 ENV BOOTSTRAP_URIS=ws://localhost:4017/relay
 
 # Expose ports
-# 4017: relay server and portal frontend
+# 4017: TCP relay server and portal frontend
+# 19132: UDP relay (Minecraft Bedrock default)
 EXPOSE 4017
+EXPOSE 19132/udp
 
 ENTRYPOINT ["/usr/bin/relay-server"]

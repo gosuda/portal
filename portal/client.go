@@ -731,3 +731,87 @@ func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 func (g *RelayClient) IncomingConnection() <-chan *IncomingConn {
 	return g.incomingConnCh
 }
+
+// RequestUDPSession requests a UDP session from the relay server
+func (g *RelayClient) RequestUDPSession(cred *cryptoops.Credential, leaseID string) (rdverb.ResponseCode, int, string, error) {
+	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Requesting UDP session")
+
+	// Generate nonce
+	nonce := make([]byte, 32)
+	_, err := io.ReadFull(rand.Reader, nonce)
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	// Create UDP register request
+	req := &rdverb.UDPRegisterRequest{
+		LeaseId:   leaseID,
+		Nonce:     nonce,
+		Timestamp: time.Now().Unix(),
+	}
+
+	// Marshal request
+	reqData, err := req.MarshalVT()
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	// Sign the request
+	signature := cred.Sign(reqData)
+	signedPayload := &rdsec.SignedPayload{
+		Data:      reqData,
+		Signature: signature,
+	}
+
+	signedData, err := signedPayload.MarshalVT()
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	// Create packet
+	packet := &rdverb.Packet{
+		Type:    rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_REQUEST,
+		Payload: signedData,
+	}
+
+	// Open stream
+	stream, err := g.sess.OpenStream()
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+	defer stream.Close()
+
+	// Send request
+	err = writePacket(stream, packet)
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] UDP register request sent, waiting for response")
+
+	// Read response
+	respPacket, err := readPacket(stream)
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_RESPONSE {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", ErrInvalidResponse
+	}
+
+	// Parse response
+	resp := &rdverb.UDPRegisterResponse{}
+	err = resp.UnmarshalVT(respPacket.Payload)
+	if err != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, 0, "", err
+	}
+
+	log.Info().
+		Str("lease_id", leaseID).
+		Str("code", resp.Code.String()).
+		Int32("udp_port", resp.UdpPort).
+		Str("session_token", resp.SessionToken).
+		Msg("[RelayClient] UDP register response received")
+
+	return resp.Code, int(resp.UdpPort), resp.SessionToken, nil
+}

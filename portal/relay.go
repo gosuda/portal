@@ -36,6 +36,7 @@ type RelayServer struct {
 	relayedConnectionsLock sync.RWMutex
 
 	leaseManager *LeaseManager
+	udpRelay     *UDPRelay // UDP relay for UDP-based leases
 
 	stopch    chan struct{}
 	waitgroup sync.WaitGroup
@@ -188,6 +189,8 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 			err = g.handleLeaseDeleteRequest(ctx, packet)
 		case rdverb.PacketType_PACKET_TYPE_CONNECTION_REQUEST:
 			err = g.handleConnectionRequest(ctx, packet)
+		case rdverb.PacketType_PACKET_TYPE_UDP_REGISTER_REQUEST:
+			err = g.handleUDPRegisterRequest(ctx, packet)
 		default:
 			log.Warn().
 				Int64("conn_id", id).
@@ -304,5 +307,18 @@ func (g *RelayServer) Start() {
 func (g *RelayServer) Stop() {
 	close(g.stopch)
 	g.leaseManager.Stop()
+	if g.udpRelay != nil {
+		g.udpRelay.Stop()
+	}
 	g.waitgroup.Wait()
+}
+
+// SetUDPRelay sets the UDP relay for this relay server
+func (g *RelayServer) SetUDPRelay(udpRelay *UDPRelay) {
+	g.udpRelay = udpRelay
+}
+
+// GetUDPRelay returns the UDP relay instance
+func (g *RelayServer) GetUDPRelay() *UDPRelay {
+	return g.udpRelay
 }

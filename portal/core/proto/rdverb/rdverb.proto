@@ -18,6 +18,9 @@ enum PacketType {
 
   PACKET_TYPE_CONNECTION_REQUEST = 6;
   PACKET_TYPE_CONNECTION_RESPONSE = 7;
+
+  PACKET_TYPE_UDP_REGISTER_REQUEST = 8; // Authenticated - Register UDP endpoint
+  PACKET_TYPE_UDP_REGISTER_RESPONSE = 9;
 }
 
 enum ResponseCode {
@@ -49,11 +52,18 @@ message RelayInfoResponse {
   RelayInfo relay_info = 1;
 }
 
+enum Protocol {
+  PROTOCOL_TCP = 0;  // TCP-based (yamux streams)
+  PROTOCOL_UDP = 1;  // UDP-based (packet relay)
+  PROTOCOL_BOTH = 2; // Both TCP and UDP
+}
+
 message Lease {
   rdsec.Identity identity = 1;
   int64 expires = 2;
   string name = 3;
   repeated string alpn = 4;
+  Protocol protocol = 5; // Protocol type for this lease
 }
 
 message LeaseUpdateRequest {
@@ -83,4 +93,16 @@ message ConnectionRequest {
 
 message ConnectionResponse {
   ResponseCode code = 1;
+}
+
+message UDPRegisterRequest {
+  string lease_id = 1;        // Lease ID to register UDP for
+  bytes nonce = 2;            // Random nonce for replay protection
+  int64 timestamp = 3;        // Timestamp for message freshness
+}
+
+message UDPRegisterResponse {
+  ResponseCode code = 1;
+  int32 udp_port = 2;        // UDP port assigned by relay server
+  string session_token = 3;   // Session token for UDP packets
 }

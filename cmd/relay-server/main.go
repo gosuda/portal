@@ -21,6 +21,7 @@ var (
 	flagBootstraps []string
 	flagALPN       string
 	flagPort       int
+	flagUDPPort    int
 	flagStaticDir  string
 	flagPortalHost string
 )
@@ -54,6 +55,7 @@ func main() {
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
+	flag.IntVar(&flagUDPPort, "udp-port", 19132, "UDP relay port (default: 19132 for Minecraft Bedrock)")
 	flag.StringVar(&flagStaticDir, "static-dir", defaultStaticDir, "static files directory for portal frontend (env: STATIC_DIR)")
 	flag.StringVar(&flagPortalHost, "portal-host", defaultPortalHost, "portal host for frontend serving (env: PORTAL_HOST)")
 
@@ -122,6 +124,20 @@ func runServer() error {
 	serv := portal.NewRelayServer(cred, flagBootstraps)
 	serv.Start()
 	defer serv.Stop()
+
+	// Start UDP relay if port is specified
+	if flagUDPPort > 0 {
+		udpAddr := fmt.Sprintf(":%d", flagUDPPort)
+		udpRelay, err := portal.NewUDPRelay(udpAddr, serv)
+		if err != nil {
+			log.Fatal().Err(err).Str("addr", udpAddr).Msg("[server] failed to create UDP relay")
+		}
+		serv.SetUDPRelay(udpRelay)
+		if err := udpRelay.Start(); err != nil {
+			log.Fatal().Err(err).Msg("[server] failed to start UDP relay")
+		}
+		log.Info().Int("port", flagUDPPort).Msg("[server] UDP relay started")
+	}
 
 	// Admin UI + Relay + Static Frontend
 	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
