@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -177,6 +176,38 @@ type Metadata struct {
 	Country     string   `json:"country"`
 }
 
+type MetadataOption func(*Metadata)
+
+func WithDescription(description string) MetadataOption {
+	return func(m *Metadata) {
+		m.Description = description
+	}
+}
+
+func WithTags(tags []string) MetadataOption {
+	return func(m *Metadata) {
+		m.Tags = tags
+	}
+}
+
+func WithThumbnail(thumbnail string) MetadataOption {
+	return func(m *Metadata) {
+		m.Thumbnail = thumbnail
+	}
+}
+
+func WithOwner(owner string) MetadataOption {
+	return func(m *Metadata) {
+		m.Owner = owner
+	}
+}
+
+func WithCountry(country string) MetadataOption {
+	return func(m *Metadata) {
+		m.Country = country
+	}
+}
+
 type RDClient struct {
 	mu sync.Mutex
 
@@ -316,12 +347,11 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, metadata *Metadata) (*RDListener, error) {
+func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*RDListener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
 		Strs("alpns", alpns).
-		Bool("has_metadata", metadata != nil).
 		Msg("[SDK] Creating listener")
 
 	// Validate name is URL-safe
@@ -334,13 +364,9 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 
 	metadataValue := ""
 
-	if metadata != nil {
-		metadataJSON, err := json.Marshal(metadata)
-		if err != nil {
-			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
-			return nil, ErrInvalidMetadata
-		}
-		metadataValue = string(metadataJSON)
+	for _, option := range options {
+		metadata := &Metadata{}
+		option(metadata)
 	}
 
 	g.mu.Lock()
