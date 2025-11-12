@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -168,6 +169,14 @@ type RDListener struct {
 	closed bool
 }
 
+type Metadata struct {
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Thumbnail   string   `json:"thumbnail"`
+	Owner       string   `json:"owner"`
+	Country     string   `json:"country"`
+}
+
 type RDClient struct {
 	mu sync.Mutex
 
@@ -188,6 +197,7 @@ var (
 	ErrRelayNotFound        = errors.New("relay not found")
 	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
 	ErrFailedToCreateClient = errors.New("failed to create relay client")
+	ErrInvalidMetadata      = errors.New("invalid metadata")
 )
 
 func NewClient(opt ...Option) (*RDClient, error) {
@@ -306,11 +316,12 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string) (*RDListener, error) {
+func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, metadata ...Metadata) (*RDListener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
 		Strs("alpns", alpns).
+		Int("metadata_count", len(metadata)).
 		Msg("[SDK] Creating listener")
 
 	// Validate name is URL-safe
@@ -319,6 +330,22 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 			Str("name", name).
 			Msg("[SDK] Lease name contains invalid characters")
 		return nil, ErrInvalidName
+	}
+
+	if len(metadata) > 1 {
+		log.Error().Msg("[SDK] Too many metadata arguments")
+		return nil, ErrInvalidMetadata
+	}
+
+	metadataValue := ""
+
+	if len(metadata) > 0 {
+		metadataJSON, err := json.Marshal(metadata[0])
+		if err != nil {
+			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
+			return nil, ErrInvalidMetadata
+		}
+		metadataValue = string(metadataJSON)
 	}
 
 	g.mu.Lock()
@@ -346,6 +373,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 		},
 		Name: name,
 		Alpn: alpns,
+		Metadata: metadataValue,
 	}
 
 	// Create listener with lease metadata for re-registration
