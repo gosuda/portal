@@ -409,8 +409,8 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 			Id:        cred.ID(),
 			PublicKey: cred.PublicKey(),
 		},
-		Name: name,
-		Alpn: alpns,
+		Name:     name,
+		Alpn:     alpns,
 		Metadata: metadataValue,
 	}
 
