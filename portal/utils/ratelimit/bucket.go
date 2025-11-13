@@ -6,51 +6,54 @@ import (
 	"time"
 )
 
-// Bucket is a simple, precise byte-rate limiter (thread-safe).
-// All fields are integer-based (bytes, ns) to avoid float overhead.
+// Bucket is a very simple thread-safe rate limiter.
+// It uses a shared timeline (allowAt) with a fixed per-byte duration and
+// a maximum slack to model burst capacity.
 type Bucket struct {
 	mu       sync.Mutex
-	rateBps  int64     // bytes per second
-	capacity int64     // max tokens (burst), typically = rateBps
-	tokens   int64     // current tokens in bytes
-	last     time.Time // last refill time
+	perByte  time.Duration // time per byte
+	maxSlack time.Duration // maximum credit time (burst)
+	allowAt  time.Time     // next allowed time on the timeline
 }
 
-// NewBucket creates a bucket with the given rate and burst (bytes).
-// If burst <= 0, it defaults to rateBps.
+// NewBucket creates a limiter for rateBps with burst bytes.
+// burst is translated to time slack = burst * perByte.
 func NewBucket(rateBps int64, burst int64) *Bucket {
+	if rateBps <= 0 {
+		return nil
+	}
 	if burst <= 0 {
 		burst = rateBps
 	}
-	return &Bucket{rateBps: rateBps, capacity: burst, tokens: burst, last: time.Now()}
+	perByte := time.Second / time.Duration(rateBps)
+	if perByte <= 0 {
+		perByte = time.Nanosecond
+	}
+	maxSlack := perByte * time.Duration(burst)
+	now := time.Now()
+	// Start with full burst credit available
+	allowAt := now.Add(-maxSlack)
+	return &Bucket{perByte: perByte, maxSlack: maxSlack, allowAt: allowAt}
 }
 
-// Take blocks until n bytes worth of tokens are available, then consumes them.
+// Take blocks long enough to account for n bytes at the configured rate.
+// It is safe for concurrent use and coordinates consumers by a shared timeline.
 func (b *Bucket) Take(n int64) {
-	for {
-		var sleep time.Duration
-		b.mu.Lock()
-		now := time.Now()
-		elapsed := now.Sub(b.last)
-		if elapsed > 0 {
-			refill := (elapsed.Nanoseconds() * b.rateBps) / int64(time.Second)
-			if refill > 0 {
-				b.tokens += refill
-				if b.tokens > b.capacity {
-					b.tokens = b.capacity
-				}
-				b.last = now
-			}
-		}
-		if b.tokens >= n {
-			b.tokens -= n
-			b.mu.Unlock()
-			return
-		}
-		deficit := n - b.tokens
-		nsNeeded := max((deficit*int64(time.Second))/b.rateBps, int64(time.Millisecond))
-		sleep = time.Duration(nsNeeded)
-		b.mu.Unlock()
+	if b == nil || n <= 0 {
+		return
+	}
+	b.mu.Lock()
+	now := time.Now()
+	// Refill slack over time up to maxSlack
+	if now.Sub(b.allowAt) > b.maxSlack {
+		b.allowAt = now.Add(-b.maxSlack)
+	}
+	start := b.allowAt
+	finish := start.Add(b.perByte * time.Duration(n))
+	b.allowAt = finish
+	b.mu.Unlock()
+
+	if sleep := finish.Sub(now); sleep > 0 {
 		time.Sleep(sleep)
 	}
 }
