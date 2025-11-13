@@ -49,7 +49,7 @@ http://localhost:4017
 #
 # Then edit docker-compose.yml environment for your domain:
 PORTAL_UI_URL: https://yourservice.com
-POSTAL_FRONTEND_URL: https://*.yourservice.com
+PORTAL_FRONTEND_URL: https://*.yourservice.com
 BOOTSTRAP_URIS: wss://yourservice.com/relay
 
 ```
