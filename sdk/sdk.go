@@ -175,6 +175,7 @@ type Metadata struct {
 	Thumbnail   string   `json:"thumbnail"`
 	Owner       string   `json:"owner"`
 	Country     string   `json:"country"`
+	Hide 				bool     `json:"hide"` // 고수다 숨김 여부
 }
 
 func (m Metadata) isEmpty() bool {
@@ -215,6 +216,12 @@ func WithCountry(country string) MetadataOption {
 	return func(m *Metadata) {
 		m.Country = country
 	}
+}
+
+func WithHide(hide bool) MetadataOption {
+    return func(m *Metadata) {
+        m.Hide = hide
+    }
 }
 
 type RDClient struct {
