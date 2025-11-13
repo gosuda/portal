@@ -91,7 +91,7 @@ func runExpose() error {
 	defer client.Close()
 
 	// Register listener
-	listener, err := client.Listen(cred, flagName, []string{"http/1.1", "h2"}, nil)
+	listener, err := client.Listen(cred, flagName, []string{"http/1.1", "h2"})
 	if err != nil {
 		return fmt.Errorf("failed to register service: %w", err)
 	}
