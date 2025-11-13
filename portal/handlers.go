@@ -11,6 +11,7 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
+	"gosuda.org/portal/portal/utils/ratelimit"
 )
 
 type StreamContext struct {
@@ -326,6 +327,21 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		Str("response_code", resp.Code.String()).
 		Msg("[RelayServer] Received response from lease holder, sending to client")
 
+	// Enforce relayed connection limits if currently accepted
+	if resp.Code == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		leaseID := string(leaseEntry.Lease.Identity.Id)
+		g.limitsLock.Lock()
+		overPerLease := g.maxRelayedPerLease > 0 && g.relayedPerLeaseCount[leaseID] >= g.maxRelayedPerLease
+		if overPerLease {
+			log.Warn().
+				Str("lease_id", leaseID).
+				Bool("over_per_lease", overPerLease).
+				Msg("[RelayServer] Relayed connection per-lease limit reached, rejecting")
+			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+		}
+		g.limitsLock.Unlock()
+	}
+
 	// Send response to client
 	response, err := resp.MarshalVT()
 	if err != nil {
@@ -350,6 +366,10 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		ctx.Hijack()
 
 		leaseID := string(leaseEntry.Lease.Identity.Id)
+		// Increment counters for active relayed connections
+		g.limitsLock.Lock()
+		g.relayedPerLeaseCount[leaseID] = g.relayedPerLeaseCount[leaseID] + 1
+		g.limitsLock.Unlock()
 		g.relayedConnectionsLock.Lock()
 		g.relayedConnections[leaseID] = append(g.relayedConnections[leaseID], ctx.Stream)
 		g.relayedConnectionsLock.Unlock()
@@ -358,10 +378,10 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		var wg sync.WaitGroup
 		wg.Add(2)
 
-		// Copy from client to lease holder
+		// Copy from client to lease holder (with optional per-lease BPS limit)
 		go func() {
 			defer wg.Done()
-			n, err := io.Copy(leaseStream, ctx.Stream)
+			n, err := ratelimit.Copy(leaseStream, ctx.Stream, g.getLeaseBPSBucket(leaseID))
 			log.Debug().
 				Str("lease_id", leaseID).
 				Int64("bytes", n).
@@ -370,10 +390,10 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 			leaseStream.Close()
 		}()
 
-		// Copy from lease holder to client
+		// Copy from lease holder to client (with optional per-lease BPS limit)
 		go func() {
 			defer wg.Done()
-			n, err := io.Copy(ctx.Stream, leaseStream)
+			n, err := ratelimit.Copy(ctx.Stream, leaseStream, g.getLeaseBPSBucket(leaseID))
 			log.Debug().
 				Str("lease_id", leaseID).
 				Int64("bytes", n).
@@ -384,6 +404,15 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 
 		wg.Wait()
 		log.Debug().Str("lease_id", leaseID).Msg("[RelayServer] Connection forwarding completed successfully")
+
+		// Decrement counters after forwarding completes
+		g.limitsLock.Lock()
+		if v := g.relayedPerLeaseCount[leaseID]; v > 1 {
+			g.relayedPerLeaseCount[leaseID] = v - 1
+		} else {
+			delete(g.relayedPerLeaseCount, leaseID)
+		}
+		g.limitsLock.Unlock()
 
 		// Clean up relayed connection tracking
 		g.relayedConnectionsLock.Lock()

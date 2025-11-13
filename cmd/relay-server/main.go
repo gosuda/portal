@@ -23,6 +23,8 @@ var (
 	flagPort       int
 	flagStaticDir  string
 	flagPortalHost string
+	flagMaxLease   int
+	flagLeaseBPS   int
 )
 
 func main() {
@@ -56,6 +58,8 @@ func main() {
 	flag.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
 	flag.StringVar(&flagStaticDir, "static-dir", defaultStaticDir, "static files directory for portal frontend (env: STATIC_DIR)")
 	flag.StringVar(&flagPortalHost, "portal-host", defaultPortalHost, "portal host for frontend serving (env: PORTAL_HOST)")
+	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
+	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
 
 	flag.Parse()
 
@@ -120,6 +124,13 @@ func runServer() error {
 	cred := sdk.NewCredential()
 
 	serv := portal.NewRelayServer(cred, flagBootstraps)
+	// Apply traffic controls if configured
+	if flagMaxLease > 0 {
+		serv.SetMaxRelayedPerLease(flagMaxLease)
+	}
+	if flagLeaseBPS > 0 {
+		serv.GetLeaseManager().SetDefaultBPS(int64(flagLeaseBPS))
+	}
 	serv.Start()
 	defer serv.Stop()
 

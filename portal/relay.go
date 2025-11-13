@@ -10,6 +10,7 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
+	"gosuda.org/portal/portal/utils/ratelimit"
 )
 
 type Connection struct {
@@ -39,6 +40,15 @@ type RelayServer struct {
 
 	stopch    chan struct{}
 	waitgroup sync.WaitGroup
+
+	// Traffic control limits and counters
+	maxRelayedPerLease   int
+	relayedPerLeaseCount map[string]int
+	limitsLock           sync.Mutex
+
+	// Per-lease byte rate limit (BPS for relay throughput)
+	leaseBPS     map[string]*ratelimit.Bucket
+	leaseBPSRate map[string]int64
 }
 
 func NewRelayServer(credential *cryptoops.Credential, address []string) *RelayServer {
@@ -48,17 +58,45 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 			Id:        credential.ID(),
 			PublicKey: credential.PublicKey(),
 		},
-		address:            address,
-		connidCounter:      0,
-		connections:        make(map[int64]*Connection),
-		leaseConnections:   make(map[string]*Connection),
-		relayedConnections: make(map[string][]*yamux.Stream),
-		leaseManager:       NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
-		stopch:             make(chan struct{}),
+		address:              address,
+		connidCounter:        0,
+		connections:          make(map[int64]*Connection),
+		leaseConnections:     make(map[string]*Connection),
+		relayedConnections:   make(map[string][]*yamux.Stream),
+		leaseManager:         NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
+		stopch:               make(chan struct{}),
+		relayedPerLeaseCount: make(map[string]int),
+		leaseBPS:             make(map[string]*ratelimit.Bucket),
+		leaseBPSRate:         make(map[string]int64),
 	}
 }
 
 var _yamux_config = yamux.DefaultConfig()
+
+func (g *RelayServer) getLeaseBPSBucket(leaseID string) *ratelimit.Bucket {
+	// Lookup per-lease BPS from LeaseManager (0 = unlimited)
+	bps := g.leaseManager.GetBPSLimit(leaseID)
+	if bps <= 0 {
+		return nil
+	}
+	desired := bps
+	g.limitsLock.Lock()
+	defer g.limitsLock.Unlock()
+	if b, ok := g.leaseBPS[leaseID]; ok {
+		if g.leaseBPSRate[leaseID] == desired {
+			return b
+		}
+		// replace with new rate
+		nb := ratelimit.NewBucket(desired, desired)
+		g.leaseBPS[leaseID] = nb
+		g.leaseBPSRate[leaseID] = desired
+		return nb
+	}
+	b := ratelimit.NewBucket(desired, desired)
+	g.leaseBPS[leaseID] = b
+	g.leaseBPSRate[leaseID] = desired
+	return b
+}
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
 	log.Debug().Int64("conn_id", id).Msg("[RelayServer] Handling new connection")
@@ -103,6 +141,7 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 
 		// Close the underlying connection
 		connection.conn.Close()
+
 		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection cleanup complete")
 	}()
 
@@ -305,4 +344,11 @@ func (g *RelayServer) Stop() {
 	close(g.stopch)
 	g.leaseManager.Stop()
 	g.waitgroup.Wait()
+}
+
+// Traffic control setters
+func (g *RelayServer) SetMaxRelayedPerLease(n int) {
+	g.limitsLock.Lock()
+	g.maxRelayedPerLease = n
+	g.limitsLock.Unlock()
 }
