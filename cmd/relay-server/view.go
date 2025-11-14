@@ -198,9 +198,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		var meta struct {
 			Hide bool `json:"hide"`
 		}
-		if err := json.Unmarshal([]byte(lease.Metadata), &meta); err == nil && meta.Hide {
-			// leaseRow에 Hide 정보만 넣고 리스트에는 포함
-		}
+		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
 
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
