@@ -90,9 +90,6 @@
               <div class="title">
                 {{if .Name}}{{.Name}}{{else}}(unnamed){{end}}
               </div>
-              {{ if not .Hide }}
-              <span class="gosuda-badge">고수다</span>
-              {{ end }}
               <svg
                 class="chevron"
                 xmlns="http://www.w3.org/2000/svg"
@@ -151,6 +148,5 @@
         } catch (_) {}
       })();
     </script>
-    <script src="app.js"></script>
   </body>
 </html>
