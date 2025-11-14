@@ -61,11 +61,16 @@ See [portal-toys](https://github.com/gosuda/portal-toys)
 
 For a detailed overview of system components and data flow, see the [architecture documentation](docs/architecture.md).
 
+## Glossary
+
+If you need Portal-specific terminology, check the [Portal glossary](docs/glossary.md)
 ## Contributing
 
 We welcome contributions from the community!
 Before getting started, please check the [development guide](docs/development.md)
  for setup instructions and best practices.
+
+## Glossary
 
 ### Steps to Contribute
 1. Fork the repository
