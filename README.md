@@ -70,8 +70,6 @@ We welcome contributions from the community!
 Before getting started, please check the [development guide](docs/development.md)
  for setup instructions and best practices.
 
-## Glossary
-
 ### Steps to Contribute
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
