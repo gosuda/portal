@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -191,6 +192,14 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
+
+		// Metadata parsing and hide check
+		var meta struct {
+			Hide bool `json:"hide"`
+		}
+		if err := json.Unmarshal([]byte(lease.Metadata), &meta); err == nil && meta.Hide {
+			continue
+		}
 
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
