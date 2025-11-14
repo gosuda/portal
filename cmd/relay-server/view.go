@@ -168,6 +168,7 @@ type leaseRow struct {
 	TTL         string
 	Link        string
 	StaleRed    bool
+	Hide        bool
 }
 
 type adminPageData struct {
@@ -198,7 +199,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			Hide bool `json:"hide"`
 		}
 		if err := json.Unmarshal([]byte(lease.Metadata), &meta); err == nil && meta.Hide {
-			continue
+			// leaseRow에 Hide 정보만 넣고 리스트에는 포함
 		}
 
 		// Calculate TTL
@@ -280,6 +281,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
+			Hide:        meta.Hide,
 		}
 
 		rows = append(rows, row)
