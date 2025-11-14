@@ -108,13 +108,16 @@ func (r *UDPRelay) packetWorker() {
 
 // handlePacket processes a single UDP packet
 func (r *UDPRelay) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
-	// Parse packet
+	// Try to parse as Portal protocol packet (with session token)
 	packet, err := ParseUDPPacket(data)
 	if err != nil {
+		// Failed to parse as Portal packet - treat as plain UDP
 		log.Debug().
 			Err(err).
 			Str("remote", remoteAddr.String()).
-			Msg("[UDPRelay] Failed to parse packet")
+			Int("size", len(data)).
+			Msg("[UDPRelay] Not a Portal packet, treating as plain UDP")
+		r.handlePlainUDPPacket(data, remoteAddr)
 		return
 	}
 
@@ -145,6 +148,102 @@ func (r *UDPRelay) handlePacket(data []byte, remoteAddr *net.UDPAddr) {
 		log.Warn().
 			Str("type", packetTypeName(packet.Type)).
 			Msg("[UDPRelay] Unknown packet type")
+	}
+}
+
+// handlePlainUDPPacket handles plain UDP packets (without Portal protocol wrapper)
+// This allows direct client connections (e.g., Minecraft clients) to connect without portal-tunnel
+func (r *UDPRelay) handlePlainUDPPacket(data []byte, remoteAddr *net.UDPAddr) {
+	// Find a session where this client could be ClientB
+	// Look for sessions that have ClientA registered but not ClientB yet
+	session := r.sessionManager.FindSessionForPlainClient(remoteAddr)
+
+	if session == nil {
+		// No session found - might be a first packet before host is ready
+		log.Debug().
+			Str("remote", remoteAddr.String()).
+			Int("size", len(data)).
+			Msg("[UDPRelay] No available session for plain UDP client")
+		return
+	}
+
+	log.Info().
+		Str("lease_id", session.LeaseID).
+		Str("remote", remoteAddr.String()).
+		Int("size", len(data)).
+		Msg("[UDPRelay] 📨 Plain UDP packet received")
+
+	// Register as ClientB if not already registered
+	if session.ClientBAddr == nil {
+		session.ClientBAddr = remoteAddr
+		log.Info().
+			Str("lease_id", session.LeaseID).
+			Str("addr", remoteAddr.String()).
+			Msg("[UDPRelay] ✅ Plain UDP client registered as Client B")
+	}
+
+	// Determine sender and target
+	var targetAddr *net.UDPAddr
+	var isClientA bool
+
+	if session.ClientAAddr != nil && session.ClientAAddr.String() == remoteAddr.String() {
+		// Sender is client A (host with portal-tunnel)
+		isClientA = true
+		targetAddr = session.ClientBAddr
+	} else if session.ClientBAddr != nil && session.ClientBAddr.String() == remoteAddr.String() {
+		// Sender is client B (plain UDP client)
+		isClientA = false
+		targetAddr = session.ClientAAddr
+	} else {
+		log.Warn().
+			Str("lease_id", session.LeaseID).
+			Str("sender", remoteAddr.String()).
+			Msg("[UDPRelay] Unknown plain UDP sender")
+		return
+	}
+
+	// Update activity
+	session.UpdateActivity(isClientA)
+
+	// Forward packet to target
+	if targetAddr != nil {
+		var sendData []byte
+		var err error
+
+		if isClientA {
+			// From host (ClientA with portal-tunnel) to plain client (ClientB)
+			// Just send the plain data
+			sendData = data
+		} else {
+			// From plain client (ClientB) to host (ClientA with portal-tunnel)
+			// Wrap in Portal protocol
+			sendData, err = EncodeUDPPacket(UDPPacketTypeData, session.SessionToken, data)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("lease_id", session.LeaseID).
+					Msg("[UDPRelay] Failed to encode packet for host")
+				return
+			}
+		}
+
+		_, err = r.conn.WriteToUDP(sendData, targetAddr)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("lease_id", session.LeaseID).
+				Str("target", targetAddr.String()).
+				Msg("[UDPRelay] Failed to relay plain UDP packet")
+			return
+		}
+
+		log.Info().
+			Str("lease_id", session.LeaseID).
+			Str("from", remoteAddr.String()).
+			Str("to", targetAddr.String()).
+			Int("size", len(data)).
+			Bool("wrapped", !isClientA).
+			Msg("[UDPRelay] 🔄 Plain UDP packet relayed")
 	}
 }
 

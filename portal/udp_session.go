@@ -266,3 +266,27 @@ func (m *UDPSessionManager) GetActiveSessionCount() int {
 	defer m.sessionsLock.RUnlock()
 	return len(m.sessions)
 }
+
+// FindSessionForPlainClient finds a session that can accept a plain UDP client
+// Returns the first session where ClientA is registered but ClientB is not
+// or where ClientB matches the given address
+func (m *UDPSessionManager) FindSessionForPlainClient(addr *net.UDPAddr) *UDPSession {
+	m.sessionsLock.RLock()
+	defer m.sessionsLock.RUnlock()
+
+	// First pass: check if this address is already registered as ClientB
+	for _, session := range m.sessions {
+		if session.ClientBAddr != nil && session.ClientBAddr.String() == addr.String() {
+			return session
+		}
+	}
+
+	// Second pass: find a session with ClientA but no ClientB (waiting for plain client)
+	for _, session := range m.sessions {
+		if session.ClientAAddr != nil && session.ClientBAddr == nil && !session.IsExpired() {
+			return session
+		}
+	}
+
+	return nil
+}
