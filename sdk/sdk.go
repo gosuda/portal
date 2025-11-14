@@ -784,6 +784,56 @@ func (g *RDClient) GetRelays() []string {
 	return relays
 }
 
+// RegisterLease registers a lease with all available relays
+func (g *RDClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Lease) error {
+	log.Debug().
+		Str("lease_id", cred.ID()).
+		Str("name", lease.Name).
+		Msg("[SDK] Registering lease with all relays")
+
+	g.mu.Lock()
+	relays := make([]*rdRelay, 0, len(g.relays))
+	for _, r := range g.relays {
+		relays = append(relays, r)
+	}
+	g.mu.Unlock()
+
+	if len(relays) == 0 {
+		return ErrNoAvailableRelay
+	}
+
+	// Register with all relays
+	var lastErr error
+	successCount := 0
+	for _, relay := range relays {
+		err := relay.client.RegisterLease(cred, lease)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("relay", relay.addr).
+				Msg("[SDK] Failed to register lease with relay")
+			lastErr = err
+		} else {
+			log.Debug().
+				Str("relay", relay.addr).
+				Msg("[SDK] Lease registered successfully with relay")
+			successCount++
+		}
+	}
+
+	// Return error only if all registrations failed
+	if successCount == 0 {
+		return fmt.Errorf("failed to register lease with any relay: %w", lastErr)
+	}
+
+	log.Info().
+		Int("success_count", successCount).
+		Int("total_relays", len(relays)).
+		Msg("[SDK] Lease registration completed")
+
+	return nil
+}
+
 func (g *RDClient) LookupName(name string) (*rdverb.Lease, error) {
 	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
 	var relays []*rdRelay
