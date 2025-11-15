@@ -109,7 +109,15 @@
                 >{{.LastSeenISO}}</time
               ><br />Active ~{{.LastSeen}} ago
             </div>
-            <div class="muted idtext" style="margin-top: auto">{{.Peer}}</div>
+            <div class="muted idtext" style="margin-top: auto">
+              <div>
+                <strong>Lease ID:</strong>
+                <span class="mono">{{.Peer}}</span>
+              </div>
+              {{if .Description}}<div><strong>Description:</strong> {{.Description}}</div>{{end}}
+              {{if .Tags}}<div><strong>Tags:</strong> {{.Tags}}</div>{{end}}
+              {{if .Owner}}<div><strong>Owner:</strong> {{.Owner}}</div>{{end}}
+            </div>
           </a>
           {{else}}
           <article class="card">

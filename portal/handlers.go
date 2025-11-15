@@ -78,7 +78,7 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 		log.Debug().
 			Str("lease_id", leaseID).
 			Str("lease_name", req.Lease.Name).
-			RawJSON("metadata", []byte(req.Lease.Metadata)).
+			Str("metadata", req.Lease.Metadata).
 			Int64("connection_id", ctx.ConnectionID).
 			Msg("[RelayServer] Lease update completed successfully")
 	} else {

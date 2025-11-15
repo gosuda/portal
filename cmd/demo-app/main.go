@@ -92,22 +92,13 @@ func runDemo() error {
 	}
 	defer client.Close()
 
-	// Derive tags slice from comma-separated flag
-	var tags []string
-	for _, t := range strings.Split(flagTags, ",") {
-		t = strings.TrimSpace(t)
-		if t != "" {
-			tags = append(tags, t)
-		}
-	}
-
-	// 3) Register lease and obtain a net.Listener that accepts relayed connections
+	// 3) Register lease
 	listener, err := client.Listen(
 		cred,
 		flagName,
 		[]string{"http/1.1"},
 		sdk.WithDescription(flagDesc),
-		sdk.WithTags(tags),
+		sdk.WithTags(strings.Split(flagTags, ",")),
 		sdk.WithOwner(flagOwner),
 		sdk.WithHide(flagHide),
 	)
