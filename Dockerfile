@@ -17,8 +17,14 @@ RUN go mod download
 # Copy the rest of the source code
 COPY . .
 
-# Build WASM, precompress, and server
-RUN make build-wasm compress-wasm build-server
+# Build WASM (if needed), precompress, and server
+RUN if ls dist/[0-9a-f]*.wasm.br >/dev/null 2>&1; then \
+      echo "[docker] Using prebuilt WASM artifacts in dist/"; \
+    else \
+      echo "[docker] No prebuilt WASM found; running make build-wasm compress-wasm"; \
+      make build-wasm compress-wasm; \
+    fi && \
+    make build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
