@@ -17,6 +17,9 @@ type UDPSession struct {
 	ClientAAddr  *net.UDPAddr
 	ClientBAddr  *net.UDPAddr
 
+	// Client B type flag - true if ClientB is a plain UDP client (without Portal protocol)
+	ClientBIsPlain bool
+
 	// Last activity timestamps
 	LastSeenA time.Time
 	LastSeenB time.Time

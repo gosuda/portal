@@ -176,6 +176,7 @@ func (r *UDPRelay) handlePlainUDPPacket(data []byte, remoteAddr *net.UDPAddr) {
 	// Register as ClientB if not already registered
 	if session.ClientBAddr == nil {
 		session.ClientBAddr = remoteAddr
+		session.ClientBIsPlain = true // Mark as plain UDP client
 		log.Info().
 			Str("lease_id", session.LeaseID).
 			Str("addr", remoteAddr.String()).
@@ -296,17 +297,33 @@ func (r *UDPRelay) handleDataPacket(packet *UDPPacket, session *UDPSession, send
 
 	// Relay packet if target exists
 	if targetAddr != nil {
-		// Re-encode packet with same session token for target
-		relayData, err := EncodeUDPPacket(packet.Type, packet.SessionToken, packet.Data)
-		if err != nil {
-			log.Error().
-				Err(err).
+		var sendData []byte
+		var err error
+
+		// Check if target is a plain UDP client (ClientB)
+		// isClientA means sender is ClientA, so target is ClientB
+		if isClientA && session.ClientBIsPlain {
+			// Sending from ClientA (host) to plain UDP ClientB - unwrap (send only data)
+			sendData = packet.Data
+			log.Debug().
 				Str("lease_id", session.LeaseID).
-				Msg("[UDPRelay] Failed to encode relay packet")
-			return
+				Str("from", senderAddr.String()).
+				Str("to", targetAddr.String()).
+				Int("size", len(packet.Data)).
+				Msg("[UDPRelay] 📦 Unwrapping packet for plain UDP client")
+		} else {
+			// Normal Portal protocol client - re-encode with protocol wrapper
+			sendData, err = EncodeUDPPacket(packet.Type, packet.SessionToken, packet.Data)
+			if err != nil {
+				log.Error().
+					Err(err).
+					Str("lease_id", session.LeaseID).
+					Msg("[UDPRelay] Failed to encode relay packet")
+				return
+			}
 		}
 
-		_, err = r.conn.WriteToUDP(relayData, targetAddr)
+		_, err = r.conn.WriteToUDP(sendData, targetAddr)
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -321,6 +338,7 @@ func (r *UDPRelay) handleDataPacket(packet *UDPPacket, session *UDPSession, send
 			Str("from", senderAddr.String()).
 			Str("to", targetAddr.String()).
 			Int("size", len(packet.Data)).
+			Bool("unwrapped", isClientA && session.ClientBIsPlain).
 			Msg("[UDPRelay] Packet relayed")
 	}
 }
@@ -328,9 +346,38 @@ func (r *UDPRelay) handleDataPacket(packet *UDPPacket, session *UDPSession, send
 // handleKeepalivePacket processes keepalive packets
 func (r *UDPRelay) handleKeepalivePacket(packet *UDPPacket, session *UDPSession, senderAddr *net.UDPAddr) {
 	// Determine which client sent the keepalive
-	isClientA := false
+	var isClientA bool
+
 	if session.ClientAAddr != nil && session.ClientAAddr.String() == senderAddr.String() {
+		// Known ClientA
 		isClientA = true
+	} else if session.ClientBAddr != nil && session.ClientBAddr.String() == senderAddr.String() {
+		// Known ClientB
+		isClientA = false
+	} else {
+		// New client - register as ClientA if available, otherwise ClientB
+		if session.ClientAAddr == nil {
+			session.ClientAAddr = senderAddr
+			isClientA = true
+			log.Debug().
+				Str("lease_id", session.LeaseID).
+				Str("addr", senderAddr.String()).
+				Msg("[UDPRelay] Client A endpoint registered via keepalive")
+		} else if session.ClientBAddr == nil {
+			session.ClientBAddr = senderAddr
+			isClientA = false
+			log.Debug().
+				Str("lease_id", session.LeaseID).
+				Str("addr", senderAddr.String()).
+				Msg("[UDPRelay] Client B endpoint registered via keepalive")
+		} else {
+			// Both slots taken, ignore
+			log.Warn().
+				Str("lease_id", session.LeaseID).
+				Str("sender", senderAddr.String()).
+				Msg("[UDPRelay] Unknown keepalive sender, both clients already registered")
+			return
+		}
 	}
 
 	// Update activity
