@@ -175,16 +175,14 @@ type Metadata struct {
 	Tags        []string `json:"tags"`
 	Thumbnail   string   `json:"thumbnail"`
 	Owner       string   `json:"owner"`
-	Country     string   `json:"country"`
-	Hide        bool     `json:"hide"` // 고수다 숨김 여부
+	Hide        bool     `json:"hide"`
 }
 
 func (m Metadata) isEmpty() bool {
 	return m.Description == "" &&
 		len(m.Tags) == 0 &&
 		m.Thumbnail == "" &&
-		m.Owner == "" &&
-		m.Country == ""
+		m.Owner == ""
 }
 
 type MetadataOption func(*Metadata)
@@ -210,12 +208,6 @@ func WithThumbnail(thumbnail string) MetadataOption {
 func WithOwner(owner string) MetadataOption {
 	return func(m *Metadata) {
 		m.Owner = owner
-	}
-}
-
-func WithCountry(country string) MetadataOption {
-	return func(m *Metadata) {
-		m.Country = country
 	}
 }
 
