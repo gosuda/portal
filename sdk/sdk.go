@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
@@ -175,6 +176,7 @@ type Metadata struct {
 	Thumbnail   string   `json:"thumbnail"`
 	Owner       string   `json:"owner"`
 	Country     string   `json:"country"`
+	Hide        bool     `json:"hide"` // 고수다 숨김 여부
 }
 
 func (m Metadata) isEmpty() bool {
@@ -214,6 +216,12 @@ func WithOwner(owner string) MetadataOption {
 func WithCountry(country string) MetadataOption {
 	return func(m *Metadata) {
 		m.Country = country
+	}
+}
+
+func WithHide(hide bool) MetadataOption {
+	return func(m *Metadata) {
+		m.Hide = hide
 	}
 }
 

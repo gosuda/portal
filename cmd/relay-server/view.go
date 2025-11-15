@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -167,6 +168,7 @@ type leaseRow struct {
 	TTL         string
 	Link        string
 	StaleRed    bool
+	Hide        bool
 }
 
 type adminPageData struct {
@@ -191,6 +193,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
+
+		// Metadata parsing and hide check
+		var meta struct {
+			Hide bool `json:"hide"`
+		}
+		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
 
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
@@ -271,6 +279,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
+			Hide:        meta.Hide,
 		}
 
 		rows = append(rows, row)

@@ -188,7 +188,7 @@ func runPaint() error {
 	defer client.Close()
 
 	// 3) Register lease and obtain a net.Listener that accepts relayed connections
-	listener, err := client.Listen(cred, flagName, []string{"http/1.1"}, sdk.WithDescription("Portal demo paint app"), sdk.WithTags([]string{"demo", "paint"}), sdk.WithOwner("PortalApp Developer"), sdk.WithCountry("KR"))
+	listener, err := client.Listen(cred, flagName, []string{"http/1.1"}, sdk.WithDescription("Portal demo paint app"), sdk.WithTags([]string{"demo", "paint"}), sdk.WithOwner("PortalApp Developer"), sdk.WithCountry("KR"), sdk.WithHide(false))
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
