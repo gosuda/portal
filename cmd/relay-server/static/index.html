@@ -30,7 +30,6 @@
               type="text"
               placeholder="Search by name"
               aria-label="Search by name"
-              oninput="filterCards(this.value)"
             />
           </div>
           <a
@@ -124,29 +123,6 @@
         </div>
       </main>
     </div>
-    <script>
-      function filterCards(q) {
-        q = (q || "").toLowerCase().trim();
-        const cards = document.querySelectorAll(".grid .card");
-        cards.forEach((card) => {
-          const name = (card.getAttribute("data-name") || "").toLowerCase();
-          const show = !q || name.includes(q);
-          card.style.display = show ? "" : "none";
-        });
-      }
-      (function () {
-        try {
-          const opts = { dateStyle: "medium", timeStyle: "short" };
-          document.querySelectorAll("time.lastseen").forEach((el) => {
-            const iso = el.getAttribute("datetime");
-            if (!iso) return;
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return;
-            el.textContent = new Intl.DateTimeFormat(undefined, opts).format(d);
-            el.title = d.toString();
-          });
-        } catch (_) {}
-      })();
-    </script>
+    <script src="/static/admin.js"></script>
   </body>
 </html>
