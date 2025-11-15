@@ -109,6 +109,10 @@ type SecureConnection struct {
 	decryptor cipher.AEAD
 
 	readBuffer *bytebufferpool.ByteBuffer
+
+	// Ensure Close is safe and idempotent
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (r *SecureConnection) SetDeadline(t time.Time) error {
@@ -242,11 +246,14 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 
 // Close closes the underlying connection and releases resources
 func (sc *SecureConnection) Close() error {
-	if sc.readBuffer != nil {
-		releaseBuffer(sc.readBuffer)
-		sc.readBuffer = nil
-	}
-	return sc.conn.Close()
+	sc.closeOnce.Do(func() {
+		if sc.readBuffer != nil {
+			releaseBuffer(sc.readBuffer)
+			sc.readBuffer = nil
+		}
+		sc.closeErr = sc.conn.Close()
+	})
+	return sc.closeErr
 }
 
 // ClientHandshake performs the client-side of the handshake

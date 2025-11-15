@@ -48,13 +48,7 @@ func (m *RelayInfo) CloneVT() *RelayInfo {
 		return (*RelayInfo)(nil)
 	}
 	r := new(RelayInfo)
-	if rhs := m.Identity; rhs != nil {
-		if vtpb, ok := interface{}(rhs).(interface{ CloneVT() *rdsec.Identity }); ok {
-			r.Identity = vtpb.CloneVT()
-		} else {
-			r.Identity = proto.Clone(rhs).(*rdsec.Identity)
-		}
-	}
+	r.Identity = m.Identity.CloneVT()
 	if rhs := m.Address; rhs != nil {
 		tmpContainer := make([]string, len(rhs))
 		copy(tmpContainer, rhs)
@@ -116,15 +110,10 @@ func (m *Lease) CloneVT() *Lease {
 		return (*Lease)(nil)
 	}
 	r := new(Lease)
+	r.Identity = m.Identity.CloneVT()
 	r.Expires = m.Expires
 	r.Name = m.Name
-	if rhs := m.Identity; rhs != nil {
-		if vtpb, ok := interface{}(rhs).(interface{ CloneVT() *rdsec.Identity }); ok {
-			r.Identity = vtpb.CloneVT()
-		} else {
-			r.Identity = proto.Clone(rhs).(*rdsec.Identity)
-		}
-	}
+	r.Metadata = m.Metadata
 	if rhs := m.Alpn; rhs != nil {
 		tmpContainer := make([]string, len(rhs))
 		copy(tmpContainer, rhs)
@@ -186,14 +175,8 @@ func (m *LeaseDeleteRequest) CloneVT() *LeaseDeleteRequest {
 		return (*LeaseDeleteRequest)(nil)
 	}
 	r := new(LeaseDeleteRequest)
+	r.Identity = m.Identity.CloneVT()
 	r.Timestamp = m.Timestamp
-	if rhs := m.Identity; rhs != nil {
-		if vtpb, ok := interface{}(rhs).(interface{ CloneVT() *rdsec.Identity }); ok {
-			r.Identity = vtpb.CloneVT()
-		} else {
-			r.Identity = proto.Clone(rhs).(*rdsec.Identity)
-		}
-	}
 	if rhs := m.Nonce; rhs != nil {
 		tmpBytes := make([]byte, len(rhs))
 		copy(tmpBytes, rhs)
@@ -233,13 +216,7 @@ func (m *ConnectionRequest) CloneVT() *ConnectionRequest {
 	}
 	r := new(ConnectionRequest)
 	r.LeaseId = m.LeaseId
-	if rhs := m.ClientIdentity; rhs != nil {
-		if vtpb, ok := interface{}(rhs).(interface{ CloneVT() *rdsec.Identity }); ok {
-			r.ClientIdentity = vtpb.CloneVT()
-		} else {
-			r.ClientIdentity = proto.Clone(rhs).(*rdsec.Identity)
-		}
-	}
+	r.ClientIdentity = m.ClientIdentity.CloneVT()
 	if len(m.unknownFields) > 0 {
 		r.unknownFields = make([]byte, len(m.unknownFields))
 		copy(r.unknownFields, m.unknownFields)
@@ -296,11 +273,7 @@ func (this *RelayInfo) EqualVT(that *RelayInfo) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
-	if equal, ok := interface{}(this.Identity).(interface{ EqualVT(*rdsec.Identity) bool }); ok {
-		if !equal.EqualVT(that.Identity) {
-			return false
-		}
-	} else if !proto.Equal(this.Identity, that.Identity) {
+	if !this.Identity.EqualVT(that.Identity) {
 		return false
 	}
 	if len(this.Address) != len(that.Address) {
@@ -380,11 +353,7 @@ func (this *Lease) EqualVT(that *Lease) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
-	if equal, ok := interface{}(this.Identity).(interface{ EqualVT(*rdsec.Identity) bool }); ok {
-		if !equal.EqualVT(that.Identity) {
-			return false
-		}
-	} else if !proto.Equal(this.Identity, that.Identity) {
+	if !this.Identity.EqualVT(that.Identity) {
 		return false
 	}
 	if this.Expires != that.Expires {
@@ -401,6 +370,9 @@ func (this *Lease) EqualVT(that *Lease) bool {
 		if vx != vy {
 			return false
 		}
+	}
+	if this.Metadata != that.Metadata {
+		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
 }
@@ -462,11 +434,7 @@ func (this *LeaseDeleteRequest) EqualVT(that *LeaseDeleteRequest) bool {
 	} else if this == nil || that == nil {
 		return false
 	}
-	if equal, ok := interface{}(this.Identity).(interface{ EqualVT(*rdsec.Identity) bool }); ok {
-		if !equal.EqualVT(that.Identity) {
-			return false
-		}
-	} else if !proto.Equal(this.Identity, that.Identity) {
+	if !this.Identity.EqualVT(that.Identity) {
 		return false
 	}
 	if string(this.Nonce) != string(that.Nonce) {
@@ -513,11 +481,7 @@ func (this *ConnectionRequest) EqualVT(that *ConnectionRequest) bool {
 	if this.LeaseId != that.LeaseId {
 		return false
 	}
-	if equal, ok := interface{}(this.ClientIdentity).(interface{ EqualVT(*rdsec.Identity) bool }); ok {
-		if !equal.EqualVT(that.ClientIdentity) {
-			return false
-		}
-	} else if !proto.Equal(this.ClientIdentity, that.ClientIdentity) {
+	if !this.ClientIdentity.EqualVT(that.ClientIdentity) {
 		return false
 	}
 	return string(this.unknownFields) == string(that.unknownFields)
@@ -646,24 +610,12 @@ func (m *RelayInfo) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		}
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVT([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVT(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -776,6 +728,13 @@ func (m *Lease) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if len(m.Metadata) > 0 {
+		i -= len(m.Metadata)
+		copy(dAtA[i:], m.Metadata)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Metadata)))
+		i--
+		dAtA[i] = 0x2a
+	}
 	if len(m.Alpn) > 0 {
 		for iNdEx := len(m.Alpn) - 1; iNdEx >= 0; iNdEx-- {
 			i -= len(m.Alpn[iNdEx])
@@ -798,24 +757,12 @@ func (m *Lease) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVT([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVT(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -958,24 +905,12 @@ func (m *LeaseDeleteRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVT([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVT(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1051,24 +986,12 @@ func (m *ConnectionRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.unknownFields)
 	}
 	if m.ClientIdentity != nil {
-		if vtmsg, ok := interface{}(m.ClientIdentity).(interface {
-			MarshalToSizedBufferVT([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVT(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.ClientIdentity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.ClientIdentity.MarshalToSizedBufferVT(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -1217,24 +1140,12 @@ func (m *RelayInfo) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
 		}
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVTStrict([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVTStrict(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1347,6 +1258,13 @@ func (m *Lease) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if len(m.Metadata) > 0 {
+		i -= len(m.Metadata)
+		copy(dAtA[i:], m.Metadata)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Metadata)))
+		i--
+		dAtA[i] = 0x2a
+	}
 	if len(m.Alpn) > 0 {
 		for iNdEx := len(m.Alpn) - 1; iNdEx >= 0; iNdEx-- {
 			i -= len(m.Alpn[iNdEx])
@@ -1369,24 +1287,12 @@ func (m *Lease) MarshalToSizedBufferVTStrict(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVTStrict([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVTStrict(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1529,24 +1435,12 @@ func (m *LeaseDeleteRequest) MarshalToSizedBufferVTStrict(dAtA []byte) (int, err
 		dAtA[i] = 0x12
 	}
 	if m.Identity != nil {
-		if vtmsg, ok := interface{}(m.Identity).(interface {
-			MarshalToSizedBufferVTStrict([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVTStrict(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.Identity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.Identity.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1622,24 +1516,12 @@ func (m *ConnectionRequest) MarshalToSizedBufferVTStrict(dAtA []byte) (int, erro
 		copy(dAtA[i:], m.unknownFields)
 	}
 	if m.ClientIdentity != nil {
-		if vtmsg, ok := interface{}(m.ClientIdentity).(interface {
-			MarshalToSizedBufferVTStrict([]byte) (int, error)
-		}); ok {
-			size, err := vtmsg.MarshalToSizedBufferVTStrict(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
-		} else {
-			encoded, err := proto.Marshal(m.ClientIdentity)
-			if err != nil {
-				return 0, err
-			}
-			i -= len(encoded)
-			copy(dAtA[i:], encoded)
-			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(encoded)))
+		size, err := m.ClientIdentity.MarshalToSizedBufferVTStrict(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
+		i -= size
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -1715,13 +1597,7 @@ func (m *RelayInfo) SizeVT() (n int) {
 	var l int
 	_ = l
 	if m.Identity != nil {
-		if size, ok := interface{}(m.Identity).(interface {
-			SizeVT() int
-		}); ok {
-			l = size.SizeVT()
-		} else {
-			l = proto.Size(m.Identity)
-		}
+		l = m.Identity.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	if len(m.Address) > 0 {
@@ -1771,13 +1647,7 @@ func (m *Lease) SizeVT() (n int) {
 	var l int
 	_ = l
 	if m.Identity != nil {
-		if size, ok := interface{}(m.Identity).(interface {
-			SizeVT() int
-		}); ok {
-			l = size.SizeVT()
-		} else {
-			l = proto.Size(m.Identity)
-		}
+		l = m.Identity.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	if m.Expires != 0 {
@@ -1792,6 +1662,10 @@ func (m *Lease) SizeVT() (n int) {
 			l = len(s)
 			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 		}
+	}
+	l = len(m.Metadata)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -1838,13 +1712,7 @@ func (m *LeaseDeleteRequest) SizeVT() (n int) {
 	var l int
 	_ = l
 	if m.Identity != nil {
-		if size, ok := interface{}(m.Identity).(interface {
-			SizeVT() int
-		}); ok {
-			l = size.SizeVT()
-		} else {
-			l = proto.Size(m.Identity)
-		}
+		l = m.Identity.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	l = len(m.Nonce)
@@ -1882,13 +1750,7 @@ func (m *ConnectionRequest) SizeVT() (n int) {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	if m.ClientIdentity != nil {
-		if size, ok := interface{}(m.ClientIdentity).(interface {
-			SizeVT() int
-		}); ok {
-			l = size.SizeVT()
-		} else {
-			l = proto.Size(m.ClientIdentity)
-		}
+		l = m.ClientIdentity.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
@@ -2073,16 +1935,8 @@ func (m *RelayInfo) UnmarshalVT(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVT([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -2372,16 +2226,8 @@ func (m *Lease) UnmarshalVT(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVT([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -2466,6 +2312,38 @@ func (m *Lease) UnmarshalVT(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.Alpn = append(m.Alpn, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Metadata", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Metadata = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -2760,16 +2638,8 @@ func (m *LeaseDeleteRequest) UnmarshalVT(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVT([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -3010,16 +2880,8 @@ func (m *ConnectionRequest) UnmarshalVT(dAtA []byte) error {
 			if m.ClientIdentity == nil {
 				m.ClientIdentity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.ClientIdentity).(interface {
-				UnmarshalVT([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.ClientIdentity); err != nil {
-					return err
-				}
+			if err := m.ClientIdentity.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		default:
@@ -3276,16 +3138,8 @@ func (m *RelayInfo) UnmarshalVTUnsafe(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVTUnsafe([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -3579,16 +3433,8 @@ func (m *Lease) UnmarshalVTUnsafe(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVTUnsafe([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -3681,6 +3527,42 @@ func (m *Lease) UnmarshalVTUnsafe(dAtA []byte) error {
 				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
 			}
 			m.Alpn = append(m.Alpn, stringValue)
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Metadata", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			var stringValue string
+			if intStringLen > 0 {
+				stringValue = unsafe.String(&dAtA[iNdEx], intStringLen)
+			}
+			m.Metadata = stringValue
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -3972,16 +3854,8 @@ func (m *LeaseDeleteRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 			if m.Identity == nil {
 				m.Identity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.Identity).(interface {
-				UnmarshalVTUnsafe([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.Identity); err != nil {
-					return err
-				}
+			if err := m.Identity.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		case 2:
@@ -4223,16 +4097,8 @@ func (m *ConnectionRequest) UnmarshalVTUnsafe(dAtA []byte) error {
 			if m.ClientIdentity == nil {
 				m.ClientIdentity = &rdsec.Identity{}
 			}
-			if unmarshal, ok := interface{}(m.ClientIdentity).(interface {
-				UnmarshalVTUnsafe([]byte) error
-			}); ok {
-				if err := unmarshal.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
-					return err
-				}
-			} else {
-				if err := proto.Unmarshal(dAtA[iNdEx:postIndex], m.ClientIdentity); err != nil {
-					return err
-				}
+			if err := m.ClientIdentity.UnmarshalVTUnsafe(dAtA[iNdEx:postIndex]); err != nil {
+				return err
 			}
 			iNdEx = postIndex
 		default:

@@ -54,6 +54,7 @@ message Lease {
   int64 expires = 2;
   string name = 3;
   repeated string alpn = 4;
+  string metadata = 5;
 }
 
 message LeaseUpdateRequest {

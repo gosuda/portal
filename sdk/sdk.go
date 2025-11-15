@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
@@ -168,6 +170,53 @@ type RDListener struct {
 	closed bool
 }
 
+type Metadata struct {
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Thumbnail   string   `json:"thumbnail"`
+	Owner       string   `json:"owner"`
+	Hide        bool     `json:"hide"`
+}
+
+func (m Metadata) isEmpty() bool {
+	return m.Description == "" &&
+		len(m.Tags) == 0 &&
+		m.Thumbnail == "" &&
+		m.Owner == ""
+}
+
+type MetadataOption func(*Metadata)
+
+func WithDescription(description string) MetadataOption {
+	return func(m *Metadata) {
+		m.Description = description
+	}
+}
+
+func WithTags(tags []string) MetadataOption {
+	return func(m *Metadata) {
+		m.Tags = tags
+	}
+}
+
+func WithThumbnail(thumbnail string) MetadataOption {
+	return func(m *Metadata) {
+		m.Thumbnail = thumbnail
+	}
+}
+
+func WithOwner(owner string) MetadataOption {
+	return func(m *Metadata) {
+		m.Owner = owner
+	}
+}
+
+func WithHide(hide bool) MetadataOption {
+	return func(m *Metadata) {
+		m.Hide = hide
+	}
+}
+
 type RDClient struct {
 	mu sync.Mutex
 
@@ -188,6 +237,7 @@ var (
 	ErrRelayNotFound        = errors.New("relay not found")
 	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
 	ErrFailedToCreateClient = errors.New("failed to create relay client")
+	ErrInvalidMetadata      = errors.New("invalid metadata")
 )
 
 func NewClient(opt ...Option) (*RDClient, error) {
@@ -306,7 +356,7 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string) (*RDListener, error) {
+func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*RDListener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
@@ -319,6 +369,21 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 			Str("name", name).
 			Msg("[SDK] Lease name contains invalid characters")
 		return nil, ErrInvalidName
+	}
+
+	var metadata Metadata
+	for _, option := range options {
+		option(&metadata)
+	}
+
+	metadataValue := ""
+	if !metadata.isEmpty() {
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
+			return nil, ErrInvalidMetadata
+		}
+		metadataValue = string(metadataJSON)
 	}
 
 	g.mu.Lock()
@@ -344,8 +409,9 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 			Id:        cred.ID(),
 			PublicKey: cred.PublicKey(),
 		},
-		Name: name,
-		Alpn: alpns,
+		Name:     name,
+		Alpn:     alpns,
+		Metadata: metadataValue,
 	}
 
 	// Create listener with lease metadata for re-registration

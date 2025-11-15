@@ -1,10 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/andybalholm/brotli"
 	"github.com/rs/zerolog/log"
 )
 
@@ -33,11 +28,10 @@ var portalFrontendPattern = ""
 // bootstrapURIs stores the relay bootstrap server URIs
 var bootstrapURIs = "ws://localhost:4017/relay"
 
-// wasmCache stores pre-compressed WASM files in memory
+// wasmCache stores pre-loaded WASM files in memory (optional)
 type wasmCacheEntry struct {
 	original []byte
 	brotli   []byte
-	gzip     []byte
 	hash     string
 }
 
@@ -46,7 +40,7 @@ var (
 	wasmCacheMu sync.RWMutex
 )
 
-// initWasmCache pre-compresses and caches all WASM files on startup
+// initWasmCache loads pre-built WASM artifacts (original + precompressed) into memory on startup.
 func initWasmCache() error {
 	// Read all files in staticDir
 	entries, err := os.ReadDir(staticDir)
@@ -68,7 +62,7 @@ func initWasmCache() error {
 				if err := cacheWasmFile(name, fullPath); err != nil {
 					log.Warn().Err(err).Str("file", name).Msg("failed to cache WASM file")
 				} else {
-					log.Info().Str("file", name).Msg("cached and compressed WASM file")
+					log.Info().Str("file", name).Msg("cached WASM file")
 				}
 			}
 		}
@@ -77,7 +71,7 @@ func initWasmCache() error {
 	return nil
 }
 
-// cacheWasmFile reads, compresses, and caches a WASM file
+// cacheWasmFile reads and caches a WASM file and its pre-compressed variants (if present).
 func cacheWasmFile(name, fullPath string) error {
 	// Read original file
 	original, err := os.ReadFile(fullPath)
@@ -86,42 +80,24 @@ func cacheWasmFile(name, fullPath string) error {
 	}
 
 	// Verify SHA256 hash matches filename
-	hash := sha256.Sum256(original)
-	expectedHash := strings.TrimSuffix(name, ".wasm")
-	actualHash := hex.EncodeToString(hash[:])
-	if expectedHash != actualHash {
-		log.Warn().
-			Str("file", name).
-			Str("expected", expectedHash).
-			Str("actual", actualHash).
-			Msg("WASM file hash mismatch")
+	hashHex := strings.TrimSuffix(name, ".wasm")
+	if !isHexString(hashHex) || len(hashHex) != 64 {
+		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
 	}
 
-	// Compress with brotli (level 11 for maximum compression)
-	var brBuf bytes.Buffer
-	brWriter := brotli.NewWriterLevel(&brBuf, 11)
-	if _, err := brWriter.Write(original); err != nil {
-		return err
-	}
-	if err := brWriter.Close(); err != nil {
-		return err
-	}
-
-	// Compress with gzip as fallback
-	var gzBuf bytes.Buffer
-	gzWriter := gzip.NewWriter(&gzBuf)
-	if _, err := gzWriter.Write(original); err != nil {
-		return err
-	}
-	if err := gzWriter.Close(); err != nil {
-		return err
+	// Load precompressed variant if it exists
+	var brData []byte
+	brPath := fullPath + ".br"
+	if data, err := os.ReadFile(brPath); err == nil {
+		brData = data
+	} else if !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("file", brPath).Msg("failed to read brotli-compressed WASM")
 	}
 
 	entry := &wasmCacheEntry{
 		original: original,
-		brotli:   brBuf.Bytes(),
-		gzip:     gzBuf.Bytes(),
-		hash:     actualHash,
+		brotli:   brData,
+		hash:     hashHex,
 	}
 
 	wasmCacheMu.Lock()
@@ -132,9 +108,6 @@ func cacheWasmFile(name, fullPath string) error {
 		Str("file", name).
 		Int("original", len(original)).
 		Int("brotli", len(entry.brotli)).
-		Int("gzip", len(entry.gzip)).
-		Float64("br_ratio", float64(len(entry.brotli))/float64(len(original))*100).
-		Float64("gz_ratio", float64(len(entry.gzip))/float64(len(original))*100).
 		Msg("WASM file cached")
 
 	return nil
@@ -241,7 +214,7 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, path string) {
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 
 	// Prefer brotli if supported
-	if strings.Contains(acceptEncoding, "br") {
+	if strings.Contains(acceptEncoding, "br") && len(entry.brotli) > 0 {
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
 		w.WriteHeader(http.StatusOK)
@@ -250,20 +223,6 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, path string) {
 			Str("path", path).
 			Int("size", len(entry.brotli)).
 			Str("encoding", "brotli").
-			Msg("served compressed WASM")
-		return
-	}
-
-	// Fall back to gzip if supported
-	if strings.Contains(acceptEncoding, "gzip") {
-		w.Header().Set("Content-Encoding", "gzip")
-		w.Header().Set("Content-Length", strconv.Itoa(len(entry.gzip)))
-		w.WriteHeader(http.StatusOK)
-		w.Write(entry.gzip)
-		log.Debug().
-			Str("path", path).
-			Int("size", len(entry.gzip)).
-			Str("encoding", "gzip").
 			Msg("served compressed WASM")
 		return
 	}

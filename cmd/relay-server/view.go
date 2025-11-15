@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/wsstream"
+	"gosuda.org/portal/sdk"
 )
 
 //go:embed static
@@ -167,6 +169,10 @@ type leaseRow struct {
 	TTL         string
 	Link        string
 	StaleRed    bool
+	Hide        bool
+	Description string
+	Tags        string
+	Owner       string
 }
 
 type adminPageData struct {
@@ -191,6 +197,13 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
+
+		// Metadata parsing
+		var meta sdk.Metadata
+		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
+		if meta.Hide {
+			continue
+		}
 
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
@@ -271,6 +284,10 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
+			Hide:        meta.Hide,
+			Description: strings.TrimSpace(meta.Description),
+			Tags:        strings.Join(meta.Tags, ", "),
+			Owner:       strings.TrimSpace(meta.Owner),
 		}
 
 		rows = append(rows, row)
