@@ -2,8 +2,12 @@ FROM golang:1 AS builder
 
 WORKDIR /src
 
-# Install make and binaryen (for wasm-opt) to use Makefile
-RUN apt-get update && apt-get install -y --no-install-recommends binaryen make && rm -rf /var/lib/apt/lists/*
+# Install make, binaryen (wasm-opt), and brotli CLI for WASM build/compression
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    binaryen \
+    brotli \
+    make \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
 
@@ -13,11 +17,8 @@ RUN go mod download
 # Copy the rest of the source code
 COPY . .
 
-# Build WASM and server
-RUN make build-wasm
-
-# Build server
-RUN make build-server
+# Build WASM, precompress, and server
+RUN make build-wasm compress-wasm build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
