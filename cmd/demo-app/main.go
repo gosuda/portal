@@ -2,14 +2,16 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -24,120 +26,26 @@ var (
 	flagServerURL string
 	flagPort      int
 	flagName      string
+	flagDesc      string
+	flagTags      string
+	flagOwner     string
+	flagHide      bool
 )
 
 func main() {
-	// Define flags equivalent to previous Cobra flags
 	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
-	flag.IntVar(&flagPort, "port", 8092, "local paint HTTP port")
+	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
+	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
+	flag.StringVar(&flagTags, "tags", "demo,connectivity", "comma-separated lease tags")
+	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
+	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
 
 	flag.Parse()
 
-	if err := runPaint(); err != nil {
-		log.Fatal().Err(err).Msg("execute paint command")
+	if err := runDemo(); err != nil {
+		log.Fatal().Err(err).Msg("execute demo command")
 	}
-}
-
-// DrawMessage represents a drawing action
-type DrawMessage struct {
-	Type   string  `json:"type"` // "draw", "shape", "text", or "clear"
-	X      float64 `json:"x,omitempty"`
-	Y      float64 `json:"y,omitempty"`
-	PrevX  float64 `json:"prevX,omitempty"`
-	PrevY  float64 `json:"prevY,omitempty"`
-	StartX float64 `json:"startX,omitempty"`
-	StartY float64 `json:"startY,omitempty"`
-	EndX   float64 `json:"endX,omitempty"`
-	EndY   float64 `json:"endY,omitempty"`
-	Mode   string  `json:"mode,omitempty"` // "line", "circle", "rectangle"
-	Text   string  `json:"text,omitempty"` // for text type
-	Color  string  `json:"color,omitempty"`
-	Width  int     `json:"width,omitempty"`
-	Canvas string  `json:"canvas,omitempty"` // for initial state
-}
-
-// Canvas holds the current drawing state
-type Canvas struct {
-	mu      sync.RWMutex
-	clients map[*websocket.Conn]bool
-	wg      sync.WaitGroup
-	history []DrawMessage
-}
-
-func newCanvas() *Canvas {
-	return &Canvas{
-		clients: make(map[*websocket.Conn]bool),
-		history: make([]DrawMessage, 0),
-	}
-}
-
-func (c *Canvas) register(conn *websocket.Conn) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.clients[conn] = true
-
-	// Send history to new client
-	for _, msg := range c.history {
-		err := conn.WriteJSON(msg)
-		if err != nil {
-			log.Error().Err(err).Msg("write to client")
-		}
-	}
-}
-
-func (c *Canvas) unregister(conn *websocket.Conn) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.clients[conn]; ok {
-		delete(c.clients, conn)
-		err := conn.Close()
-		if err != nil {
-			log.Error().Err(err).Msg("close client")
-		}
-	}
-}
-
-func (c *Canvas) broadcast(msg DrawMessage) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Store in history
-	switch msg.Type {
-	case "draw", "shape", "text":
-		c.history = append(c.history, msg)
-	case "clear":
-		c.history = make([]DrawMessage, 0)
-	}
-
-	// Broadcast to all clients
-	for client := range c.clients {
-		err := client.WriteJSON(msg)
-		if err != nil {
-			log.Error().Err(err).Msg("write to client")
-			err = client.Close()
-			if err != nil {
-				log.Error().Err(err).Msg("close client")
-			}
-			delete(c.clients, client)
-		}
-	}
-}
-
-func (c *Canvas) closeAll() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for client := range c.clients {
-		err := client.Close()
-		if err != nil {
-			log.Error().Err(err).Msg("close client")
-		}
-	}
-	c.clients = make(map[*websocket.Conn]bool)
-}
-
-func (c *Canvas) wait() {
-	c.wg.Wait()
 }
 
 var upgrader = websocket.Upgrader{
@@ -146,36 +54,33 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-func (c *Canvas) handleWS(w http.ResponseWriter, r *http.Request) {
+// handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
+func handleWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("upgrade websocket")
 		return
 	}
-
-	c.register(conn)
-	c.wg.Add(1)
-
-	defer func() {
-		c.unregister(conn)
-		c.wg.Done()
-	}()
+	defer conn.Close()
 
 	for {
-		var msg DrawMessage
-		err := conn.ReadJSON(&msg)
+		messageType, data, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Error().Err(err).Msg("read message")
+				log.Error().Err(err).Msg("read websocket message")
 			}
 			break
 		}
-		c.broadcast(msg)
+
+		if err := conn.WriteMessage(messageType, data); err != nil {
+			log.Error().Err(err).Msg("write websocket message")
+			break
+		}
 	}
 }
 
-func runPaint() error {
-	// 1) Create credential for this paint app
+func runDemo() error {
+	// 1) Create credential for this demo app
 	cred := sdk.NewCredential()
 
 	// 2) Create SDK client and connect to relay(s)
@@ -187,15 +92,31 @@ func runPaint() error {
 	}
 	defer client.Close()
 
+	// Derive tags slice from comma-separated flag
+	var tags []string
+	for _, t := range strings.Split(flagTags, ",") {
+		t = strings.TrimSpace(t)
+		if t != "" {
+			tags = append(tags, t)
+		}
+	}
+
 	// 3) Register lease and obtain a net.Listener that accepts relayed connections
-	listener, err := client.Listen(cred, flagName, []string{"http/1.1"}, sdk.WithDescription("Portal demo paint app"), sdk.WithTags([]string{"demo", "paint"}), sdk.WithOwner("PortalApp Developer"), sdk.WithCountry("KR"), sdk.WithHide(false))
+	listener, err := client.Listen(
+		cred,
+		flagName,
+		[]string{"http/1.1"},
+		sdk.WithDescription(flagDesc),
+		sdk.WithTags(tags),
+		sdk.WithOwner(flagOwner),
+		sdk.WithHide(flagHide),
+	)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
 
 	// 4) Setup HTTP handler
-	canvas := newCanvas()
 	mux := http.NewServeMux()
 
 	// Serve static files from embedded filesystem
@@ -204,10 +125,24 @@ func runPaint() error {
 		return fmt.Errorf("create static fs: %w", err)
 	}
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
-	mux.HandleFunc("/ws", canvas.handleWS)
+
+	// Simple HTTP ping endpoint for connectivity checks
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"message": "pong",
+			"time":    time.Now().UTC().Format(time.RFC3339),
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Error().Err(err).Msg("write ping response")
+		}
+	})
+
+	// WebSocket echo endpoint for bidirectional test
+	mux.HandleFunc("/ws", handleWS)
 
 	// 5) Serve HTTP over relay listener
-	log.Info().Msgf("[paint] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
 
 	srvErr := make(chan error, 1)
 	go func() {
@@ -219,16 +154,13 @@ func runPaint() error {
 
 	select {
 	case <-sig:
-		log.Info().Msg("[paint] shutting down...")
+		log.Info().Msg("[demo] shutting down...")
 	case err := <-srvErr:
 		if err != nil {
-			log.Error().Err(err).Msg("[paint] http serve error")
+			log.Error().Err(err).Msg("[demo] http serve error")
 		}
 	}
 
-	canvas.closeAll()
-	canvas.wait()
-
-	log.Info().Msg("[paint] shutdown complete")
+	log.Info().Msg("[demo] shutdown complete")
 	return nil
 }

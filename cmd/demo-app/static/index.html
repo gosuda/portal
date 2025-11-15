@@ -6,71 +6,103 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
-    <title>Demo App</title>
+    <title>Portal Demo Connectivity</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
     <div class="container">
-        <h1>🎨 Demo App</h1>
+        <h1>Portal Demo Connectivity</h1>
 
         <div class="toolbar">
-            <div class="mode-buttons">
-                <button class="mode-btn active" data-mode="pen" title="Pen">✏️</button>
-                <button class="mode-btn" data-mode="eraser" title="Eraser">🧹</button>
-                <button class="mode-btn" data-mode="circle" title="Circle">⭕</button>
-                <button class="mode-btn" data-mode="rectangle" title="Rectangle">▢</button>
-                <button class="mode-btn" data-mode="line" title="Line">📏</button>
-                <button class="mode-btn" data-mode="text" title="Text">T</button>
-            </div>
-
-            <div class="color-section">
-                <label for="color">Color:</label>
-                <input type="color" id="color" value="#000000">
-                <div class="color-presets">
-                    <button class="color-preset" data-color="#000000" style="background: #000000;"
-                        title="Black"></button>
-                    <button class="color-preset" data-color="#ffffff"
-                        style="background: #ffffff; border: 1px solid #ddd;" title="White"></button>
-                    <button class="color-preset" data-color="#ef4444" style="background: #ef4444;" title="Red"></button>
-                    <button class="color-preset" data-color="#f97316" style="background: #f97316;"
-                        title="Orange"></button>
-                    <button class="color-preset" data-color="#eab308" style="background: #eab308;"
-                        title="Yellow"></button>
-                    <button class="color-preset" data-color="#22c55e" style="background: #22c55e;"
-                        title="Green"></button>
-                    <button class="color-preset" data-color="#06b6d4" style="background: #06b6d4;"
-                        title="Cyan"></button>
-                    <button class="color-preset" data-color="#3b82f6" style="background: #3b82f6;"
-                        title="Blue"></button>
-                    <button class="color-preset" data-color="#8b5cf6" style="background: #8b5cf6;"
-                        title="Purple"></button>
-                    <button class="color-preset" data-color="#ec4899" style="background: #ec4899;"
-                        title="Pink"></button>
-                    <button class="color-preset" data-color="#a855f7" style="background: #a855f7;"
-                        title="Violet"></button>
-                    <button class="color-preset" data-color="#6b7280" style="background: #6b7280;"
-                        title="Gray"></button>
-                </div>
-            </div>
-
-            <div>
-                <label for="width">Width:</label>
-                <input type="range" id="width" min="1" max="20" value="3">
-                <span class="width-display" id="widthDisplay">3</span>
-            </div>
-
-            <button id="clearBtn" class="danger">Clear Canvas</button>
+            <button id="httpPingBtn">HTTP Ping</button>
+            <button id="wsConnectBtn">WS Connect</button>
+            <button id="wsSendBtn" disabled>WS Send "hello"</button>
         </div>
 
         <div class="canvas-wrapper">
-            <canvas id="canvas"></canvas>
+            <pre id="log" class="log"></pre>
         </div>
 
-        <div id="status" class="status">Connecting...</div>
+        <div id="status" class="status">Idle</div>
     </div>
 
-    <script src="app.js"></script>
+    <script>
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+        const httpPingBtn = document.getElementById('httpPingBtn');
+        const wsConnectBtn = document.getElementById('wsConnectBtn');
+        const wsSendBtn = document.getElementById('wsSendBtn');
+
+        let ws = null;
+
+        function log(message) {
+            const time = new Date().toISOString();
+            logEl.textContent += `[${time}] ${message}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        httpPingBtn.addEventListener('click', async () => {
+            statusEl.textContent = 'HTTP: Pinging...';
+            try {
+                const res = await fetch('/api/ping');
+                const json = await res.json();
+                statusEl.textContent = 'HTTP: OK';
+                log(`HTTP /api/ping -> ${JSON.stringify(json)}`);
+            } catch (err) {
+                statusEl.textContent = 'HTTP: Error';
+                log(`HTTP error: ${err}`);
+            }
+        });
+
+        wsConnectBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const basePath = location.pathname.endsWith('/') ? location.pathname : (location.pathname + '/');
+            const url = protocol + '//' + window.location.host + basePath + 'ws';
+
+            statusEl.textContent = 'WS: Connecting...';
+            log(`WS connecting to ${url}`);
+
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                statusEl.textContent = 'WS: Connected';
+                log('WS connected');
+                wsSendBtn.disabled = false;
+                wsConnectBtn.textContent = 'WS Disconnect';
+            };
+
+            ws.onclose = () => {
+                statusEl.textContent = 'WS: Disconnected';
+                log('WS disconnected');
+                wsSendBtn.disabled = true;
+                wsConnectBtn.textContent = 'WS Connect';
+            };
+
+            ws.onerror = (err) => {
+                log(`WS error: ${err.message || err}`);
+            };
+
+            ws.onmessage = (event) => {
+                log(`WS recv: ${event.data}`);
+            };
+        });
+
+        wsSendBtn.addEventListener('click', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('WS send skipped: not connected');
+                return;
+            }
+            const msg = 'hello';
+            ws.send(msg);
+            log(`WS send: ${msg}`);
+        });
+    </script>
 </body>
 
 </html>
