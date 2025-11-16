@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,11 +18,19 @@ import (
 )
 
 var (
-	flagRelayURL string
-	flagHost     string
-	flagPort     string
-	flagName     string
+	flagConfigPath string
+	flagService    string
+	flagRelayURL   string
+	flagHost       string
+	flagPort       string
+	flagName       string
 )
+
+type serviceContext struct {
+	Name         string
+	LocalAddr    string
+	RelayServers []string
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -31,10 +41,12 @@ func main() {
 	switch os.Args[1] {
 	case "expose":
 		fs := flag.NewFlagSet("expose", flag.ExitOnError)
-		fs.StringVar(&flagRelayURL, "relay", "ws://localhost:4017/relay", "Portal relay server URL")
-		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to")
-		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to")
-		fs.StringVar(&flagName, "name", "", "Service name (will be generated if not provided)")
+		fs.StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
+		fs.StringVar(&flagService, "service", "", "Specific service name to expose (defaults to first entry)")
+		fs.StringVar(&flagRelayURL, "relay", "ws://localhost:4017/relay", "Portal relay server URL when config is not provided")
+		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
+		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
+		fs.StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
 		_ = fs.Parse(os.Args[2:])
 
 		if err := runExpose(); err != nil {
@@ -53,69 +65,110 @@ func printTunnelUsage() {
 	fmt.Println("portal-tunnel — Expose local services through Portal relay")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  portal-tunnel expose [port PORT] [--relay URL] [--name NAME] [--host HOST]")
+	fmt.Println("  portal-tunnel expose --config <file> [--service <name>]")
+	fmt.Println("  portal-tunnel expose [--relay URL] [--host HOST] [--port PORT] [--name NAME]")
 }
 
 func runExpose() error {
-	localAddr := net.JoinHostPort(flagHost, flagPort)
+	if flagConfigPath == "" {
+		return runExposeWithFlags()
+	}
+	return runExposeWithConfig()
+}
 
-	// Always wait until the local service is available
-	log.Info().Msgf("Waiting for local service at %s (interval=%v)...", localAddr, time.Second)
-	if err := waitForLocalService(localAddr, 0, time.Second); err != nil {
+func runExposeWithConfig() error {
+	cfg, err := LoadConfig(flagConfigPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	services, err := selectServices(cfg, flagService)
+	if err != nil {
 		return err
 	}
-	log.Info().Msgf("✓ Local service is reachable at %s", localAddr)
 
-	// Create credential
-	cred := sdk.NewCredential()
-	leaseID := cred.ID()
-
-	// Use provided name or generate from lease ID
-	if flagName == "" {
-		flagName = fmt.Sprintf("tunnel-%s", leaseID[:8])
-	}
-
-	log.Info().Msgf("Starting Portal Tunnel...")
-	log.Info().Msgf("  Local:    %s", localAddr)
-	log.Info().Msgf("  Relay:    %s", flagRelayURL)
-	log.Info().Msgf("  Name:     %s", flagName)
-	log.Info().Msgf("  Lease ID: %s", leaseID)
-
-	// Create SDK client
-	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
-		c.BootstrapServers = []string{flagRelayURL}
-	})
-	if err != nil {
-		return fmt.Errorf("failed to connect to relay: %w", err)
-	}
-	defer client.Close()
-
-	// Register listener
-	listener, err := client.Listen(cred, flagName, []string{"http/1.1", "h2"})
-	if err != nil {
-		return fmt.Errorf("failed to register service: %w", err)
-	}
-	defer listener.Close()
-
-	log.Info().Msg("")
-	log.Info().Msg("=== Service is now publicly accessible ===")
-	log.Info().Msg("Access via:")
-	log.Info().Msgf("- Name:     /peer/%s", flagName)
-	log.Info().Msgf("- Lease ID: /peer/%s", leaseID)
-	relayHost := extractHost(flagRelayURL)
-	log.Info().Msgf("- Example:  http://%s/peer/%s", relayHost, flagName)
-	log.Info().Msg("")
-	log.Info().Msg("Press Ctrl+C to stop...")
-	log.Info().Msg("")
-
-	// Handle connections
+	relayDir := NewRelayDirectory(cfg.Relays)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Info().Msg("")
+		log.Info().Msg("Shutting down tunnels...")
+		cancel()
+	}()
 
+	errCh := make(chan error, len(services))
+	var wg sync.WaitGroup
+
+	for _, svc := range services {
+		service := svc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := runServiceTunnel(ctx, relayDir, service, fmt.Sprintf("config=%s", flagConfigPath)); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case err := <-errCh:
+		cancel()
+		<-doneCh
+		return err
+	case <-ctx.Done():
+		<-doneCh
+		log.Info().Msg("Tunnel stopped")
+		return nil
+	case <-doneCh:
+		return nil
+	}
+}
+
+func runExposeWithFlags() error {
+	relayURL := strings.TrimSpace(flagRelayURL)
+	if relayURL == "" {
+		return fmt.Errorf("--relay is required when --config is not provided")
+	}
+
+	host := strings.TrimSpace(flagHost)
+	if host == "" {
+		host = "localhost"
+	}
+	port := strings.TrimSpace(flagPort)
+	if port == "" {
+		return fmt.Errorf("--port is required when --config is not provided")
+	}
+
+	target := net.JoinHostPort(host, port)
+	service := &ServiceConfig{
+		Name:            strings.TrimSpace(flagName),
+		Target:          target,
+		Protocols:       []string{"http/1.1", "h2"},
+		RelayPreference: []string{"flags"},
+	}
+
+	relayDir := NewRelayDirectory([]RelayConfig{
+		{
+			Name: "flags",
+			URLs: []string{relayURL},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		log.Info().Msg("")
@@ -123,54 +176,35 @@ func runExpose() error {
 		cancel()
 	}()
 
-	// Accept connections and proxy them
-	connCount := 0
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info().Msg("Tunnel stopped")
-			return nil
-		default:
-		}
-
-		relayConn, err := listener.Accept()
-		if err != nil {
-			// Check if context was cancelled
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				log.Error().Err(err).Msg("Failed to accept connection")
-				continue
-			}
-		}
-
-		connCount++
-		currentConnCount := connCount
-		log.Info().Msgf("→ [#%d] New connection from %s", currentConnCount, relayConn.RemoteAddr())
-
-		// Handle connection in goroutine
-		go func(relayConn net.Conn, connNum int) {
-			if err := proxyConnection(relayConn, localAddr, connNum); err != nil {
-				log.Error().Err(err).Int("conn", connNum).Msg("Proxy error")
-			}
-			log.Info().Msgf("← [#%d] Connection closed", connNum)
-		}(relayConn, currentConnCount)
+	if err := runServiceTunnel(ctx, relayDir, service, "flags"); err != nil {
+		return err
 	}
+
+	log.Info().Msg("Tunnel stopped")
+	return nil
 }
 
-func proxyConnection(relayConn net.Conn, localAddr string, connNum int) error {
+func proxyConnection(ctx context.Context, svcCtx *serviceContext, relayConn net.Conn, connNum int) error {
 	defer relayConn.Close()
 
 	// Connect to local service
-	localConn, err := net.Dial("tcp", localAddr)
+	localConn, err := net.Dial("tcp", svcCtx.LocalAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to local service: %w", err)
+		return fmt.Errorf("failed to connect to local service %s: %w", svcCtx.LocalAddr, err)
 	}
 	defer localConn.Close()
 
 	// Bidirectional copy
 	errCh := make(chan error, 2)
+	cancelCopy := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			relayConn.Close()
+			localConn.Close()
+		case <-cancelCopy:
+		}
+	}()
 
 	// Relay -> Local
 	go func() {
@@ -190,11 +224,126 @@ func proxyConnection(relayConn net.Conn, localAddr string, connNum int) error {
 	// Close both connections to stop the other goroutine
 	relayConn.Close()
 	localConn.Close()
+	close(cancelCopy)
 
 	// Wait for other goroutine
 	<-errCh
 
 	return err
+}
+
+func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *ServiceConfig, origin string) error {
+	localAddr := service.Target
+	serviceName := strings.TrimSpace(service.Name)
+	bootstrapServers, err := relayDir.BootstrapServers(service.RelayPreference)
+	if err != nil {
+		return fmt.Errorf("service %s: resolve relay servers: %w", serviceName, err)
+	}
+
+	cred := sdk.NewCredential()
+	leaseID := cred.ID()
+	if serviceName == "" {
+		serviceName = fmt.Sprintf("tunnel-%s", leaseID[:8])
+		log.Info().Str("service", serviceName).Msg("No service name provided; generated automatically")
+	}
+	svcCtx := &serviceContext{
+		Name:         serviceName,
+		LocalAddr:    localAddr,
+		RelayServers: bootstrapServers,
+	}
+
+	log.Info().Str("service", serviceName).Msgf("Waiting for local service at %s (interval=%v)...", localAddr, time.Second)
+	if err := waitForLocalService(localAddr, 0, time.Second); err != nil {
+		return fmt.Errorf("service %s: %w", serviceName, err)
+	}
+	log.Info().Str("service", serviceName).Msgf("✓ Local service is reachable at %s", localAddr)
+
+	log.Info().Str("service", serviceName).Msgf("Starting Portal Tunnel (%s)...", origin)
+	log.Info().Str("service", serviceName).Msgf("  Local:    %s", localAddr)
+	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
+	log.Info().Str("service", serviceName).Msgf("  Lease ID: %s", leaseID)
+
+	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
+		c.BootstrapServers = bootstrapServers
+	})
+	if err != nil {
+		return fmt.Errorf("service %s: failed to connect to relay: %w", serviceName, err)
+	}
+	defer client.Close()
+
+	listener, err := client.Listen(cred, serviceName, service.Protocols)
+	if err != nil {
+		return fmt.Errorf("service %s: failed to register service: %w", serviceName, err)
+	}
+	defer listener.Close()
+
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
+	log.Info().Str("service", serviceName).Msg("")
+	log.Info().Str("service", serviceName).Msg("=== Service is now publicly accessible ===")
+	log.Info().Str("service", serviceName).Msg("Access via:")
+	log.Info().Str("service", serviceName).Msgf("- Name:     /peer/%s", serviceName)
+	log.Info().Str("service", serviceName).Msgf("- Lease ID: /peer/%s", leaseID)
+	relayHost := extractHost(bootstrapServers[0])
+	log.Info().Str("service", serviceName).Msgf("- Example:  http://%s/peer/%s", relayHost, serviceName)
+	log.Info().Str("service", serviceName).Msg("")
+
+	connCount := 0
+	var connWG sync.WaitGroup
+	defer connWG.Wait()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		relayConn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+				log.Error().Str("service", serviceName).Err(err).Msg("Failed to accept connection")
+				continue
+			}
+		}
+
+		connCount++
+		currentConnCount := connCount
+		log.Info().Str("service", serviceName).Msgf("→ [#%d] New connection from %s", currentConnCount, relayConn.RemoteAddr())
+
+		connWG.Add(1)
+		go func(relayConn net.Conn, connNum int) {
+			defer connWG.Done()
+			if err := proxyConnection(ctx, svcCtx, relayConn, connNum); err != nil {
+				log.Error().Str("service", serviceName).Err(err).Int("conn", connNum).Msg("Proxy error")
+			}
+			log.Info().Str("service", serviceName).Msgf("← [#%d] Connection closed", connNum)
+		}(relayConn, currentConnCount)
+	}
+}
+
+func selectServices(cfg *TunnelConfig, name string) ([]*ServiceConfig, error) {
+	if len(cfg.Services) == 0 {
+		return nil, fmt.Errorf("config has no services")
+	}
+	if name == "" {
+		services := make([]*ServiceConfig, len(cfg.Services))
+		for i := range cfg.Services {
+			services[i] = &cfg.Services[i]
+		}
+		return services, nil
+	}
+	for i := range cfg.Services {
+		if cfg.Services[i].Name == name {
+			return []*ServiceConfig{&cfg.Services[i]}, nil
+		}
+	}
+	return nil, fmt.Errorf("service %q not found in config", name)
 }
 
 func extractHost(wsURL string) string {
