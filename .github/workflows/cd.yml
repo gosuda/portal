@@ -51,6 +51,16 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,enable=true,prefix=sha-,suffix=,format=short
 
+      - name: Build builder image
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          target: builder
+          context: .
+          push: false
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -59,8 +69,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,mode=max
-          cache-to: type=gha,mode=max
+
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
@@ -76,7 +85,7 @@ jobs:
         run: |
           kubectl config set-cluster default --server ${{ secrets.KUBERNETES_ENDPOINT }}
           kubectl config set-credentials default --token ${{ secrets.KUBERNETES_TOKEN }}
-          kubectl config set-context default --cluster=default --user=default --namespace=${{ env.KUBERNETES_NAMESPACE }}
+          kubectl config set-context default --cluster=default --user=default --namespace=${{ secrets.KUBERNETES_NAMESPACE }}
           kubectl config use-context default
           kubectl version
 
