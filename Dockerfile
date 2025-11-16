@@ -1,12 +1,23 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1
 
 FROM --platform=$BUILDPLATFORM golang:1 AS builder
 
-ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
-
 WORKDIR /src
+
+# Set GOMODCACHE to cache Go modules in cache volume
+RUN go env -w GOMODCACHE=/root/.cache/go-build 
+
+# Copy go.mod and go.sum
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN --mount=type=cache,target=/go/pkg/mod \
+  go mod download
+
+# Copy the rest of the source code
+COPY . .
+
+FROM --platform=$BUILDPLATFORM builder AS wasm-builder
 
 # Install make, binaryen (wasm-opt), and brotli CLI for WASM build/compression
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,15 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   make \
   && rm -rf /var/lib/apt/lists/*
 
-# Set GOMODCACHE to cache Go modules in cache volume
-RUN go env -w GOMODCACHE=/root/.cache/go-build 
-
-# Copy the rest of the source code
-COPY . .
-
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
   make build-wasm compress-wasm
+
+FROM --platform=$BUILDPLATFORM builder AS server-builder
+
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
@@ -32,10 +43,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # Copy server binary
-COPY --from=builder /src/bin/relay-server /usr/bin/relay-server
+COPY --from=server-builder /src/bin/relay-server /usr/bin/relay-server
 
 # Copy static files for portal frontend
-COPY --from=builder /src/dist /app/dist
+COPY --from=wasm-builder /src/dist /app/dist
 
 # Set default environment variables
 ENV STATIC_DIR=/app/dist
