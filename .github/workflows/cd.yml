@@ -51,9 +51,6 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,enable=true,prefix=sha-,suffix=,format=short
 
-      - name: Pre-build WASM artifacts
-        run: make build-wasm compress-wasm
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -62,6 +59,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
@@ -72,8 +71,6 @@ jobs:
         uses: actions/checkout@v5
 
       - uses: azure/setup-kubectl@v4
-        with:
-          version: "1.33"
 
       - name: Prepare Kubernetes context
         run: |
