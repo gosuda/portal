@@ -265,7 +265,6 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 
 	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
 		c.BootstrapServers = bootstrapServers
-
 	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to connect to relay: %w", serviceName, err)
