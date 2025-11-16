@@ -31,9 +31,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 # Copy server binary
 COPY --from=builder /src/bin/relay-server /usr/bin/relay-server
 
-# Copy static files for portal frontend
-COPY --from=builder /src/dist /app/dist
-
 # Set default environment variables
 ENV STATIC_DIR=/app/dist
 ENV PORTAL_UI_URL=http://localhost:4017
