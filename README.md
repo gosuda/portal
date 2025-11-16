@@ -77,8 +77,6 @@ bin/portal-tunnel expose --config config.yaml
 bin/portal-tunnel expose --relay <url> --host localhost --port 8080 --name <service>
 ```
 
-
-
 ## Glossary
 
 If you need Portal-specific terminology, check the [Portal glossary](docs/glossary.md)
