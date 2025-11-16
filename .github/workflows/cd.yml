@@ -52,24 +52,6 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,enable=true,prefix=sha-,suffix=,format=short
 
-      - name: Build wasm-builder image
-        uses: docker/build-push-action@v6
-        with:
-          platforms: ${{ env.PLATFORMS }}
-          target: wasm-builder
-          push: false
-          cache-from: type=gha,mode=max
-          cache-to: type=gha,mode=max
-
-      - name: Build server-builder image
-        uses: docker/build-push-action@v6
-        with:
-          platforms: ${{ env.PLATFORMS }}
-          target: server-builder
-          push: false
-          cache-from: type=gha,mode=max
-          cache-to: type=gha,mode=max
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -77,6 +59,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
 
   deploy:
     name: Deploy to `https://portal.iwanhae.kr`
