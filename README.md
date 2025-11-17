@@ -74,7 +74,7 @@ bin/portal-tunnel expose --config config.yaml
 2. **Expose a single service directly**
 
 ```bash
-bin/portal-tunnel expose --relay <url> --host localhost --port 8080 --name <service>
+bin/portal-tunnel expose --relay <url> [--relay <url> ...] --host localhost --port 8080 --name <service>
 ```
 
 ## Glossary
