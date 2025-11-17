@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -94,6 +95,96 @@ func WithReconnectInterval(interval time.Duration) Option {
 	return func(c *RDClientConfig) {
 		c.ReconnectInterval = interval
 	}
+}
+
+func normalizeBootstrapServers(addrs []string) ([]string, error) {
+	normalized := make([]string, 0, len(addrs))
+
+	for _, addr := range addrs {
+		trimmed := strings.TrimSpace(addr)
+		if trimmed == "" {
+			continue
+		}
+
+		normalizedAddr, err := normalizeBootstrapAddress(trimmed)
+		if err != nil {
+			return nil, err
+		}
+
+		normalized = append(normalized, normalizedAddr)
+	}
+
+	return normalized, nil
+}
+
+func normalizeBootstrapAddress(address string) (string, error) {
+	const relayPath = "/relay"
+
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", errors.New("bootstrap address is empty")
+	}
+
+	original := address
+
+	var (
+		u   *url.URL
+		err error
+	)
+
+	if strings.Contains(address, "://") {
+		u, err = url.Parse(address)
+	} else {
+		u, err = url.Parse("wss://" + address)
+	}
+	if err != nil {
+		return "", fmt.Errorf("invalid bootstrap address %q: %w", original, err)
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "ws", "wss":
+	case "http":
+		scheme = "ws"
+	case "https":
+		scheme = "wss"
+	case "":
+		scheme = "wss"
+	default:
+		return "", fmt.Errorf("unsupported bootstrap scheme %q for %q", u.Scheme, original)
+	}
+	u.Scheme = scheme
+
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("missing host in bootstrap address %q", original)
+	}
+
+	port := u.Port()
+	if ip := net.ParseIP(host); ip != nil {
+		if port == "" {
+			port = "4017"
+		}
+		u.Host = net.JoinHostPort(host, port)
+	} else if port != "" {
+		u.Host = net.JoinHostPort(host, port)
+	} else {
+		u.Host = host
+	}
+
+	switch path := strings.TrimSuffix(u.Path, "/"); path {
+	case "", "/":
+		u.Path = relayPath
+	case relayPath:
+		u.Path = relayPath
+	default:
+		u.Path = relayPath
+	}
+
+	u.RawQuery = ""
+	u.Fragment = ""
+
+	return u.String(), nil
 }
 
 type rdRelay struct {
@@ -252,6 +343,12 @@ func NewClient(opt ...Option) (*RDClient, error) {
 
 	for _, o := range opt {
 		o(config)
+	}
+
+	var err error
+	config.BootstrapServers, err = normalizeBootstrapServers(config.BootstrapServers)
+	if err != nil {
+		return nil, err
 	}
 
 	client := &RDClient{
@@ -737,6 +834,12 @@ func (l *RDListener) Addr() net.Addr {
 
 // AddRelay adds a new relay server to the client
 func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
+	normalizedAddr, err := normalizeBootstrapAddress(addr)
+	if err != nil {
+		return err
+	}
+	addr = normalizedAddr
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
