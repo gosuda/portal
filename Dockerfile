@@ -1,30 +1,40 @@
-FROM golang:1 AS builder
+# syntax=docker/dockerfile:1
+
+FROM --platform=$BUILDPLATFORM golang:1 AS builder
 
 WORKDIR /src
 
 # Install make, binaryen (wasm-opt), and brotli CLI for WASM build/compression
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    binaryen \
-    brotli \
-    make \
+  binaryen \
+  brotli \
+  make \
   && rm -rf /var/lib/apt/lists/*
 
+# Set GOMODCACHE to cache Go modules in cache volume
+RUN go env -w GOMODCACHE=/root/.cache/go-build 
+
+# Copy go.mod and go.sum
 COPY go.mod go.sum ./
 
 # Download dependencies
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+  go mod download
 
 # Copy the rest of the source code
 COPY . .
 
-# Build WASM (if needed), precompress, and server
-RUN if ls dist/[0-9a-f]*.wasm.br >/dev/null 2>&1; then \
-      echo "[docker] Using prebuilt WASM artifacts in dist/"; \
-    else \
-      echo "[docker] No prebuilt WASM found; running make build-wasm compress-wasm"; \
-      make build-wasm compress-wasm; \
-    fi && \
-    make build-server
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  make build-wasm compress-wasm
+
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  GOOS=${TARGETOS} GOARCH=${TARGETARCH} make build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
 

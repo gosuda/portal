@@ -6,10 +6,13 @@ on:
     tags: ["v*"]
   release:
     types: [published]
+  pull_request:
+    branches: [main]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm64
 
 jobs:
   build-and-push:
@@ -47,15 +50,55 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-
-      - name: Pre-build WASM artifacts
-        run: make build-wasm compress-wasm
+            type=sha,enable=true,prefix=sha-,suffix=,format=short
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          context: .
+          platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,mode=max
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to `https://portal.iwanhae.kr`
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: "kubernetes_iwanhae_kr"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Prepare Kubernetes context
+        run: |
+          kubectl config set-cluster default --server ${{ secrets.KUBERNETES_ENDPOINT }}
+          kubectl config set-credentials default --token ${{ secrets.KUBERNETES_TOKEN }}
+          kubectl config set-context default --cluster=default --user=default --namespace=${{ secrets.KUBERNETES_NAMESPACE }}
+          kubectl config use-context default
+          kubectl version
+
+      - name: Get Container Image Tag from metadata action
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=sha,enable=true,prefix=sha-,suffix=,format=short
+        id: meta
+
+      - name: Deploy to Kubernetes
+        run: kubectl set image deployments.apps/portal portal="${{ steps.meta.outputs.tags }}"
+
+      - name: Wait for Deployment to be Ready
+        run: kubectl rollout status deployment/portal --timeout=1m
+        timeout-minutes: 1
+        continue-on-error: true
+
+      - name: Rollback Deployment
+        if: failure()
+        run: |-
+          kubectl rollout undo deployment/portal
+          exit 1
