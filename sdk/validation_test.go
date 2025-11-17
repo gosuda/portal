@@ -68,3 +68,66 @@ func TestIsURLSafeName(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeBootstrapServer(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		want       string
+		shouldFail bool
+	}{
+		{
+			name:  "already ws",
+			input: "ws://localhost:4017/relay",
+			want:  "ws://localhost:4017/relay",
+		},
+		{
+			name:  "already wss",
+			input: "wss://localhost:4017/relay",
+			want:  "wss://localhost:4017/relay",
+		},
+		{
+			name:  "localhost with port",
+			input: "localhost:4017",
+			want:  "wss://localhost:4017/relay",
+		},
+		{
+			name:  "domain without port",
+			input: "example.com",
+			want:  "wss://example.com/relay",
+		},
+		{
+			name:  "http scheme",
+			input: "http://example.com",
+			want:  "ws://example.com/relay",
+		},
+		{
+			name:  "https scheme",
+			input: "https://example.com",
+			want:  "wss://example.com/relay",
+		},
+		{
+			name:       "empty",
+			input:      "",
+			shouldFail: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeBootstrapServer(tt.input)
+			if tt.shouldFail {
+				if err == nil {
+					t.Fatalf("normalizeBootstrapServer(%q) expected error, got nil", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeBootstrapServer(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeBootstrapServer(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
