@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	pathpkg "path"
 	"strconv"
@@ -515,69 +514,6 @@ func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the content-addressed WASM file
-	wasmCacheMu.RLock()
-	var wasmHash string
-	var wasmFile string
-	for filename, entry := range wasmCache {
-		wasmHash = entry.hash
-		wasmFile = filename
-		break
-	}
-	wasmCacheMu.RUnlock()
-
-	// Fallback: scan embedded WASM directory if cache is empty
-	if wasmHash == "" {
-		entries, err := wasmFS.ReadDir("dist")
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				if strings.HasSuffix(name, ".wasm.br") && len(name) == 72 {
-					hash := strings.TrimSuffix(name, ".wasm.br")
-					if isHexString(hash) && len(hash) == 64 {
-						wasmHash = hash
-						wasmFile = hash + ".wasm"
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Generate WASM URL
-	wasmURL := portalUIURL + "/frontend/" + wasmFile
-
-	// Create manifest object
-	manifestData := map[string]string{
-		"wasmFile":   wasmFile,
-		"wasmUrl":    wasmURL,
-		"hash":       wasmHash,
-		"bootstraps": bootstrapURIs,
-	}
-
-	// Convert manifest to JSON string
-	manifestJSON, err := json.Marshal(manifestData)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal manifest for service worker")
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Replace placeholders
-	result := string(content)
-	result = strings.ReplaceAll(result, "<PORTAL_UI_URL>", portalUIURL)
-	result = strings.ReplaceAll(result, "\"<WASM_MANIFEST>\"", string(manifestJSON))
-
-	// Inject __BOOTSTRAP_SERVERS__ as a global variable in service worker
-	bootstrapServersLine := fmt.Sprintf("self.__BOOTSTRAP_SERVERS__ = %q;\n", bootstrapURIs)
-
-	// Insert after the wasmManifest line (after line that sets wasmManifest)
-	manifestLine := "let wasmManifest = JSON.parse(wasmManifestString);"
-	result = strings.Replace(result, manifestLine, manifestLine+"\n"+bootstrapServersLine, 1)
-
 	// Set headers for no caching
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
@@ -586,10 +522,7 @@ func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
 
 	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(result))
+	w.Write(content)
 
-	log.Debug().
-		Str("portalUIURL", portalUIURL).
-		Str("wasmHash", wasmHash).
-		Msg("Served dynamic service-worker.js")
+	log.Debug().Msg("Served service-worker.js")
 }
