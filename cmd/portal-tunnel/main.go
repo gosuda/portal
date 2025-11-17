@@ -19,65 +19,11 @@ import (
 
 var (
 	flagConfigPath string
-	flagRelayURLs  = newRelayListFlag("ws://localhost:4017/relay")
+	flagRelayURLs  string
 	flagHost       string
 	flagPort       string
 	flagName       string
 )
-
-type relayListFlag struct {
-	values   []string
-	explicit bool
-}
-
-func newRelayListFlag(defaults ...string) *relayListFlag {
-	list := make([]string, 0, len(defaults))
-	for _, value := range defaults {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		list = append(list, value)
-	}
-	return &relayListFlag{values: list}
-}
-
-func (f *relayListFlag) Set(value string) error {
-	if f == nil {
-		return fmt.Errorf("relay list flag is not initialized")
-	}
-
-	if !f.explicit {
-		f.values = nil
-		f.explicit = true
-	}
-
-	parts := strings.Split(value, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		f.values = append(f.values, part)
-	}
-	return nil
-}
-
-func (f *relayListFlag) String() string {
-	if f == nil {
-		return ""
-	}
-	return strings.Join(f.values, ",")
-}
-
-func (f *relayListFlag) Values() []string {
-	if f == nil || len(f.values) == 0 {
-		return nil
-	}
-	out := make([]string, len(f.values))
-	copy(out, f.values)
-	return out
-}
 
 type serviceContext struct {
 	Name         string
@@ -95,7 +41,7 @@ func main() {
 	case "expose":
 		fs := flag.NewFlagSet("expose", flag.ExitOnError)
 		fs.StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
-		fs.Var(flagRelayURLs, "relay", "Portal relay server URL. Repeat or comma-separate to supply multiple servers when config is not provided")
+		fs.StringVar(&flagRelayURLs, "relay", "ws://localhost:4017/relay", "Portal relay server URLs when config is not provided (comma-separated)")
 		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
 		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
 		fs.StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
@@ -118,7 +64,7 @@ func printTunnelUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  portal-tunnel expose --config <file>")
-	fmt.Println("  portal-tunnel expose [--relay URL ...] [--host HOST] [--port PORT] [--name NAME]")
+	fmt.Println("  portal-tunnel expose [--relay URL,URL...]] [--host HOST] [--port PORT] [--name NAME]")
 }
 
 func runExpose() error {
@@ -187,7 +133,7 @@ func runExposeWithConfig() error {
 }
 
 func runExposeWithFlags() error {
-	relayURLs := flagRelayURLs.Values()
+	relayURLs := parseCommaSeparatedURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
@@ -388,6 +334,25 @@ func selectServices(cfg *TunnelConfig) ([]*ServiceConfig, error) {
 		services[i] = &cfg.Services[i]
 	}
 	return services, nil
+}
+
+func parseCommaSeparatedURLs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+
+	return out
 }
 
 func extractHost(wsURL string) string {
