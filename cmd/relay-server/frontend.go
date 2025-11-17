@@ -30,9 +30,8 @@ var bootstrapURIs = "ws://localhost:4017/relay"
 
 // wasmCache stores pre-loaded WASM files in memory (optional)
 type wasmCacheEntry struct {
-	original []byte
-	brotli   []byte
-	hash     string
+	brotli []byte
+	hash   string
 }
 
 var (
@@ -92,9 +91,8 @@ func cacheWasmFile(name, fullPath string) error {
 	}
 
 	entry := &wasmCacheEntry{
-		original: nil,
-		brotli:   brData,
-		hash:     hashHex,
+		brotli: brData,
+		hash:   hashHex,
 	}
 
 	wasmCacheMu.Lock()
