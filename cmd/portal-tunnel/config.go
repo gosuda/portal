@@ -8,6 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var defaultProtocols = []string{"http/1.1", "h2"}
+
 // RelayConfig describes a named relay endpoint and its bootstrap URLs.
 type RelayConfig struct {
 	Name string   `yaml:"name"`
@@ -171,10 +173,13 @@ func (cfg *TunnelConfig) validate() error {
 }
 
 func (cfg *TunnelConfig) applyDefaults() {
-	const defaultProtocol = "http/1.1"
 	for i := range cfg.Services {
-		if len(cfg.Services[i].Protocols) == 0 {
-			cfg.Services[i].Protocols = []string{defaultProtocol}
-		}
+		applyServiceDefaults(&cfg.Services[i])
+	}
+}
+
+func applyServiceDefaults(svc *ServiceConfig) {
+	if len(svc.Protocols) == 0 {
+		svc.Protocols = append([]string(nil), defaultProtocols...)
 	}
 }
