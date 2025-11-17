@@ -8,8 +8,10 @@
 *.so
 *.dylib
 bin/
-dist/
 chat
+
+cmd/relay-server/dist/*
+!cmd/relay-server/dist/.gitkeep
 
 # Test binary, built with `go test -c`
 *.test
