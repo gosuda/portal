@@ -271,7 +271,19 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
+		// Use frontend pattern if available, otherwise fall back to portalHost
+		var link string
+		if portalFrontendPattern != "" {
+			// For wildcard patterns like *.localhost:4017, replace * with lease name
+			if strings.HasPrefix(portalFrontendPattern, "*.") {
+				link = fmt.Sprintf("//%s%s", lease.Name, strings.TrimPrefix(portalFrontendPattern, "*"))
+			} else {
+				// For non-wildcard patterns, construct URL with lease name as subdomain
+				link = fmt.Sprintf("//%s.%s/", lease.Name, portalFrontendPattern)
+			}
+		} else {
+			link = fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
+		}
 
 		row := leaseRow{
 			Peer:        identityID,
