@@ -21,7 +21,6 @@ var (
 	flagBootstraps []string
 	flagALPN       string
 	flagPort       int
-	flagStaticDir  string
 	flagPortalHost string
 	flagMaxLease   int
 	flagLeaseBPS   int
@@ -30,11 +29,6 @@ var (
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	// Defaults from environment
-	defaultStaticDir := os.Getenv("STATIC_DIR")
-	if defaultStaticDir == "" {
-		defaultStaticDir = "./dist"
-	}
 	// Parse PORTAL_UI_URL or PORTAL_FRONTEND_URL to extract portal host
 	defaultPortalHost := os.Getenv("PORTAL_UI_URL")
 	if defaultPortalHost == "" {
@@ -56,7 +50,6 @@ func main() {
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
-	flag.StringVar(&flagStaticDir, "static-dir", defaultStaticDir, "static files directory for portal frontend (env: STATIC_DIR)")
 	flag.StringVar(&flagPortalHost, "portal-host", defaultPortalHost, "portal host for frontend serving (env: PORTAL_HOST)")
 	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
@@ -82,8 +75,7 @@ func runServer() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Set static directory and portal host
-	staticDir = flagStaticDir
+	// Set portal host
 	portalHost = flagPortalHost
 
 	// Set portal UI URL from environment or construct from portal host
@@ -114,7 +106,6 @@ func runServer() error {
 	}
 
 	log.Info().
-		Str("static_dir", staticDir).
 		Str("portal_host", portalHost).
 		Str("portal_ui_url", portalUIURL).
 		Str("portal_frontend_pattern", portalFrontendPattern).

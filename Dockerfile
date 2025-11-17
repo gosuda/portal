@@ -4,6 +4,13 @@ FROM --platform=$BUILDPLATFORM golang:1 AS builder
 
 WORKDIR /src
 
+# Install make, binaryen (wasm-opt), and brotli CLI for WASM build/compression
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  binaryen \
+  brotli \
+  make \
+  && rm -rf /var/lib/apt/lists/*
+
 # Set GOMODCACHE to cache Go modules in cache volume
 RUN go env -w GOMODCACHE=/root/.cache/go-build 
 
@@ -17,20 +24,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Copy the rest of the source code
 COPY . .
 
-FROM --platform=$BUILDPLATFORM builder AS wasm-builder
-
-# Install make, binaryen (wasm-opt), and brotli CLI for WASM build/compression
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  binaryen \
-  brotli \
-  make \
-  && rm -rf /var/lib/apt/lists/*
-
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
   make build-wasm compress-wasm
-
-FROM --platform=$BUILDPLATFORM builder AS server-builder
 
 ARG TARGETPLATFORM
 ARG TARGETOS
@@ -43,10 +39,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 # Copy server binary
-COPY --from=server-builder /src/bin/relay-server /usr/bin/relay-server
-
-# Copy static files for portal frontend
-COPY --from=wasm-builder /src/dist /app/dist
+COPY --from=builder /src/bin/relay-server /usr/bin/relay-server
 
 # Set default environment variables
 ENV STATIC_DIR=/app/dist
