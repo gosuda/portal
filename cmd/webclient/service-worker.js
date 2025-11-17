@@ -1,7 +1,7 @@
 //const wasm_exec_URL = "https://cdn.jsdelivr.net/gh/golang/go@go1.25.3/lib/wasm/wasm_exec.js";
-let BASE_PATH = "<PORTAL_UI_URL>";
-let wasmManifestString = '"<WASM_MANIFEST>"';
-let wasmManifest;
+const BASE_PATH = self.location.origin || "";
+let wasmManifest = null;
+let wasmManifestPromise = null;
 
 // Debug mode detection (disable verbose logging in production)
 const DEBUG_MODE = self.location.hostname === 'localhost' ||
@@ -14,19 +14,52 @@ function debugLog(...args) {
   }
 }
 
-// Parse manifest with error handling
-try {
-  wasmManifest = JSON.parse(wasmManifestString);
-  debugLog("[SW] Manifest parsed successfully:", wasmManifest);
-} catch (error) {
-  console.error("[SW] Failed to parse WASM manifest:", error);
-  console.error("[SW] Manifest string:", wasmManifestString);
-  // Use fallback manifest
-  wasmManifest = {
-    wasmFile: "main.wasm",
-    wasmUrl: null
-  };
-  console.warn("[SW] Using fallback manifest:", wasmManifest);
+// Load manifest from backend (decouples SW from Go template)
+async function loadManifest() {
+  if (wasmManifest) {
+    return wasmManifest;
+  }
+
+  if (wasmManifestPromise) {
+    return wasmManifestPromise;
+  }
+
+  wasmManifestPromise = (async () => {
+    try {
+      debugLog("[SW] Fetching WASM manifest...");
+      const response = await fetch("/frontend/manifest.json", { cache: "no-cache" });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const manifest = await response.json();
+      wasmManifest = manifest;
+
+      // Expose bootstrap servers to WASM runtime (service worker global)
+      if (manifest.bootstraps) {
+        self.__BOOTSTRAP_SERVERS__ = manifest.bootstraps;
+        debugLog("[SW] Bootstraps loaded from manifest:", manifest.bootstraps);
+      }
+
+      debugLog("[SW] Manifest loaded successfully:", manifest);
+      return manifest;
+    } catch (error) {
+      console.error("[SW] Failed to load WASM manifest:", error);
+
+      // Fallback manifest
+      wasmManifest = {
+        wasmFile: "main.wasm",
+        wasmUrl: null
+      };
+      console.warn("[SW] Using fallback manifest:", wasmManifest);
+      return wasmManifest;
+    } finally {
+      wasmManifestPromise = null;
+    }
+  })();
+
+  return wasmManifestPromise;
 }
 
 let wasm_exec_URL = BASE_PATH + "/frontend/wasm_exec.js";
@@ -388,12 +421,15 @@ async function runWASM() {
   }
 
   try {
+    // Ensure manifest is loaded
+    const manifest = await loadManifest();
+
     // Determine WASM URL from manifest
     let wasm_URL;
-    if (wasmManifest.wasmUrl && new URL(wasmManifest.wasmUrl).protocol !== "http:") {
-      wasm_URL = wasmManifest.wasmUrl;
+    if (manifest.wasmUrl && new URL(manifest.wasmUrl).protocol !== "http:") {
+      wasm_URL = manifest.wasmUrl;
     } else {
-      wasm_URL = `/frontend/${wasmManifest.wasmFile}`;
+      wasm_URL = `/frontend/${manifest.wasmFile}`;
     }
     debugLog("[SW] WASM URL:", wasm_URL);
 
