@@ -19,7 +19,6 @@ import (
 
 var (
 	flagConfigPath string
-	flagService    string
 	flagRelayURL   string
 	flagHost       string
 	flagPort       string
@@ -42,7 +41,6 @@ func main() {
 	case "expose":
 		fs := flag.NewFlagSet("expose", flag.ExitOnError)
 		fs.StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
-		fs.StringVar(&flagService, "service", "", "Specific service name to expose (defaults to first entry)")
 		fs.StringVar(&flagRelayURL, "relay", "ws://localhost:4017/relay", "Portal relay server URL when config is not provided")
 		fs.StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
 		fs.StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
@@ -65,7 +63,7 @@ func printTunnelUsage() {
 	fmt.Println("portal-tunnel — Expose local services through Portal relay")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  portal-tunnel expose --config <file> [--service <name>]")
+	fmt.Println("  portal-tunnel expose --config <file>")
 	fmt.Println("  portal-tunnel expose [--relay URL] [--host HOST] [--port PORT] [--name NAME]")
 }
 
@@ -81,7 +79,7 @@ func runExposeWithConfig() error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	services, err := selectServices(cfg, flagService)
+	services, err := selectServices(cfg)
 	if err != nil {
 		return err
 	}
@@ -327,23 +325,15 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 	}
 }
 
-func selectServices(cfg *TunnelConfig, name string) ([]*ServiceConfig, error) {
+func selectServices(cfg *TunnelConfig) ([]*ServiceConfig, error) {
 	if len(cfg.Services) == 0 {
 		return nil, fmt.Errorf("config has no services")
 	}
-	if name == "" {
-		services := make([]*ServiceConfig, len(cfg.Services))
-		for i := range cfg.Services {
-			services[i] = &cfg.Services[i]
-		}
-		return services, nil
-	}
+	services := make([]*ServiceConfig, len(cfg.Services))
 	for i := range cfg.Services {
-		if cfg.Services[i].Name == name {
-			return []*ServiceConfig{&cfg.Services[i]}, nil
-		}
+		services[i] = &cfg.Services[i]
 	}
-	return nil, fmt.Errorf("service %q not found in config", name)
+	return services, nil
 }
 
 func extractHost(wsURL string) string {
