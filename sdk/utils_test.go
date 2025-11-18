@@ -26,10 +26,12 @@ func TestIsURLSafeName(t *testing.T) {
 		{"chinese", "中文服务", true},
 		{"arabic", "خدمة", true},
 		{"mixed languages", "Service-서비스-サービス", true},
-		{"korean numbers", "서비스123", true},
+		{"korean numbers", "서비스23", true},
 
 		// Invalid names
 		{"with space", "my service", false},
+		{"with leading space", " service", false},
+		{"with trailing space", "service ", false},
 		{"with slash", "my/service", false},
 		{"with dot", "my.service", false},
 		{"with colon", "my:service", false},
@@ -55,8 +57,8 @@ func TestIsURLSafeName(t *testing.T) {
 		{"with backtick", "my`service", false},
 		{"with less than", "my<service", false},
 		{"with greater than", "my>service", false},
-		{"emoji", "my-service😀", false},
-		{"with space korean", "한글 서비스", false},
+		{"emoji", "my-service🚀", false},
+		{"with space korean", "한 글서비스", false},
 	}
 
 	for _, tt := range tests {
@@ -97,18 +99,43 @@ func TestNormalizeBootstrapServer(t *testing.T) {
 			want:  "wss://example.com/relay",
 		},
 		{
-			name:  "http scheme",
+			name:  "http scheme without path",
 			input: "http://example.com",
 			want:  "ws://example.com/relay",
 		},
 		{
-			name:  "https scheme",
+			name:  "https scheme without path",
 			input: "https://example.com",
 			want:  "wss://example.com/relay",
 		},
 		{
+			name:  "http scheme with path",
+			input: "http://example.com/custom",
+			want:  "ws://example.com/custom",
+		},
+		{
+			name:  "https scheme with path",
+			input: "https://example.com/custom",
+			want:  "wss://example.com/custom",
+		},
+		{
+			name:  "bare host with path",
+			input: "example.com/custom",
+			want:  "wss://example.com/custom",
+		},
+		{
 			name:       "empty",
 			input:      "",
+			shouldFail: true,
+		},
+		{
+			name:       "whitespace only",
+			input:      "   ",
+			shouldFail: true,
+		},
+		{
+			name:       "missing host",
+			input:      "/relay",
 			shouldFail: true,
 		},
 	}
