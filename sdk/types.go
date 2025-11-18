@@ -33,33 +33,33 @@ type ClientConfig struct {
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
 }
 
-type Option func(*ClientConfig)
+type ClientOption func(*ClientConfig)
 
-func WithBootstrapServers(servers []string) Option {
+func WithBootstrapServers(servers []string) ClientOption {
 	return func(c *ClientConfig) {
 		c.BootstrapServers = servers
 	}
 }
 
-func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) Option {
+func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) ClientOption {
 	return func(c *ClientConfig) {
 		c.Dialer = dialer
 	}
 }
 
-func WithHealthCheckInterval(interval time.Duration) Option {
+func WithHealthCheckInterval(interval time.Duration) ClientOption {
 	return func(c *ClientConfig) {
 		c.HealthCheckInterval = interval
 	}
 }
 
-func WithReconnectMaxRetries(retries int) Option {
+func WithReconnectMaxRetries(retries int) ClientOption {
 	return func(c *ClientConfig) {
 		c.ReconnectMaxRetries = retries
 	}
 }
 
-func WithReconnectInterval(interval time.Duration) Option {
+func WithReconnectInterval(interval time.Duration) ClientOption {
 	return func(c *ClientConfig) {
 		c.ReconnectInterval = interval
 	}

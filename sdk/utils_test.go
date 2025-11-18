@@ -1,6 +1,10 @@
 package sdk
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestIsURLSafeName(t *testing.T) {
 	tests := []struct {
@@ -26,7 +30,7 @@ func TestIsURLSafeName(t *testing.T) {
 		{"chinese", "中文服务", true},
 		{"arabic", "خدمة", true},
 		{"mixed languages", "Service-서비스-サービス", true},
-		{"korean numbers", "서비스23", true},
+		{"korean numbers", "서비스3", true},
 
 		// Invalid names
 		{"with space", "my service", false},
@@ -64,9 +68,7 @@ func TestIsURLSafeName(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isURLSafeName(tt.input)
-			if result != tt.expected {
-				t.Errorf("isURLSafeName(%q) = %v, want %v", tt.input, result, tt.expected)
-			}
+			assert.Equal(t, tt.expected, result, "isURLSafeName(%q)", tt.input)
 		})
 	}
 }
@@ -144,17 +146,11 @@ func TestNormalizeBootstrapServer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := normalizeBootstrapServer(tt.input)
 			if tt.shouldFail {
-				if err == nil {
-					t.Fatalf("normalizeBootstrapServer(%q) expected error, got nil", tt.input)
-				}
+				assert.Error(t, err, "normalizeBootstrapServer(%q) expected error", tt.input)
 				return
 			}
-			if err != nil {
-				t.Fatalf("normalizeBootstrapServer(%q) unexpected error: %v", tt.input, err)
-			}
-			if got != tt.want {
-				t.Fatalf("normalizeBootstrapServer(%q) = %q, want %q", tt.input, got, tt.want)
-			}
+			assert.NoError(t, err, "normalizeBootstrapServer(%q) unexpected error", tt.input)
+			assert.Equal(t, tt.want, got, "normalizeBootstrapServer(%q)", tt.input)
 		})
 	}
 }

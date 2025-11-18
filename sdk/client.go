@@ -29,7 +29,7 @@ type Client struct {
 	waitGroup sync.WaitGroup // Track all listener workers
 }
 
-func NewClient(opt ...Option) (*Client, error) {
+func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
