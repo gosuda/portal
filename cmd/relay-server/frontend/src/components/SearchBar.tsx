@@ -1,12 +1,12 @@
 import { Search } from "lucide-react";
-import { Input } from "./ui/input";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "./ui/select";
+} from "@/components/ui/select";
 
 interface SearchBarProps {
   searchQuery: string;
@@ -29,7 +29,7 @@ export function SearchBar({
     <div className="space-y-4 px-4 sm:px-6">
       <label className="flex flex-col min-w-40 h-12 w-full">
         <div className="flex w-full flex-1 items-stretch rounded-lg h-full">
-          <div className="text-[#92a9c9] flex border-none bg-[#233348] items-center justify-center pl-4 rounded-l-lg border-r-0">
+          <div className="text-text-muted flex border-none bg-border-dark items-center justify-center pl-4 rounded-l-lg border-r-0">
             <Search className="w-5 h-5" />
           </div>
           <Input

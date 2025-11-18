@@ -16,7 +16,7 @@ export function Pagination({
       <button
         onClick={() => onPageChange(currentPage - 1)}
         disabled={currentPage === 1}
-        className="flex h-10 w-10 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-[#233348] text-white hover:bg-[#2d3f58] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex h-10 w-10 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-border-dark text-white hover:bg-[#2d3f58] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <ChevronLeft className="w-6 h-6" />
       </button>
@@ -26,7 +26,7 @@ export function Pagination({
       <button
         onClick={() => onPageChange(currentPage + 1)}
         disabled={currentPage === totalPages}
-        className="flex h-10 w-10 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-[#233348] text-white hover:bg-[#2d3f58] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex h-10 w-10 cursor-pointer items-center justify-center overflow-hidden rounded-full bg-border-dark text-white hover:bg-[#2d3f58] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         <ChevronRight className="w-6 h-6" />
       </button>

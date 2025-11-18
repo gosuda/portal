@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
-import { Header } from "./components/Header";
-import { SearchBar } from "./components/SearchBar";
-import { ServerCard } from "./components/ServerCard";
-import { Pagination } from "./components/Pagination";
-import { useSSRData } from "./hooks/useSSRData";
-import type { ServerData, Metadata } from "./hooks/useSSRData";
+import { Header } from "@/components/Header";
+import { SearchBar } from "@/components/SearchBar";
+import { ServerCard } from "@/components/ServerCard";
+import { Pagination } from "@/components/Pagination";
+import { useSSRData } from "@/hooks/useSSRData";
+import type { ServerData, Metadata } from "@/hooks/useSSRData";
 
 const ITEMS_PER_PAGE = 6;
 
@@ -97,9 +97,7 @@ function App() {
         return aTag.localeCompare(bTag);
       });
     } else if (sortBy === "owner") {
-      filtered = [...filtered].sort((a, b) =>
-        a.owner.localeCompare(b.owner)
-      );
+      filtered = [...filtered].sort((a, b) => a.owner.localeCompare(b.owner));
     }
 
     return filtered;
