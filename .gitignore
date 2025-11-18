@@ -12,6 +12,8 @@ chat
 
 cmd/relay-server/dist/*
 !cmd/relay-server/dist/.gitkeep
+cmd/relay-server/app/*
+!cmd/relay-server/app/.gitkeep
 
 # Test binary, built with `go test -c`
 *.test

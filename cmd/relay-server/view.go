@@ -5,12 +5,14 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"html/template"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/oschwald/geoip2-golang"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
@@ -20,6 +22,16 @@ import (
 
 //go:embed static
 var assetsFS embed.FS
+
+//go:embed static/GeoLite2-Country.mmdb
+var geoipFS embed.FS
+
+// GeoIP database reader (global instance with lazy initialization)
+var (
+	geoipReader     *geoip2.Reader
+	geoipReaderOnce sync.Once
+	geoipReaderErr  error
+)
 
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
@@ -42,30 +54,27 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		addr = ":0"
 	}
 
-	// Parse template once per server instance (no global var)
-	tmpl := template.Must(template.ParseFS(assetsFS, "static/index.html"))
+	// Create app UI mux
+	appMux := http.NewServeMux()
 
-	// Create admin UI mux
-	adminMux := http.NewServeMux()
+	// Serve embedded favicons (ico/png/svg) for portal UI
+	serveAsset(appMux, "/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
+	serveAsset(appMux, "/favicon.png", "static/favicon/favicon.png", "image/png")
+	serveAsset(appMux, "/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
 
-	// Serve embedded favicons (ico/png/svg) for admin UI
-	serveAsset(adminMux, "/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
-	serveAsset(adminMux, "/favicon.png", "static/favicon/favicon.png", "image/png")
-	serveAsset(adminMux, "/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
-
-	// Static assets for admin UI (embedded files)
-	adminMux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+	// Portal app assets (JS, CSS, etc.) - served from /app/
+	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/static/")
-		serveAdminStatic(w, r, path)
+		path := strings.TrimPrefix(r.URL.Path, "/app/")
+		serveAppStatic(w, r, path, serv)
 	})
 
-	// Portal frontend files (for unified caching)
-	adminMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		// Portal frontend files (for unified caching)
+	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -75,14 +84,14 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 		// Special handling for manifest.json - generate dynamically
 		if path == "manifest.json" {
-			serveDynamicManifest(w, r)
+			serveDynamicManifest(w)
 			return
 		}
 
 		servePortalStaticFile(w, r, path)
 	})
 
-	adminMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -96,36 +105,21 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		}
 
 		stream := &wsstream.WsStream{Conn: wsConn}
-		if err := serv.HandleConnection(stream); err != nil {
+		if err := serv.HandleConnection(stream, r.RemoteAddr); err != nil {
 			log.Error().Err(err).Msg("[server] websocket relay connection error")
 			wsConn.Close()
 			return
 		}
 	})
 
-	// Admin UI index page
-	adminMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Convert lease entries to rows for the admin page
-		rows := convertLeaseEntriesToRows(serv)
-
-		data := adminPageData{
-			NodeID:     nodeID,
-			Bootstraps: bootstraps,
-			Rows:       rows,
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.Execute(w, data); err != nil {
-			log.Error().Err(err).Msg("[server] error rendering admin index")
-		}
+	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
+	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// serveAppStatic handles both "/" and 404 fallback with SSR
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		serveAppStatic(w, r, path, serv)
 	})
 
-	adminMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("{\"status\":\"ok\"}"))
 	})
@@ -133,12 +127,12 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	// Create portal frontend mux
 	portalMux := createPortalMux()
 
-	// Top-level handler that routes based on host
+	// Top-level handler that routes based on host and path
 	topHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isPortalSubdomain(r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
-			adminMux.ServeHTTP(w, r)
+			appMux.ServeHTTP(w, r)
 		}
 	})
 
@@ -170,23 +164,131 @@ type leaseRow struct {
 	Link        string
 	StaleRed    bool
 	Hide        bool
-	Description string
-	Tags        string
-	Owner       string
+	Metadata    string
+	Region      string
+	CountryCode string
 }
 
-type adminPageData struct {
-	NodeID     string
-	Bootstraps []string
-	Rows       []leaseRow
+// initGeoIP initializes the GeoIP database reader (lazy loaded)
+func initGeoIP() error {
+	geoipReaderOnce.Do(func() {
+		// Try to load from embedded FS first
+		data, err := geoipFS.ReadFile("static/GeoLite2-Country.mmdb")
+		if err == nil {
+			reader, err := geoip2.FromBytes(data)
+			if err == nil {
+				geoipReader = reader
+				log.Info().
+					Str("source", "embedded").
+					Int("size", len(data)).
+					Msg("GeoIP database loaded successfully from embedded FS")
+				return
+			}
+			log.Warn().Err(err).Msg("Failed to parse embedded GeoIP database")
+		} else {
+			log.Debug().Err(err).Msg("Embedded GeoIP database not found, trying file paths")
+		}
+	})
+
+	return geoipReaderErr
 }
 
-// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the admin page
+// getRegionFromIP extracts region information from an IP address
+func getRegionFromIP(ipStr string) (region, countryCode string) {
+	// Initialize GeoIP if needed
+	if err := initGeoIP(); err != nil {
+		return "unknown", ""
+	}
+
+	// Parse IP address
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "unknown", ""
+	}
+
+	// Skip private/local IPs
+	if ip.IsLoopback() || ip.IsPrivate() {
+		log.Debug().Str("ip", ipStr).Msg("[GeoIP] Skipping local/private IP")
+		return "local", ""
+	}
+
+	// Lookup country record
+	record, err := geoipReader.Country(ip)
+	if err != nil {
+		log.Debug().Err(err).Str("ip", ipStr).Msg("GeoIP lookup failed")
+		return "unknown", ""
+	}
+
+	// Extract country code
+	countryCode = record.Country.IsoCode
+
+	// Map country code to region
+	// Based on common regional groupings used in gaming/CDN services
+	switch countryCode {
+	// North America
+	case "US", "CA", "MX", "GT", "HN", "SV", "NI", "CR", "PA", "BZ":
+		region = "us-east"
+
+	// South America
+	case "BR", "AR", "CL", "CO", "PE", "VE", "EC", "BO", "PY", "UY", "GY", "SR", "GF":
+		region = "south-america"
+
+	// Europe - West
+	case "GB", "IE", "PT", "ES", "FR", "BE", "NL", "LU":
+		region = "eu-west"
+
+	// Europe - Central/East
+	case "DE", "AT", "CH", "IT", "PL", "CZ", "SK", "HU", "RO", "BG", "SI", "HR", "BA", "RS", "ME", "AL", "MK", "GR", "CY":
+		region = "eu-central"
+
+	// Europe - North
+	case "SE", "NO", "DK", "FI", "IS", "EE", "LV", "LT":
+		region = "eu-west"
+
+	// Asia - East
+	case "JP", "KR", "CN", "TW", "HK", "MO":
+		region = "asia-pacific"
+
+	// Asia - Southeast
+	case "SG", "MY", "TH", "ID", "PH", "VN", "LA", "KH", "MM", "BN":
+		region = "asia-pacific"
+
+	// Asia - South
+	case "IN", "PK", "BD", "LK", "NP", "BT", "MV":
+		region = "asia-pacific"
+
+	// Oceania
+	case "AU", "NZ", "FJ", "PG", "NC", "PF", "SB", "VU", "WS", "TO":
+		region = "asia-pacific"
+
+	// Middle East
+	case "AE", "SA", "IL", "TR", "EG", "IQ", "IR", "JO", "LB", "SY", "YE", "OM", "KW", "BH", "QA":
+		region = "eu-central"
+
+	// Africa
+	case "ZA", "NG", "KE", "GH", "TZ", "UG", "ET", "MA", "DZ", "TN", "LY", "SD", "AO", "MZ", "ZW", "BW", "NA", "ZM", "MW", "MG":
+		region = "eu-west"
+
+	default:
+		region = "unknown"
+	}
+
+	log.Debug().
+		Str("ip", ipStr).
+		Str("region", region).
+		Str("country", countryCode).
+		Msg("[GeoIP] Region mapped successfully")
+
+	return region, countryCode
+}
+
+// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
 func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	// Get all lease entries directly from the lease manager
 	leaseEntries := serv.GetAllLeaseEntries()
 
-	var rows []leaseRow
+	// Initialize with empty slice instead of nil to avoid "null" in JSON
+	rows := []leaseRow{}
 	now := time.Now()
 
 	for _, leaseEntry := range leaseEntries {
@@ -285,6 +387,34 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			link = fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
 		}
 
+		// Get GeoIP information from RemoteAddr
+		var region string
+		var countryCode string
+		if leaseEntry.RemoteAddr != "" {
+			// Extract IP from RemoteAddr (format: "ip:port")
+			ipStr := leaseEntry.RemoteAddr
+			if idx := strings.LastIndex(ipStr, ":"); idx != -1 {
+				ipStr = ipStr[:idx]
+			}
+			log.Info().
+				Str("lease_id", identityID).
+				Str("remote_addr", leaseEntry.RemoteAddr).
+				Str("extracted_ip", ipStr).
+				Msg("[GeoIP] Processing lease RemoteAddr")
+			region, countryCode = getRegionFromIP(ipStr)
+			log.Info().
+				Str("lease_id", identityID).
+				Str("region", region).
+				Str("country_code", countryCode).
+				Msg("[GeoIP] Region detected")
+		} else {
+			log.Info().
+				Str("lease_id", identityID).
+				Msg("[GeoIP] No RemoteAddr available for lease")
+			region = "unknown"
+			countryCode = ""
+		}
+
 		row := leaseRow{
 			Peer:        identityID,
 			Name:        name,
@@ -297,12 +427,14 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
 			Hide:        meta.Hide,
-			Description: strings.TrimSpace(meta.Description),
-			Tags:        strings.Join(meta.Tags, ", "),
-			Owner:       strings.TrimSpace(meta.Owner),
+			Metadata:    lease.Metadata,
+			Region:      region,
+			CountryCode: countryCode,
 		}
 
-		rows = append(rows, row)
+		if row.Hide != true {
+			rows = append(rows, row)
+		}
 	}
 
 	return rows

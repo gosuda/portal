@@ -10,10 +10,14 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
+	"gosuda.org/portal/portal"
 )
 
 //go:embed dist/*
 var wasmFS embed.FS
+
+//go:embed app/*
+var appFS embed.FS
 
 // portalHost is the host for portal frontend.
 var portalHost = "localhost"
@@ -144,7 +148,7 @@ func createPortalMux() *http.ServeMux {
 
 		// Special handling for manifest.json - generate dynamically
 		if path == "manifest.json" {
-			serveDynamicManifest(w, r)
+			serveDynamicManifest(w)
 			return
 		}
 
@@ -168,6 +172,59 @@ func createPortalMux() *http.ServeMux {
 	})
 
 	return mux
+}
+
+// servePortalHTMLWithSSR serves portal.html with SSR data injection
+func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	setCORSHeaders(w)
+
+	// Read portal.html from embedded FS
+	fullPath := pathpkg.Join("app", "portal.html")
+	htmlContent, err := appFS.ReadFile(fullPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read portal.html")
+		http.NotFound(w, r)
+		return
+	}
+
+	// Inject SSR data
+	injectedHTML := injectServerData(string(htmlContent), serv)
+
+	// Set headers
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+
+	// Send response
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(injectedHTML))
+
+	log.Debug().Msg("Served portal.html with SSR data")
+}
+
+// injectServerData injects server data into HTML for SSR
+func injectServerData(htmlContent string, serv *portal.RelayServer) string {
+	// Get server data from lease manager
+	rows := convertLeaseEntriesToRows(serv)
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(rows)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to marshal server data for SSR")
+		jsonData = []byte("[]")
+	}
+
+	// Create SSR script tag
+	ssrScript := `<script id="__SSR_DATA__" type="application/json">` + string(jsonData) + `</script>`
+
+	// Inject before </head> tag
+	injected := strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
+
+	log.Debug().
+		Int("rows", len(rows)).
+		Int("jsonSize", len(jsonData)).
+		Msg("Injected SSR data into HTML")
+
+	return injected
 }
 
 // servePortalStaticFile serves static files for portal frontend with caching
@@ -194,7 +251,26 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 
 	if !ok {
 		log.Debug().Str("path", filePath).Msg("WASM file not in cache")
-		http.NotFound(w, r)
+		// Fallback: try to serve uncompressed WASM from embedded FS
+		fullPath := pathpkg.Join("dist", filePath)
+		data, err := wasmFS.ReadFile(fullPath)
+		if err != nil {
+			log.Debug().Err(err).Str("path", fullPath).Msg("WASM file not found in embedded FS")
+			http.NotFound(w, r)
+			return
+		}
+
+		// Serve uncompressed WASM
+		setCORSHeaders(w)
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		w.Header().Set("Content-Type", "application/wasm")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+		log.Debug().
+			Str("path", filePath).
+			Int("size", len(data)).
+			Msg("served uncompressed WASM from embedded FS")
 		return
 	}
 
@@ -227,22 +303,30 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 		Msg("served compressed WASM")
 }
 
-// serveAdminStatic serves static files for admin UI from embedded FS
-func serveAdminStatic(w http.ResponseWriter, r *http.Request, path string) {
+// serveAppStatic serves static files for app UI (React app) from embedded FS
+// Falls back to portal.html with SSR when path is root or file not found
+func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *portal.RelayServer) {
 	// Prevent directory traversal
 	if strings.Contains(path, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
-	// Try to read from embedded FS
 	setCORSHeaders(w)
 
-	fullPath := pathpkg.Join("static", path)
-	data, err := assetsFS.ReadFile(fullPath)
+	// If path is empty or "/", serve portal.html with SSR
+	if path == "" || path == "/" {
+		servePortalHTMLWithSSR(w, r, serv)
+		return
+	}
+
+	// Try to read from embedded FS
+	fullPath := pathpkg.Join("app", path)
+	data, err := appFS.ReadFile(fullPath)
 	if err != nil {
-		log.Debug().Err(err).Str("path", path).Msg("admin static file not found")
-		http.NotFound(w, r)
+		// File not found - fallback to portal.html with SSR for SPA routing
+		log.Debug().Err(err).Str("path", path).Msg("app static file not found, falling back to SSR")
+		servePortalHTMLWithSSR(w, r, serv)
 		return
 	}
 
@@ -260,7 +344,7 @@ func serveAdminStatic(w http.ResponseWriter, r *http.Request, path string) {
 	log.Debug().
 		Str("path", path).
 		Int("size", len(data)).
-		Msg("served admin static file")
+		Msg("served app static file")
 }
 
 // servePortalStatic serves static files for portal frontend with appropriate cache headers
@@ -408,7 +492,20 @@ func isPortalSubdomain(host string) bool {
 	if portalHost == "" {
 		return false
 	}
-	return strings.HasSuffix(host, "."+portalHost)
+
+	// Remove port from host for comparison
+	hostWithoutPort := host
+	if idx := strings.LastIndex(host, ":"); idx != -1 {
+		hostWithoutPort = host[:idx]
+	}
+
+	// Remove port from portalHost for comparison
+	portalHostWithoutPort := portalHost
+	if idx := strings.LastIndex(portalHost, ":"); idx != -1 {
+		portalHostWithoutPort = portalHost[:idx]
+	}
+
+	return strings.HasSuffix(hostWithoutPort, "."+portalHostWithoutPort)
 }
 
 // matchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)
@@ -434,7 +531,7 @@ func isHexString(s string) bool {
 }
 
 // serveDynamicManifest generates and serves manifest.json dynamically
-func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
+func serveDynamicManifest(w http.ResponseWriter) {
 	setCORSHeaders(w)
 
 	// Find the content-addressed WASM file

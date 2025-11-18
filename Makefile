@@ -1,6 +1,20 @@
 SHELL := /bin/sh
 
-.PHONY: run build build-wasm compress-wasm build-server clean
+.PHONY: help run build build-wasm compress-wasm build-frontend build-server clean
+
+.DEFAULT_GOAL := help
+
+help:
+	@echo "Available targets:"
+	@echo "  make build             - Build everything (protoc, wasm, frontend, server, tunnel)"
+	@echo "  make build-protoc      - Generate Go code from protobuf definitions"
+	@echo "  make build-wasm        - Build WASM client with optimization"
+	@echo "  make compress-wasm     - Compress WASM with brotli"
+	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
+	@echo "  make build-server      - Build Go relay server (includes frontend build)"
+	@echo "  make build-tunnel      - Build Portal Tunnel CLI"
+	@echo "  make run               - Run relay server"
+	@echo "  make clean             - Remove build artifacts"
 
 run:
 	./bin/relay-server
@@ -48,6 +62,7 @@ build-wasm:
 	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/portal.mp4
 	
 	@echo "[wasm] build complete"
+	@make compress-wasm
 
 # Precompress content-addressed WASM with brotli
 compress-wasm:
@@ -66,8 +81,15 @@ compress-wasm:
 	rm -f "$$WASM_FILE"; \
 	echo "[wasm] brotli: cmd/relay-server/dist/$$WASM_HASH.wasm.br"
 
+
+# Build React frontend with Tailwind CSS 4
+build-frontend:
+	@echo "[frontend] building React frontend..."
+	@cd cmd/relay-server/frontend && npm run build
+	@echo "[frontend] build complete"
+
 # Build Go relay server (embeds WASM from cmd/relay-server/static)
-build-server:
+build-server: build-frontend
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 
@@ -78,3 +100,4 @@ build-tunnel:
 
 clean:
 	rm -rf bin
+	rm -rf app

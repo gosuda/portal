@@ -14,8 +14,9 @@ import (
 )
 
 type Connection struct {
-	conn io.ReadWriteCloser
-	sess *yamux.Session
+	conn       io.ReadWriteCloser
+	sess       *yamux.Session
+	RemoteAddr string
 
 	streams     map[uint32]*yamux.Stream
 	streamsLock sync.Mutex
@@ -253,7 +254,7 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 	}
 }
 
-func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
+func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser, remoteAddr string) error {
 	log.Debug().Msg("[RelayServer] New connection received")
 
 	sess, err := yamux.Server(conn, _yamux_config)
@@ -266,9 +267,10 @@ func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
 	g.connidCounter++
 	connID := g.connidCounter
 	connection := &Connection{
-		conn:    conn,
-		sess:    sess,
-		streams: make(map[uint32]*yamux.Stream),
+		conn:       conn,
+		sess:       sess,
+		RemoteAddr: remoteAddr,
+		streams:    make(map[uint32]*yamux.Stream),
 	}
 	g.connections[connID] = connection
 	g.connectionsLock.Unlock()

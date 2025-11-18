@@ -190,6 +190,9 @@ func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
 
 // Read reads and decrypts data from the underlying connection
 func (sc *SecureConnection) Read(p []byte) (int, error) {
+	if sc == nil || sc.conn == nil {
+		return 0, errors.New("connection is nil")
+	}
 	if len(sc.readBuffer.B) > 0 {
 		n := copy(p, sc.readBuffer.B)
 		copy(sc.readBuffer.B[:len(sc.readBuffer.B)-n], sc.readBuffer.B[n:])

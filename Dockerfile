@@ -26,7 +26,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
-  make build-wasm compress-wasm
+  make build-wasm
 
 ARG TARGETPLATFORM
 ARG TARGETOS

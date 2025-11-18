@@ -49,7 +49,7 @@ func main() {
 	var flagBootstrapsCSV string
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flag.IntVar(&flagPort, "port", 4017, "admin UI and HTTP proxy port")
+	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
 	flag.StringVar(&flagPortalHost, "portal-host", defaultPortalHost, "portal host for frontend serving (env: PORTAL_HOST)")
 	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
@@ -125,7 +125,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	// Admin UI + Relay + Static Frontend
+	// App UI + Relay + Static Frontend
 	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
 
 	<-ctx.Done()
