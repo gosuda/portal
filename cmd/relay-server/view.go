@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"strings"
 	"time"
@@ -13,17 +12,21 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
+	pathpkg "path"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/wsstream"
 	"gosuda.org/portal/sdk"
 )
 
-//go:embed static
-var assetsFS embed.FS
+//go:embed dist/*
+var distFS embed.FS
 
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-		b, err := assetsFS.ReadFile(assetPath)
+		// Read from dist/app subdirectory of the embedded FS
+		fullPath := pathpkg.Join("dist", "app", assetPath)
+		b, err := distFS.ReadFile(fullPath)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -42,30 +45,27 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		addr = ":0"
 	}
 
-	// Parse template once per server instance (no global var)
-	tmpl := template.Must(template.ParseFS(assetsFS, "static/index.html"))
+	// Create app UI mux
+	appMux := http.NewServeMux()
 
-	// Create admin UI mux
-	adminMux := http.NewServeMux()
+	// Serve favicons (ico/png/svg) from dist/app
+	serveAsset(appMux, "/favicon.ico", "favicon.ico", "image/x-icon")
+	serveAsset(appMux, "/favicon.png", "favicon.png", "image/png")
+	serveAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
 
-	// Serve embedded favicons (ico/png/svg) for admin UI
-	serveAsset(adminMux, "/favicon.ico", "static/favicon/favicon.ico", "image/x-icon")
-	serveAsset(adminMux, "/favicon.png", "static/favicon/favicon.png", "image/png")
-	serveAsset(adminMux, "/favicon.svg", "static/favicon/favicon.svg", "image/svg+xml")
-
-	// Static assets for admin UI (embedded files)
-	adminMux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+	// Portal app assets (JS, CSS, etc.) - served from /app/
+	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/static/")
-		serveAdminStatic(w, r, path)
+		path := strings.TrimPrefix(r.URL.Path, "/app/")
+		serveAppStatic(w, r, path, serv)
 	})
 
 	// Portal frontend files (for unified caching)
-	adminMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
@@ -75,14 +75,14 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 		// Special handling for manifest.json - generate dynamically
 		if path == "manifest.json" {
-			serveDynamicManifest(w, r)
+			serveDynamicManifest(w)
 			return
 		}
 
 		servePortalStaticFile(w, r, path)
 	})
 
-	adminMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -103,29 +103,14 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		}
 	})
 
-	// Admin UI index page
-	adminMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Convert lease entries to rows for the admin page
-		rows := convertLeaseEntriesToRows(serv)
-
-		data := adminPageData{
-			NodeID:     nodeID,
-			Bootstraps: bootstraps,
-			Rows:       rows,
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		if err := tmpl.Execute(w, data); err != nil {
-			log.Error().Err(err).Msg("[server] error rendering admin index")
-		}
+	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
+	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// serveAppStatic handles both "/" and 404 fallback with SSR
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		serveAppStatic(w, r, path, serv)
 	})
 
-	adminMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("{\"status\":\"ok\"}"))
 	})
@@ -133,12 +118,12 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	// Create portal frontend mux
 	portalMux := createPortalMux()
 
-	// Top-level handler that routes based on host
+	// Top-level handler that routes based on host and path
 	topHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isPortalSubdomain(r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
-			adminMux.ServeHTTP(w, r)
+			appMux.ServeHTTP(w, r)
 		}
 	})
 
@@ -170,23 +155,16 @@ type leaseRow struct {
 	Link        string
 	StaleRed    bool
 	Hide        bool
-	Description string
-	Tags        string
-	Owner       string
+	Metadata    string
 }
 
-type adminPageData struct {
-	NodeID     string
-	Bootstraps []string
-	Rows       []leaseRow
-}
-
-// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the admin page
+// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
 func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	// Get all lease entries directly from the lease manager
 	leaseEntries := serv.GetAllLeaseEntries()
 
-	var rows []leaseRow
+	// Initialize with empty slice instead of nil to avoid "null" in JSON
+	rows := []leaseRow{}
 	now := time.Now()
 
 	for _, leaseEntry := range leaseEntries {
@@ -297,12 +275,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
 			Hide:        meta.Hide,
-			Description: strings.TrimSpace(meta.Description),
-			Tags:        strings.Join(meta.Tags, ", "),
-			Owner:       strings.TrimSpace(meta.Owner),
+			Metadata:    lease.Metadata,
 		}
 
-		rows = append(rows, row)
+		if row.Hide != true {
+			rows = append(rows, row)
+		}
 	}
 
 	return rows

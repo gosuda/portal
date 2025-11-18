@@ -10,8 +10,8 @@
 bin/
 chat
 
-cmd/relay-server/dist/*
-!cmd/relay-server/dist/.gitkeep
+cmd/relay-server/dist/app
+cmd/relay-server/dist/wasm
 
 # Test binary, built with `go test -c`
 *.test
