@@ -4,7 +4,7 @@ FROM --platform=$BUILDPLATFORM golang:1 AS builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  nodejs npm brotli make && rm -rf /var/lib/apt/lists/*
+  nodejs npm brotli make binaryen && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
