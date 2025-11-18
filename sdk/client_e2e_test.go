@@ -11,12 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
-	"gosuda.org/portal/portal/utils/wsstream"
 )
 
 func init() {
@@ -33,9 +34,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	// 1. Create relay server credential
 	log.Info().Msg("[TEST] Step 1: Creating relay server credential")
 	relayServerCred, err := cryptoops.NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create relay server credential: %v", err)
-	}
+	require.NoError(t, err, "Failed to create relay server credential")
 	log.Debug().Str("relay_id", relayServerCred.ID()).Msg("[TEST] Relay server credential created")
 
 	// 2. Start relay server
@@ -49,16 +48,12 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		log.Debug().Str("remote", r.RemoteAddr).Msg("[TEST] Relay server accepting WebSocket connection")
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[TEST] Failed to upgrade WebSocket")
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		if err := relayServer.HandleConnection(wsConn); err != nil {
+		if err := relayServer.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[TEST] Relay server error handling connection")
 		}
 	})
@@ -91,21 +86,17 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 4. Create app SDK client and register listener
 	log.Info().Msg("[TEST] Step 4: Creating app SDK client")
-	appClient, err := NewClient(func(c *RDClientConfig) {
+	appClient, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create app SDK client: %v", err)
-	}
+	require.NoError(t, err, "Failed to create app SDK client")
 	defer appClient.Close()
 	log.Info().Msg("[TEST] App SDK client created")
 
 	// 5. Register listener on app side
 	log.Info().Msg("[TEST] Step 5: Registering app listener")
 	appListener, err := appClient.Listen(appCred, "test-app", []string{"http/1.1"})
-	if err != nil {
-		t.Fatalf("Failed to create app listener: %v", err)
-	}
+	require.NoError(t, err, "Failed to create app listener")
 	defer appListener.Close()
 	log.Info().Str("lease_id", appCred.ID()).Msg("[TEST] App listener registered")
 
@@ -140,12 +131,10 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 8. Create client SDK client
 	log.Info().Msg("[TEST] Step 8: Creating client SDK client")
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create client SDK: %v", err)
-	}
+	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()
 	log.Info().Msg("[TEST] Client SDK client created")
 
@@ -156,9 +145,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	// 10. Dial to app through relay
 	log.Info().Msg("[TEST] Step 10: Client dialing to app through relay")
 	conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
-	if err != nil {
-		t.Fatalf("Failed to dial to app: %v", err)
-	}
+	require.NoError(t, err, "Failed to dial to app")
 	defer conn.Close()
 	log.Info().
 		Str("local", conn.LocalAddr().String()).
@@ -170,22 +157,18 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// Create HTTP request
 	req, err := http.NewRequest("GET", "http://test-app/", nil)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP request: %v", err)
-	}
+	require.NoError(t, err, "Failed to create HTTP request")
 
 	// Write HTTP request to connection
 	if err := req.Write(conn); err != nil {
-		t.Fatalf("Failed to write HTTP request: %v", err)
+		require.NoError(t, err, "Failed to write HTTP request")
 	}
 	log.Debug().Msg("[TEST] HTTP request sent")
 
 	// Read HTTP response
 	log.Info().Msg("[TEST] Step 12: Reading HTTP response")
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
-		t.Fatalf("Failed to read HTTP response: %v", err)
-	}
+	require.NoError(t, err, "Failed to read HTTP response")
 	defer resp.Body.Close()
 
 	log.Debug().
@@ -195,30 +178,20 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("Failed to read response body: %v", err)
-	}
+	require.NoError(t, err, "Failed to read response body")
 
 	responseStr := string(body)
 	log.Info().Str("body", responseStr).Msg("[TEST] Response body received")
 
 	// 12. Verify response
 	log.Info().Msg("[TEST] Step 13: Verifying response")
-	if resp.StatusCode != 200 {
-		t.Errorf("Expected status code 200, got %d", resp.StatusCode)
-	}
-
-	if len(body) == 0 {
-		t.Error("Expected non-empty response body")
-	}
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Expected status code 200")
+	require.NotEmpty(t, body, "Expected non-empty response body")
 
 	// Check if response contains test message
 	bodyStr := string(body)
-	if len(bodyStr) == 0 {
-		t.Error("Response body is empty")
-	} else {
-		log.Info().Str("response", bodyStr).Msg("[TEST] Response verification successful")
-	}
+	require.NotEmpty(t, bodyStr, "Response body is empty")
+	log.Info().Str("response", bodyStr).Msg("[TEST] Response verification successful")
 
 	log.Info().Msg("=== E2E Test Completed Successfully ===")
 }
@@ -229,9 +202,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 
 	// Setup relay server
 	relayServerCred, err := cryptoops.NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create relay server credential: %v", err)
-	}
+	require.NoError(t, err, "Failed to create relay server credential")
 
 	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14018/relay"})
 	relayServer.Start()
@@ -240,15 +211,11 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	relayAddr := "127.0.0.1:14018"
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		relayServer.HandleConnection(wsConn)
+		relayServer.HandleConnection(stream)
 	})
 
 	relayHTTPServer := &http.Server{
@@ -268,18 +235,14 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Setup app
 	appCred := NewCredential()
 
-	appClient, err := NewClient(func(c *RDClientConfig) {
+	appClient, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create app SDK client: %v", err)
-	}
+	require.NoError(t, err, "Failed to create app SDK client")
 	defer appClient.Close()
 
 	appListener, err := appClient.Listen(appCred, "multi-test-app", []string{"http/1.1"})
-	if err != nil {
-		t.Fatalf("Failed to create app listener: %v", err)
-	}
+	require.NoError(t, err, "Failed to create app listener")
 	defer appListener.Close()
 
 	// Serve echo server
@@ -301,12 +264,10 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Create client
 	clientCred := NewCredential()
 
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create client SDK: %v", err)
-	}
+	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()
 
 	time.Sleep(2 * time.Second)
@@ -321,8 +282,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
 
 			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
-			if err != nil {
-				t.Errorf("Connection %d failed to dial: %v", i, err)
+			if !assert.NoError(t, err, "Connection %d failed to dial", i) {
 				return
 			}
 			defer conn.Close()
@@ -330,20 +290,19 @@ func TestE2E_MultipleConnections(t *testing.T) {
 			testData := fmt.Sprintf("test-message-%d", i)
 
 			// Write test data
-			if _, err := conn.Write([]byte(testData)); err != nil {
-				t.Errorf("Connection %d failed to write: %v", i, err)
+			_, err = conn.Write([]byte(testData))
+			if !assert.NoError(t, err, "Connection %d failed to write", i) {
 				return
 			}
 
 			// Read echoed data
 			buf := make([]byte, len(testData))
-			if _, err := io.ReadFull(conn, buf); err != nil {
-				t.Errorf("Connection %d failed to read: %v", i, err)
+			_, err = io.ReadFull(conn, buf)
+			if !assert.NoError(t, err, "Connection %d failed to read", i) {
 				return
 			}
 
-			if string(buf) != testData {
-				t.Errorf("Connection %d: expected %q, got %q", i, testData, string(buf))
+			if !assert.Equal(t, testData, string(buf), "Connection %d: unexpected echo data", i) {
 				return
 			}
 
@@ -368,7 +327,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := NewClient(func(c *RDClientConfig) {
+		_, err := NewClient(func(c *ClientConfig) {
 			c.BootstrapServers = []string{"ws://127.0.0.1:19999/relay"} // Non-existent
 		})
 		done <- err
@@ -376,13 +335,10 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Error("Expected error when connecting to non-existent relay")
-		} else {
-			log.Info().Err(err).Msg("[TEST] Got expected error")
-		}
+		require.Error(t, err, "Expected error when connecting to non-existent relay")
+		log.Info().Err(err).Msg("[TEST] Got expected error")
 	case <-ctx.Done():
-		t.Error("Connection attempt did not complete within timeout")
+		require.Fail(t, "Connection attempt did not complete within timeout")
 	}
 
 	// Try to dial to non-existent lease
@@ -395,15 +351,11 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	relayAddr := "127.0.0.1:14019"
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		relayServer.HandleConnection(wsConn)
+		relayServer.HandleConnection(stream)
 	})
 
 	relayHTTPServer := &http.Server{
@@ -420,12 +372,10 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14019/relay"}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create client SDK: %v", err)
-	}
+	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()
 
 	time.Sleep(1 * time.Second)
@@ -433,11 +383,8 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	// Try to dial to non-existent lease
 	log.Info().Msg("[TEST] Attempting to dial non-existent lease")
 	_, err = clientSDK.Dial(clientCred, "non-existent-lease-id", "http/1.1")
-	if err == nil {
-		t.Error("Expected error when dialing non-existent lease")
-	} else {
-		log.Info().Err(err).Msg("[TEST] Got expected error for non-existent lease")
-	}
+	require.Error(t, err, "Expected error when dialing non-existent lease")
+	log.Info().Err(err).Msg("[TEST] Got expected error for non-existent lease")
 
 	log.Info().Msg("=== Connection Timeout Test Completed ===")
 }

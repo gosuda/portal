@@ -3,301 +3,37 @@ package sdk
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
-	"gosuda.org/portal/portal/utils/wsstream"
 )
 
-func NewCredential() *cryptoops.Credential {
-	cred, err := cryptoops.NewCredential()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create credential")
-	}
-	return cred
-}
+type Client struct {
+	config *ClientConfig
+	mu     sync.Mutex
 
-// URL-safe name validation regex
-// Allows: Unicode letters (\p{L}), Unicode numbers (\p{N}), hyphen (-), underscore (_)
-// This includes Korean (한글), Japanese (日本語), Chinese (中文), Arabic (العربية), etc.
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
-
-// isURLSafeName checks if a name contains only URL-safe characters
-// Supports Unicode characters including Korean (한글), Japanese (日本語), Chinese (中文), etc.
-// Disallows: spaces, special characters like /, ?, &, =, %, etc.
-// Note: Browsers will automatically URL-encode non-ASCII characters (e.g., 한글 → %ED%95%9C%EA%B8%80)
-func isURLSafeName(name string) bool {
-	if name == "" {
-		return true // Empty name is allowed (will be treated as unnamed)
-	}
-	return urlSafeNameRegex.MatchString(name)
-}
-
-func webSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
-	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
-		if err != nil {
-			return nil, err
-		}
-		return &wsstream.WsStream{Conn: wsConn}, nil
-	}
-}
-
-type RDClientConfig struct {
-	BootstrapServers    []string
-	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
-	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
-	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
-	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
-}
-
-type Option func(*RDClientConfig)
-
-func WithBootstrapServers(servers []string) Option {
-	return func(c *RDClientConfig) {
-		c.BootstrapServers = servers
-	}
-}
-
-func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) Option {
-	return func(c *RDClientConfig) {
-		c.Dialer = dialer
-	}
-}
-
-func WithHealthCheckInterval(interval time.Duration) Option {
-	return func(c *RDClientConfig) {
-		c.HealthCheckInterval = interval
-	}
-}
-
-func WithReconnectMaxRetries(retries int) Option {
-	return func(c *RDClientConfig) {
-		c.ReconnectMaxRetries = retries
-	}
-}
-
-func WithReconnectInterval(interval time.Duration) Option {
-	return func(c *RDClientConfig) {
-		c.ReconnectInterval = interval
-	}
-}
-
-type rdRelay struct {
-	addr     string
-	client   *portal.RelayClient
-	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
-	stop     chan struct{}
-	stopOnce sync.Once // Ensure stop channel is closed only once
-	mu       sync.Mutex
-}
-
-var _ net.Conn = (*RDConnection)(nil)
-
-type RDConnection struct {
-	via        *rdRelay
-	localAddr  string
-	remoteAddr string
-	conn       *cryptoops.SecureConnection
-}
-
-// Implement net.Conn interface for RDConnection
-func (r *RDConnection) Read(b []byte) (n int, err error) {
-	return r.conn.Read(b)
-}
-
-func (r *RDConnection) Write(b []byte) (n int, err error) {
-	return r.conn.Write(b)
-}
-
-func (r *RDConnection) Close() error {
-	return r.conn.Close()
-}
-
-func (r *RDConnection) LocalAddr() net.Addr {
-	return rdAddr(r.localAddr)
-}
-
-func (r *RDConnection) RemoteAddr() net.Addr {
-	return rdAddr(r.remoteAddr)
-}
-
-func (r *RDConnection) SetDeadline(t time.Time) error {
-	return r.conn.SetDeadline(t)
-}
-
-func (r *RDConnection) SetReadDeadline(t time.Time) error {
-	return r.conn.SetReadDeadline(t)
-}
-
-func (r *RDConnection) SetWriteDeadline(t time.Time) error {
-	return r.conn.SetWriteDeadline(t)
-}
-
-// rdAddr implements net.Addr
-type rdAddr string
-
-func (a rdAddr) Network() string {
-	return "portal"
-}
-
-func (a rdAddr) String() string {
-	return string(a)
-}
-
-type RDListener struct {
-	mu sync.Mutex
-
-	cred  *cryptoops.Credential
-	lease *rdverb.Lease
-
-	conns map[*RDConnection]struct{}
-
-	connCh chan *RDConnection
-	closed bool
-}
-
-type Metadata struct {
-	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
-	Thumbnail   string   `json:"thumbnail"`
-	Owner       string   `json:"owner"`
-	Hide        bool     `json:"hide"`
-}
-
-func (m Metadata) isEmpty() bool {
-	return m.Description == "" &&
-		len(m.Tags) == 0 &&
-		m.Thumbnail == "" &&
-		m.Owner == ""
-}
-
-type MetadataOption func(*Metadata)
-
-func WithDescription(description string) MetadataOption {
-	return func(m *Metadata) {
-		m.Description = description
-	}
-}
-
-func WithTags(tags []string) MetadataOption {
-	return func(m *Metadata) {
-		m.Tags = tags
-	}
-}
-
-func WithThumbnail(thumbnail string) MetadataOption {
-	return func(m *Metadata) {
-		m.Thumbnail = thumbnail
-	}
-}
-
-func WithOwner(owner string) MetadataOption {
-	return func(m *Metadata) {
-		m.Owner = owner
-	}
-}
-
-func WithHide(hide bool) MetadataOption {
-	return func(m *Metadata) {
-		m.Hide = hide
-	}
-}
-
-// normalizeBootstrapServer takes various user-friendly server inputs and
-// converts them into a proper WebSocket URL.
-// Examples:
-//   - "wss://localhost:4017/relay" -> unchanged
-//   - "ws://localhost:4017/relay"  -> unchanged
-//   - "http://example.com"        -> "ws://example.com/relay"
-//   - "https://example.com"       -> "wss://example.com/relay"
-//   - "localhost:4017"            -> "wss://localhost:4017/relay"
-//   - "example.com"               -> "wss://example.com/relay"
-func normalizeBootstrapServer(raw string) (string, error) {
-	server := strings.TrimSpace(raw)
-	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
-	}
-
-	// Already a WebSocket URL
-	if strings.HasPrefix(server, "ws://") || strings.HasPrefix(server, "wss://") {
-		return server, nil
-	}
-
-	// HTTP/HTTPS -> WS/WSS with default /relay path
-	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
-		u, err := url.Parse(server)
-		if err != nil {
-			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-		}
-		switch u.Scheme {
-		case "http":
-			u.Scheme = "ws"
-		case "https":
-			u.Scheme = "wss"
-		}
-		if u.Path == "" || u.Path == "/" {
-			u.Path = "/relay"
-		}
-		return u.String(), nil
-	}
-
-	// Bare host[:port][/path] -> assume WSS and /relay if no path
-	u, err := url.Parse("wss://" + server)
-	if err != nil {
-		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
-	}
-	if u.Path == "" || u.Path == "/" {
-		u.Path = "/relay"
-	}
-	return u.String(), nil
-}
-
-type RDClient struct {
-	mu sync.Mutex
-
-	relays    map[string]*rdRelay
-	listeners map[string]*RDListener
-	config    *RDClientConfig
+	relays    map[string]*connRelay
+	listeners map[string]*listener
 
 	stopch    chan struct{}
 	stopOnce  sync.Once      // Ensure stopch is closed only once
 	waitGroup sync.WaitGroup // Track all listener workers
 }
 
-var (
-	ErrNoAvailableRelay     = errors.New("no available relay")
-	ErrClientClosed         = errors.New("client is closed")
-	ErrListenerExists       = errors.New("listener already exists for this credential")
-	ErrRelayExists          = errors.New("relay already exists")
-	ErrRelayNotFound        = errors.New("relay not found")
-	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
-	ErrFailedToCreateClient = errors.New("failed to create relay client")
-	ErrInvalidMetadata      = errors.New("invalid metadata")
-)
+func NewClient(opt ...ClientOption) (*Client, error) {
+	log.Debug().Msg("[SDK] Creating new Client")
 
-func NewClient(opt ...Option) (*RDClient, error) {
-	log.Debug().Msg("[SDK] Creating new RDClient")
-
-	config := &RDClientConfig{
-		Dialer:              webSocketDialer(),
+	config := &ClientConfig{
+		Dialer:              NewWebSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -307,9 +43,9 @@ func NewClient(opt ...Option) (*RDClient, error) {
 		o(config)
 	}
 
-	client := &RDClient{
-		relays:    make(map[string]*rdRelay),
-		listeners: make(map[string]*RDListener),
+	client := &Client{
+		relays:    make(map[string]*connRelay),
+		listeners: make(map[string]*listener),
 		config:    config,
 		stopch:    make(chan struct{}),
 	}
@@ -317,7 +53,7 @@ func NewClient(opt ...Option) (*RDClient, error) {
 	// Initialize relays from bootstrap servers
 	var connectionErrors []error
 	for _, server := range config.BootstrapServers {
-		normalized, err := normalizeBootstrapServer(server)
+		normalized, err := NormalizePortalURL(server)
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -348,17 +84,17 @@ func NewClient(opt ...Option) (*RDClient, error) {
 		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %v", connectionErrors)
 	}
 
-	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] RDClient created successfully")
+	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] Client created successfully")
 	return client, nil
 }
 
-func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (*RDConnection, error) {
+func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (*connection, error) {
 	log.Debug().
 		Str("lease_id", leaseID).
 		Str("alpn", alpn).
 		Msg("[SDK] Dialing to lease")
 
-	var relays []*rdRelay
+	var relays []*connRelay
 
 	g.mu.Lock()
 	for _, server := range g.relays {
@@ -370,11 +106,11 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 
 	var wg sync.WaitGroup
 	var availableRelaysMu sync.Mutex
-	var availableRelays []*rdRelay
+	var availableRelays []*connRelay
 
 	for _, relay := range relays {
 		wg.Add(1)
-		go func(relay *rdRelay) {
+		go func(relay *connRelay) {
 			defer wg.Done()
 			info, err := relay.client.GetRelayInfo()
 			if err != nil {
@@ -419,14 +155,14 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 			Str("local", conn.LocalID()).
 			Str("remote", conn.RemoteID()).
 			Msg("[SDK] Connection established successfully")
-		return &RDConnection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
+		return &connection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
 	}
 
 	log.Warn().Str("lease_id", leaseID).Msg("[SDK] All connection attempts failed")
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*RDListener, error) {
+func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*listener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
@@ -485,11 +221,11 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	}
 
 	// Create listener with lease metadata for re-registration
-	listener := &RDListener{
+	listener := &listener{
 		cred:   cred,
 		lease:  lease,
-		conns:  make(map[*RDConnection]struct{}),
-		connCh: make(chan *RDConnection, 100),
+		conns:  make(map[*connection]struct{}),
+		connCh: make(chan *connection, 100),
 		closed: false,
 	}
 
@@ -503,7 +239,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 
 	// Register lease with all available relays
 	for _, relay := range g.relays {
-		go func(r *rdRelay) {
+		go func(r *connRelay) {
 			err := r.client.RegisterLease(cred, listener.lease)
 			if err != nil {
 				log.Error().Err(err).Str("relay", r.addr).Msg("[SDK] Failed to register lease")
@@ -527,7 +263,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	return listener, nil
 }
 
-func (g *RDClient) listenerWorker(server *rdRelay) {
+func (g *Client) listenerWorker(server *connRelay) {
 	defer g.waitGroup.Done()
 	log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker started")
 
@@ -536,18 +272,18 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 		case <-server.stop:
 			log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker stopped")
 			return
-		case conn, ok := <-server.client.IncomingConnection():
+		case incoming, ok := <-server.client.IncomingConnection():
 			if !ok {
 				log.Debug().Str("relay", server.addr).Msg("[SDK] Incoming connection channel closed")
 				return // Channel closed
 			}
 
-			lease := conn.LeaseID()
+			lease := incoming.LeaseID()
 			log.Debug().
 				Str("relay", server.addr).
 				Str("lease_id", lease).
-				Str("local", conn.LocalID()).
-				Str("remote", conn.RemoteID()).
+				Str("local", incoming.LocalID()).
+				Str("remote", incoming.RemoteID()).
 				Msg("[SDK] Received incoming connection")
 
 			g.mu.Lock()
@@ -556,15 +292,15 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 
 			if !exists {
 				log.Warn().Str("lease_id", lease).Msg("[SDK] No listener found for lease, closing connection")
-				conn.SecureConnection.Close() // Close unused connection
+				incoming.SecureConnection.Close() // Close unused connection
 				continue
 			}
 
-			rdConn := &RDConnection{
+			conn := &connection{
 				via:        server,
-				conn:       conn.SecureConnection,
-				localAddr:  conn.LocalID(),
-				remoteAddr: conn.RemoteID(),
+				conn:       incoming.SecureConnection,
+				localAddr:  incoming.LocalID(),
+				remoteAddr: incoming.RemoteID(),
 			}
 
 			listener.mu.Lock()
@@ -572,31 +308,31 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 			if listener.closed {
 				log.Debug().Str("lease_id", lease).Msg("[SDK] Listener closed, rejecting connection")
 				listener.mu.Unlock()
-				rdConn.Close()
+				conn.Close()
 				continue
 			}
-			listener.conns[rdConn] = struct{}{}
+			listener.conns[conn] = struct{}{}
 			listener.mu.Unlock()
 
 			// Send connection to listener (non-blocking)
 			select {
-			case listener.connCh <- rdConn:
+			case listener.connCh <- conn:
 				log.Debug().Str("lease_id", lease).Msg("[SDK] Connection sent to listener channel")
 				// Connection sent successfully
 			default:
 				// Channel full, close connection
 				log.Warn().Str("lease_id", lease).Msg("[SDK] Listener channel full, closing connection")
 				listener.mu.Lock()
-				delete(listener.conns, rdConn)
+				delete(listener.conns, conn)
 				listener.mu.Unlock()
-				rdConn.Close()
+				conn.Close()
 			}
 		}
 	}
 }
 
-func (g *RDClient) Close() error {
-	log.Debug().Msg("[SDK] Closing RDClient")
+func (g *Client) Close() error {
+	log.Debug().Msg("[SDK] Closing Client")
 	var errs []error
 
 	// Signal all goroutines to stop (only once)
@@ -605,11 +341,11 @@ func (g *RDClient) Close() error {
 	})
 
 	g.mu.Lock()
-	listeners := make([]*RDListener, 0, len(g.listeners))
+	listeners := make([]*listener, 0, len(g.listeners))
 	for _, listener := range g.listeners {
 		listeners = append(listeners, listener)
 	}
-	relays := make([]*rdRelay, 0, len(g.relays))
+	relays := make([]*connRelay, 0, len(g.relays))
 	for _, relay := range g.relays {
 		relays = append(relays, relay)
 	}
@@ -635,7 +371,7 @@ func (g *RDClient) Close() error {
 	log.Debug().Msg("[SDK] Waiting for all workers to finish")
 	g.waitGroup.Wait()
 
-	log.Debug().Msg("[SDK] RDClient closed successfully")
+	log.Debug().Msg("[SDK] Client closed successfully")
 	if len(errs) > 0 {
 		return errs[0]
 	}
@@ -643,7 +379,7 @@ func (g *RDClient) Close() error {
 }
 
 // healthCheckWorker periodically checks relay health and reconnects if needed
-func (g *RDClient) healthCheckWorker(relay *rdRelay) {
+func (g *Client) healthCheckWorker(relay *connRelay) {
 	defer g.waitGroup.Done()
 
 	ticker := time.NewTicker(g.config.HealthCheckInterval)
@@ -695,7 +431,7 @@ func (g *RDClient) healthCheckWorker(relay *rdRelay) {
 }
 
 // reconnectRelay attempts to reconnect to a relay server
-func (g *RDClient) reconnectRelay(relay *rdRelay) {
+func (g *Client) reconnectRelay(relay *connRelay) {
 	addr := relay.addr
 	dialer := relay.dialer
 
@@ -765,48 +501,8 @@ func (g *RDClient) reconnectRelay(relay *rdRelay) {
 	}()
 }
 
-// Implement net.Listener interface for RDListener
-func (l *RDListener) Accept() (net.Conn, error) {
-	conn, ok := <-l.connCh
-	if !ok {
-		return nil, net.ErrClosed
-	}
-	return conn, nil
-}
-
-func (l *RDListener) Close() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.closed {
-		return nil
-	}
-
-	l.closed = true
-
-	// Close the connection channel first to prevent new connections
-	close(l.connCh)
-
-	// Close all active connections
-	for conn := range l.conns {
-		if err := conn.Close(); err != nil {
-			log.Error().Err(err).Msg("[SDK] Error closing connection")
-		}
-		delete(l.conns, conn)
-	}
-
-	// Clear the connections map
-	l.conns = make(map[*RDConnection]struct{})
-
-	return nil
-}
-
-func (l *RDListener) Addr() net.Addr {
-	return rdAddr(l.cred.ID())
-}
-
 // AddRelay adds a new relay server to the client
-func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
+func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -829,7 +525,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	}
 
 	// Add relay
-	relay := &rdRelay{
+	relay := &connRelay{
 		addr:   addr,
 		client: relayClient,
 		dialer: dialer,
@@ -872,7 +568,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 }
 
 // RemoveRelay removes a relay server from the client
-func (g *RDClient) RemoveRelay(addr string) error {
+func (g *Client) RemoveRelay(addr string) error {
 	g.mu.Lock()
 	relay, exists := g.relays[addr]
 	if !exists {
@@ -908,7 +604,7 @@ func (g *RDClient) RemoveRelay(addr string) error {
 }
 
 // GetRelays returns a list of all relay addresses
-func (g *RDClient) GetRelays() []string {
+func (g *Client) GetRelays() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -920,9 +616,9 @@ func (g *RDClient) GetRelays() []string {
 	return relays
 }
 
-func (g *RDClient) LookupName(name string) (*rdverb.Lease, error) {
+func (g *Client) LookupName(name string) (*rdverb.Lease, error) {
 	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
-	var relays []*rdRelay
+	var relays []*connRelay
 
 	g.mu.Lock()
 	for _, server := range g.relays {
