@@ -121,7 +121,7 @@ func runExposeWithConfig() error {
 }
 
 func runExposeWithFlags() error {
-	relayURLs := parseCommaSeparatedURLs(flagRelayURLs)
+	relayURLs := sdk.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
@@ -279,23 +279,4 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 			log.Info().Str("service", serviceName).Msg("Connection closed")
 		}(relayConn)
 	}
-}
-
-func parseCommaSeparatedURLs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-
-	return out
 }

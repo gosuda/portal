@@ -73,7 +73,7 @@ func TestIsURLSafeName(t *testing.T) {
 	}
 }
 
-func TestNormalizeBootstrapServer(t *testing.T) {
+func TestNormalizePortalURL(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      string
@@ -144,7 +144,7 @@ func TestNormalizeBootstrapServer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := normalizeBootstrapServer(tt.input)
+			got, err := NormalizePortalURL(tt.input)
 			if tt.shouldFail {
 				assert.Error(t, err, "normalizeBootstrapServer(%q) expected error", tt.input)
 				return
@@ -153,4 +153,73 @@ func TestNormalizeBootstrapServer(t *testing.T) {
 			assert.Equal(t, tt.want, got, "normalizeBootstrapServer(%q)", tt.input)
 		})
 	}
+}
+
+func TestParseURLs(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"empty", "", nil},
+		{"spaces only", "   ", nil},
+		{"single", "ws://a", []string{"ws://a"}},
+		{"trim spaces", "  ws://a  ,  wss://b  ", []string{"ws://a", "wss://b"}},
+		{"ignore empties", ",,ws://a,,wss://b,,", []string{"ws://a", "wss://b"}},
+		{"three", "a,b,c", []string{"a", "b", "c"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseURLs(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestIsHTMLContentType(t *testing.T) {
+	assert.True(t, IsHTMLContentType("text/html"))
+	assert.True(t, IsHTMLContentType("text/html; charset=utf-8"))
+	assert.True(t, IsHTMLContentType("TEXT/HTML; CHARSET=UTF-8"))
+	// Fallback path (parse error) with html prefix
+	assert.True(t, IsHTMLContentType("text/html; bad==value"))
+	assert.False(t, IsHTMLContentType("application/json"))
+	assert.False(t, IsHTMLContentType(""))
+}
+
+func TestGetContentType(t *testing.T) {
+	cases := map[string]string{
+		".html": "text/html; charset=utf-8",
+		".js":   "application/javascript",
+		".json": "application/json",
+		".wasm": "application/wasm",
+		".css":  "text/css",
+		".mp4":  "video/mp4",
+		".svg":  "image/svg+xml",
+		".png":  "image/png",
+		".ico":  "image/x-icon",
+		".bin":  "",
+		"":      "",
+	}
+	for ext, want := range cases {
+		got := GetContentType(ext)
+		assert.Equal(t, want, got, "ext=%q", ext)
+	}
+}
+
+func TestMatchesWildcardPattern(t *testing.T) {
+	// Wildcard pattern
+	assert.True(t, MatchesWildcardPattern("app.localhost:4017", "*.localhost:4017"))
+	assert.True(t, MatchesWildcardPattern("x.y.localhost:4017", "*.localhost:4017"))
+	assert.False(t, MatchesWildcardPattern("localhost:4017", "*.localhost:4017"))
+	assert.True(t, MatchesWildcardPattern("exact.host", "exact.host"))
+	assert.False(t, MatchesWildcardPattern("sub.exact.host", "exact.host"))
+}
+
+func TestIsHexString(t *testing.T) {
+	assert.True(t, IsHexString("0123456789abcdef"))
+	assert.True(t, IsHexString("ABCDEF"))
+	assert.True(t, IsHexString(""), "empty string is considered hex")
+	assert.False(t, IsHexString("g"))
+	assert.False(t, IsHexString("xyz"))
 }

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +18,6 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
-	"gosuda.org/portal/portal/utils/wsstream"
 )
 
 func init() {
@@ -50,16 +48,12 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		log.Debug().Str("remote", r.RemoteAddr).Msg("[TEST] Relay server accepting WebSocket connection")
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[TEST] Failed to upgrade WebSocket")
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		if err := relayServer.HandleConnection(wsConn); err != nil {
+		if err := relayServer.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[TEST] Relay server error handling connection")
 		}
 	})
@@ -217,15 +211,11 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	relayAddr := "127.0.0.1:14018"
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		relayServer.HandleConnection(wsConn)
+		relayServer.HandleConnection(stream)
 	})
 
 	relayHTTPServer := &http.Server{
@@ -361,15 +351,11 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	relayAddr := "127.0.0.1:14019"
 	relayMux := http.NewServeMux()
 	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		upgrader := websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		}
-		ws, err := upgrader.Upgrade(w, r, nil)
+		stream, _, err := UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			return
 		}
-		wsConn := &wsstream.WsStream{Conn: ws}
-		relayServer.HandleConnection(wsConn)
+		relayServer.HandleConnection(stream)
 	})
 
 	relayHTTPServer := &http.Server{

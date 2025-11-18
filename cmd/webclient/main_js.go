@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -344,24 +343,6 @@ func (c *WSConnection) Close() {
 	})
 }
 
-// IsHTMLContentType checks if the Content-Type header indicates HTML content
-// It properly handles media type parsing with parameters like charset
-func IsHTMLContentType(contentType string) bool {
-	if contentType == "" {
-		return false
-	}
-
-	// Parse the media type and parameters
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		// If parsing fails, do a simple case-insensitive check for "text/html"
-		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
-	}
-
-	// Check if the media type is HTML
-	return mediaType == "text/html"
-}
-
 func getLeaseID(hostname string) string {
 	// First, decode URL-encoded characters (e.g., %ED%8E%98%EC%9D%B8%ED%8A%B8 -> 페인트)
 	decoded, err := url.QueryUnescape(hostname)
@@ -412,7 +393,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header()[key] = value
 	}
 
-	if IsHTMLContentType(resp.Header.Get("Content-Type")) {
+	if sdk.IsHTMLContentType(resp.Header.Get("Content-Type")) {
 		w.WriteHeader(resp.StatusCode)
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {

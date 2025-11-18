@@ -33,7 +33,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
-		Dialer:              newWebSocketDialer(),
+		Dialer:              NewWebSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -53,7 +53,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	// Initialize relays from bootstrap servers
 	var connectionErrors []error
 	for _, server := range config.BootstrapServers {
-		normalized, err := normalizeBootstrapServer(server)
+		normalized, err := NormalizePortalURL(server)
 		if err != nil {
 			log.Error().
 				Err(err).
