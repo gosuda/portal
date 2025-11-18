@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	rdClient *sdk.RDClient
+	client *sdk.Client
 
 	// SDK connection manager for Service Worker messaging
 	sdkConnections   = make(map[string]io.ReadWriteCloser)
@@ -94,7 +94,7 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 	}
 	address = unicodeAddr
 
-	lease, err := rdClient.LookupName(address)
+	lease, err := client.LookupName(address)
 	if err == nil && lease != nil {
 		log.Debug().Str("name", address).Str("id", lease.Identity.Id).Msg("[Dialer] Found lease")
 		address = lease.Identity.Id
@@ -104,7 +104,7 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 
 	log.Debug().Str("original_addr", originalAddr).Str("final_addr", address).Msg("[Dialer] Attempting dial")
 	cred := sdk.NewCredential()
-	conn, err := rdClient.Dial(cred, address, "http/1.1")
+	conn, err := client.Dial(cred, address, "http/1.1")
 	if err != nil {
 		log.Error().Err(err).Str("address", address).Msg("[Dialer] Dial failed")
 		return nil, err
@@ -112,7 +112,7 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 	return conn, nil
 }
 
-var client = &http.Client{
+var httpClient = &http.Client{
 	Timeout: time.Second * 30,
 	Transport: &http.Transport{
 		MaxIdleConns:        1000,
@@ -400,7 +400,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.URL.Host = decodedHost
 	r.URL.Scheme = "http"
 
-	resp, err := client.Do(r)
+	resp, err := httpClient.Do(r)
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to proxy request to %s", r.URL.String())
 		http.Error(w, fmt.Sprintf("Failed to proxy request to %s, err: %v", r.URL.String(), err), http.StatusBadGateway)
@@ -642,7 +642,7 @@ func handleSDKConnect(data js.Value) {
 		log.Debug().Str("original", leaseName).Str("normalized", normalizedLeaseName).Msg("[SDK Connect] Normalized lease name")
 
 		// Lookup lease by name to get lease ID
-		lease, err := rdClient.LookupName(normalizedLeaseName)
+		lease, err := client.LookupName(normalizedLeaseName)
 		if err != nil {
 			log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
 			js.Global().Call("__sdk_post_message", map[string]interface{}{
@@ -658,7 +658,7 @@ func handleSDKConnect(data js.Value) {
 
 		// Create E2EE connection using SDK with lease ID
 		cred := sdk.NewCredential()
-		conn, err := rdClient.Dial(cred, leaseID, "http/1.1")
+		conn, err := client.Dial(cred, leaseID, "http/1.1")
 		if err != nil {
 			log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed")
 
@@ -849,14 +849,14 @@ func main() {
 
 	log.Info().Strs("servers", bootstrapServerList).Msg("Initializing RDClient with bootstrap servers from global variable")
 
-	rdClient, err = sdk.NewClient(
+	client, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstrapServerList),
 		sdk.WithDialer(WebSocketDialerJS()),
 	)
 	if err != nil {
 		panic(err)
 	}
-	defer rdClient.Close()
+	defer client.Close()
 
 	// Initialize WebSocket manager
 	wsManager := NewWebSocketManager()
