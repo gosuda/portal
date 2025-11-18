@@ -50,7 +50,7 @@ func main() {
 
 // handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
 func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := sdk.DefaultWebSocketUpgrader.Upgrade(w, r, nil)
+	conn, err := sdk.UpgradeWebSocket(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("upgrade websocket")
 		return

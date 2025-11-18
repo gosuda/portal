@@ -37,14 +37,14 @@ func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, err
 	}
 }
 
-// DefaultWebSocketUpgrader provides a permissive upgrader used across cmd binaries
-var DefaultWebSocketUpgrader = websocket.Upgrader{
+// defaultWebSocketUpgrader provides a permissive upgrader used across cmd binaries
+var defaultWebSocketUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 // UpgradeWebSocket upgrades the request/response to a WebSocket connection using DefaultWebSocketUpgrader
 func UpgradeWebSocket(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*websocket.Conn, error) {
-	return DefaultWebSocketUpgrader.Upgrade(w, r, responseHeader)
+	return defaultWebSocketUpgrader.Upgrade(w, r, responseHeader)
 }
 
 // UpgradeToWSStream upgrades HTTP to WebSocket and wraps it as io.ReadWriteCloser
