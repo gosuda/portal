@@ -84,7 +84,7 @@ func runDemo() error {
 	cred := sdk.NewCredential()
 
 	// 2) Create SDK client and connect to relay(s)
-	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
+	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
 		c.BootstrapServers = []string{flagServerURL}
 	})
 	if err != nil {

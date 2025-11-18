@@ -19,7 +19,7 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
-type RDClientConfig struct {
+type ClientConfig struct {
 	BootstrapServers    []string
 	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
 	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
@@ -27,39 +27,39 @@ type RDClientConfig struct {
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
 }
 
-type Option func(*RDClientConfig)
+type Option func(*ClientConfig)
 
 func WithBootstrapServers(servers []string) Option {
-	return func(c *RDClientConfig) {
+	return func(c *ClientConfig) {
 		c.BootstrapServers = servers
 	}
 }
 
 func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) Option {
-	return func(c *RDClientConfig) {
+	return func(c *ClientConfig) {
 		c.Dialer = dialer
 	}
 }
 
 func WithHealthCheckInterval(interval time.Duration) Option {
-	return func(c *RDClientConfig) {
+	return func(c *ClientConfig) {
 		c.HealthCheckInterval = interval
 	}
 }
 
 func WithReconnectMaxRetries(retries int) Option {
-	return func(c *RDClientConfig) {
+	return func(c *ClientConfig) {
 		c.ReconnectMaxRetries = retries
 	}
 }
 
 func WithReconnectInterval(interval time.Duration) Option {
-	return func(c *RDClientConfig) {
+	return func(c *ClientConfig) {
 		c.ReconnectInterval = interval
 	}
 }
 
-type rdRelay struct {
+type connRelay struct {
 	addr     string
 	client   *portal.RelayClient
 	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
@@ -68,68 +68,68 @@ type rdRelay struct {
 	mu       sync.Mutex
 }
 
-var _ net.Conn = (*RDConnection)(nil)
+var _ net.Conn = (*connection)(nil)
 
-type RDConnection struct {
-	via        *rdRelay
+type connection struct {
+	via        *connRelay
 	localAddr  string
 	remoteAddr string
 	conn       *cryptoops.SecureConnection
 }
 
-// Implement net.Conn interface for RDConnection
-func (r *RDConnection) Read(b []byte) (n int, err error) {
+func (r *connection) Read(b []byte) (n int, err error) {
 	return r.conn.Read(b)
 }
 
-func (r *RDConnection) Write(b []byte) (n int, err error) {
+func (r *connection) Write(b []byte) (n int, err error) {
 	return r.conn.Write(b)
 }
 
-func (r *RDConnection) Close() error {
+func (r *connection) Close() error {
 	return r.conn.Close()
 }
 
-func (r *RDConnection) LocalAddr() net.Addr {
-	return rdAddr(r.localAddr)
+func (r *connection) LocalAddr() net.Addr {
+	return addr(r.localAddr)
 }
 
-func (r *RDConnection) RemoteAddr() net.Addr {
-	return rdAddr(r.remoteAddr)
+func (r *connection) RemoteAddr() net.Addr {
+	return addr(r.remoteAddr)
 }
 
-func (r *RDConnection) SetDeadline(t time.Time) error {
+func (r *connection) SetDeadline(t time.Time) error {
 	return r.conn.SetDeadline(t)
 }
 
-func (r *RDConnection) SetReadDeadline(t time.Time) error {
+func (r *connection) SetReadDeadline(t time.Time) error {
 	return r.conn.SetReadDeadline(t)
 }
 
-func (r *RDConnection) SetWriteDeadline(t time.Time) error {
+func (r *connection) SetWriteDeadline(t time.Time) error {
 	return r.conn.SetWriteDeadline(t)
 }
 
-// rdAddr implements net.Addr
-type rdAddr string
+var _ net.Addr = (*addr)(nil)
 
-func (a rdAddr) Network() string {
+type addr string
+
+func (a addr) Network() string {
 	return "portal"
 }
 
-func (a rdAddr) String() string {
+func (a addr) String() string {
 	return string(a)
 }
 
-type RDListener struct {
+type Listener struct {
 	mu sync.Mutex
 
 	cred  *cryptoops.Credential
 	lease *rdverb.Lease
 
-	conns map[*RDConnection]struct{}
+	conns map[*connection]struct{}
 
-	connCh chan *RDConnection
+	connCh chan *connection
 	closed bool
 }
 
@@ -180,12 +180,12 @@ func WithHide(hide bool) MetadataOption {
 	}
 }
 
-type RDClient struct {
+type Client struct {
 	mu sync.Mutex
 
-	relays    map[string]*rdRelay
-	listeners map[string]*RDListener
-	config    *RDClientConfig
+	relays    map[string]*connRelay
+	listeners map[string]*Listener
+	config    *ClientConfig
 
 	stopch    chan struct{}
 	stopOnce  sync.Once      // Ensure stopch is closed only once
@@ -203,10 +203,10 @@ var (
 	ErrInvalidMetadata      = errors.New("invalid metadata")
 )
 
-func NewClient(opt ...Option) (*RDClient, error) {
-	log.Debug().Msg("[SDK] Creating new RDClient")
+func NewClient(opt ...Option) (*Client, error) {
+	log.Debug().Msg("[SDK] Creating new Client")
 
-	config := &RDClientConfig{
+	config := &ClientConfig{
 		Dialer:              newWebSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
@@ -217,9 +217,9 @@ func NewClient(opt ...Option) (*RDClient, error) {
 		o(config)
 	}
 
-	client := &RDClient{
-		relays:    make(map[string]*rdRelay),
-		listeners: make(map[string]*RDListener),
+	client := &Client{
+		relays:    make(map[string]*connRelay),
+		listeners: make(map[string]*Listener),
 		config:    config,
 		stopch:    make(chan struct{}),
 	}
@@ -258,17 +258,17 @@ func NewClient(opt ...Option) (*RDClient, error) {
 		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %v", connectionErrors)
 	}
 
-	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] RDClient created successfully")
+	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] Client created successfully")
 	return client, nil
 }
 
-func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (*RDConnection, error) {
+func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (*connection, error) {
 	log.Debug().
 		Str("lease_id", leaseID).
 		Str("alpn", alpn).
 		Msg("[SDK] Dialing to lease")
 
-	var relays []*rdRelay
+	var relays []*connRelay
 
 	g.mu.Lock()
 	for _, server := range g.relays {
@@ -280,11 +280,11 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 
 	var wg sync.WaitGroup
 	var availableRelaysMu sync.Mutex
-	var availableRelays []*rdRelay
+	var availableRelays []*connRelay
 
 	for _, relay := range relays {
 		wg.Add(1)
-		go func(relay *rdRelay) {
+		go func(relay *connRelay) {
 			defer wg.Done()
 			info, err := relay.client.GetRelayInfo()
 			if err != nil {
@@ -329,14 +329,14 @@ func (g *RDClient) Dial(cred *cryptoops.Credential, leaseID string, alpn string)
 			Str("local", conn.LocalID()).
 			Str("remote", conn.RemoteID()).
 			Msg("[SDK] Connection established successfully")
-		return &RDConnection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
+		return &connection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
 	}
 
 	log.Warn().Str("lease_id", leaseID).Msg("[SDK] All connection attempts failed")
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*RDListener, error) {
+func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*Listener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
@@ -395,11 +395,11 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	}
 
 	// Create listener with lease metadata for re-registration
-	listener := &RDListener{
+	listener := &Listener{
 		cred:   cred,
 		lease:  lease,
-		conns:  make(map[*RDConnection]struct{}),
-		connCh: make(chan *RDConnection, 100),
+		conns:  make(map[*connection]struct{}),
+		connCh: make(chan *connection, 100),
 		closed: false,
 	}
 
@@ -413,7 +413,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 
 	// Register lease with all available relays
 	for _, relay := range g.relays {
-		go func(r *rdRelay) {
+		go func(r *connRelay) {
 			err := r.client.RegisterLease(cred, listener.lease)
 			if err != nil {
 				log.Error().Err(err).Str("relay", r.addr).Msg("[SDK] Failed to register lease")
@@ -437,7 +437,7 @@ func (g *RDClient) Listen(cred *cryptoops.Credential, name string, alpns []strin
 	return listener, nil
 }
 
-func (g *RDClient) listenerWorker(server *rdRelay) {
+func (g *Client) listenerWorker(server *connRelay) {
 	defer g.waitGroup.Done()
 	log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker started")
 
@@ -446,18 +446,18 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 		case <-server.stop:
 			log.Debug().Str("relay", server.addr).Msg("[SDK] Listener worker stopped")
 			return
-		case conn, ok := <-server.client.IncomingConnection():
+		case incoming, ok := <-server.client.IncomingConnection():
 			if !ok {
 				log.Debug().Str("relay", server.addr).Msg("[SDK] Incoming connection channel closed")
 				return // Channel closed
 			}
 
-			lease := conn.LeaseID()
+			lease := incoming.LeaseID()
 			log.Debug().
 				Str("relay", server.addr).
 				Str("lease_id", lease).
-				Str("local", conn.LocalID()).
-				Str("remote", conn.RemoteID()).
+				Str("local", incoming.LocalID()).
+				Str("remote", incoming.RemoteID()).
 				Msg("[SDK] Received incoming connection")
 
 			g.mu.Lock()
@@ -466,15 +466,15 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 
 			if !exists {
 				log.Warn().Str("lease_id", lease).Msg("[SDK] No listener found for lease, closing connection")
-				conn.SecureConnection.Close() // Close unused connection
+				incoming.SecureConnection.Close() // Close unused connection
 				continue
 			}
 
-			rdConn := &RDConnection{
+			conn := &connection{
 				via:        server,
-				conn:       conn.SecureConnection,
-				localAddr:  conn.LocalID(),
-				remoteAddr: conn.RemoteID(),
+				conn:       incoming.SecureConnection,
+				localAddr:  incoming.LocalID(),
+				remoteAddr: incoming.RemoteID(),
 			}
 
 			listener.mu.Lock()
@@ -482,31 +482,31 @@ func (g *RDClient) listenerWorker(server *rdRelay) {
 			if listener.closed {
 				log.Debug().Str("lease_id", lease).Msg("[SDK] Listener closed, rejecting connection")
 				listener.mu.Unlock()
-				rdConn.Close()
+				conn.Close()
 				continue
 			}
-			listener.conns[rdConn] = struct{}{}
+			listener.conns[conn] = struct{}{}
 			listener.mu.Unlock()
 
 			// Send connection to listener (non-blocking)
 			select {
-			case listener.connCh <- rdConn:
+			case listener.connCh <- conn:
 				log.Debug().Str("lease_id", lease).Msg("[SDK] Connection sent to listener channel")
 				// Connection sent successfully
 			default:
 				// Channel full, close connection
 				log.Warn().Str("lease_id", lease).Msg("[SDK] Listener channel full, closing connection")
 				listener.mu.Lock()
-				delete(listener.conns, rdConn)
+				delete(listener.conns, conn)
 				listener.mu.Unlock()
-				rdConn.Close()
+				conn.Close()
 			}
 		}
 	}
 }
 
-func (g *RDClient) Close() error {
-	log.Debug().Msg("[SDK] Closing RDClient")
+func (g *Client) Close() error {
+	log.Debug().Msg("[SDK] Closing Client")
 	var errs []error
 
 	// Signal all goroutines to stop (only once)
@@ -515,11 +515,11 @@ func (g *RDClient) Close() error {
 	})
 
 	g.mu.Lock()
-	listeners := make([]*RDListener, 0, len(g.listeners))
+	listeners := make([]*Listener, 0, len(g.listeners))
 	for _, listener := range g.listeners {
 		listeners = append(listeners, listener)
 	}
-	relays := make([]*rdRelay, 0, len(g.relays))
+	relays := make([]*connRelay, 0, len(g.relays))
 	for _, relay := range g.relays {
 		relays = append(relays, relay)
 	}
@@ -545,7 +545,7 @@ func (g *RDClient) Close() error {
 	log.Debug().Msg("[SDK] Waiting for all workers to finish")
 	g.waitGroup.Wait()
 
-	log.Debug().Msg("[SDK] RDClient closed successfully")
+	log.Debug().Msg("[SDK] Client closed successfully")
 	if len(errs) > 0 {
 		return errs[0]
 	}
@@ -553,7 +553,7 @@ func (g *RDClient) Close() error {
 }
 
 // healthCheckWorker periodically checks relay health and reconnects if needed
-func (g *RDClient) healthCheckWorker(relay *rdRelay) {
+func (g *Client) healthCheckWorker(relay *connRelay) {
 	defer g.waitGroup.Done()
 
 	ticker := time.NewTicker(g.config.HealthCheckInterval)
@@ -605,7 +605,7 @@ func (g *RDClient) healthCheckWorker(relay *rdRelay) {
 }
 
 // reconnectRelay attempts to reconnect to a relay server
-func (g *RDClient) reconnectRelay(relay *rdRelay) {
+func (g *Client) reconnectRelay(relay *connRelay) {
 	addr := relay.addr
 	dialer := relay.dialer
 
@@ -675,8 +675,8 @@ func (g *RDClient) reconnectRelay(relay *rdRelay) {
 	}()
 }
 
-// Implement net.Listener interface for RDListener
-func (l *RDListener) Accept() (net.Conn, error) {
+// Implement net.Listener interface for Listener
+func (l *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-l.connCh
 	if !ok {
 		return nil, net.ErrClosed
@@ -684,7 +684,7 @@ func (l *RDListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-func (l *RDListener) Close() error {
+func (l *Listener) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -706,17 +706,17 @@ func (l *RDListener) Close() error {
 	}
 
 	// Clear the connections map
-	l.conns = make(map[*RDConnection]struct{})
+	l.conns = make(map[*connection]struct{})
 
 	return nil
 }
 
-func (l *RDListener) Addr() net.Addr {
-	return rdAddr(l.cred.ID())
+func (l *Listener) Addr() net.Addr {
+	return addr(l.cred.ID())
 }
 
 // AddRelay adds a new relay server to the client
-func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
+func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -739,7 +739,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 	}
 
 	// Add relay
-	relay := &rdRelay{
+	relay := &connRelay{
 		addr:   addr,
 		client: relayClient,
 		dialer: dialer,
@@ -782,7 +782,7 @@ func (g *RDClient) AddRelay(addr string, dialer func(context.Context, string) (i
 }
 
 // RemoveRelay removes a relay server from the client
-func (g *RDClient) RemoveRelay(addr string) error {
+func (g *Client) RemoveRelay(addr string) error {
 	g.mu.Lock()
 	relay, exists := g.relays[addr]
 	if !exists {
@@ -818,7 +818,7 @@ func (g *RDClient) RemoveRelay(addr string) error {
 }
 
 // GetRelays returns a list of all relay addresses
-func (g *RDClient) GetRelays() []string {
+func (g *Client) GetRelays() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -830,9 +830,9 @@ func (g *RDClient) GetRelays() []string {
 	return relays
 }
 
-func (g *RDClient) LookupName(name string) (*rdverb.Lease, error) {
+func (g *Client) LookupName(name string) (*rdverb.Lease, error) {
 	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
-	var relays []*rdRelay
+	var relays []*connRelay
 
 	g.mu.Lock()
 	for _, server := range g.relays {

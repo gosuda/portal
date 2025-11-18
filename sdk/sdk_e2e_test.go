@@ -91,7 +91,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 4. Create app SDK client and register listener
 	log.Info().Msg("[TEST] Step 4: Creating app SDK client")
-	appClient, err := NewClient(func(c *RDClientConfig) {
+	appClient, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 8. Create client SDK client
 	log.Info().Msg("[TEST] Step 8: Creating client SDK client")
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
 	})
 	if err != nil {
@@ -268,7 +268,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Setup app
 	appCred := NewCredential()
 
-	appClient, err := NewClient(func(c *RDClientConfig) {
+	appClient, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
 	})
 	if err != nil {
@@ -301,7 +301,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Create client
 	clientCred := NewCredential()
 
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
 	})
 	if err != nil {
@@ -368,7 +368,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := NewClient(func(c *RDClientConfig) {
+		_, err := NewClient(func(c *ClientConfig) {
 			c.BootstrapServers = []string{"ws://127.0.0.1:19999/relay"} // Non-existent
 		})
 		done <- err
@@ -420,7 +420,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	clientSDK, err := NewClient(func(c *RDClientConfig) {
+	clientSDK, err := NewClient(func(c *ClientConfig) {
 		c.BootstrapServers = []string{"ws://127.0.0.1:14019/relay"}
 	})
 	if err != nil {

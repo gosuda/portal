@@ -219,7 +219,7 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
 	log.Info().Str("service", serviceName).Msgf("  Lease ID: %s", leaseID)
 
-	client, err := sdk.NewClient(func(c *sdk.RDClientConfig) {
+	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
 		c.BootstrapServers = bootstrapServers
 	})
 	if err != nil {
