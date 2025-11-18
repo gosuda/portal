@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/sdk"
 )
 
 // portalHost is the host for portal frontend.
@@ -49,10 +50,10 @@ func initWasmCache() error {
 		}
 
 		name := entry.Name()
-		// Look for content-addressed WASM files: <64-char-hex>.wasm.br
-		if strings.HasSuffix(name, ".wasm.br") && len(name) == 72 { // 64 + len(".wasm.br")
+		// Look for content-addressed WASM files: <hex>.wasm.br
+		if strings.HasSuffix(name, ".wasm.br") {
 			hash := strings.TrimSuffix(name, ".wasm.br")
-			if isHexString(hash) && len(hash) == 64 {
+			if sdk.IsHexString(hash) {
 				fullPath := pathpkg.Join("dist", "wasm", name)
 				// Cache under the URL path (<hash>.wasm) while reading the
 				// brotli-compressed artifact (<hash>.wasm.br) from embed.FS.
@@ -71,9 +72,9 @@ func initWasmCache() error {
 
 // cacheWasmFile reads and caches a WASM file and its pre-compressed variant (brotli).
 func cacheWasmFile(name, fullPath string) error {
-	// Verify SHA256 hash matches filename (name is <hash>.wasm).
+	// Verify name looks like a hex hash (name is <hash>.wasm).
 	hashHex := strings.TrimSuffix(name, ".wasm")
-	if !isHexString(hashHex) || len(hashHex) != 64 {
+	if !sdk.IsHexString(hashHex) {
 		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
 	}
 
@@ -103,13 +104,6 @@ func cacheWasmFile(name, fullPath string) error {
 	return nil
 }
 
-// setCORSHeaders sets CORS headers for static file serving
-func setCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
-}
-
 // createPortalMux creates a new HTTP mux for portal frontend
 func createPortalMux() *http.ServeMux {
 	// Initialize WASM cache on startup
@@ -121,7 +115,7 @@ func createPortalMux() *http.ServeMux {
 
 	// Static file handler for /frontend/ (for unified caching)
 	mux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		sdk.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -139,7 +133,7 @@ func createPortalMux() *http.ServeMux {
 
 	// Root handler for portal frontend
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		sdk.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -158,7 +152,7 @@ func createPortalMux() *http.ServeMux {
 
 // servePortalHTMLWithSSR serves portal.html with SSR data injection
 func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	// Read portal.html from embedded FS
 	fullPath := pathpkg.Join("dist", "app", "portal.html")
@@ -212,9 +206,9 @@ func injectServerData(htmlContent string, serv *portal.RelayServer) string {
 // servePortalStaticFile serves static files for portal frontend with caching
 func servePortalStaticFile(w http.ResponseWriter, r *http.Request, filePath string) {
 	// Check if this is a content-addressed WASM file
-	if strings.HasSuffix(filePath, ".wasm") && len(filePath) == 69 { // 64 + len(".wasm")
+	if strings.HasSuffix(filePath, ".wasm") {
 		hash := strings.TrimSuffix(filePath, ".wasm")
-		if isHexString(hash) && len(hash) == 64 {
+		if sdk.IsHexString(hash) {
 			serveCompressedWasm(w, r, filePath)
 			return
 		}
@@ -243,7 +237,7 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 		}
 
 		// Serve uncompressed WASM
-		setCORSHeaders(w)
+		sdk.SetCORSHeaders(w)
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		w.Header().Set("Content-Type", "application/wasm")
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
@@ -257,7 +251,7 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 	}
 
 	// Set immutable cache headers for content-addressed files
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Type", "application/wasm")
 
@@ -294,7 +288,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *p
 		return
 	}
 
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	// If path is empty or "/", serve portal.html with SSR
 	if path == "" || path == "/" {
@@ -314,7 +308,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *p
 
 	// Set content type based on extension
 	ext := pathpkg.Ext(path)
-	contentType := getContentType(ext)
+	contentType := sdk.GetContentType(ext)
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
@@ -372,7 +366,7 @@ func servePortalStatic(w http.ResponseWriter, r *http.Request) {
 
 // serveStaticFile reads and serves a file from the static directory
 func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, contentType string) {
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	fullPath := pathpkg.Join("dist", "wasm", path)
 	data, err := distFS.ReadFile(fullPath)
@@ -387,7 +381,7 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 		w.Header().Set("Content-Type", contentType)
 	} else {
 		ext := pathpkg.Ext(path)
-		ct := getContentType(ext)
+		ct := sdk.GetContentType(ext)
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
@@ -405,7 +399,7 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 // serveStaticFileWithFallback reads and serves a file from the static directory
 // If the file is not found, it falls back to portal.html for SPA routing
 func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path string, contentType string) {
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	fullPath := pathpkg.Join("dist", "wasm", path)
 	data, err := distFS.ReadFile(fullPath)
@@ -422,7 +416,7 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 		w.Header().Set("Content-Type", contentType)
 	} else {
 		ext := pathpkg.Ext(path)
-		ct := getContentType(ext)
+		ct := sdk.GetContentType(ext)
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
 		}
@@ -438,36 +432,13 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 }
 
 // getContentType returns the MIME type for a file extension
-func getContentType(ext string) string {
-	switch ext {
-	case ".html":
-		return "text/html; charset=utf-8"
-	case ".js":
-		return "application/javascript"
-	case ".json":
-		return "application/json"
-	case ".wasm":
-		return "application/wasm"
-	case ".css":
-		return "text/css"
-	case ".mp4":
-		return "video/mp4"
-	case ".svg":
-		return "image/svg+xml"
-	case ".png":
-		return "image/png"
-	case ".ico":
-		return "image/x-icon"
-	default:
-		return ""
-	}
-}
+// content types are provided via sdk.GetContentType
 
 // isPortalSubdomain checks if the host matches the portal frontend pattern
 func isPortalSubdomain(host string) bool {
 	// If we have a frontend pattern, use it
 	if portalFrontendPattern != "" {
-		return matchesWildcardPattern(host, portalFrontendPattern)
+		return sdk.MatchesWildcardPattern(host, portalFrontendPattern)
 	}
 
 	// Fallback to checking if it ends with .{portalHost}
@@ -479,30 +450,14 @@ func isPortalSubdomain(host string) bool {
 }
 
 // matchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)
-func matchesWildcardPattern(host, pattern string) bool {
-	// Handle wildcard pattern (e.g., *.localhost:4017)
-	if strings.HasPrefix(pattern, "*.") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		return strings.HasSuffix(host, suffix)
-	}
-
-	// Exact match
-	return host == pattern
-}
+// wildcard matching is provided via sdk.MatchesWildcardPattern
 
 // isHexString checks if a string contains only hexadecimal characters
-func isHexString(s string) bool {
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
-}
+// hex string check is provided via sdk.IsHexString
 
 // serveDynamicManifest generates and serves manifest.json dynamically
 func serveDynamicManifest(w http.ResponseWriter) {
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	// Find the content-addressed WASM file
 	wasmCacheMu.RLock()
@@ -524,10 +479,10 @@ func serveDynamicManifest(w http.ResponseWriter) {
 					continue
 				}
 				name := entry.Name()
-				// Look for content-addressed WASM files: <64-char-hex>.wasm.br
-				if strings.HasSuffix(name, ".wasm.br") && len(name) == 72 {
+				// Look for content-addressed WASM files: <hex>.wasm.br
+				if strings.HasSuffix(name, ".wasm.br") {
 					hash := strings.TrimSuffix(name, ".wasm.br")
-					if isHexString(hash) && len(hash) == 64 {
+					if sdk.IsHexString(hash) {
 						wasmHash = hash
 						wasmFile = hash + ".wasm"
 						break
@@ -570,7 +525,7 @@ func serveDynamicManifest(w http.ResponseWriter) {
 
 // serveDynamicServiceWorker serves service-worker.js with injected manifest and config
 func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
+	sdk.SetCORSHeaders(w)
 
 	// Read the service-worker.js template
 	fullPath := pathpkg.Join("dist", "wasm", "service-worker.js")

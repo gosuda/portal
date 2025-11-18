@@ -9,13 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
 	pathpkg "path"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/utils/wsstream"
 	"gosuda.org/portal/sdk"
 )
 
@@ -55,7 +53,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		sdk.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -66,7 +64,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	// Portal frontend files (for unified caching)
 	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		sdk.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -89,13 +87,11 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 			return
 		}
 
-		wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+		stream, wsConn, err := sdk.UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[server] websocket upgrade failed")
 			return
 		}
-
-		stream := &wsstream.WsStream{Conn: wsConn}
 		if err := serv.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[server] websocket relay connection error")
 			wsConn.Close()
@@ -284,10 +280,4 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	}
 
 	return rows
-}
-
-var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
 }
