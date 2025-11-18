@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,11 +19,14 @@ import (
 	"gosuda.org/portal/sdk"
 )
 
+//go:embed dist/*
+var distFS embed.FS
+
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-
-		fullPath := pathpkg.Join("app", assetPath)
-		b, err := appFS.ReadFile(fullPath)
+		// Read from dist/app subdirectory of the embedded FS
+		fullPath := pathpkg.Join("dist", "app", assetPath)
+		b, err := distFS.ReadFile(fullPath)
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -44,10 +48,10 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	// Create app UI mux
 	appMux := http.NewServeMux()
 
-	// Serve embedded favicons (ico/png/svg) for portal UI
-	serveAsset(appMux, "/favicon.ico", "/favicon.ico", "image/x-icon")
-	serveAsset(appMux, "/favicon.png", "/favicon.png", "image/png")
-	serveAsset(appMux, "/favicon.svg", "/favicon.svg", "image/svg+xml")
+	// Serve favicons (ico/png/svg) from dist/app
+	serveAsset(appMux, "/favicon.ico", "favicon.ico", "image/x-icon")
+	serveAsset(appMux, "/favicon.png", "favicon.png", "image/png")
+	serveAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {

@@ -12,7 +12,7 @@ export default defineConfig({
     {
       name: "rename-index",
       closeBundle() {
-        const appDir = resolve(process.cwd(), "../app");
+        const appDir = resolve(process.cwd(), "../dist/app");
         const indexPath = resolve(appDir, "index.html");
         const portalPath = resolve(appDir, "portal.html");
         try {
@@ -30,7 +30,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../app",
+    outDir: "../dist/app",
     emptyOutDir: false,
     rollupOptions: {
       output: {
