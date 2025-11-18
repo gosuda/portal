@@ -8,8 +8,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make build             - Build everything (protoc, wasm, frontend, server, tunnel)"
 	@echo "  make build-protoc      - Generate Go code from protobuf definitions"
-	@echo "  make build-wasm        - Build WASM client with optimization"
-	@echo "  make compress-wasm     - Compress WASM with brotli"
+	@echo "  make build-wasm        - Build and compress WASM client with optimization"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-server      - Build Go relay server (includes frontend build)"
 	@echo "  make build-tunnel      - Build Portal Tunnel CLI"
@@ -19,8 +18,8 @@ help:
 run:
 	./bin/relay-server
 
-# Convenience target: build wasm, compress, then server
-build: build-protoc build-wasm compress-wasm build-server build-tunnel
+# Convenience target
+build: build-wasm build-frontend build-server build-tunnel
 
 build-protoc:
 	protoc -I . \
@@ -60,12 +59,8 @@ build-wasm:
 	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/portal.html
 	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/portal.mp4
-	
 	@echo "[wasm] build complete"
-	@make compress-wasm
 
-# Precompress content-addressed WASM with brotli
-compress-wasm:
 	@echo "[wasm] precompressing webclient WASM with brotli..."
 	@WASM_FILE=$$(ls cmd/relay-server/dist/[0-9a-f]*.wasm 2>/dev/null | head -n1); \
 	if [ -z "$$WASM_FILE" ]; then \
