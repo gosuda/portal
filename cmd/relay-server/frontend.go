@@ -126,17 +126,6 @@ func createPortalMux() *http.ServeMux {
 
 	mux := http.NewServeMux()
 
-	// Static file handler for /static/
-	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		path := strings.TrimPrefix(r.URL.Path, "/static/")
-		servePortalStaticFile(w, r, path)
-	})
-
 	// Static file handler for /frontend/ (for unified caching)
 	mux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
