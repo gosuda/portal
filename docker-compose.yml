@@ -8,8 +8,8 @@ services:
       - "--port"
       - "${PORTAL_PORT:-4017}"
     environment:
-      PORTAL_UI_URL: ${PORTAL_UI_URL:-http://localhost:${PORTAL_PORT:-4017}}
-      PORTAL_FRONTEND_URL: ${PORTAL_FRONTEND_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
+      PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
+      PORTAL_SUBDOMAIN_URL: ${PORTAL_SUBDOMAIN_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
       BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
     ports:
       - "4017:4017"

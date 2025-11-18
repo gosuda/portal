@@ -6,12 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	pathpkg "path"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
@@ -23,7 +22,7 @@ var distFS embed.FS
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 		// Read from dist/app subdirectory of the embedded FS
-		fullPath := pathpkg.Join("dist", "app", assetPath)
+		fullPath := path.Join("dist", "app", assetPath)
 		b, err := distFS.ReadFile(fullPath)
 		if err != nil {
 			http.NotFound(w, r)
@@ -58,8 +57,8 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/app/")
-		serveAppStatic(w, r, path, serv)
+		p := strings.TrimPrefix(r.URL.Path, "/app/")
+		serveAppStatic(w, r, p, serv)
 	})
 
 	// Portal frontend files (for unified caching)
@@ -69,15 +68,13 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
-
-		// Special handling for manifest.json - generate dynamically
-		if path == "manifest.json" {
+		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
+		if p == "manifest.json" {
 			serveDynamicManifest(w)
 			return
 		}
 
-		servePortalStaticFile(w, r, path)
+		servePortalStaticFile(w, r, p)
 	})
 
 	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
@@ -102,8 +99,8 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
 	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// serveAppStatic handles both "/" and 404 fallback with SSR
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		serveAppStatic(w, r, path, serv)
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		serveAppStatic(w, r, p, serv)
 	})
 
 	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -245,19 +242,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		// Use frontend pattern if available, otherwise fall back to portalHost
-		var link string
-		if portalFrontendPattern != "" {
-			// For wildcard patterns like *.localhost:4017, replace * with lease name
-			if strings.HasPrefix(portalFrontendPattern, "*.") {
-				link = fmt.Sprintf("//%s%s", lease.Name, strings.TrimPrefix(portalFrontendPattern, "*"))
-			} else {
-				// For non-wildcard patterns, construct URL with lease name as subdomain
-				link = fmt.Sprintf("//%s.%s/", lease.Name, portalFrontendPattern)
-			}
-		} else {
-			link = fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
-		}
+		link := fmt.Sprintf("//%s.%s/", lease.Name, flagPortalURL)
 
 		row := leaseRow{
 			Peer:        identityID,

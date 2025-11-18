@@ -202,3 +202,45 @@ func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
+
+func StripScheme(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return s
+	}
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimPrefix(s, "https://")
+
+	return s
+}
+
+// TrimAfterFirstSlash returns s up to but not including the first '/'.
+func TrimAfterFirstSlash(s string) string {
+	if s == "" {
+		return s
+	}
+	if idx := strings.IndexByte(s, '/'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
+}
+
+func StripPort(s string) string {
+	if s == "" {
+		return s
+	}
+	if idx := strings.LastIndexByte(s, ':'); idx >= 0 && idx+1 < len(s) {
+		port := s[idx+1:]
+		digits := true
+		for _, ch := range port {
+			if ch < '0' || ch > '9' {
+				digits = false
+				break
+			}
+		}
+		if digits {
+			return s[:idx]
+		}
+	}
+	return s
+}

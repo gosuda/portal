@@ -13,18 +13,6 @@ import (
 	"gosuda.org/portal/sdk"
 )
 
-// portalHost is the host for portal frontend.
-var portalHost = "localhost"
-
-// portalUIURL is the base URL for portal frontend
-var portalUIURL = "http://localhost:4017"
-
-// portalFrontendPattern is the wildcard pattern for portal frontend URLs (e.g., *.localhost:4017)
-var portalFrontendPattern = ""
-
-// bootstrapURIs stores the relay bootstrap server URIs
-var bootstrapURIs = "ws://localhost:4017/relay"
-
 // wasmCache stores pre-loaded WASM files in memory (optional)
 type wasmCacheEntry struct {
 	brotli []byte
@@ -337,9 +325,8 @@ func servePortalStatic(w http.ResponseWriter, r *http.Request) {
 	// Special handling for specific files
 	switch path {
 	case "manifest.json":
-		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-		w.Header().Set("Content-Type", "application/json")
-		serveStaticFileWithFallback(w, r, path, "application/json")
+		// Serve dynamic manifest regardless of static presence
+		serveDynamicManifest(w)
 		return
 
 	case "service-worker.js":
@@ -431,29 +418,24 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 	w.Write(data)
 }
 
-// getContentType returns the MIME type for a file extension
-// content types are provided via sdk.GetContentType
-
 // isPortalSubdomain checks if the host matches the portal frontend pattern
 func isPortalSubdomain(host string) bool {
-	// If we have a frontend pattern, use it
-	if portalFrontendPattern != "" {
-		return sdk.MatchesWildcardPattern(host, portalFrontendPattern)
+	// If we have a frontend pattern (already normalized in main), use it
+	if flagPortalSubdomainURL != "" {
+		p := flagPortalSubdomainURL
+		if strings.HasPrefix(p, "*.") {
+			return strings.HasSuffix(host, strings.TrimPrefix(p, "*"))
+		}
+		return host == p
 	}
 
-	// Fallback to checking if it ends with .{portalHost}
-	if portalHost == "" {
+	// Fallback to checking if it ends with .{rootHost}
+	if rootHost == "" {
 		return false
 	}
 
-	return strings.HasSuffix(host, "."+portalHost)
+	return strings.HasSuffix(sdk.StripPort(host), "."+rootHost)
 }
-
-// matchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)
-// wildcard matching is provided via sdk.MatchesWildcardPattern
-
-// isHexString checks if a string contains only hexadecimal characters
-// hex string check is provided via sdk.IsHexString
 
 // serveDynamicManifest generates and serves manifest.json dynamically
 func serveDynamicManifest(w http.ResponseWriter) {
@@ -493,14 +475,14 @@ func serveDynamicManifest(w http.ResponseWriter) {
 	}
 
 	// Generate WASM URL
-	wasmURL := portalUIURL + "/frontend/" + wasmFile
+	wasmURL := flagPortalURL + "/frontend/" + wasmFile
 
 	// Create manifest structure
 	manifest := map[string]string{
 		"wasmFile":   wasmFile,
 		"wasmUrl":    wasmURL,
 		"hash":       wasmHash,
-		"bootstraps": bootstrapURIs,
+		"bootstraps": strings.Join(flagBootstraps, ","),
 	}
 
 	// Set headers for no caching
@@ -519,7 +501,7 @@ func serveDynamicManifest(w http.ResponseWriter) {
 		Str("wasmFile", wasmFile).
 		Str("wasmUrl", wasmURL).
 		Str("hash", wasmHash).
-		Str("bootstraps", bootstrapURIs).
+		Str("bootstraps", strings.Join(flagBootstraps, ",")).
 		Msg("Served dynamic manifest")
 }
 
