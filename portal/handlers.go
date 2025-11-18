@@ -65,7 +65,7 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 	var resp rdverb.LeaseUpdateResponse
 
 	// Update lease in lease manager
-	if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID, ctx.Connection.RemoteAddr) {
+	if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID) {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
 		// Register lease connection

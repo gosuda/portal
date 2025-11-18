@@ -13,8 +13,7 @@ type LeaseEntry struct {
 	Lease        *rdverb.Lease
 	Expires      time.Time
 	LastSeen     time.Time
-	ConnectionID int64  // Store the connection ID
-	RemoteAddr   string // Store the remote IP address
+	ConnectionID int64 // Store the connection ID
 }
 
 type LeaseManager struct {
@@ -79,7 +78,7 @@ func (lm *LeaseManager) cleanupExpiredLeases() {
 	}
 }
 
-func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64, remoteAddr string) bool {
+func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) bool {
 	lm.leasesLock.Lock()
 	defer lm.leasesLock.Unlock()
 
@@ -129,7 +128,6 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64, rem
 		Expires:      expires,
 		LastSeen:     time.Now(),
 		ConnectionID: connectionID,
-		RemoteAddr:   remoteAddr,
 	}
 
 	// Apply default BPS limit for this lease if configured and no explicit limit set

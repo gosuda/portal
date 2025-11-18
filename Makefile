@@ -85,11 +85,11 @@ compress-wasm:
 # Build React frontend with Tailwind CSS 4
 build-frontend:
 	@echo "[frontend] building React frontend..."
-	@cd cmd/relay-server/frontend && npm run build
+	@cd cmd/relay-server/frontend && npm i && npm run build
 	@echo "[frontend] build complete"
 
 # Build Go relay server (embeds WASM from cmd/relay-server/static)
-build-server: build-frontend
+build-server:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 

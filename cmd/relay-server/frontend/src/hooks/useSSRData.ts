@@ -21,9 +21,6 @@ export interface ServerData {
   StaleRed: boolean;
   Hide: boolean;
   Metadata: string;
-  Region: string;
-  CountryCode: string;
-  City: string;
 }
 
 /**

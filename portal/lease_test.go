@@ -40,12 +40,12 @@ func TestLeaseManager_NameConflict(t *testing.T) {
 	}
 
 	// First lease should succeed
-	if !lm.UpdateLease(lease1, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease1, 1) {
 		t.Fatal("First lease registration should succeed")
 	}
 
 	// Second lease with same name should fail (name conflict)
-	if lm.UpdateLease(lease2, 2, "192.168.1.2:1234") {
+	if lm.UpdateLease(lease2, 2) {
 		t.Fatal("Second lease registration should fail due to name conflict")
 	}
 
@@ -91,12 +91,12 @@ func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
 	}
 
 	// First registration
-	if !lm.UpdateLease(lease1, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease1, 1) {
 		t.Fatal("First lease registration should succeed")
 	}
 
 	// Update with same identity should succeed (no conflict)
-	if !lm.UpdateLease(lease2, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease2, 1) {
 		t.Fatal("Updating own lease should succeed")
 	}
 
@@ -139,11 +139,11 @@ func TestLeaseManager_EmptyNameAllowed(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease1, 1) {
 		t.Fatal("First lease with empty name should succeed")
 	}
 
-	if !lm.UpdateLease(lease2, 2, "192.168.1.2:1234") {
+	if !lm.UpdateLease(lease2, 2) {
 		t.Fatal("Second lease with empty name should succeed (empty names don't conflict)")
 	}
 }
@@ -177,11 +177,11 @@ func TestLeaseManager_UnnamedAllowed(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease1, 1) {
 		t.Fatal("First lease with '(unnamed)' should succeed")
 	}
 
-	if !lm.UpdateLease(lease2, 2, "192.168.1.2:1234") {
+	if !lm.UpdateLease(lease2, 2) {
 		t.Fatal("Second lease with '(unnamed)' should succeed (unnamed don't conflict)")
 	}
 }
@@ -215,11 +215,11 @@ func TestLeaseManager_UnicodeNameConflict(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1, "192.168.1.1:1234") {
+	if !lm.UpdateLease(lease1, 1) {
 		t.Fatal("First lease with Korean name should succeed")
 	}
 
-	if lm.UpdateLease(lease2, 2, "192.168.1.2:1234") {
+	if lm.UpdateLease(lease2, 2) {
 		t.Fatal("Second lease with same Korean name should fail")
 	}
 }

@@ -493,19 +493,7 @@ func isPortalSubdomain(host string) bool {
 		return false
 	}
 
-	// Remove port from host for comparison
-	hostWithoutPort := host
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		hostWithoutPort = host[:idx]
-	}
-
-	// Remove port from portalHost for comparison
-	portalHostWithoutPort := portalHost
-	if idx := strings.LastIndex(portalHost, ":"); idx != -1 {
-		portalHostWithoutPort = portalHost[:idx]
-	}
-
-	return strings.HasSuffix(hostWithoutPort, "."+portalHostWithoutPort)
+	return strings.HasSuffix(host, "."+portalHost)
 }
 
 // matchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)

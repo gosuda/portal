@@ -7,30 +7,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
-import { COUNTRY_NAMES } from "../lib/countries";
 
 interface SearchBarProps {
   searchQuery: string;
   onSearchChange: (value: string) => void;
-  region: string;
-  onRegionChange: (value: string) => void;
   status: string;
   onStatusChange: (value: string) => void;
   sortBy: string;
   onSortByChange: (value: string) => void;
-  availableCountries: string[];
 }
 
 export function SearchBar({
   searchQuery,
   onSearchChange,
-  region,
-  onRegionChange,
   status,
   onStatusChange,
   sortBy,
   onSortByChange,
-  availableCountries,
 }: SearchBarProps) {
   return (
     <div className="space-y-4 px-4 sm:px-6">
@@ -47,20 +40,6 @@ export function SearchBar({
         </div>
       </label>
       <div className="flex flex-wrap gap-3">
-        <Select value={region} onValueChange={onRegionChange}>
-          <SelectTrigger className="w-[140px] h-8">
-            <SelectValue placeholder="Country" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Countries</SelectItem>
-            {availableCountries.map((countryCode) => (
-              <SelectItem key={countryCode} value={countryCode}>
-                {COUNTRY_NAMES[countryCode] || countryCode}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
         <Select value={status} onValueChange={onStatusChange}>
           <SelectTrigger className="w-[140px] h-8">
             <SelectValue placeholder="Status" />

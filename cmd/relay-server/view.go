@@ -5,14 +5,11 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/oschwald/geoip2-golang"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
@@ -22,16 +19,6 @@ import (
 
 //go:embed static
 var assetsFS embed.FS
-
-//go:embed static/GeoLite2-Country.mmdb
-var geoipFS embed.FS
-
-// GeoIP database reader (global instance with lazy initialization)
-var (
-	geoipReader     *geoip2.Reader
-	geoipReaderOnce sync.Once
-	geoipReaderErr  error
-)
 
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +60,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		serveAppStatic(w, r, path, serv)
 	})
 
-		// Portal frontend files (for unified caching)
+	// Portal frontend files (for unified caching)
 	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
@@ -105,7 +92,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		}
 
 		stream := &wsstream.WsStream{Conn: wsConn}
-		if err := serv.HandleConnection(stream, r.RemoteAddr); err != nil {
+		if err := serv.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[server] websocket relay connection error")
 			wsConn.Close()
 			return
@@ -165,121 +152,6 @@ type leaseRow struct {
 	StaleRed    bool
 	Hide        bool
 	Metadata    string
-	Region      string
-	CountryCode string
-}
-
-// initGeoIP initializes the GeoIP database reader (lazy loaded)
-func initGeoIP() error {
-	geoipReaderOnce.Do(func() {
-		// Try to load from embedded FS first
-		data, err := geoipFS.ReadFile("static/GeoLite2-Country.mmdb")
-		if err == nil {
-			reader, err := geoip2.FromBytes(data)
-			if err == nil {
-				geoipReader = reader
-				log.Info().
-					Str("source", "embedded").
-					Int("size", len(data)).
-					Msg("GeoIP database loaded successfully from embedded FS")
-				return
-			}
-			log.Warn().Err(err).Msg("Failed to parse embedded GeoIP database")
-		} else {
-			log.Debug().Err(err).Msg("Embedded GeoIP database not found, trying file paths")
-		}
-	})
-
-	return geoipReaderErr
-}
-
-// getRegionFromIP extracts region information from an IP address
-func getRegionFromIP(ipStr string) (region, countryCode string) {
-	// Initialize GeoIP if needed
-	if err := initGeoIP(); err != nil {
-		return "unknown", ""
-	}
-
-	// Parse IP address
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return "unknown", ""
-	}
-
-	// Skip private/local IPs
-	if ip.IsLoopback() || ip.IsPrivate() {
-		log.Debug().Str("ip", ipStr).Msg("[GeoIP] Skipping local/private IP")
-		return "local", ""
-	}
-
-	// Lookup country record
-	record, err := geoipReader.Country(ip)
-	if err != nil {
-		log.Debug().Err(err).Str("ip", ipStr).Msg("GeoIP lookup failed")
-		return "unknown", ""
-	}
-
-	// Extract country code
-	countryCode = record.Country.IsoCode
-
-	// Map country code to region
-	// Based on common regional groupings used in gaming/CDN services
-	switch countryCode {
-	// North America
-	case "US", "CA", "MX", "GT", "HN", "SV", "NI", "CR", "PA", "BZ":
-		region = "us-east"
-
-	// South America
-	case "BR", "AR", "CL", "CO", "PE", "VE", "EC", "BO", "PY", "UY", "GY", "SR", "GF":
-		region = "south-america"
-
-	// Europe - West
-	case "GB", "IE", "PT", "ES", "FR", "BE", "NL", "LU":
-		region = "eu-west"
-
-	// Europe - Central/East
-	case "DE", "AT", "CH", "IT", "PL", "CZ", "SK", "HU", "RO", "BG", "SI", "HR", "BA", "RS", "ME", "AL", "MK", "GR", "CY":
-		region = "eu-central"
-
-	// Europe - North
-	case "SE", "NO", "DK", "FI", "IS", "EE", "LV", "LT":
-		region = "eu-west"
-
-	// Asia - East
-	case "JP", "KR", "CN", "TW", "HK", "MO":
-		region = "asia-pacific"
-
-	// Asia - Southeast
-	case "SG", "MY", "TH", "ID", "PH", "VN", "LA", "KH", "MM", "BN":
-		region = "asia-pacific"
-
-	// Asia - South
-	case "IN", "PK", "BD", "LK", "NP", "BT", "MV":
-		region = "asia-pacific"
-
-	// Oceania
-	case "AU", "NZ", "FJ", "PG", "NC", "PF", "SB", "VU", "WS", "TO":
-		region = "asia-pacific"
-
-	// Middle East
-	case "AE", "SA", "IL", "TR", "EG", "IQ", "IR", "JO", "LB", "SY", "YE", "OM", "KW", "BH", "QA":
-		region = "eu-central"
-
-	// Africa
-	case "ZA", "NG", "KE", "GH", "TZ", "UG", "ET", "MA", "DZ", "TN", "LY", "SD", "AO", "MZ", "ZW", "BW", "NA", "ZM", "MW", "MG":
-		region = "eu-west"
-
-	default:
-		region = "unknown"
-	}
-
-	log.Debug().
-		Str("ip", ipStr).
-		Str("region", region).
-		Str("country", countryCode).
-		Msg("[GeoIP] Region mapped successfully")
-
-	return region, countryCode
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
@@ -387,34 +259,6 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			link = fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
 		}
 
-		// Get GeoIP information from RemoteAddr
-		var region string
-		var countryCode string
-		if leaseEntry.RemoteAddr != "" {
-			// Extract IP from RemoteAddr (format: "ip:port")
-			ipStr := leaseEntry.RemoteAddr
-			if idx := strings.LastIndex(ipStr, ":"); idx != -1 {
-				ipStr = ipStr[:idx]
-			}
-			log.Info().
-				Str("lease_id", identityID).
-				Str("remote_addr", leaseEntry.RemoteAddr).
-				Str("extracted_ip", ipStr).
-				Msg("[GeoIP] Processing lease RemoteAddr")
-			region, countryCode = getRegionFromIP(ipStr)
-			log.Info().
-				Str("lease_id", identityID).
-				Str("region", region).
-				Str("country_code", countryCode).
-				Msg("[GeoIP] Region detected")
-		} else {
-			log.Info().
-				Str("lease_id", identityID).
-				Msg("[GeoIP] No RemoteAddr available for lease")
-			region = "unknown"
-			countryCode = ""
-		}
-
 		row := leaseRow{
 			Peer:        identityID,
 			Name:        name,
@@ -428,8 +272,6 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			StaleRed:    !connected && since >= 15*time.Second,
 			Hide:        meta.Hide,
 			Metadata:    lease.Metadata,
-			Region:      region,
-			CountryCode: countryCode,
 		}
 
 		if row.Hide != true {

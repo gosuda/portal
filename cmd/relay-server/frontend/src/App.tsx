@@ -28,26 +28,16 @@ function convertSSRDataToServers(ssrData: ServerData[]) {
       console.error("[App] Failed to parse metadata:", err, row.Metadata);
     }
 
-    // Get region from SSR data (GeoIP-detected region)
-    const region = row.Region || "unknown";
-
-    // Combine region tag with metadata tags
-    const metadataTags = Array.isArray(metadata.tags) ? metadata.tags : [];
-    const allTags =
-      region !== "unknown" ? [region, ...metadataTags] : metadataTags;
-
     return {
       id: index + 1,
       name: row.Name || row.DNS || "(unnamed)",
       description: metadata.description || "",
-      tags: allTags,
+      tags: Array.isArray(metadata.tags) ? metadata.tags : [],
       thumbnail: metadata.thumbnail || "",
       owner: metadata.owner || "",
       online: row.Connected,
       dns: row.DNS || "",
       link: row.Link,
-      region: region,
-      countryCode: row.CountryCode || "",
     };
   });
 }
@@ -55,7 +45,6 @@ function convertSSRDataToServers(ssrData: ServerData[]) {
 function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
-  const [region, setRegion] = useState("all");
   const [status, setStatus] = useState("all");
   const [sortBy, setSortBy] = useState("default");
 
@@ -75,17 +64,6 @@ function App() {
     return [];
   }, [ssrData]);
 
-  // Extract unique available countries from servers
-  const availableCountries = useMemo(() => {
-    const countryCodes = new Set<string>();
-    servers.forEach((server) => {
-      if (server.countryCode) {
-        countryCodes.add(server.countryCode);
-      }
-    });
-    return Array.from(countryCodes).sort();
-  }, [servers]);
-
   // Filter and sort servers
   const filteredServers = useMemo(() => {
     let filtered = servers.filter((server) => {
@@ -98,18 +76,13 @@ function App() {
           tag.toLowerCase().includes(searchQuery.toLowerCase())
         );
 
-      // Country filter (using country code)
-      const matchesRegion =
-        region === "all" ||
-        server.countryCode === region;
-
       // Status filter
       const matchesStatus =
         status === "all" ||
         (status === "online" && server.online) ||
         (status === "offline" && !server.online);
 
-      return matchesSearch && matchesRegion && matchesStatus;
+      return matchesSearch && matchesStatus;
     });
 
     // Sort based on sortBy value
@@ -130,7 +103,7 @@ function App() {
     }
 
     return filtered;
-  }, [servers, searchQuery, region, status, sortBy]);
+  }, [servers, searchQuery, status, sortBy]);
 
   // Pagination
   const totalPages = Math.ceil(filteredServers.length / ITEMS_PER_PAGE);
@@ -142,11 +115,6 @@ function App() {
   // Reset to page 1 when filters change
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    setCurrentPage(1);
-  };
-
-  const handleRegionChange = (value: string) => {
-    setRegion(value);
     setCurrentPage(1);
   };
 
@@ -170,13 +138,10 @@ function App() {
               <SearchBar
                 searchQuery={searchQuery}
                 onSearchChange={handleSearchChange}
-                region={region}
-                onRegionChange={handleRegionChange}
                 status={status}
                 onStatusChange={handleStatusChange}
                 sortBy={sortBy}
                 onSortByChange={handleSortByChange}
-                availableCountries={availableCountries}
               />
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 p-4 sm:p-6 mt-4">
                 {paginatedServers.length > 0 ? (
