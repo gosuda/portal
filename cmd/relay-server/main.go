@@ -25,7 +25,6 @@ var (
 	flagPort               int
 	flagMaxLease           int
 	flagLeaseBPS           int
-	rootHost               string
 )
 
 func main() {
@@ -55,10 +54,7 @@ func main() {
 	flag.Parse()
 
 	flagBootstraps = sdk.ParseURLs(flagBootstrapsCSV)
-	flagPortalURL = sdk.StripScheme(flagPortalURL)
 	flagPortalSubdomainURL = sdk.StripScheme(flagPortalSubdomainURL)
-	rootHost = sdk.StripPort(flagPortalURL)
-
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -69,7 +65,6 @@ func runServer() error {
 	defer stop()
 
 	log.Info().
-		Str("root_host", rootHost).
 		Str("frontend_base_url", flagPortalURL).
 		Str("subdomain_pattern", flagPortalSubdomainURL).
 		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
@@ -78,7 +73,6 @@ func runServer() error {
 	cred := sdk.NewCredential()
 
 	serv := portal.NewRelayServer(cred, flagBootstraps)
-	// Apply traffic controls if configured
 	if flagMaxLease > 0 {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
@@ -88,8 +82,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	// App UI + Relay + Static Frontend
-	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

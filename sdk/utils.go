@@ -203,25 +203,43 @@ func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
 
+// IsSubdomain reports whether host matches the given domain pattern.
+// Supports patterns like:
+//   - "*.example.com" (wildcard for any subdomain of example.com)
+//   - "sub.example.com" (exact host match)
+//
+// Normalizes by stripping scheme/port and lowercasing.
+func IsSubdomain(domain, host string) bool {
+	if host == "" || domain == "" {
+		return false
+	}
+
+	h := strings.ToLower(StripPort(StripScheme(host)))
+	d := strings.ToLower(StripPort(StripScheme(domain)))
+
+	// Wildcard pattern: require at least one label before the suffix
+	if strings.HasPrefix(d, "*.") {
+		suffix := d[1:] // keep leading dot (e.g., ".example.com")
+		return len(h) > len(suffix) && strings.HasSuffix(h, suffix)
+	}
+
+	if h == d {
+		return true
+	}
+
+	if strings.Count(d, ".") == 1 {
+		return strings.HasSuffix(h, "."+d)
+	}
+
+	return false
+}
+
 func StripScheme(s string) string {
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return s
-	}
+	s = strings.TrimSuffix(s, "/")
 	s = strings.TrimPrefix(s, "http://")
 	s = strings.TrimPrefix(s, "https://")
 
-	return s
-}
-
-// TrimAfterFirstSlash returns s up to but not including the first '/'.
-func TrimAfterFirstSlash(s string) string {
-	if s == "" {
-		return s
-	}
-	if idx := strings.IndexByte(s, '/'); idx >= 0 {
-		return s[:idx]
-	}
 	return s
 }
 
