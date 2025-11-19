@@ -217,11 +217,7 @@ func IsSubdomain(domain, host string) bool {
 		return true
 	}
 
-	if strings.Count(d, ".") == 1 {
-		return strings.HasSuffix(h, "."+d)
-	}
-
-	return false
+	return strings.HasSuffix(h, "."+d)
 }
 
 func StripScheme(s string) string {
