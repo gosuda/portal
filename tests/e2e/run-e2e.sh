@@ -21,6 +21,8 @@ trap cleanup EXIT
 # Build Portal Server
 echo "Building Portal Server..."
 cd "$ROOT_DIR"
+make build-wasm
+make build-frontend
 make build-server
 
 # Start Portal Server
@@ -45,29 +47,7 @@ echo "Starting Test App..."
 APP_PID=$!
 sleep 2 # Wait for app to register
 
-# Ensure test-app.localhost resolves to 127.0.0.1
-if ! ping -c 1 test-app.localhost &> /dev/null; then
-    echo "test-app.localhost does not resolve. Attempting to add to /etc/hosts..."
-    if [ -n "$CI" ]; then
-        echo "127.0.0.1 test-app.localhost" | sudo tee -a /etc/hosts
-    else
-        # Try to use sudo non-interactively
-        if sudo -n true 2>/dev/null; then
-            echo "127.0.0.1 test-app.localhost" | sudo tee -a /etc/hosts
-        else
-            echo "ERROR: test-app.localhost does not resolve to 127.0.0.1."
-            echo "Please run the following command manually and re-run the test:"
-            echo "  sudo sh -c 'echo \"127.0.0.1 test-app.localhost\" >> /etc/hosts'"
-            exit 1
-        fi
-    fi
-fi
 
-# Verify resolution again
-if ! ping -c 1 test-app.localhost &> /dev/null; then
-    echo "ERROR: Failed to resolve test-app.localhost even after attempting to add it."
-    exit 1
-fi
 
 APP_URL="http://test-app.localhost:4017"
 echo "App URL: $APP_URL"

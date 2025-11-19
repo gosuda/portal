@@ -97,7 +97,7 @@ func main() {
 	defer client.Close()
 
 	// Register service "test-app"
-	listener, err := client.Listen(cred, "test-app", nil)
+	listener, err := client.Listen(cred, "test-app", []string{"http/1.1"})
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to listen on Portal")
 	}

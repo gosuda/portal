@@ -1,8 +1,18 @@
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 
 (async () => {
     const targetUrl = process.env.TARGET_URL || 'http://localhost:4017';
+    const screenshotDir = path.join(__dirname, '..', '..', '..', 'artifacts', 'screenshots');
     console.log(`Target URL: ${targetUrl}`);
+    console.log(`Screenshot directory: ${screenshotDir}`);
+
+    // Ensure screenshot directory exists
+    if (!fs.existsSync(screenshotDir)) {
+        fs.mkdirSync(screenshotDir, { recursive: true });
+        console.log('Created screenshot directory:', screenshotDir);
+    }
 
     const browser = await puppeteer.launch({
         headless: "new",
@@ -11,12 +21,28 @@ const puppeteer = require('puppeteer');
     const page = await browser.newPage();
 
     try {
-        // 1. Navigate to the page
-        console.log('Navigating to page...');
+        // 1. Navigate to the page and wait for auto-reload
+        console.log('Navigating to page and waiting for auto-reload...');
         await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-        console.log('Page loaded');
+        console.log('Initial page loaded, waiting for potential auto-reload...');
 
-        // 2. Verify content
+        // Wait for a few seconds to catch any auto-reload
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Check if the page has reloaded by comparing URLs or content
+        const currentUrl = page.url();
+        console.log(`Current URL after wait: ${currentUrl}`);
+        if (currentUrl !== targetUrl) {
+            console.log('Page reloaded to a new URL.');
+        } else {
+            console.log('Page did not reload.');
+        }
+        
+        // Capture screenshot of the initial loaded state (Portal UI)
+        await page.screenshot({ path: path.join(screenshotDir, '01-portal-ui.png'), fullPage: true });
+        console.log('Captured screenshot: 01-portal-ui.png');
+
+        // 2. Verify content and capture "Test App Initial Load"
         console.log('Verifying content...');
         const content = await page.content();
         console.log('Page content length:', content.length);
@@ -25,6 +51,15 @@ const puppeteer = require('puppeteer');
             throw new Error('Page content does not contain "Hello World"');
         }
         console.log('Content verification passed.');
+
+        // Capture screenshot of the Test App Initial Load
+        await page.screenshot({ path: path.join(screenshotDir, '02-test-app-initial-load.png'), fullPage: true });
+        console.log('Captured screenshot: 02-test-app-initial-load.png');
+
+        // 3. Capture "Connection Screen" before WebSocket tests
+        // Assuming the connection screen is visible before WebSocket interaction
+        await page.screenshot({ path: path.join(screenshotDir, '03-connection-screen.png'), fullPage: true });
+        console.log('Captured screenshot: 03-connection-screen.png');
 
         // 3. Test WebSocket
         console.log('Testing WebSocket...');
@@ -89,9 +124,16 @@ const puppeteer = require('puppeteer');
             console.log('Test 3 Passed');
         });
         console.log('WebSocket tests passed.');
+        
+        // 4. Capture final state after tests
+        await page.screenshot({ path: path.join(screenshotDir, '04-final-state.png'), fullPage: true });
+        console.log('Captured screenshot: 04-final-state.png');
 
     } catch (error) {
         console.error('Test failed:', error);
+        // Capture screenshot on failure for debugging
+        await page.screenshot({ path: path.join(screenshotDir, '00-error-state.png'), fullPage: true });
+        console.log('Captured screenshot on failure: 00-error-state.png');
         process.exit(1);
     } finally {
         await browser.close();

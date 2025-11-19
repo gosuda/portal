@@ -7,6 +7,6 @@
         "test": "node test.js"
     },
     "dependencies": {
-        "puppeteer": "^21.3.8"
+        "puppeteer": "^24.30.0"
     }
 }
