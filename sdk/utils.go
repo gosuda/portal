@@ -243,6 +243,12 @@ func StripScheme(s string) string {
 	return s
 }
 
+func StripWildCard(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "*.")
+	return s
+}
+
 func StripPort(s string) string {
 	if s == "" {
 		return s

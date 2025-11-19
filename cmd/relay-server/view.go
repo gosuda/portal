@@ -267,8 +267,11 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		}
 
 		// Build link using the configured subdomain base
-		subdomainBase := strings.TrimPrefix(sdk.StripScheme(flagPortalSubdomainURL), "*.")
-		link := fmt.Sprintf("//%s.%s/", lease.Name, subdomainBase)
+		base := flagPortalSubdomainURL
+		if base == "" {
+			base = flagPortalURL
+		}
+		link := fmt.Sprintf("//%s.%s/", lease.Name, sdk.StripWildCard(sdk.StripScheme(base)))
 
 		row := leaseRow{
 			Peer:        identityID,

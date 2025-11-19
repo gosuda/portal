@@ -390,7 +390,7 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, filePat
 }
 
 // serveDynamicManifest generates and serves manifest.json dynamically
-func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
+func serveDynamicManifest(w http.ResponseWriter, _ *http.Request) {
 	sdk.SetCORSHeaders(w)
 
 	// Find the content-addressed WASM file

@@ -54,7 +54,6 @@ func main() {
 	flag.Parse()
 
 	flagBootstraps = sdk.ParseURLs(flagBootstrapsCSV)
-	flagPortalSubdomainURL = sdk.StripScheme(flagPortalSubdomainURL)
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
