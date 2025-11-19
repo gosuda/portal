@@ -76,7 +76,6 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 	address = strings.TrimSuffix(address, ":80")
 	address = strings.TrimSuffix(address, ":443")
 
-	// Decode URL-encoded address (e.g., %ED%8E%98%EC%9D%B8%ED%8A%B8 -> 페인트)
 	decodedAddr, err := url.QueryUnescape(address)
 	if err != nil {
 		log.Debug().Err(err).Str("address", address).Msg("[Dialer] Failed to unescape address")
@@ -84,7 +83,6 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 	}
 	address = decodedAddr
 
-	// Convert Punycode to Unicode (e.g., xn--lu5bu9rfta -> 페인트)
 	unicodeAddr, err := idna.ToUnicode(address)
 	if err != nil {
 		log.Debug().Err(err).Str("address", address).Msg("[Dialer] Failed to convert punycode")
@@ -102,13 +100,18 @@ var rdDialer = func(ctx context.Context, network, address string) (net.Conn, err
 		log.Debug().Err(err).Str("name", address).Msg("[Dialer] Lease lookup failed")
 	}
 
-	log.Debug().Str("original_addr", originalAddr).Str("final_addr", address).Msg("[Dialer] Attempting dial")
+	if originalAddr != address {
+		log.Info().Str("name", unicodeAddr).Str("resolved", address).Msg("[Dialer] Address resolved")
+	}
+
 	cred := sdk.NewCredential()
 	conn, err := client.Dial(cred, address, "http/1.1")
 	if err != nil {
 		log.Error().Err(err).Str("address", address).Msg("[Dialer] Dial failed")
 		return nil, err
 	}
+	log.Info().Str("address", address).Msg("[Dialer] Connection Established")
+
 	return conn, nil
 }
 
