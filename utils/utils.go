@@ -259,13 +259,13 @@ func StripPort(s string) string {
 	return s
 }
 
-// DefaultSubdomainPattern builds a wildcard subdomain pattern from a base portal URL or host.
+// DefaultAppPattern builds a wildcard subdomain pattern from a base portal URL or host.
 // Examples:
 //   - "https://portal.example.com" -> "*.portal.example.com"
 //   - "portal.example.com"        -> "*.portal.example.com"
 //   - "localhost:4017"            -> "*.localhost:4017"
 //   - ""                          -> "*.localhost:4017"
-func DefaultSubdomainPattern(base string) string {
+func DefaultAppPattern(base string) string {
 	base = strings.TrimSpace(strings.TrimSuffix(base, "/"))
 	if base == "" {
 		return "*.localhost:4017"

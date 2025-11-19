@@ -19,13 +19,13 @@ import (
 )
 
 var (
-	flagPortalURL          string
-	flagPortalSubdomainURL string
-	flagBootstraps         []string
-	flagALPN               string
-	flagPort               int
-	flagMaxLease           int
-	flagLeaseBPS           int
+	flagPortalURL    string
+	flagPortalAppURL string
+	flagBootstraps   []string
+	flagALPN         string
+	flagPort         int
+	flagMaxLease     int
+	flagLeaseBPS     int
 )
 
 func main() {
@@ -36,9 +36,9 @@ func main() {
 		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
 		defaultPortalURL = "http://localhost:4017"
 	}
-	defaultSubdomain := os.Getenv("PORTAL_SUBDOMAIN_URL")
-	if defaultSubdomain == "" {
-		defaultSubdomain = utils.DefaultSubdomainPattern(defaultPortalURL)
+	defaultAppURL := os.Getenv("PORTAL_APP_URL")
+	if defaultAppURL == "" {
+		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
 	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
@@ -47,7 +47,7 @@ func main() {
 
 	var flagBootstrapsCSV string
 	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagPortalSubdomainURL, "portal-subdomain-url", defaultSubdomain, "subdomain wildcard URL (env: PORTAL_SUBDOMAIN_URL)")
+	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
@@ -66,8 +66,8 @@ func runServer() error {
 	defer stop()
 
 	log.Info().
-		Str("frontend_base_url", flagPortalURL).
-		Str("subdomain_pattern", flagPortalSubdomainURL).
+		Str("portal_base_url", flagPortalURL).
+		Str("app_url", flagPortalAppURL).
 		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
 		Msg("[server] frontend configuration")
 

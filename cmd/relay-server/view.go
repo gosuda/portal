@@ -138,7 +138,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Route subdomain requests (e.g., *.example.com) to portalMux
 		// and everything else to the app UI mux.
-		if utils.IsSubdomain(flagPortalSubdomainURL, r.Host) {
+		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
 			appMux.ServeHTTP(w, r)
@@ -268,7 +268,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		}
 
 		// Build link using the configured subdomain base
-		base := flagPortalSubdomainURL
+		base := flagPortalAppURL
 		if base == "" {
 			base = flagPortalURL
 		}

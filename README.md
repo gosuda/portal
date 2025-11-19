@@ -49,7 +49,7 @@ http://localhost:4017
 #
 # Then edit docker-compose.yml environment for your domain:
 PORTAL_URL: https://portal.example.com
-PORTAL_SUBDOMAIN_URL: https://*.example.com
+PORTAL_APP_URL: https://*.example.com
 BOOTSTRAP_URIS: wss://portal.example.com/relay
 
 ```
