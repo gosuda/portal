@@ -1,0 +1,41 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["*"]
+
+jobs:
+  e2e-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            --no-install-recommends \
+            nodejs \
+            npm \
+            brotli \
+            make \
+            binaryen
+          # Configure hosts for E2E test
+          echo "127.0.0.1 test-app.localhost" | sudo tee -a /etc/hosts
+
+      - name: Run E2E Tests
+        run: |
+          ./tests/e2e/run-e2e.sh

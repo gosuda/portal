@@ -1,0 +1,12 @@
+{
+    "name": "puppeteer-tests",
+    "version": "1.0.0",
+    "description": "Puppeteer tests for E2E testing",
+    "main": "test.js",
+    "scripts": {
+        "test": "node test.js"
+    },
+    "dependencies": {
+        "puppeteer": "^21.3.8"
+    }
+}
