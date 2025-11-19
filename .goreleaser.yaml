@@ -2,8 +2,7 @@ version: 2
 
 before:
   hooks:
-    - apt-get update
-    - apt-get install -y --no-install-recommends nodejs npm brotli make binaryen
+    - make clean
     - make build
 
 builds:
