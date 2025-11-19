@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"path"
-	pathpkg "path"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +35,7 @@ func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal
 	sdk.SetCORSHeaders(w)
 
 	// Read portal.html from embedded FS
-	fullPath := pathpkg.Join("dist", "app", "portal.html")
+	fullPath := path.Join("dist", "app", "portal.html")
 	htmlContent, err := distFS.ReadFile(fullPath)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to read portal.html")
@@ -102,9 +101,9 @@ func servePortalStaticFile(w http.ResponseWriter, r *http.Request, filePath stri
 
 // serveAppStatic serves static files for app UI (React app) from embedded FS
 // Falls back to portal.html with SSR when path is root or file not found
-func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *portal.RelayServer) {
+func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer) {
 	// Prevent directory traversal
-	if strings.Contains(path, "..") {
+	if strings.Contains(appPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
@@ -112,23 +111,23 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *p
 	sdk.SetCORSHeaders(w)
 
 	// If path is empty or "/", serve portal.html with SSR
-	if path == "" || path == "/" {
+	if appPath == "" || appPath == "/" {
 		servePortalHTMLWithSSR(w, r, serv)
 		return
 	}
 
 	// Try to read from embedded FS
-	fullPath := pathpkg.Join("dist", "app", path)
+	fullPath := path.Join("dist", "app", appPath)
 	data, err := distFS.ReadFile(fullPath)
 	if err != nil {
 		// File not found - fallback to portal.html with SSR for SPA routing
-		log.Debug().Err(err).Str("path", path).Msg("app static file not found, falling back to SSR")
+		log.Debug().Err(err).Str("path", appPath).Msg("app static file not found, falling back to SSR")
 		servePortalHTMLWithSSR(w, r, serv)
 		return
 	}
 
 	// Set content type based on extension
-	ext := pathpkg.Ext(path)
+	ext := path.Ext(appPath)
 	contentType := sdk.GetContentType(ext)
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
@@ -139,7 +138,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, path string, serv *p
 	w.Write(data)
 
 	log.Debug().
-		Str("path", path).
+		Str("path", appPath).
 		Int("size", len(data)).
 		Msg("served app static file")
 }
@@ -173,7 +172,7 @@ func initWasmCache() error {
 		if strings.HasSuffix(name, ".wasm.br") {
 			hash := strings.TrimSuffix(name, ".wasm.br")
 			if sdk.IsHexString(hash) {
-				fullPath := pathpkg.Join("dist", "wasm", name)
+				fullPath := path.Join("dist", "wasm", name)
 				// Cache under the URL path (<hash>.wasm) while reading the
 				// brotli-compressed artifact (<hash>.wasm.br) from embed.FS.
 				cacheKey := hash + ".wasm"
@@ -232,7 +231,7 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 	if !ok {
 		log.Debug().Str("path", filePath).Msg("WASM file not in cache")
 		// Fallback: try to serve uncompressed WASM from embedded FS
-		fullPath := pathpkg.Join("dist", "wasm", filePath)
+		fullPath := path.Join("dist", "wasm", filePath)
 		data, err := distFS.ReadFile(fullPath)
 		if err != nil {
 			log.Debug().Err(err).Str("path", fullPath).Msg("WASM file not found in embedded FS")
@@ -286,19 +285,19 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 // servePortalStatic serves static files for portal frontend with appropriate cache headers
 // Falls back to portal.html for SPA routing (404 -> portal.html)
 func servePortalStatic(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/")
+	staticPath := strings.TrimPrefix(r.URL.Path, "/")
 
 	// Prevent directory traversal
-	if strings.Contains(path, "..") {
+	if strings.Contains(staticPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
 	// Special handling for specific files
-	switch path {
+	switch staticPath {
 	case "manifest.json":
 		// Serve dynamic manifest regardless of static presence
-		serveDynamicManifest(w)
+		serveDynamicManifest(w, r)
 		return
 
 	case "service-worker.js":
@@ -308,29 +307,29 @@ func servePortalStatic(w http.ResponseWriter, r *http.Request) {
 	case "wasm_exec.js":
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "application/javascript")
-		serveStaticFileWithFallback(w, r, path, "application/javascript")
+		serveStaticFileWithFallback(w, r, staticPath, "application/javascript")
 		return
 
 	case "portal.mp4":
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 		w.Header().Set("Content-Type", "video/mp4")
-		serveStaticFileWithFallback(w, r, path, "video/mp4")
+		serveStaticFileWithFallback(w, r, staticPath, "video/mp4")
 		return
 	}
 
 	// Default caching for other files
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	serveStaticFileWithFallback(w, r, path, "")
+	serveStaticFileWithFallback(w, r, staticPath, "")
 }
 
 // serveStaticFile reads and serves a file from the static directory
-func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, contentType string) {
+func serveStaticFile(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
 	sdk.SetCORSHeaders(w)
 
-	fullPath := pathpkg.Join("dist", "wasm", path)
+	fullPath := path.Join("dist", "wasm", filePath)
 	data, err := distFS.ReadFile(fullPath)
 	if err != nil {
-		log.Debug().Err(err).Str("path", path).Msg("static file not found")
+		log.Debug().Err(err).Str("path", filePath).Msg("static file not found")
 		http.NotFound(w, r)
 		return
 	}
@@ -339,7 +338,7 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
-		ext := pathpkg.Ext(path)
+		ext := path.Ext(filePath)
 		ct := sdk.GetContentType(ext)
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
@@ -347,7 +346,7 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 	}
 
 	log.Debug().
-		Str("path", path).
+		Str("path", filePath).
 		Int("size", len(data)).
 		Msg("served static file")
 
@@ -357,14 +356,14 @@ func serveStaticFile(w http.ResponseWriter, r *http.Request, path string, conten
 
 // serveStaticFileWithFallback reads and serves a file from the static directory
 // If the file is not found, it falls back to portal.html for SPA routing
-func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path string, contentType string) {
+func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
 	sdk.SetCORSHeaders(w)
 
-	fullPath := pathpkg.Join("dist", "wasm", path)
+	fullPath := path.Join("dist", "wasm", filePath)
 	data, err := distFS.ReadFile(fullPath)
 	if err != nil {
 		// File not found - fallback to portal.html for SPA routing
-		log.Debug().Err(err).Str("path", path).Msg("static file not found, serving portal.html")
+		log.Debug().Err(err).Str("path", filePath).Msg("static file not found, serving portal.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		serveStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
 		return
@@ -374,7 +373,7 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
-		ext := pathpkg.Ext(path)
+		ext := path.Ext(filePath)
 		ct := sdk.GetContentType(ext)
 		if ct != "" {
 			w.Header().Set("Content-Type", ct)
@@ -382,7 +381,7 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 	}
 
 	log.Debug().
-		Str("path", path).
+		Str("path", filePath).
 		Int("size", len(data)).
 		Msg("served static file")
 
@@ -391,7 +390,7 @@ func serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, path st
 }
 
 // serveDynamicManifest generates and serves manifest.json dynamically
-func serveDynamicManifest(w http.ResponseWriter) {
+func serveDynamicManifest(w http.ResponseWriter, r *http.Request) {
 	sdk.SetCORSHeaders(w)
 
 	// Find the content-addressed WASM file
@@ -463,7 +462,7 @@ func serveDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
 	sdk.SetCORSHeaders(w)
 
 	// Read the service-worker.js template
-	fullPath := pathpkg.Join("dist", "wasm", "service-worker.js")
+	fullPath := path.Join("dist", "wasm", "service-worker.js")
 	content, err := distFS.ReadFile(fullPath)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to read service-worker.js")

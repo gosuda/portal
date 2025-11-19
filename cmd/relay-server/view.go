@@ -57,7 +57,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
 		if p == "manifest.json" {
-			serveDynamicManifest(w)
+			serveDynamicManifest(w, r)
 			return
 		}
 
@@ -107,7 +107,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
 		if p == "manifest.json" {
-			serveDynamicManifest(w)
+			serveDynamicManifest(w, r)
 			return
 		}
 		servePortalStaticFile(w, r, p)
@@ -266,7 +266,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		// Build link using the configured subdomain base (strip "*." if present)
+		// Build link using the configured subdomain base
 		subdomainBase := strings.TrimPrefix(sdk.StripScheme(flagPortalSubdomainURL), "*.")
 		link := fmt.Sprintf("//%s.%s/", lease.Name, subdomainBase)
 
