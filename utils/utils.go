@@ -1,4 +1,4 @@
-package sdk
+package utils
 
 import (
 	"context"
@@ -11,19 +11,9 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/utils/wsstream"
 )
-
-func NewCredential() *cryptoops.Credential {
-	cred, err := cryptoops.NewCredential()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create credential")
-	}
-	return cred
-}
 
 // NewWebSocketDialer returns a dialer that establishes WebSocket connections
 // and wraps them as io.ReadWriteCloser.
@@ -59,10 +49,10 @@ func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader ht
 // URL-safe name validation regex
 var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
 
-// isURLSafeName checks if a name contains only URL-safe characters.
+// IsURLSafeName checks if a name contains only URL-safe characters.
 // Disallows: spaces, special characters like /, ?, &, =, %, etc.
 // Note: Browsers will automatically URL-encode non-ASCII characters.
-func isURLSafeName(name string) bool {
+func IsURLSafeName(name string) bool {
 	if name == "" {
 		return true // Empty name is allowed (will be treated as unnamed)
 	}

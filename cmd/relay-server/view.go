@@ -13,6 +13,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 //go:embed dist/*
@@ -39,7 +40,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		sdk.SetCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -50,7 +51,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 
 	// Portal frontend files (for unified caching)
 	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		sdk.SetCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -71,7 +72,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 			return
 		}
 
-		stream, wsConn, err := sdk.UpgradeToWSStream(w, r, nil)
+		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[server] websocket upgrade failed")
 			return
@@ -100,7 +101,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 
 	// Static file handler for /frontend/ (for unified caching)
 	portalMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		sdk.SetCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -120,7 +121,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 
 	// Root and SPA fallback for portal subdomains
 	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		sdk.SetCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -137,7 +138,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Route subdomain requests (e.g., *.example.com) to portalMux
 		// and everything else to the app UI mux.
-		if sdk.IsSubdomain(flagPortalSubdomainURL, r.Host) {
+		if utils.IsSubdomain(flagPortalSubdomainURL, r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
 			appMux.ServeHTTP(w, r)
@@ -271,7 +272,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		if base == "" {
 			base = flagPortalURL
 		}
-		link := fmt.Sprintf("//%s.%s/", lease.Name, sdk.StripWildCard(sdk.StripScheme(base)))
+		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
 		row := leaseRow{
 			Peer:        identityID,

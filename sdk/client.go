@@ -15,7 +15,16 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
+	"gosuda.org/portal/utils"
 )
+
+func NewCredential() *cryptoops.Credential {
+	cred, err := cryptoops.NewCredential()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create credential")
+	}
+	return cred
+}
 
 type Client struct {
 	config *ClientConfig
@@ -33,7 +42,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
-		Dialer:              NewWebSocketDialer(),
+		Dialer:              utils.NewWebSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -53,7 +62,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	// Initialize relays from bootstrap servers
 	var connectionErrors []error
 	for _, server := range config.BootstrapServers {
-		normalized, err := NormalizePortalURL(server)
+		normalized, err := utils.NormalizePortalURL(server)
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -170,7 +179,7 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 		Msg("[SDK] Creating listener")
 
 	// Validate name is URL-safe
-	if !isURLSafeName(name) {
+	if !utils.IsURLSafeName(name) {
 		log.Error().
 			Str("name", name).
 			Msg("[SDK] Lease name contains invalid characters")

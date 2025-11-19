@@ -15,6 +15,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 var (
@@ -37,11 +38,11 @@ func main() {
 	}
 	defaultSubdomain := os.Getenv("PORTAL_SUBDOMAIN_URL")
 	if defaultSubdomain == "" {
-		defaultSubdomain = sdk.DefaultSubdomainPattern(defaultPortalURL)
+		defaultSubdomain = utils.DefaultSubdomainPattern(defaultPortalURL)
 	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
-		defaultBootstraps = sdk.DefaultBootstrapFrom(defaultPortalURL)
+		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
 	}
 
 	var flagBootstrapsCSV string
@@ -54,7 +55,7 @@ func main() {
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
 	flag.Parse()
 
-	flagBootstraps = sdk.ParseURLs(flagBootstrapsCSV)
+	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}

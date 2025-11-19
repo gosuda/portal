@@ -1,4 +1,4 @@
-package sdk
+package utils
 
 import (
 	"testing"
@@ -67,7 +67,7 @@ func TestIsURLSafeName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isURLSafeName(tt.input)
+			result := IsURLSafeName(tt.input)
 			assert.Equal(t, tt.expected, result, "isURLSafeName(%q)", tt.input)
 		})
 	}

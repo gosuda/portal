@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 //go:embed static
@@ -50,7 +51,7 @@ func main() {
 
 // handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
 func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := sdk.UpgradeWebSocket(w, r, nil)
+	conn, err := utils.UpgradeWebSocket(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("upgrade websocket")
 		return
