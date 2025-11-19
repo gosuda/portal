@@ -38,3 +38,6 @@ profile.cov
 # Docker Compose Override
 docker-compose.override.yml
 docker-compose.override.yaml
+
+# Added by goreleaser init:
+dist/
