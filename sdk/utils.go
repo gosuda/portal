@@ -268,3 +268,47 @@ func StripPort(s string) string {
 	}
 	return s
 }
+
+// DefaultSubdomainPattern builds a wildcard subdomain pattern from a base portal URL or host.
+// Examples:
+//   - "https://portal.example.com" -> "*.portal.example.com"
+//   - "portal.example.com"        -> "*.portal.example.com"
+//   - "localhost:4017"            -> "*.localhost:4017"
+//   - ""                          -> "*.localhost:4017"
+func DefaultSubdomainPattern(base string) string {
+	base = strings.TrimSpace(strings.TrimSuffix(base, "/"))
+	if base == "" {
+		return "*.localhost:4017"
+	}
+	host := StripWildCard(StripScheme(base))
+	if host == "" {
+		return "*.localhost:4017"
+	}
+	// Avoid doubling wildcard if provided accidentally
+	if strings.HasPrefix(host, "*.") {
+		return host
+	}
+	return "*." + host
+}
+
+// DefaultBootstrapFrom derives a websocket bootstrap URL from a base portal URL or host.
+// It prefers NormalizePortalURL for consistent mapping and falls back to localhost.
+// Examples:
+//   - "https://portal.example.com" -> "wss://portal.example.com/relay"
+//   - "http://portal.example.com"  -> "ws://portal.example.com/relay"
+//   - "localhost:4017"             -> "wss://localhost:4017/relay"
+//   - ""                           -> "ws://localhost:4017/relay"
+func DefaultBootstrapFrom(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "ws://localhost:4017/relay"
+	}
+	if u, err := NormalizePortalURL(base); err == nil && u != "" {
+		return u
+	}
+	host := StripScheme(strings.TrimSuffix(base, "/"))
+	if host == "" {
+		return "ws://localhost:4017/relay"
+	}
+	return "ws://" + host + "/relay"
+}

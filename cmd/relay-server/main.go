@@ -32,15 +32,16 @@ func main() {
 
 	defaultPortalURL := strings.TrimSuffix(os.Getenv("PORTAL_URL"), "/")
 	if defaultPortalURL == "" {
-		defaultPortalURL = "localhost:4017"
+		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
+		defaultPortalURL = "http://localhost:4017"
 	}
 	defaultSubdomain := os.Getenv("PORTAL_SUBDOMAIN_URL")
 	if defaultSubdomain == "" {
-		defaultSubdomain = "*.localhost:4017"
+		defaultSubdomain = sdk.DefaultSubdomainPattern(defaultPortalURL)
 	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
-		defaultBootstraps = "ws://localhost:4017/relay"
+		defaultBootstraps = sdk.DefaultBootstrapFrom(defaultPortalURL)
 	}
 
 	var flagBootstrapsCSV string
