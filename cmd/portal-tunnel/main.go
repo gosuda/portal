@@ -239,14 +239,6 @@ func runServiceTunnel(ctx context.Context, relayDir *RelayDirectory, service *Se
 		_ = listener.Close()
 	}()
 
-	log.Info().Str("service", serviceName).Msg("")
-	log.Info().Str("service", serviceName).Msg("Access via:")
-	log.Info().Str("service", serviceName).Msgf("- Name:     /peer/%s", serviceName)
-	log.Info().Str("service", serviceName).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", serviceName).Msgf("- Example:  http://%s/peer/%s", bootstrapServers[0], serviceName)
-
-	log.Info().Str("service", serviceName).Msg("")
-
 	connCount := 0
 	var connWG sync.WaitGroup
 	defer connWG.Wait()

@@ -38,3 +38,6 @@ profile.cov
 # Docker Compose Override
 docker-compose.override.yml
 docker-compose.override.yaml
+tests/e2e/test-app/test-app
+tests/e2e/test-app/app.log
+artifacts/screenshots/
