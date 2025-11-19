@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,16 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
+	"gosuda.org/portal/utils"
 )
+
+func NewCredential() *cryptoops.Credential {
+	cred, err := cryptoops.NewCredential()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create credential")
+	}
+	return cred
+}
 
 type Client struct {
 	config *ClientConfig
@@ -33,7 +43,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
-		Dialer:              NewWebSocketDialer(),
+		Dialer:              utils.NewWebSocketDialer(),
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -53,7 +63,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	// Initialize relays from bootstrap servers
 	var connectionErrors []error
 	for _, server := range config.BootstrapServers {
-		normalized, err := NormalizePortalURL(server)
+		normalized, err := utils.NormalizePortalURL(server)
 		if err != nil {
 			log.Error().
 				Err(err).
@@ -170,7 +180,7 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 		Msg("[SDK] Creating listener")
 
 	// Validate name is URL-safe
-	if !isURLSafeName(name) {
+	if !utils.IsURLSafeName(name) {
 		log.Error().
 			Str("name", name).
 			Msg("[SDK] Lease name contains invalid characters")
@@ -641,4 +651,118 @@ func (g *Client) LookupName(name string) (*rdverb.Lease, error) {
 		}
 	}
 	return nil, ErrNoAvailableRelay
+}
+
+type listener struct {
+	mu sync.Mutex
+
+	cred  *cryptoops.Credential
+	lease *rdverb.Lease
+
+	conns map[*connection]struct{}
+
+	connCh chan *connection
+	closed bool
+}
+
+// Implement net.Listener interface for Listener
+func (l *listener) Accept() (net.Conn, error) {
+	conn, ok := <-l.connCh
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return conn, nil
+}
+
+func (l *listener) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.closed {
+		return nil
+	}
+
+	l.closed = true
+
+	// Close the connection channel first to prevent new connections
+	close(l.connCh)
+
+	// Close all active connections
+	for conn := range l.conns {
+		if err := conn.Close(); err != nil {
+			log.Error().Err(err).Msg("[SDK] Error closing connection")
+		}
+		delete(l.conns, conn)
+	}
+
+	// Clear the connections map
+	l.conns = make(map[*connection]struct{})
+
+	return nil
+}
+
+func (l *listener) Addr() net.Addr {
+	return addr(l.cred.ID())
+}
+
+type connRelay struct {
+	addr     string
+	client   *portal.RelayClient
+	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
+	stop     chan struct{}
+	stopOnce sync.Once // Ensure stop channel is closed only once
+	mu       sync.Mutex
+}
+
+var _ net.Conn = (*connection)(nil)
+
+type connection struct {
+	via        *connRelay
+	localAddr  string
+	remoteAddr string
+	conn       *cryptoops.SecureConnection
+}
+
+func (r *connection) Read(b []byte) (n int, err error) {
+	return r.conn.Read(b)
+}
+
+func (r *connection) Write(b []byte) (n int, err error) {
+	return r.conn.Write(b)
+}
+
+func (r *connection) Close() error {
+	return r.conn.Close()
+}
+
+func (r *connection) LocalAddr() net.Addr {
+	return addr(r.localAddr)
+}
+
+func (r *connection) RemoteAddr() net.Addr {
+	return addr(r.remoteAddr)
+}
+
+func (r *connection) SetDeadline(t time.Time) error {
+	return r.conn.SetDeadline(t)
+}
+
+func (r *connection) SetReadDeadline(t time.Time) error {
+	return r.conn.SetReadDeadline(t)
+}
+
+func (r *connection) SetWriteDeadline(t time.Time) error {
+	return r.conn.SetWriteDeadline(t)
+}
+
+var _ net.Addr = (*addr)(nil)
+
+type addr string
+
+func (a addr) Network() string {
+	return "portal"
+}
+
+func (a addr) String() string {
+	return string(a)
 }

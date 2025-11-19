@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 var (
@@ -121,7 +122,7 @@ func runExposeWithConfig() error {
 }
 
 func runExposeWithFlags() error {
-	relayURLs := sdk.ParseURLs(flagRelayURLs)
+	relayURLs := utils.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}

@@ -9,40 +9,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
-	pathpkg "path"
-
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/utils/wsstream"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 //go:embed dist/*
 var distFS embed.FS
 
-func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
-	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-		// Read from dist/app subdirectory of the embedded FS
-		fullPath := pathpkg.Join("dist", "app", assetPath)
-		b, err := distFS.ReadFile(fullPath)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
-}
-
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
+	}
+
+	// Initialize WASM cache used by content handlers
+	if err := initWasmCache(); err != nil {
+		log.Error().Err(err).Msg("failed to initialize WASM cache")
 	}
 
 	// Create app UI mux
@@ -55,31 +40,29 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/app/")
-		serveAppStatic(w, r, path, serv)
+		p := strings.TrimPrefix(r.URL.Path, "/app/")
+		serveAppStatic(w, r, p, serv)
 	})
 
 	// Portal frontend files (for unified caching)
 	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
+		utils.SetCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/frontend/")
-
-		// Special handling for manifest.json - generate dynamically
-		if path == "manifest.json" {
-			serveDynamicManifest(w)
+		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
+		if p == "manifest.json" {
+			serveDynamicManifest(w, r)
 			return
 		}
 
-		servePortalStaticFile(w, r, path)
+		servePortalStaticFile(w, r, p)
 	})
 
 	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
@@ -89,13 +72,11 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 			return
 		}
 
-		wsConn, err := wsUpgrader.Upgrade(w, r, nil)
+		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[server] websocket upgrade failed")
 			return
 		}
-
-		stream := &wsstream.WsStream{Conn: wsConn}
 		if err := serv.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[server] websocket relay connection error")
 			wsConn.Close()
@@ -106,8 +87,8 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
 	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// serveAppStatic handles both "/" and 404 fallback with SSR
-		path := strings.TrimPrefix(r.URL.Path, "/")
-		serveAppStatic(w, r, path, serv)
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		serveAppStatic(w, r, p, serv)
 	})
 
 	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -115,12 +96,49 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 		w.Write([]byte("{\"status\":\"ok\"}"))
 	})
 
-	// Create portal frontend mux
-	portalMux := createPortalMux()
+	// Create portal frontend mux (routes only)
+	portalMux := http.NewServeMux()
 
-	// Top-level handler that routes based on host and path
-	topHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isPortalSubdomain(r.Host) {
+	// Static file handler for /frontend/ (for unified caching)
+	portalMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
+		utils.SetCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
+		if p == "manifest.json" {
+			serveDynamicManifest(w, r)
+			return
+		}
+		servePortalStaticFile(w, r, p)
+	})
+
+	// Service worker for portal subdomains (serve from dist/wasm)
+	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
+		serveDynamicServiceWorker(w, r)
+	})
+
+	// Root and SPA fallback for portal subdomains
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		utils.SetCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/" {
+			// Serve portal HTML from dist/wasm
+			serveStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
+			return
+		}
+		servePortalStatic(w, r)
+	})
+
+	// routes based on host and path
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Route subdomain requests (e.g., *.example.com) to portalMux
+		// and everything else to the app UI mux.
+		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
 			appMux.ServeHTTP(w, r)
@@ -129,7 +147,7 @@ func serveHTTP(_ context.Context, addr string, serv *portal.RelayServer, nodeID 
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: topHandler,
+		Handler: handler,
 	}
 
 	go func() {
@@ -249,19 +267,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		// Use frontend pattern if available, otherwise fall back to portalHost
-		var link string
-		if portalFrontendPattern != "" {
-			// For wildcard patterns like *.localhost:4017, replace * with lease name
-			if strings.HasPrefix(portalFrontendPattern, "*.") {
-				link = fmt.Sprintf("//%s%s", lease.Name, strings.TrimPrefix(portalFrontendPattern, "*"))
-			} else {
-				// For non-wildcard patterns, construct URL with lease name as subdomain
-				link = fmt.Sprintf("//%s.%s/", lease.Name, portalFrontendPattern)
-			}
-		} else {
-			link = fmt.Sprintf("//%s.%s/", lease.Name, portalHost)
+		// Build link using the configured subdomain base
+		base := flagPortalAppURL
+		if base == "" {
+			base = flagPortalURL
 		}
+		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
 		row := leaseRow{
 			Peer:        identityID,
@@ -284,10 +295,4 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	}
 
 	return rows
-}
-
-var wsUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
 }

@@ -15,57 +15,47 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 var (
-	flagBootstraps []string
-	flagALPN       string
-	flagPort       int
-	flagPortalHost string
-	flagMaxLease   int
-	flagLeaseBPS   int
+	flagPortalURL    string
+	flagPortalAppURL string
+	flagBootstraps   []string
+	flagALPN         string
+	flagPort         int
+	flagMaxLease     int
+	flagLeaseBPS     int
 )
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	// Parse PORTAL_UI_URL or PORTAL_FRONTEND_URL to extract portal host
-	defaultPortalHost := os.Getenv("PORTAL_UI_URL")
-	if defaultPortalHost == "" {
-		defaultPortalHost = os.Getenv("PORTAL_FRONTEND_URL")
+	defaultPortalURL := strings.TrimSuffix(os.Getenv("PORTAL_URL"), "/")
+	if defaultPortalURL == "" {
+		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
+		defaultPortalURL = "http://localhost:4017"
 	}
-	if defaultPortalHost != "" {
-		// Extract host from URL (supports wildcard patterns like http://*.localhost:4017)
-		defaultPortalHost = strings.TrimPrefix(defaultPortalHost, "http://")
-		defaultPortalHost = strings.TrimPrefix(defaultPortalHost, "https://")
-		defaultPortalHost = strings.TrimPrefix(defaultPortalHost, "*.")
-	} else {
-		defaultPortalHost = "localhost:4017"
+	defaultAppURL := os.Getenv("PORTAL_APP_URL")
+	if defaultAppURL == "" {
+		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
 	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
-		defaultBootstraps = "ws://localhost:4017/relay"
+		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
 	}
+
 	var flagBootstrapsCSV string
+	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
+	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.StringVar(&flagPortalHost, "portal-host", defaultPortalHost, "portal host for frontend serving (env: PORTAL_HOST)")
 	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
-
 	flag.Parse()
 
-	// Parse bootstrap list
-	parts := strings.Split(flagBootstrapsCSV, ",")
-	flagBootstraps = make([]string, 0, len(parts))
-	for _, p := range parts {
-		s := strings.TrimSpace(p)
-		if s != "" {
-			flagBootstraps = append(flagBootstraps, s)
-		}
-	}
-
+	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -75,47 +65,15 @@ func runServer() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Set portal host
-	portalHost = flagPortalHost
-
-	// Set portal UI URL from environment or construct from portal host
-	portalUIURL = os.Getenv("PORTAL_UI_URL")
-	if portalUIURL == "" {
-		portalUIURL = os.Getenv("PORTAL_FRONTEND_URL")
-	}
-	if portalUIURL == "" {
-		portalUIURL = "http://" + portalHost
-	}
-	// Trim trailing slashes
-	portalUIURL = strings.TrimSuffix(portalUIURL, "/")
-
-	// Set portal frontend pattern from PORTAL_FRONTEND_URL
-	portalFrontendURL := os.Getenv("PORTAL_FRONTEND_URL")
-	if portalFrontendURL != "" {
-		// Extract host pattern from URL (e.g., http://*.localhost:4017 -> *.localhost:4017)
-		portalFrontendURL = strings.TrimPrefix(portalFrontendURL, "http://")
-		portalFrontendURL = strings.TrimPrefix(portalFrontendURL, "https://")
-		portalFrontendPattern = portalFrontendURL
-	}
-
-	// Set bootstrap URIs from environment
-	bootstrapURIs = os.Getenv("BOOTSTRAP_URIS")
-	if bootstrapURIs == "" {
-		// Use flagBootstraps as fallback
-		bootstrapURIs = strings.Join(flagBootstraps, ",")
-	}
-
 	log.Info().
-		Str("portal_host", portalHost).
-		Str("portal_ui_url", portalUIURL).
-		Str("portal_frontend_pattern", portalFrontendPattern).
-		Str("bootstrap_uris", bootstrapURIs).
+		Str("portal_base_url", flagPortalURL).
+		Str("app_url", flagPortalAppURL).
+		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
 		Msg("[server] frontend configuration")
 
 	cred := sdk.NewCredential()
 
 	serv := portal.NewRelayServer(cred, flagBootstraps)
-	// Apply traffic controls if configured
 	if flagMaxLease > 0 {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
@@ -125,8 +83,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	// App UI + Relay + Static Frontend
-	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

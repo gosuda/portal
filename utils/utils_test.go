@@ -1,4 +1,4 @@
-package sdk
+package utils
 
 import (
 	"testing"
@@ -67,7 +67,7 @@ func TestIsURLSafeName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isURLSafeName(tt.input)
+			result := IsURLSafeName(tt.input)
 			assert.Equal(t, tt.expected, result, "isURLSafeName(%q)", tt.input)
 		})
 	}
@@ -222,4 +222,39 @@ func TestIsHexString(t *testing.T) {
 	assert.True(t, IsHexString(""), "empty string is considered hex")
 	assert.False(t, IsHexString("g"))
 	assert.False(t, IsHexString("xyz"))
+}
+
+func TestIsSubdomain(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		host    string
+		want    bool
+	}{
+		{"wildcard basic", "*.example.com", "api.example.com", true},
+		{"wildcard deep", "*.example.com", "v1.api.example.com", true},
+		{"wildcard requires label", "*.example.com", "example.com", false},
+		{"wildcard mismatch", "*.example.com", "example.org", false},
+
+		{"exact match", "sub.example.com", "sub.example.com", true},
+		{"exact mismatch sub-sub", "sub.example.com", "deep.sub.example.com", true},
+		{"exact case+port insensitive", "SuB.ExAmPlE.CoM", "SUB.example.com:443", true},
+
+		{"base domain exact", "example.com", "example.com", true},
+		{"base domain includes subdomains", "example.com", "api.example.com", true},
+		{"base domain mismatch suffix", "example.com", "badexample.com", false},
+
+		{"empty pattern", "", "a.example.com", false},
+
+		{"localhost wildcard", "*.localhost", "a.localhost", true},
+		{"localhost wildcard with port", "*.localhost:4017", "a.localhost:4017", true},
+		{"scheme+port normalized", "https://*.example.com:443", "api.example.com:443", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsSubdomain(tc.pattern, tc.host)
+			assert.Equal(t, got, tc.want, tc.name)
+		})
+	}
 }

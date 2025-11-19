@@ -48,9 +48,9 @@ http://localhost:4017
 #   A (wildcard) for *.example.com (or *.portal.example.com) → server IP
 #
 # Then edit docker-compose.yml environment for your domain:
-PORTAL_UI_URL: https://yourservice.com
-PORTAL_FRONTEND_URL: https://*.yourservice.com
-BOOTSTRAP_URIS: wss://yourservice.com/relay
+PORTAL_URL: https://portal.example.com
+PORTAL_APP_URL: https://*.example.com
+BOOTSTRAP_URIS: wss://portal.example.com/relay
 
 ```
 
