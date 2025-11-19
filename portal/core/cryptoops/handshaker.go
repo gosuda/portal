@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"slices"
 	"sync"
 	"time"
@@ -111,6 +112,8 @@ type SecureConnection struct {
 	readBuffer *bytebufferpool.ByteBuffer
 
 	// Ensure Close is safe and idempotent
+	mu        sync.RWMutex
+	closed    bool
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -146,6 +149,13 @@ func (sc *SecureConnection) RemoteID() string {
 
 // Write encrypts and writes data to the underlying connection
 func (sc *SecureConnection) Write(p []byte) (int, error) {
+	sc.mu.RLock()
+	if sc.closed {
+		sc.mu.RUnlock()
+		return 0, net.ErrClosed
+	}
+	sc.mu.RUnlock()
+
 	const fragSize = maxRawPacketSize / 2
 	if len(p) > fragSize {
 		for i := 0; i < (len(p)+fragSize-1)/fragSize; i++ {
@@ -190,12 +200,20 @@ func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
 
 // Read reads and decrypts data from the underlying connection
 func (sc *SecureConnection) Read(p []byte) (int, error) {
+	sc.mu.RLock()
+	if sc.closed {
+		sc.mu.RUnlock()
+		return 0, net.ErrClosed
+	}
+
 	if sc.readBuffer != nil && len(sc.readBuffer.B) > 0 {
 		n := copy(p, sc.readBuffer.B)
 		copy(sc.readBuffer.B[:len(sc.readBuffer.B)-n], sc.readBuffer.B[n:])
 		sc.readBuffer.B = sc.readBuffer.B[:len(sc.readBuffer.B)-n]
+		sc.mu.RUnlock()
 		return n, nil
 	}
+	sc.mu.RUnlock()
 
 	// Read length prefix first (4 bytes)
 	lengthBuf := _lengthBufferPool.Get().(*[4]byte)
@@ -235,9 +253,19 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 		return 0, ErrDecryptionFailed
 	}
 
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if sc.closed {
+		return 0, net.ErrClosed
+	}
+
 	// Copy decrypted data to the provided buffer
 	n := copy(p, decrypted)
 	if n < len(decrypted) {
+		if sc.readBuffer == nil {
+			sc.readBuffer = acquireBuffer(len(decrypted) - n)
+		}
 		sc.readBuffer.B = append(sc.readBuffer.B, decrypted[n:]...)
 	}
 
@@ -247,10 +275,13 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 // Close closes the underlying connection and releases resources
 func (sc *SecureConnection) Close() error {
 	sc.closeOnce.Do(func() {
+		sc.mu.Lock()
+		sc.closed = true
 		if sc.readBuffer != nil {
 			releaseBuffer(sc.readBuffer)
 			sc.readBuffer = nil
 		}
+		sc.mu.Unlock()
 		sc.closeErr = sc.conn.Close()
 	})
 	return sc.closeErr
