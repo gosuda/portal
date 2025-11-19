@@ -821,3 +821,57 @@ func BenchmarkEncryption(b *testing.B) {
 	clientSecure.Close()
 	serverSecure.Close()
 }
+
+// TestConcurrentReadClose tests that closing the connection while reading is safe
+func TestConcurrentReadClose(t *testing.T) {
+	clientCred, _ := NewCredential()
+	serverCred, _ := NewCredential()
+
+	clientConn, serverConn := pipeConn()
+
+	clientHandshaker := NewHandshaker(clientCred)
+	serverHandshaker := NewHandshaker(serverCred)
+
+	var clientSecure, serverSecure *SecureConnection
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+	}()
+
+	go func() {
+		defer wg.Done()
+		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+	}()
+
+	wg.Wait()
+
+	// Start a goroutine that reads continuously
+	readErrCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		_, err := clientSecure.Read(buf)
+		readErrCh <- err
+	}()
+
+	// Give the reader a moment to start and block
+	time.Sleep(10 * time.Millisecond)
+
+	// Close the connection
+	clientSecure.Close()
+
+	// Check the read error
+	select {
+	case err := <-readErrCh:
+		if err == nil {
+			t.Error("Expected error from Read after Close, got nil")
+		}
+		// We expect either net.ErrClosed or an IO error depending on timing
+	case <-time.After(1 * time.Second):
+		t.Error("Read did not return after Close")
+	}
+
+	serverSecure.Close()
+}
