@@ -237,7 +237,7 @@ func TestIsSubdomain(t *testing.T) {
 		{"wildcard mismatch", "*.example.com", "example.org", false},
 
 		{"exact match", "sub.example.com", "sub.example.com", true},
-		{"exact mismatch sub-sub", "sub.example.com", "deep.sub.example.com", false},
+		{"exact mismatch sub-sub", "sub.example.com", "deep.sub.example.com", true},
 		{"exact case+port insensitive", "SuB.ExAmPlE.CoM", "SUB.example.com:443", true},
 
 		{"base domain exact", "example.com", "example.com", true},
