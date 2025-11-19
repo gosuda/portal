@@ -24,6 +24,7 @@ import (
 	"golang.org/x/net/idna"
 	"gosuda.org/portal/cmd/webclient/httpjs"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/utils"
 )
 
 var (
@@ -393,7 +394,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header()[key] = value
 	}
 
-	if sdk.IsHTMLContentType(resp.Header.Get("Content-Type")) {
+	if utils.IsHTMLContentType(resp.Header.Get("Content-Type")) {
 		w.WriteHeader(resp.StatusCode)
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
