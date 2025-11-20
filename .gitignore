@@ -38,3 +38,5 @@ profile.cov
 # Docker Compose Override
 docker-compose.override.yml
 docker-compose.override.yaml
+
+*.log
