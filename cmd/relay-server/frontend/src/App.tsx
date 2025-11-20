@@ -141,7 +141,7 @@ function App() {
                 sortBy={sortBy}
                 onSortByChange={handleSortByChange}
               />
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 p-4 sm:p-6 mt-4">
+              <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6 mt-4">
                 {paginatedServers.length > 0 ? (
                   paginatedServers.map((server) => (
                     <ServerCard
