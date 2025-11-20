@@ -29,11 +29,11 @@ export function ServerCard({
       type="button"
       onClick={goServer}
       bg-card-dark
-      className="bg-center bg-no-repeat bg-cover rounded-xl shadow-sm hover:shadow-lg hover:scale-105 transition-all duration-300 cursor-pointer"
+      className="h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-sm hover:shadow-lg hover:scale-105 transition-all duration-300 cursor-pointer"
       style={{ backgroundImage: `url(${thumbnail || defaultThumbnail})` }}
     >
       <div className="h-full w-full bg-black/70 rounded-xl z-1 flex flex-col gap-4 p-4 items-start text-start">
-        <div className="flex flex-1 flex-col justify-between gap-4">
+        <div className="w-full flex flex-1 flex-col justify-between gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
               <div
@@ -49,9 +49,11 @@ export function ServerCard({
                 {online ? "Online" : "Offline"}
               </p>
             </div>
-            <p className="text-white text-lg font-bold leading-tight">{name}</p>
+            <p className="text-white text-lg font-bold leading-tight truncate max-w-full">
+              {name}
+            </p>
             {description && (
-              <p className="text-text-muted text-sm font-normal leading-normal line-clamp-2">
+              <p className="text-text-muted text-sm font-normal leading-normal truncate max-w-full">
                 {description}
               </p>
             )}
@@ -60,7 +62,7 @@ export function ServerCard({
                 {tags.map((tag, index) => (
                   <span
                     key={index}
-                    className="px-2 py-1 bg-border-dark text-primary text-xs font-medium rounded"
+                    className="px-2 py-1 bg-border-dark text-primary text-xs font-medium rounded truncate max-w-[120px]"
                   >
                     {tag}
                   </span>
@@ -68,7 +70,7 @@ export function ServerCard({
               </div>
             )}
             {owner && (
-              <p className="text-text-muted text-xs font-normal leading-normal">
+              <p className="text-text-muted text-xs font-normal leading-normal truncate max-w-full">
                 by {owner}
               </p>
             )}
