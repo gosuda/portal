@@ -1,6 +1,6 @@
 services:
   portal:
-    image: ghcr.io/gosuda/portal:1
+    image: ghcr.io/gosuda/portal:main
     pull_policy: always
     build:
       context: .
