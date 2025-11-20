@@ -26,6 +26,7 @@ var (
 	flagPort         int
 	flagMaxLease     int
 	flagLeaseBPS     int
+	flagNoIndex      bool
 )
 
 func main() {
@@ -53,6 +54,9 @@ func main() {
 	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
 	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
+
+	defaultNoIndex := os.Getenv("NOINDEX") == "true"
+	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
 	flag.Parse()
 
 	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
@@ -83,7 +87,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
