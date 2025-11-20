@@ -20,7 +20,7 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps []string, noIndex bool, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -37,6 +37,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 	serveAsset(appMux, "/favicon.ico", "favicon.ico", "image/x-icon")
 	serveAsset(appMux, "/favicon.png", "favicon.png", "image/png")
 	serveAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
+
+	if noIndex {
+		appMux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("User-agent: *\nDisallow: /\n"))
+		})
+	}
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
