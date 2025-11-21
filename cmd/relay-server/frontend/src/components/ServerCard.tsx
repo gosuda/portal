@@ -36,15 +36,9 @@ export function ServerCard({
     >
       <div
         data-hero-key={`server-bg-${serverId}`}
-        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1"
+        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1 border border-foreground/40"
         style={{ backgroundImage: `url(${thumbnail || defaultThumbnail})` }}
       >
-        {/* Hero element - just the background image */}
-        {/* <img
-          src={thumbnail || defaultThumbnail}
-          alt={name}
-          className="absolute inset-0 w-full h-full object-cover"
-        /> */}
         {/* Content overlay - not part of hero transition */}
         <div className="relative h-full w-full bg-background/80 rounded-xl flex flex-col gap-4 p-4 items-start text-start">
           <div className="w-full flex flex-1 flex-col justify-between gap-4">
