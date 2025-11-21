@@ -1,42 +1,67 @@
-import { Link } from "react-router-dom";
+import { SsgoiTransition } from "@ssgoi/react";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
-interface ServerCardProps {
-  serverId: number;
+interface ServerDetailState {
+  id: number;
   name: string;
   description: string;
   tags: string[];
   thumbnail: string;
   owner: string;
   online: boolean;
-  dns: string;
   serverUrl: string;
-  navigationPath: string;
-  navigationState: any;
 }
 
-export function ServerCard({
-  serverId,
-  name,
-  description,
-  tags,
-  thumbnail,
-  owner,
-  online,
-  navigationPath,
-  navigationState,
-}: ServerCardProps) {
+export function ServerDetail() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const server = location.state as ServerDetailState;
+
+  const [isPush, setIsPush] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  useEffect(() => {
+    console.log("isPush", isPush);
+    console.log("isBlocked", isBlocked);
+    // If no server data, redirect to home
+    if (!server) {
+      navigate("/");
+      return;
+    }
+
+    // Redirect to actual server URL after animation
+    const timer = setTimeout(() => {
+      // Replace current history entry before redirecting
+      if (isPush) {
+        if (!isBlocked) {
+          setIsBlocked(true);
+        } else {
+          navigate("/");
+        }
+      } else {
+        setIsPush(true);
+        window.location.href = server.serverUrl;
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [server, isPush, setIsPush, isBlocked, setIsBlocked, navigate]);
+
+  // If no server data, show nothing (will redirect)
+  if (!server) {
+    return null;
+  }
+
+  const { id, thumbnail, name, online, description, tags, owner } = server;
+
   const defaultThumbnail =
     "https://cdn.jsdelivr.net/gh/gosuda/portal@main/portal.jpg";
 
   return (
-    <Link
-      to={navigationPath}
-      state={navigationState}
-      className="relative hover:scale-105 transition-all duration-300"
-    >
+    <SsgoiTransition id={`/server/${id}`}>
       <div
-        data-hero-key={`server-bg-${serverId}`}
-        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1"
+        data-hero-key={`server-bg-${id}`}
+        className="fixed inset-0 bg-center bg-no-repeat bg-cover w-screen h-screen"
         style={{ backgroundImage: `url(${thumbnail || defaultThumbnail})` }}
       >
         {/* Hero element - just the background image */}
@@ -46,7 +71,7 @@ export function ServerCard({
           className="absolute inset-0 w-full h-full object-cover"
         /> */}
         {/* Content overlay - not part of hero transition */}
-        <div className="relative h-full w-full bg-background/80 rounded-xl flex flex-col gap-4 p-4 items-start text-start">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-background/70 rounded-xl flex flex-col gap-4 p-4 items-start text-start z-1">
           <div className="w-full flex flex-1 flex-col justify-between gap-4">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2">
@@ -92,7 +117,6 @@ export function ServerCard({
           </div>
         </div>
       </div>
-      <div className="absolute top-2 left-2 h-full w-full bg-secondary/70 rounded-xl z-0" />
-    </Link>
+    </SsgoiTransition>
   );
 }

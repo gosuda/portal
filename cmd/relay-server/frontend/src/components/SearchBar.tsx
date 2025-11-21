@@ -29,7 +29,7 @@ export function SearchBar({
     <div className="space-y-4 px-4 sm:px-6">
       <label className="flex flex-col min-w-40 h-12 w-full">
         <div className="flex w-full flex-1 items-stretch rounded-lg h-full">
-          <div className="text-text-muted flex border-none bg-border-dark items-center justify-center pl-4 rounded-l-lg border-r-0">
+          <div className="text-text-muted flex border-none bg-border items-center justify-center pl-4 rounded-l-lg border-r-0">
             <Search className="w-5 h-5" />
           </div>
           <Input

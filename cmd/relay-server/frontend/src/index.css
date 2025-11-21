@@ -1,15 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700;900&display=swap');
 @import "tailwindcss";
 
-@theme {
-  /* ServerShare Custom Colors - Dark Mode Only */
-  --color-primary: #47cdff;
-  --color-background-dark: #0f1e23;
-  --color-green-status: #50e3c2;
-  --color-card-dark: #192433;
-  --color-border-dark: #233348;
-  --color-text-muted: #92a9c9;
+@custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
   /* Font families */
   --font-family-display: "Public Sans", sans-serif;
 
@@ -17,44 +11,105 @@
   --radius: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
+  
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-green-status: var(--green-status);
+  --color-text-muted: var(--text-muted);
 }
 
 @layer base {
   :root {
-    /* Dark mode only - using ServerShare color palette */
-    --background: 197 56% 9%; /* #0f1e23 */
-    --foreground: 210 40% 98%; /* white text */
-    --card: 200 48% 12%; /* #192433 */
-    --card-foreground: 210 40% 98%;
-    --popover: 200 48% 12%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 195 100% 64%; /* #47cdff */
-    --primary-foreground: 0 0% 0%;
-    --secondary: 200 34% 18%; /* #233348 */
-    --secondary-foreground: 210 40% 98%;
-    --muted: 200 34% 18%;
-    --muted-foreground: 207 39% 68%; /* #92a9c9 */
-    --accent: 200 34% 18%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 207 28% 21%; /* #233348 */
-    --input: 207 28% 21%;
-    --ring: 195 100% 64%; /* #47cdff */
+    /* Light Theme - Default (OKLCH) */
+    --background: oklch(98% 0.005 200); /* #f5f8f8 */
+    --foreground: oklch(35% 0.02 280); /* gray-800 */
+    --card: oklch(100% 0 0); /* white */
+    --card-foreground: oklch(35% 0.02 280); /* gray-800 */
+    --popover: oklch(100% 0 0); /* white */
+    --popover-foreground: oklch(35% 0.02 280); /* gray-800 */
+    --primary: oklch(75% 0.15 210); /* #47cdff */
+    --primary-foreground: oklch(100% 0 0); /* white */
+    --secondary: oklch(96% 0.005 240); /* gray-100 */
+    --secondary-foreground: oklch(30% 0.02 280); /* gray-700 */
+    --muted: oklch(96% 0.005 240); /* gray-100 */
+    --muted-foreground: oklch(52% 0.02 260); /* gray-500 #92a9c9 */
+    --accent: oklch(96% 0.005 240); /* gray-100 */
+    --accent-foreground: oklch(35% 0.02 280); /* gray-800 */
+    --destructive: oklch(62% 0.22 25); /* red-500 */
+    --destructive-foreground: oklch(100% 0 0); /* white */
+    --border: oklch(88% 0.005 240); /* gray-200 */
+    --input: oklch(88% 0.005 240); /* gray-200 */
+    --ring: oklch(75% 0.15 210); /* #47cdff */
+
+    /* Custom light theme colors */
+    --green-status: oklch(78% 0.16 170); /* #50E3C2 */
+    --text-muted: oklch(52% 0.02 260); /* #92a9c9 */
+  }
+
+  .dark {
+    /* Dark Theme (OKLCH) */
+    --background: oklch(18% 0.04 210); /* #0f1e23 */
+    --foreground: oklch(98% 0.01 240); /* white text */
+    --card: oklch(22% 0.05 215); /* #192433 */
+    --card-foreground: oklch(98% 0.01 240);
+    --popover: oklch(22% 0.05 215);
+    --popover-foreground: oklch(98% 0.01 240);
+    --primary: oklch(75% 0.15 210); /* #47cdff */
+    --primary-foreground: oklch(0% 0 0);
+    --secondary: oklch(28% 0.04 215); /* #233348 */
+    --secondary-foreground: oklch(98% 0.01 240);
+    --muted: oklch(28% 0.04 215);
+    --muted-foreground: oklch(70% 0.05 230); /* #92a9c9 */
+    --accent: oklch(28% 0.04 215);
+    --accent-foreground: oklch(98% 0.01 240);
+    --destructive: oklch(62% 0.22 25);
+    --destructive-foreground: oklch(98% 0.01 240);
+    --border: oklch(26% 0.04 215); /* #233348 */
+    --input: oklch(26% 0.04 215);
+    --ring: oklch(75% 0.15 210); /* #47cdff */
+
+    /* Custom dark theme colors */
+    --green-status: oklch(78% 0.16 170);
+    --text-muted: oklch(70% 0.05 230);
   }
 
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--border);
   }
 
   body {
-    background-color: var(--color-background-dark);
-    color: rgb(255 255 255);
+    background-color: var(--background);
+    color: var(--foreground);
     font-family: var(--font-family-display);
   }
 
-  /* Force dark mode always */
-  html {
+  /* Default to dark mode */
+  body {
     color-scheme: dark;
+  }
+
+  body.dark {
+    color-scheme: dark;
+  }
+
+  body.light {
+    color-scheme: light;
   }
 }
