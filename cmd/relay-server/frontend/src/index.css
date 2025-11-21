@@ -37,30 +37,30 @@
 
 @layer base {
   :root {
-    /* Light Theme - Default (OKLCH) */
-    --background: oklch(98% 0.005 200); /* #f5f8f8 */
-    --foreground: oklch(35% 0.02 280); /* gray-800 */
-    --card: oklch(100% 0 0); /* white */
-    --card-foreground: oklch(35% 0.02 280); /* gray-800 */
-    --popover: oklch(100% 0 0); /* white */
-    --popover-foreground: oklch(35% 0.02 280); /* gray-800 */
-    --primary: oklch(75% 0.15 210); /* #47cdff */
-    --primary-foreground: oklch(100% 0 0); /* white */
-    --secondary: oklch(96% 0.005 240); /* gray-100 */
-    --secondary-foreground: oklch(30% 0.02 280); /* gray-700 */
-    --muted: oklch(96% 0.005 240); /* gray-100 */
-    --muted-foreground: oklch(52% 0.02 260); /* gray-500 #92a9c9 */
-    --accent: oklch(96% 0.005 240); /* gray-100 */
-    --accent-foreground: oklch(35% 0.02 280); /* gray-800 */
-    --destructive: oklch(62% 0.22 25); /* red-500 */
-    --destructive-foreground: oklch(100% 0 0); /* white */
-    --border: oklch(88% 0.005 240); /* gray-200 */
-    --input: oklch(88% 0.005 240); /* gray-200 */
-    --ring: oklch(75% 0.15 210); /* #47cdff */
+    /* Light Theme (OKLCH) - Maintains the color tone of dark theme while inverting lightness */
+    --background: oklch(98% 0.005 240); /* Soft white instead of pure white */
+    --foreground: oklch(20% 0.03 215); /* Deep blue-gray text */
+    --card: oklch(100% 0 0); /* Pure white card (differentiated from background) */
+    --card-foreground: oklch(20% 0.03 215);
+    --popover: oklch(100% 0 0);
+    --popover-foreground: oklch(20% 0.03 215);
+    --primary: oklch(55% 0.13 210); /* Darker and less saturated than dark theme, ~#1b8bc4 */
+    --primary-foreground: oklch(100% 0 0); /* White text */
+    --secondary: oklch(95% 0.01 220); /* Light blue-gray background */
+    --secondary-foreground: oklch(25% 0.03 215);
+    --muted: oklch(94% 0.01 220); /* Light gray */
+    --muted-foreground: oklch(50% 0.04 220); /* Mid-tone gray text */
+    --accent: oklch(94% 0.02 210); /* Light accent background */
+    --accent-foreground: oklch(25% 0.03 215);
+    --destructive: oklch(55% 0.20 25); /* Red - slightly darker than dark theme */
+    --destructive-foreground: oklch(98% 0.01 240);
+    --border: oklch(90% 0.01 220); /* Subtle border */
+    --input: oklch(96% 0.005 220); /* Input field background */
+    --ring: oklch(55% 0.13 210); /* Same as primary */
 
     /* Custom light theme colors */
-    --green-status: oklch(78% 0.16 170); /* #50E3C2 */
-    --text-muted: oklch(52% 0.02 260); /* #92a9c9 */
+    --green-status: oklch(55% 0.14 150); /* Darker green than dark theme */
+    --text-muted: oklch(50% 0.04 220); /* Soft gray text */
   }
 
   .dark {
