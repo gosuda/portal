@@ -23,12 +23,12 @@ build: build-wasm build-frontend build-server build-tunnel
 
 build-protoc:
 	protoc -I . \
-	  --go_out=. \
-	  --go_opt=paths=source_relative \
-	  --go-vtproto_out=. \
-	  --go-vtproto_opt=paths=source_relative \
-	  portal/core/proto/rdsec/rdsec.proto \
-	  portal/core/proto/rdverb/rdverb.proto
+		--go_out=. \
+		--go_opt=paths=source_relative \
+		--go-vtproto_out=. \
+		--go-vtproto_opt=paths=source_relative \
+		portal/core/proto/rdsec/rdsec.proto \
+		portal/core/proto/rdverb/rdverb.proto
 
 # Build WASM artifacts with wasm-opt optimization and generate manifest
 build-wasm:
