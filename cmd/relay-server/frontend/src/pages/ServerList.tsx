@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
-import { TagFilter } from "@/components/TagFilter";
 import { useSSRData } from "@/hooks/useSSRData";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { SsgoiTransition } from "@ssgoi/react";
@@ -219,8 +218,6 @@ export function ServerList() {
     );
   };
 
-  const handleClearTags = () => setSelectedTags([]);
-
   return (
     <SsgoiTransition id="/">
       <div className="relative flex h-auto min-h-screen w-full flex-col overflow-x-hidden">
@@ -236,19 +233,13 @@ export function ServerList() {
                   onStatusChange={handleStatusChange}
                   sortBy={sortBy}
                   onSortByChange={handleSortByChange}
+                  availableTags={availableTags}
+                  selectedTags={selectedTags}
+                  onAddTag={handleTagToggle}
+                  onRemoveTag={handleTagToggle}
+                  tagMode={tagMode}
+                  onTagModeChange={setTagMode}
                 />
-                {availableTags.length > 0 && (
-                  <div className="mt-4 px-4 sm:px-6">
-                    <TagFilter
-                      availableTags={availableTags}
-                      selectedTags={selectedTags}
-                      mode={tagMode}
-                      onModeChange={setTagMode}
-                      onToggleTag={handleTagToggle}
-                      onClear={handleClearTags}
-                    />
-                  </div>
-                )}
                 <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6 mt-4">
                   {visibleServers.length > 0 ? (
                     visibleServers.map((server) => (

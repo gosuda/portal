@@ -1,0 +1,165 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import type { TagMode } from "@/types/filters";
+import { cn } from "@/lib/utils";
+
+type TagComboboxProps = {
+  availableTags: string[];
+  selectedTags: string[];
+  mode: TagMode;
+  onModeChange: (mode: TagMode) => void;
+  onAdd: (tag: string) => void;
+  onRemove: (tag: string) => void;
+};
+
+export function TagCombobox({
+  availableTags,
+  selectedTags,
+  mode,
+  onModeChange,
+  onAdd,
+  onRemove,
+}: TagComboboxProps) {
+  const [inputValue, setInputValue] = useState("");
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const listId = "tag-combobox-list";
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const filtered = useMemo(() => {
+    const query = inputValue.trim().toLowerCase();
+    const pool = availableTags.filter((tag) => !selectedTags.includes(tag));
+    if (!query) return pool.slice(0, 8);
+    return pool
+      .filter((tag) => tag.toLowerCase().includes(query))
+      .slice(0, 8);
+  }, [availableTags, selectedTags, inputValue]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [filtered.length]);
+
+  const addTag = (tag: string) => {
+    if (!tag || selectedTags.includes(tag)) return;
+    onAdd(tag);
+    setInputValue("");
+    setOpen(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setOpen(true);
+      setActiveIndex((i) => (i + 1) % Math.max(filtered.length, 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setOpen(true);
+      setActiveIndex((i) =>
+        filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length
+      );
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (open && filtered[activeIndex]) {
+        addTag(filtered[activeIndex]);
+      } else if (inputValue.trim()) {
+        addTag(inputValue.trim());
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  const handleBlur = () => {
+    // allow option click before closing
+    setTimeout(() => setOpen(false), 100);
+  };
+
+  return (
+    <div className="flex min-w-[320px] flex-1 items-center gap-2 overflow-hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-2 py-1">
+        <div className="flex flex-wrap items-center gap-2 overflow-hidden">
+          {selectedTags.map((tag) => (
+            <Button
+              key={tag}
+              variant="secondary"
+              size="sm"
+              className="h-7 rounded-full px-3 text-xs"
+              onClick={() => onRemove(tag)}
+              aria-label={`Remove tag ${tag}`}
+            >
+              {tag}
+              <span className="ml-2 text-foreground/70">×</span>
+            </Button>
+          ))}
+          <input
+            ref={inputRef}
+            value={inputValue}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            placeholder="Add tag…"
+            className="min-w-[120px] flex-1 bg-transparent text-sm outline-none placeholder:text-text-muted"
+            role="combobox"
+            aria-expanded={open}
+            aria-controls={listId}
+            aria-autocomplete="list"
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden">
+        <button
+          type="button"
+          className={cn(
+            "px-3 py-2 transition-colors",
+            mode === "OR" ? "bg-primary text-black" : "hover:bg-border/80"
+          )}
+          aria-pressed={mode === "OR"}
+          onClick={() => onModeChange("OR")}
+        >
+          OR
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "px-3 py-2 transition-colors",
+            mode === "AND" ? "bg-primary text-black" : "hover:bg-border/80"
+          )}
+          aria-pressed={mode === "AND"}
+          onClick={() => onModeChange("AND")}
+        >
+          AND
+        </button>
+      </div>
+
+      {open && filtered.length > 0 && (
+        <div className="absolute z-20 mt-1 w-[320px] rounded-lg border border-border bg-background shadow-lg">
+          <ul id={listId} role="listbox" className="max-h-56 overflow-auto py-1">
+            {filtered.map((tag, idx) => (
+              <li key={tag} role="option" aria-selected={idx === activeIndex}>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
+                    idx === activeIndex
+                      ? "bg-primary/20 text-foreground"
+                      : "hover:bg-border/60"
+                  )}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => addTag(tag)}
+                >
+                  {tag}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
