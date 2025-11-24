@@ -6,12 +6,11 @@ SHELL := /bin/sh
 
 help:
 	@echo "Available targets:"
-	@echo "  make build             - Build everything (protoc, wasm, frontend, server, tunnel)"
+	@echo "  make build             - Build everything (protoc, wasm, frontend, server)"
 	@echo "  make build-protoc      - Generate Go code from protobuf definitions"
 	@echo "  make build-wasm        - Build and compress WASM client with optimization"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-server      - Build Go relay server (includes frontend build)"
-	@echo "  make build-tunnel      - Build Portal Tunnel CLI"
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
 
@@ -19,7 +18,7 @@ run:
 	./bin/relay-server
 
 # Convenience target
-build: build-wasm build-frontend build-server build-tunnel
+build: build-wasm build-frontend build-server
 
 build-protoc:
 	protoc -I . \
@@ -89,11 +88,6 @@ build-frontend:
 build-server:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
-
-# Build Portal Tunnel CLI (cloudflared-style tunnel)
-build-tunnel:
-	@echo "[tunnel] building Portal Tunnel CLI..."
-	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/portal-tunnel ./cmd/portal-tunnel
 
 clean:
 	rm -rf bin
