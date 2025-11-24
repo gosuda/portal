@@ -79,7 +79,7 @@ export function SearchBar({
         </SelectContent>
       </Select>
 
-      <div className="relative flex min-w-[320px] flex-1">
+      <div className="relative flex w-full sm:w-auto sm:min-w-[320px] flex-1">
         <TagCombobox
           availableTags={availableTags}
           selectedTags={selectedTags}

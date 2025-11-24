@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import type { TagMode } from "@/types/filters";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,8 @@ export function TagCombobox({
   const [activeIndex, setActiveIndex] = useState(0);
   const listId = "tag-combobox-list";
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties>();
 
   const filtered = useMemo(() => {
     const query = inputValue.trim().toLowerCase();
@@ -38,6 +41,29 @@ export function TagCombobox({
   useEffect(() => {
     setActiveIndex(0);
   }, [filtered.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePosition = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPanelStyle({
+        position: "absolute",
+        top: rect.bottom + window.scrollY + 4,
+        left: rect.left + window.scrollX,
+        width: rect.width,
+        zIndex: 50,
+      });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
 
   const addTag = (tag: string) => {
     if (!tag || selectedTags.includes(tag)) return;
@@ -75,8 +101,11 @@ export function TagCombobox({
   };
 
   return (
-    <div className="flex min-w-[320px] flex-1 items-center gap-2 overflow-hidden">
-      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-2 py-1">
+    <div
+      ref={containerRef}
+      className="flex w-full sm:w-auto sm:min-w-[320px] flex-1 items-center gap-2 overflow-visible"
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-2 py-1.5 min-h-10">
         <div className="flex flex-wrap items-center gap-2 overflow-hidden">
           {selectedTags.map((tag) => (
             <Button
@@ -111,11 +140,11 @@ export function TagCombobox({
         </div>
       </div>
 
-      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden">
+      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden h-10 flex-shrink-0">
         <button
           type="button"
           className={cn(
-            "px-3 py-2 transition-colors",
+            "h-full px-3 flex items-center justify-center transition-colors",
             mode === "OR" ? "bg-primary text-black" : "hover:bg-border/80"
           )}
           aria-pressed={mode === "OR"}
@@ -126,7 +155,7 @@ export function TagCombobox({
         <button
           type="button"
           className={cn(
-            "px-3 py-2 transition-colors",
+            "h-full px-3 flex items-center justify-center transition-colors",
             mode === "AND" ? "bg-primary text-black" : "hover:bg-border/80"
           )}
           aria-pressed={mode === "AND"}
@@ -136,30 +165,38 @@ export function TagCombobox({
         </button>
       </div>
 
-      {open && filtered.length > 0 && (
-        <div className="absolute z-20 mt-1 w-[320px] rounded-lg border border-border bg-background shadow-lg">
-          <ul id={listId} role="listbox" className="max-h-56 overflow-auto py-1">
-            {filtered.map((tag, idx) => (
-              <li key={tag} role="option" aria-selected={idx === activeIndex}>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
-                    idx === activeIndex
-                      ? "bg-primary/20 text-foreground"
-                      : "hover:bg-border/60"
-                  )}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => addTag(tag)}
-                >
-                  {tag}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {open && filtered.length > 0 && panelStyle &&
+        createPortal(
+          <div
+            style={panelStyle}
+            className="rounded-lg border border-border bg-background shadow-lg"
+          >
+            <ul
+              id={listId}
+              role="listbox"
+              className="max-h-56 overflow-auto py-1"
+            >
+              {filtered.map((tag, idx) => (
+                <li key={tag} role="option" aria-selected={idx === activeIndex}>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
+                      idx === activeIndex
+                        ? "bg-primary/20 text-foreground"
+                        : "hover:bg-border/60"
+                    )}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => addTag(tag)}
+                  >
+                    {tag}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
-
