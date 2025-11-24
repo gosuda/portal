@@ -2,11 +2,12 @@ import { useState, useMemo } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
-import { Pagination } from "@/components/Pagination";
+import { TagList } from "@/components/TagList";
 import { useSSRData } from "@/hooks/useSSRData";
+import { useIntersectionObserver } from "@/hooks/useIntersectionObserver";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 
-const ITEMS_PER_PAGE = 6;
+const ITEMS_PER_BATCH = 12;
 
 // Helper function to convert SSR ServerData to frontend format
 function convertSSRDataToServers(ssrData: ServerData[]) {
@@ -43,26 +44,36 @@ function convertSSRDataToServers(ssrData: ServerData[]) {
 }
 
 function App() {
-  const [currentPage, setCurrentPage] = useState(1);
+  const [visibleCount, setVisibleCount] = useState(ITEMS_PER_BATCH);
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [sortBy, setSortBy] = useState("default");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   // Get SSR data
   const ssrData = useSSRData();
 
   // Use SSR data if available, otherwise fall back to sample servers
   const servers = useMemo(() => {
-    console.log("[App] SSR data length:", ssrData.length);
     if (ssrData.length > 0) {
-      console.log("[App] Using SSR data");
-      const converted = convertSSRDataToServers(ssrData);
-      console.log("[App] Converted servers:", converted);
-      return converted;
+      return convertSSRDataToServers(ssrData);
     }
-    console.log("[App] Using sample servers");
     return [];
   }, [ssrData]);
+
+  // Extract all available tags from servers
+  const allTags = useMemo(() => {
+    const tags = new Set<string>();
+    servers.forEach((server) => {
+      server.tags.forEach((tag) => tags.add(tag));
+    });
+    return Array.from(tags).sort();
+  }, [servers]);
+
+  // Filter available tags (exclude already selected ones)
+  const availableTags = useMemo(() => {
+    return allTags.filter((tag) => !selectedTags.includes(tag));
+  }, [allTags, selectedTags]);
 
   // Filter and sort servers
   const filteredServers = useMemo(() => {
@@ -82,7 +93,12 @@ function App() {
         (status === "online" && server.online) ||
         (status === "offline" && !server.online);
 
-      return matchesSearch && matchesStatus;
+      // Tags filter (AND logic: must have all selected tags)
+      const matchesTags =
+        selectedTags.length === 0 ||
+        selectedTags.every((tag) => server.tags.includes(tag));
+
+      return matchesSearch && matchesStatus && matchesTags;
     });
 
     // Sort based on sortBy value
@@ -98,32 +114,51 @@ function App() {
       });
     } else if (sortBy === "owner") {
       filtered = [...filtered].sort((a, b) => a.owner.localeCompare(b.owner));
+    } else if (sortBy === "name-asc") {
+      filtered = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortBy === "name-desc") {
+      filtered = [...filtered].sort((a, b) => b.name.localeCompare(a.name));
     }
 
     return filtered;
-  }, [servers, searchQuery, status, sortBy]);
+  }, [servers, searchQuery, status, sortBy, selectedTags]);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredServers.length / ITEMS_PER_PAGE);
-  const paginatedServers = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return filteredServers.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [filteredServers, currentPage]);
+  // Infinite scroll data
+  const visibleServers = useMemo(() => {
+    return filteredServers.slice(0, visibleCount);
+  }, [filteredServers, visibleCount]);
 
-  // Reset to page 1 when filters change
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value);
-    setCurrentPage(1);
+  // Intersection Observer for Infinite Scroll
+  const { elementRef: loadMoreRef } = useIntersectionObserver({
+    onIntersect: () => {
+      if (visibleCount < filteredServers.length) {
+        setVisibleCount((prev) => prev + ITEMS_PER_BATCH);
+      }
+    },
+    enabled: visibleCount < filteredServers.length,
+    threshold: 0.1,
+    rootMargin: "100px",
+  });
+
+  // Reset visible count when filters change
+  const handleFilterChange = (
+    updater: (prev: any) => any,
+    value: any
+  ) => {
+    updater(value);
+    setVisibleCount(ITEMS_PER_BATCH);
   };
 
-  const handleStatusChange = (value: string) => {
-    setStatus(value);
-    setCurrentPage(1);
+  const handleTagSelect = (tag: string) => {
+    if (!selectedTags.includes(tag)) {
+      setSelectedTags([...selectedTags, tag]);
+      setVisibleCount(ITEMS_PER_BATCH);
+    }
   };
 
-  const handleSortByChange = (value: string) => {
-    setSortBy(value);
-    setCurrentPage(1);
+  const handleRemoveTag = (tag: string) => {
+    setSelectedTags(selectedTags.filter((t) => t !== tag));
+    setVisibleCount(ITEMS_PER_BATCH);
   };
 
   return (
@@ -135,15 +170,20 @@ function App() {
             <main className="flex-1 mt-6">
               <SearchBar
                 searchQuery={searchQuery}
-                onSearchChange={handleSearchChange}
+                onSearchChange={(val) => handleFilterChange(setSearchQuery, val)}
                 status={status}
-                onStatusChange={handleStatusChange}
+                onStatusChange={(val) => handleFilterChange(setStatus, val)}
                 sortBy={sortBy}
-                onSortByChange={handleSortByChange}
+                onSortByChange={(val) => handleFilterChange(setSortBy, val)}
+                availableTags={availableTags}
+                onTagSelect={handleTagSelect}
               />
+              
+              <TagList tags={selectedTags} onRemoveTag={handleRemoveTag} />
+
               <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6 mt-4">
-                {paginatedServers.length > 0 ? (
-                  paginatedServers.map((server) => (
+                {visibleServers.length > 0 ? (
+                  visibleServers.map((server) => (
                     <ServerCard
                       key={server.id}
                       name={server.name}
@@ -164,12 +204,15 @@ function App() {
                   </div>
                 )}
               </div>
-              {totalPages > 0 && (
-                <Pagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  onPageChange={setCurrentPage}
-                />
+              
+              {/* Infinite Scroll Trigger */}
+              {visibleCount < filteredServers.length && (
+                <div 
+                  ref={loadMoreRef} 
+                  className="h-20 w-full flex justify-center items-center"
+                >
+                  <span className="text-text-muted text-sm">Loading more...</span>
+                </div>
               )}
             </main>
           </div>

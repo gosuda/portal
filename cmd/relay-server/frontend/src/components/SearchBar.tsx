@@ -15,6 +15,8 @@ interface SearchBarProps {
   onStatusChange: (value: string) => void;
   sortBy: string;
   onSortByChange: (value: string) => void;
+  availableTags: string[];
+  onTagSelect: (value: string) => void;
 }
 
 export function SearchBar({
@@ -24,6 +26,8 @@ export function SearchBar({
   onStatusChange,
   sortBy,
   onSortByChange,
+  availableTags,
+  onTagSelect,
 }: SearchBarProps) {
   return (
     <div className="space-y-4 px-4 sm:px-6">
@@ -57,9 +61,30 @@ export function SearchBar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Default</SelectItem>
+            <SelectItem value="name-asc">Name (A-Z)</SelectItem>
+            <SelectItem value="name-desc">Name (Z-A)</SelectItem>
             <SelectItem value="description">Description</SelectItem>
             <SelectItem value="tags">Tags</SelectItem>
             <SelectItem value="owner">Owner</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value="" onValueChange={onTagSelect}>
+          <SelectTrigger className="w-[140px] h-8">
+            <SelectValue placeholder="Filter Tags" />
+          </SelectTrigger>
+          <SelectContent>
+            {availableTags.length > 0 ? (
+              availableTags.map((tag) => (
+                <SelectItem key={tag} value={tag}>
+                  {tag}
+                </SelectItem>
+              ))
+            ) : (
+              <SelectItem value="no-tags" disabled>
+                No tags available
+              </SelectItem>
+            )}
           </SelectContent>
         </Select>
       </div>
