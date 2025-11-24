@@ -7,14 +7,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { SortOption, StatusFilter } from "@/types/filters";
 
 interface SearchBarProps {
   searchQuery: string;
   onSearchChange: (value: string) => void;
-  status: string;
-  onStatusChange: (value: string) => void;
-  sortBy: string;
-  onSortByChange: (value: string) => void;
+  status: StatusFilter;
+  onStatusChange: (value: StatusFilter) => void;
+  sortBy: SortOption;
+  onSortByChange: (value: SortOption) => void;
 }
 
 export function SearchBar({
@@ -57,6 +58,9 @@ export function SearchBar({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Default</SelectItem>
+            <SelectItem value="name-asc">Name (A-Z)</SelectItem>
+            <SelectItem value="name-desc">Name (Z-A)</SelectItem>
+            <SelectItem value="updated">Recently Updated</SelectItem>
             <SelectItem value="description">Description</SelectItem>
             <SelectItem value="tags">Tags</SelectItem>
             <SelectItem value="owner">Owner</SelectItem>
