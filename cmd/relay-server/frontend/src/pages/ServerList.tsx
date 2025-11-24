@@ -1,16 +1,30 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
-import { Pagination } from "@/components/Pagination";
 import { useSSRData } from "@/hooks/useSSRData";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { SsgoiTransition } from "@ssgoi/react";
+import type { SortOption, StatusFilter, TagMode } from "@/types/filters";
 
-const ITEMS_PER_PAGE = 6;
+const INITIAL_VISIBLE = 12;
+const LOAD_CHUNK = 6;
+
+type ClientServer = {
+  id: number;
+  name: string;
+  description: string;
+  tags: string[];
+  thumbnail: string;
+  owner: string;
+  online: boolean;
+  dns: string;
+  link: string;
+  lastUpdated?: string;
+};
 
 // Helper function to convert SSR ServerData to frontend format
-function convertSSRDataToServers(ssrData: ServerData[]) {
+function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
   return ssrData.map((row, index) => {
     // Parse metadata JSON string
     let metadata: Metadata = {
@@ -29,31 +43,43 @@ function convertSSRDataToServers(ssrData: ServerData[]) {
       console.error("[App] Failed to parse metadata:", err, row.Metadata);
     }
 
+    const normalizedTags = Array.isArray(metadata.tags)
+      ? metadata.tags
+          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+          .filter(Boolean)
+      : [];
+
     return {
       id: index + 1,
       name: row.Name || row.DNS || "(unnamed)",
       description: metadata.description || "",
-      tags: Array.isArray(metadata.tags) ? metadata.tags : [],
+      tags: normalizedTags,
       thumbnail: metadata.thumbnail || "",
       owner: metadata.owner || "",
       online: row.Connected,
       dns: row.DNS || "",
       link: row.Link,
+      lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
     };
   });
 }
 
 export function ServerList() {
-  const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
-  const [status, setStatus] = useState("all");
-  const [sortBy, setSortBy] = useState("default");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortOption>("default");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagMode, setTagMode] = useState<TagMode>("OR");
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Get SSR data
   const ssrData = useSSRData();
 
   // Use SSR data if available, otherwise fall back to sample servers
-  const servers = useMemo(() => {
+  const servers: ClientServer[] = useMemo(() => {
     console.log("[App] SSR data length:", ssrData.length);
     if (ssrData.length > 0) {
       console.log("[App] Using SSR data");
@@ -65,66 +91,131 @@ export function ServerList() {
     return [];
   }, [ssrData]);
 
+  const availableTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    servers.forEach((server) => {
+      server.tags.forEach((tag) => {
+        counts.set(tag, (counts.get(tag) || 0) + 1);
+      });
+    });
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+  }, [servers]);
+
   // Filter and sort servers
   const filteredServers = useMemo(() => {
-    let filtered = servers.filter((server) => {
-      // Search filter - searches name, description, and tags
-      const matchesSearch =
-        searchQuery === "" ||
-        server.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        server.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        server.tags.some((tag) =>
-          tag.toLowerCase().includes(searchQuery.toLowerCase())
-        );
+    const query = searchQuery.toLowerCase();
 
-      // Status filter
+    const matchesTags = (server: ClientServer) => {
+      if (selectedTags.length === 0) return true;
+      const tagsLower = server.tags.map((t) => t.toLowerCase());
+      if (tagMode === "AND") {
+        return selectedTags.every((tag) => tagsLower.includes(tag.toLowerCase()));
+      }
+      return selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
+    };
+
+    const filtered = servers.filter((server) => {
+      const matchesSearch =
+        query === "" ||
+        server.name.toLowerCase().includes(query) ||
+        server.description.toLowerCase().includes(query) ||
+        server.tags.some((tag) => tag.toLowerCase().includes(query));
+
       const matchesStatus =
         status === "all" ||
         (status === "online" && server.online) ||
         (status === "offline" && !server.online);
 
-      return matchesSearch && matchesStatus;
+      return matchesSearch && matchesStatus && matchesTags(server);
     });
 
-    // Sort based on sortBy value
-    if (sortBy === "description") {
-      filtered = [...filtered].sort((a, b) =>
-        a.description.localeCompare(b.description)
-      );
-    } else if (sortBy === "tags") {
-      filtered = [...filtered].sort((a, b) => {
-        const aTag = a.tags[0] || "";
-        const bTag = b.tags[0] || "";
-        return aTag.localeCompare(bTag);
-      });
-    } else if (sortBy === "owner") {
-      filtered = [...filtered].sort((a, b) => a.owner.localeCompare(b.owner));
+    const sorted = [...filtered];
+    switch (sortBy) {
+      case "name-asc":
+        sorted.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case "name-desc":
+        sorted.sort((a, b) => b.name.localeCompare(a.name));
+        break;
+      case "updated":
+        sorted.sort((a, b) => {
+          const aTime = a.lastUpdated ? Date.parse(a.lastUpdated) : 0;
+          const bTime = b.lastUpdated ? Date.parse(b.lastUpdated) : 0;
+          return bTime - aTime;
+        });
+        break;
+      case "description":
+        sorted.sort((a, b) => a.description.localeCompare(b.description));
+        break;
+      case "tags":
+        sorted.sort((a, b) => {
+          const aTag = a.tags[0] || "";
+          const bTag = b.tags[0] || "";
+          return aTag.localeCompare(bTag);
+        });
+        break;
+      case "owner":
+        sorted.sort((a, b) => a.owner.localeCompare(b.owner));
+        break;
+      default:
+        break;
     }
 
-    return filtered;
-  }, [servers, searchQuery, status, sortBy]);
+    return sorted;
+  }, [servers, searchQuery, status, sortBy, selectedTags, tagMode]);
 
-  // Pagination
-  const totalPages = Math.ceil(filteredServers.length / ITEMS_PER_PAGE);
-  const paginatedServers = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return filteredServers.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [filteredServers, currentPage]);
+  const visibleServers = useMemo(
+    () => filteredServers.slice(0, visibleCount),
+    [filteredServers, visibleCount]
+  );
 
-  // Reset to page 1 when filters change
+  const hasMore = visibleCount < filteredServers.length;
+
+  // Reset visible items when filters change
+  useEffect(() => {
+    setVisibleCount(INITIAL_VISIBLE);
+  }, [searchQuery, status, sortBy, selectedTags, tagMode]);
+
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+
+    // Disconnect any existing observer before creating a new one
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting && hasMore) {
+          setVisibleCount((count) => count + LOAD_CHUNK);
+        }
+      },
+      { rootMargin: "200px 0px" }
+    );
+
+    observer.observe(sentinelRef.current);
+    observerRef.current = observer;
+
+    return () => observer.disconnect();
+  }, [hasMore]);
+
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-    setCurrentPage(1);
   };
 
-  const handleStatusChange = (value: string) => {
+  const handleStatusChange = (value: StatusFilter) => {
     setStatus(value);
-    setCurrentPage(1);
   };
 
-  const handleSortByChange = (value: string) => {
+  const handleSortByChange = (value: SortOption) => {
     setSortBy(value);
-    setCurrentPage(1);
+  };
+
+  const handleTagToggle = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
   };
 
   return (
@@ -142,10 +233,16 @@ export function ServerList() {
                   onStatusChange={handleStatusChange}
                   sortBy={sortBy}
                   onSortByChange={handleSortByChange}
+                  availableTags={availableTags}
+                  selectedTags={selectedTags}
+                  onAddTag={handleTagToggle}
+                  onRemoveTag={handleTagToggle}
+                  tagMode={tagMode}
+                  onTagModeChange={setTagMode}
                 />
                 <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6 mt-4">
-                  {paginatedServers.length > 0 ? (
-                    paginatedServers.map((server) => (
+                  {visibleServers.length > 0 ? (
+                    visibleServers.map((server) => (
                       <ServerCard
                         key={server.id}
                         serverId={server.id}
@@ -178,12 +275,11 @@ export function ServerList() {
                     </div>
                   )}
                 </div>
-                {totalPages > 0 && (
-                  <Pagination
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    onPageChange={setCurrentPage}
-                  />
+                <div ref={sentinelRef} className="h-8 w-full" />
+                {!hasMore && filteredServers.length > 0 && (
+                  <div className="px-4 sm:px-6 pb-10 text-center text-sm text-text-muted">
+                    You have reached the end of the list.
+                  </div>
                 )}
               </main>
             </div>
