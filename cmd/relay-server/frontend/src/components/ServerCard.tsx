@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 
 interface ServerCardProps {
   serverId: number;
@@ -43,7 +44,7 @@ export function ServerCard({
     >
       <div
         data-hero-key={`server-bg-${serverId}`}
-        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1 border border-foreground/40"
+        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1 border border-foreground dark:border-foreground/40"
         style={{ ...(thumbnail && { backgroundImage: `url(${thumbnail})` }) }}
       >
         {/* Favorite button */}
@@ -94,7 +95,7 @@ export function ServerCard({
                 </p>
               )}
               {tags && tags.length > 0 && (
-                <div className="w-full overflow-x-auto scrollbar-hide mt-1">
+                <ScrollArea className="w-full mt-1">
                   <div className="flex gap-1.5 min-w-max">
                     {tags.map((tag, index) => (
                       <span
@@ -105,7 +106,8 @@ export function ServerCard({
                       </span>
                     ))}
                   </div>
-                </div>
+                  <ScrollBar orientation="horizontal" />
+                </ScrollArea>
               )}
               {owner && (
                 <p className="text-text-muted text-xs font-normal leading-normal truncate max-w-full">

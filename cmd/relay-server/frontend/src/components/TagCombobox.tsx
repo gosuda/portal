@@ -1,14 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
-import type { TagMode } from "@/types/filters";
 import { cn } from "@/lib/utils";
 
 type TagComboboxProps = {
   availableTags: string[];
   selectedTags: string[];
-  mode: TagMode;
-  onModeChange: (mode: TagMode) => void;
   onAdd: (tag: string) => void;
   onRemove: (tag: string) => void;
 };
@@ -16,8 +13,6 @@ type TagComboboxProps = {
 export function TagCombobox({
   availableTags,
   selectedTags,
-  mode,
-  onModeChange,
   onAdd,
   onRemove,
 }: TagComboboxProps) {
@@ -126,6 +121,7 @@ export function TagCombobox({
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
+            onClick={() => setOpen(true)}
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             placeholder="Add tag…"
@@ -136,31 +132,6 @@ export function TagCombobox({
             aria-autocomplete="list"
           />
         </div>
-      </div>
-
-      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden h-10 shrink-0">
-        <button
-          type="button"
-          className={cn(
-            "h-full px-3 flex items-center justify-center transition-colors",
-            mode === "OR" ? "bg-primary text-black" : "hover:bg-border/80"
-          )}
-          aria-pressed={mode === "OR"}
-          onClick={() => onModeChange("OR")}
-        >
-          OR
-        </button>
-        <button
-          type="button"
-          className={cn(
-            "h-full px-3 flex items-center justify-center transition-colors",
-            mode === "AND" ? "bg-primary text-black" : "hover:bg-border/80"
-          )}
-          aria-pressed={mode === "AND"}
-          onClick={() => onModeChange("AND")}
-        >
-          AND
-        </button>
       </div>
 
       {open &&

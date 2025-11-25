@@ -1,15 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
 import { useSSRData } from "@/hooks/useSSRData";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { SsgoiTransition } from "@ssgoi/react";
-import type { SortOption, StatusFilter, TagMode } from "@/types/filters";
+import type { SortOption, StatusFilter } from "@/types/filters";
 import { generateRandomServers } from "@/lib/testUtils";
 
-const INITIAL_VISIBLE = 12;
-const LOAD_CHUNK = 6;
 const useDebug = false;
 
 export type ClientServer = {
@@ -71,16 +69,11 @@ export function ServerList() {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>("default");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [tagMode, setTagMode] = useState<TagMode>("OR");
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const [favorites, setFavorites] = useState<number[]>(() => {
     // Load favorites from localStorage
     const stored = localStorage.getItem("serverFavorites");
     return stored ? JSON.parse(stored) : [];
   });
-
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Save favorites to localStorage whenever they change
   useEffect(() => {
@@ -119,18 +112,14 @@ export function ServerList() {
       .map(([tag]) => tag);
   }, [servers]);
 
-  // Filter and sort servers
+  // Filter and sort servers (render all at once, no pagination)
   const filteredServers = useMemo(() => {
     const query = searchQuery.toLowerCase();
 
     const matchesTags = (server: ClientServer) => {
       if (selectedTags.length === 0) return true;
       const tagsLower = server.tags.map((t) => t.toLowerCase());
-      if (tagMode === "AND") {
-        return selectedTags.every((tag) =>
-          tagsLower.includes(tag.toLowerCase())
-        );
-      }
+      // Always use OR mode
       return selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
     };
 
@@ -191,43 +180,7 @@ export function ServerList() {
     });
 
     return sorted;
-  }, [servers, searchQuery, status, sortBy, selectedTags, tagMode, favorites]);
-
-  const visibleServers = useMemo(
-    () => filteredServers.slice(0, visibleCount),
-    [filteredServers, visibleCount]
-  );
-
-  const hasMore = visibleCount < filteredServers.length;
-
-  // Reset visible items when filters change
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE);
-  }, [searchQuery, status, sortBy, selectedTags, tagMode]);
-
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-
-    // Disconnect any existing observer before creating a new one
-    if (observerRef.current) {
-      observerRef.current.disconnect();
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (entry.isIntersecting && hasMore) {
-          setVisibleCount((count) => count + LOAD_CHUNK);
-        }
-      },
-      { rootMargin: "200px 0px" }
-    );
-
-    observer.observe(sentinelRef.current);
-    observerRef.current = observer;
-
-    return () => observer.disconnect();
-  }, [hasMore]);
+  }, [servers, searchQuery, status, sortBy, selectedTags, favorites]);
 
   const handleSearchChange = (value: string) => {
     setSearchQuery(value);
@@ -257,12 +210,12 @@ export function ServerList() {
 
   return (
     <SsgoiTransition id="/">
-      <div className="relative flex h-auto min-h-screen w-full flex-col overflow-x-hidden">
+      <div className="relative flex h-auto min-h-screen w-full flex-col">
         <div className="flex h-full grow flex-col">
-          <div className="flex flex-1 justify-center py-5">
+          <div className="flex flex-1 justify-center">
             <div className="flex flex-col w-full max-w-6xl flex-1 px-4 md:px-8">
-              <Header />
-              <main className="flex-1 mt-6">
+              <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
+                <Header />
                 <SearchBar
                   searchQuery={searchQuery}
                   onSearchChange={handleSearchChange}
@@ -274,12 +227,12 @@ export function ServerList() {
                   selectedTags={selectedTags}
                   onAddTag={handleTagToggle}
                   onRemoveTag={handleTagToggle}
-                  tagMode={tagMode}
-                  onTagModeChange={setTagMode}
                 />
-                <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6 mt-4">
-                  {visibleServers.length > 0 ? (
-                    visibleServers.map((server) => (
+              </div>
+              <main className="flex-1">
+                <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6">
+                  {filteredServers.length > 0 ? (
+                    filteredServers.map((server) => (
                       <ServerCard
                         key={server.id}
                         serverId={server.id}
@@ -314,12 +267,6 @@ export function ServerList() {
                     </div>
                   )}
                 </div>
-                <div ref={sentinelRef} className="h-8 w-full" />
-                {!hasMore && filteredServers.length > 0 && (
-                  <div className="px-4 sm:px-6 pb-10 text-center text-sm text-text-muted">
-                    You have reached the end of the list.
-                  </div>
-                )}
               </main>
             </div>
           </div>

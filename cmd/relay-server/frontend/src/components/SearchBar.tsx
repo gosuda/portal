@@ -21,8 +21,6 @@ interface SearchBarProps {
   selectedTags: string[];
   onAddTag: (tag: string) => void;
   onRemoveTag: (tag: string) => void;
-  tagMode: "AND" | "OR";
-  onTagModeChange: (mode: "AND" | "OR") => void;
 }
 
 export function SearchBar({
@@ -36,11 +34,9 @@ export function SearchBar({
   selectedTags,
   onAddTag,
   onRemoveTag,
-  tagMode,
-  onTagModeChange,
 }: SearchBarProps) {
   return (
-    <div className="flex flex-wrap items-center gap-3 px-4 sm:px-6">
+    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-4 sm:px-6">
       <label className="flex min-w-[220px] flex-1 items-stretch h-11">
         <div className="text-text-muted flex items-center justify-center pl-4 pr-2 rounded-l-lg bg-border">
           <Search className="w-5 h-5" />
@@ -85,8 +81,6 @@ export function SearchBar({
           selectedTags={selectedTags}
           onAdd={onAddTag}
           onRemove={onRemoveTag}
-          mode={tagMode}
-          onModeChange={onTagModeChange}
         />
       </div>
     </div>
