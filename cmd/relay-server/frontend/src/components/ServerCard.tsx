@@ -1,4 +1,8 @@
+import { Link } from "react-router-dom";
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+
 interface ServerCardProps {
+  serverId: number;
   name: string;
   description: string;
   tags: string[];
@@ -7,76 +11,114 @@ interface ServerCardProps {
   online: boolean;
   dns: string;
   serverUrl: string;
+  navigationPath: string;
+  navigationState: any;
+  isFavorite?: boolean;
+  onToggleFavorite?: (serverId: number) => void;
 }
 
 export function ServerCard({
+  serverId,
   name,
   description,
   tags,
   thumbnail,
   owner,
   online,
-  serverUrl,
+  navigationPath,
+  navigationState,
+  isFavorite = false,
+  onToggleFavorite,
 }: ServerCardProps) {
-  const defaultThumbnail =
-    "https://cdn.jsdelivr.net/gh/gosuda/portal@main/portal.jpg";
-
-  const goServer = () => {
-    window.location.href = serverUrl;
+  const handleFavoriteClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleFavorite?.(serverId);
   };
+
   return (
-    <button
-      type="button"
-      onClick={goServer}
-      bg-card-dark
-      className="h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-sm hover:shadow-lg hover:scale-105 transition-all duration-300 cursor-pointer"
-      style={{ backgroundImage: `url(${thumbnail || defaultThumbnail})` }}
+    <Link
+      to={navigationPath}
+      state={navigationState}
+      className="relative hover:scale-105 transition-all duration-300"
     >
-      <div className="h-full w-full bg-black/70 rounded-xl z-1 flex flex-col gap-4 p-4 items-start text-start">
-        <div className="w-full flex flex-1 flex-col justify-between gap-4">
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-2.5 h-2.5 rounded-full ${
-                  online ? "bg-green-status" : "bg-red-500"
-                }`}
-              />
-              <p
-                className={`text-sm font-medium leading-normal ${
-                  online ? "text-green-status" : "text-red-500"
-                }`}
-              >
-                {online ? "Online" : "Offline"}
-              </p>
-            </div>
-            <p className="text-white text-lg font-bold leading-tight truncate max-w-full">
-              {name}
-            </p>
-            {description && (
-              <p className="text-text-muted text-sm font-normal leading-normal truncate max-w-full">
-                {description}
-              </p>
-            )}
-            {tags && tags.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-1">
-                {tags.map((tag, index) => (
-                  <span
-                    key={index}
-                    className="px-2 py-1 bg-border-dark text-primary text-xs font-medium rounded truncate max-w-[120px]"
-                  >
-                    {tag}
-                  </span>
-                ))}
+      <div
+        data-hero-key={`server-bg-${serverId}`}
+        className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1 border border-foreground dark:border-foreground/40"
+        style={{ ...(thumbnail && { backgroundImage: `url(${thumbnail})` }) }}
+      >
+        {/* Favorite button */}
+        <button
+          onClick={handleFavoriteClick}
+          className="absolute top-3 right-3 z-10 p-2 rounded-full bg-background/80 hover:bg-background transition-colors duration-200"
+          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            className="w-5 h-5 transition-colors duration-200"
+            fill={isFavorite ? "currentColor" : "none"}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ color: isFavorite ? "var(--primary)" : "currentColor" }}
+          >
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        </button>
+
+        {/* Content overlay - not part of hero transition */}
+        <div className="relative h-full w-full bg-background/80 rounded-xl flex flex-col gap-4 p-4 items-start text-start">
+          <div className="w-full flex flex-1 flex-col justify-between gap-4">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    online ? "bg-green-status" : "bg-red-500"
+                  }`}
+                />
+                <p
+                  className={`text-sm font-medium leading-normal ${
+                    online ? "text-green-status" : "text-red-500"
+                  }`}
+                >
+                  {online ? "Online" : "Offline"}
+                </p>
               </div>
-            )}
-            {owner && (
-              <p className="text-text-muted text-xs font-normal leading-normal truncate max-w-full">
-                by {owner}
+              <p className="text-foreground text-lg font-bold leading-tight truncate max-w-full">
+                {name}
               </p>
-            )}
+              {description && (
+                <p className="text-text-muted text-sm font-normal leading-normal truncate max-w-full">
+                  {description}
+                </p>
+              )}
+              {tags && tags.length > 0 && (
+                <ScrollArea className="w-full mt-1">
+                  <div className="flex gap-1.5 min-w-max">
+                    {tags.map((tag, index) => (
+                      <span
+                        key={index}
+                        className="px-2 py-1 bg-secondary text-primary text-xs font-medium rounded whitespace-nowrap"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                  <ScrollBar orientation="horizontal" />
+                </ScrollArea>
+              )}
+              {owner && (
+                <p className="text-text-muted text-xs font-normal leading-normal truncate max-w-full">
+                  by {owner}
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </button>
+      <div className="absolute top-2 left-2 h-full w-full bg-secondary/70 rounded-xl z-0" />
+    </Link>
   );
 }

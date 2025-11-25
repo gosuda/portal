@@ -1,15 +1,9 @@
 @import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700;900&display=swap');
 @import "tailwindcss";
 
-@theme {
-  /* ServerShare Custom Colors - Dark Mode Only */
-  --color-primary: #47cdff;
-  --color-background-dark: #0f1e23;
-  --color-green-status: #50e3c2;
-  --color-card-dark: #192433;
-  --color-border-dark: #233348;
-  --color-text-muted: #92a9c9;
+@custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
   /* Font families */
   --font-family-display: "Public Sans", sans-serif;
 
@@ -17,44 +11,115 @@
   --radius: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
+  
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-green-status: var(--green-status);
+  --color-text-muted: var(--text-muted);
 }
 
 @layer base {
   :root {
-    /* Dark mode only - using ServerShare color palette */
-    --background: 197 56% 9%; /* #0f1e23 */
-    --foreground: 210 40% 98%; /* white text */
-    --card: 200 48% 12%; /* #192433 */
-    --card-foreground: 210 40% 98%;
-    --popover: 200 48% 12%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 195 100% 64%; /* #47cdff */
-    --primary-foreground: 0 0% 0%;
-    --secondary: 200 34% 18%; /* #233348 */
-    --secondary-foreground: 210 40% 98%;
-    --muted: 200 34% 18%;
-    --muted-foreground: 207 39% 68%; /* #92a9c9 */
-    --accent: 200 34% 18%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 207 28% 21%; /* #233348 */
-    --input: 207 28% 21%;
-    --ring: 195 100% 64%; /* #47cdff */
+    /* Light Theme (OKLCH) - Maintains the color tone of dark theme while inverting lightness */
+    --background: oklch(98% 0.005 240); /* Soft white instead of pure white */
+    --foreground: oklch(20% 0.03 215); /* Deep blue-gray text */
+    --card: oklch(100% 0 0); /* Pure white card (differentiated from background) */
+    --card-foreground: oklch(20% 0.03 215);
+    --popover: oklch(100% 0 0);
+    --popover-foreground: oklch(20% 0.03 215);
+    --primary: oklch(55% 0.13 210); /* Darker and less saturated than dark theme, ~#1b8bc4 */
+    --primary-foreground: oklch(100% 0 0); /* White text */
+    --secondary: oklch(95% 0.01 220); /* Light blue-gray background */
+    --secondary-foreground: oklch(25% 0.03 215);
+    --muted: oklch(94% 0.01 220); /* Light gray */
+    --muted-foreground: oklch(50% 0.04 220); /* Mid-tone gray text */
+    --accent: oklch(94% 0.02 210); /* Light accent background */
+    --accent-foreground: oklch(25% 0.03 215);
+    --destructive: oklch(55% 0.20 25); /* Red - slightly darker than dark theme */
+    --destructive-foreground: oklch(98% 0.01 240);
+    --border: oklch(90% 0.01 220); /* Subtle border */
+    --input: oklch(96% 0.005 220); /* Input field background */
+    --ring: oklch(55% 0.13 210); /* Same as primary */
+
+    /* Custom light theme colors */
+    --green-status: oklch(55% 0.14 150); /* Darker green than dark theme */
+    --text-muted: oklch(50% 0.04 220); /* Soft gray text */
+  }
+
+  .dark {
+    /* Dark Theme (OKLCH) */
+    --background: oklch(18% 0.04 210); /* #0f1e23 */
+    --foreground: oklch(98% 0.01 240); /* white text */
+    --card: oklch(22% 0.05 215); /* #192433 */
+    --card-foreground: oklch(98% 0.01 240);
+    --popover: oklch(22% 0.05 215);
+    --popover-foreground: oklch(98% 0.01 240);
+    --primary: oklch(75% 0.15 210); /* #47cdff */
+    --primary-foreground: oklch(0% 0 0);
+    --secondary: oklch(28% 0.04 215); /* #233348 */
+    --secondary-foreground: oklch(98% 0.01 240);
+    --muted: oklch(28% 0.04 215);
+    --muted-foreground: oklch(70% 0.05 230); /* #92a9c9 */
+    --accent: oklch(28% 0.04 215);
+    --accent-foreground: oklch(98% 0.01 240);
+    --destructive: oklch(62% 0.22 25);
+    --destructive-foreground: oklch(98% 0.01 240);
+    --border: oklch(26% 0.04 215); /* #233348 */
+    --input: oklch(26% 0.04 215);
+    --ring: oklch(75% 0.15 210); /* #47cdff */
+
+    /* Custom dark theme colors */
+    --green-status: oklch(78% 0.16 170);
+    --text-muted: oklch(70% 0.05 230);
   }
 
   * {
-    border-color: hsl(var(--border));
+    border-color: var(--border);
   }
 
   body {
-    background-color: var(--color-background-dark);
-    color: rgb(255 255 255);
+    background-color: var(--background);
+    color: var(--foreground);
     font-family: var(--font-family-display);
   }
 
-  /* Force dark mode always */
-  html {
+  /* Default to dark mode */
+  body {
     color-scheme: dark;
+  }
+
+  body.dark {
+    color-scheme: dark;
+  }
+
+  body.light {
+    color-scheme: light;
+  }
+
+  /* Hide scrollbar for horizontal scroll */
+  .scrollbar-hide {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;  /* Chrome, Safari and Opera */
   }
 }

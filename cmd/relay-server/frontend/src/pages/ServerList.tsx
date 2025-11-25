@@ -1,0 +1,277 @@
+import { useEffect, useMemo, useState } from "react";
+import { Header } from "@/components/Header";
+import { SearchBar } from "@/components/SearchBar";
+import { ServerCard } from "@/components/ServerCard";
+import { useSSRData } from "@/hooks/useSSRData";
+import type { ServerData, Metadata } from "@/hooks/useSSRData";
+import { SsgoiTransition } from "@ssgoi/react";
+import type { SortOption, StatusFilter } from "@/types/filters";
+import { generateRandomServers } from "@/lib/testUtils";
+
+const useDebug = false;
+
+export type ClientServer = {
+  id: number;
+  name: string;
+  description: string;
+  tags: string[];
+  thumbnail: string;
+  owner: string;
+  online: boolean;
+  dns: string;
+  link: string;
+  lastUpdated?: string;
+};
+
+// Helper function to convert SSR ServerData to frontend format
+function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
+  return ssrData.map((row, index) => {
+    // Parse metadata JSON string
+    let metadata: Metadata = {
+      description: "",
+      tags: [],
+      thumbnail: "",
+      owner: "",
+      hide: false,
+    };
+
+    try {
+      if (row.Metadata) {
+        metadata = JSON.parse(row.Metadata);
+      }
+    } catch (err) {
+      console.error("[App] Failed to parse metadata:", err, row.Metadata);
+    }
+
+    const normalizedTags = Array.isArray(metadata.tags)
+      ? metadata.tags
+          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+          .filter(Boolean)
+      : [];
+
+    return {
+      id: index + 1,
+      name: row.Name || row.DNS || "(unnamed)",
+      description: metadata.description || "",
+      tags: normalizedTags,
+      thumbnail: metadata.thumbnail || "",
+      owner: metadata.owner || "",
+      online: row.Connected,
+      dns: row.DNS || "",
+      link: row.Link,
+      lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
+    };
+  });
+}
+
+export function ServerList() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [sortBy, setSortBy] = useState<SortOption>("default");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [favorites, setFavorites] = useState<number[]>(() => {
+    // Load favorites from localStorage
+    const stored = localStorage.getItem("serverFavorites");
+    return stored ? JSON.parse(stored) : [];
+  });
+
+  // Save favorites to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("serverFavorites", JSON.stringify(favorites));
+  }, [favorites]);
+
+  // Get SSR data
+  const ssrData = useSSRData();
+
+  // Use SSR data if available, otherwise fall back to sample servers
+  const servers: ClientServer[] = useMemo(() => {
+    console.log("[App] SSR data length:", ssrData.length);
+
+    if (useDebug) {
+      return generateRandomServers(100);
+    }
+    if (ssrData.length > 0) {
+      console.log("[App] Using SSR data");
+      const converted = convertSSRDataToServers(ssrData);
+      console.log("[App] Converted servers:", converted);
+      return converted;
+    }
+    console.log("[App] Using sample servers");
+    return [];
+  }, [ssrData]);
+
+  const availableTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    servers.forEach((server) => {
+      server.tags.forEach((tag) => {
+        counts.set(tag, (counts.get(tag) || 0) + 1);
+      });
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
+  }, [servers]);
+
+  // Filter and sort servers (render all at once, no pagination)
+  const filteredServers = useMemo(() => {
+    const query = searchQuery.toLowerCase();
+
+    const matchesTags = (server: ClientServer) => {
+      if (selectedTags.length === 0) return true;
+      const tagsLower = server.tags.map((t) => t.toLowerCase());
+      // Always use OR mode
+      return selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
+    };
+
+    const filtered = servers.filter((server) => {
+      const matchesSearch =
+        query === "" ||
+        server.name.toLowerCase().includes(query) ||
+        server.description.toLowerCase().includes(query) ||
+        server.tags.some((tag) => tag.toLowerCase().includes(query));
+
+      const matchesStatus =
+        status === "all" ||
+        (status === "online" && server.online) ||
+        (status === "offline" && !server.online);
+
+      return matchesSearch && matchesStatus && matchesTags(server);
+    });
+
+    const sorted = [...filtered];
+    switch (sortBy) {
+      case "name-asc":
+        sorted.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case "name-desc":
+        sorted.sort((a, b) => b.name.localeCompare(a.name));
+        break;
+      case "updated":
+        sorted.sort((a, b) => {
+          const aTime = a.lastUpdated ? Date.parse(a.lastUpdated) : 0;
+          const bTime = b.lastUpdated ? Date.parse(b.lastUpdated) : 0;
+          return bTime - aTime;
+        });
+        break;
+      case "description":
+        sorted.sort((a, b) => a.description.localeCompare(b.description));
+        break;
+      case "tags":
+        sorted.sort((a, b) => {
+          const aTag = a.tags[0] || "";
+          const bTag = b.tags[0] || "";
+          return aTag.localeCompare(bTag);
+        });
+        break;
+      case "owner":
+        sorted.sort((a, b) => a.owner.localeCompare(b.owner));
+        break;
+      default:
+        break;
+    }
+
+    // Sort by favorites first
+    sorted.sort((a, b) => {
+      const aIsFav = favorites.includes(a.id);
+      const bIsFav = favorites.includes(b.id);
+      if (aIsFav && !bIsFav) return -1;
+      if (!aIsFav && bIsFav) return 1;
+      return 0;
+    });
+
+    return sorted;
+  }, [servers, searchQuery, status, sortBy, selectedTags, favorites]);
+
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value);
+  };
+
+  const handleStatusChange = (value: StatusFilter) => {
+    setStatus(value);
+  };
+
+  const handleSortByChange = (value: SortOption) => {
+    setSortBy(value);
+  };
+
+  const handleTagToggle = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const handleToggleFavorite = (serverId: number) => {
+    setFavorites((prev) =>
+      prev.includes(serverId)
+        ? prev.filter((id) => id !== serverId)
+        : [...prev, serverId]
+    );
+  };
+
+  return (
+    <SsgoiTransition id="/">
+      <div className="relative flex h-auto min-h-screen w-full flex-col">
+        <div className="flex h-full grow flex-col">
+          <div className="flex flex-1 justify-center">
+            <div className="flex flex-col w-full max-w-6xl flex-1 px-4 md:px-8">
+              <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
+                <Header />
+                <SearchBar
+                  searchQuery={searchQuery}
+                  onSearchChange={handleSearchChange}
+                  status={status}
+                  onStatusChange={handleStatusChange}
+                  sortBy={sortBy}
+                  onSortByChange={handleSortByChange}
+                  availableTags={availableTags}
+                  selectedTags={selectedTags}
+                  onAddTag={handleTagToggle}
+                  onRemoveTag={handleTagToggle}
+                />
+              </div>
+              <main className="flex-1">
+                <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6">
+                  {filteredServers.length > 0 ? (
+                    filteredServers.map((server) => (
+                      <ServerCard
+                        key={server.id}
+                        serverId={server.id}
+                        name={server.name}
+                        description={server.description}
+                        tags={server.tags}
+                        thumbnail={server.thumbnail}
+                        owner={server.owner}
+                        online={server.online}
+                        dns={server.dns}
+                        serverUrl={server.link}
+                        navigationPath={server.link}
+                        navigationState={{
+                          id: server.id,
+                          name: server.name,
+                          description: server.description,
+                          tags: server.tags,
+                          thumbnail: server.thumbnail,
+                          owner: server.owner,
+                          online: server.online,
+                          serverUrl: server.link,
+                        }}
+                        isFavorite={favorites.includes(server.id)}
+                        onToggleFavorite={handleToggleFavorite}
+                      />
+                    ))
+                  ) : (
+                    <div className="col-span-full text-center py-12">
+                      <p className="text-text-muted text-lg">
+                        No servers found matching your criteria
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+    </SsgoiTransition>
+  );
+}
