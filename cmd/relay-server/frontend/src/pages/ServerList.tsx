@@ -6,11 +6,13 @@ import { useSSRData } from "@/hooks/useSSRData";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { SsgoiTransition } from "@ssgoi/react";
 import type { SortOption, StatusFilter, TagMode } from "@/types/filters";
+import { generateRandomServers } from "@/lib/testUtils";
 
 const INITIAL_VISIBLE = 12;
 const LOAD_CHUNK = 6;
+const useDebug = true;
 
-type ClientServer = {
+export type ClientServer = {
   id: number;
   name: string;
   description: string;
@@ -71,9 +73,19 @@ export function ServerList() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMode, setTagMode] = useState<TagMode>("OR");
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+  const [favorites, setFavorites] = useState<number[]>(() => {
+    // Load favorites from localStorage
+    const stored = localStorage.getItem("serverFavorites");
+    return stored ? JSON.parse(stored) : [];
+  });
 
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
+
+  // Save favorites to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem("serverFavorites", JSON.stringify(favorites));
+  }, [favorites]);
 
   // Get SSR data
   const ssrData = useSSRData();
@@ -81,6 +93,10 @@ export function ServerList() {
   // Use SSR data if available, otherwise fall back to sample servers
   const servers: ClientServer[] = useMemo(() => {
     console.log("[App] SSR data length:", ssrData.length);
+
+    if (useDebug) {
+      return generateRandomServers(100);
+    }
     if (ssrData.length > 0) {
       console.log("[App] Using SSR data");
       const converted = convertSSRDataToServers(ssrData);
@@ -165,8 +181,17 @@ export function ServerList() {
         break;
     }
 
+    // Sort by favorites first
+    sorted.sort((a, b) => {
+      const aIsFav = favorites.includes(a.id);
+      const bIsFav = favorites.includes(b.id);
+      if (aIsFav && !bIsFav) return -1;
+      if (!aIsFav && bIsFav) return 1;
+      return 0;
+    });
+
     return sorted;
-  }, [servers, searchQuery, status, sortBy, selectedTags, tagMode]);
+  }, [servers, searchQuery, status, sortBy, selectedTags, tagMode, favorites]);
 
   const visibleServers = useMemo(
     () => filteredServers.slice(0, visibleCount),
@@ -222,6 +247,14 @@ export function ServerList() {
     );
   };
 
+  const handleToggleFavorite = (serverId: number) => {
+    setFavorites((prev) =>
+      prev.includes(serverId)
+        ? prev.filter((id) => id !== serverId)
+        : [...prev, serverId]
+    );
+  };
+
   return (
     <SsgoiTransition id="/">
       <div className="relative flex h-auto min-h-screen w-full flex-col overflow-x-hidden">
@@ -269,6 +302,8 @@ export function ServerList() {
                           online: server.online,
                           serverUrl: server.link,
                         }}
+                        isFavorite={favorites.includes(server.id)}
+                        onToggleFavorite={handleToggleFavorite}
                       />
                     ))
                   ) : (

@@ -12,6 +12,8 @@ interface ServerCardProps {
   serverUrl: string;
   navigationPath: string;
   navigationState: any;
+  isFavorite?: boolean;
+  onToggleFavorite?: (serverId: number) => void;
 }
 
 export function ServerCard({
@@ -24,7 +26,15 @@ export function ServerCard({
   online,
   navigationPath,
   navigationState,
+  isFavorite = false,
+  onToggleFavorite,
 }: ServerCardProps) {
+  const handleFavoriteClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleFavorite?.(serverId);
+  };
+
   return (
     <Link
       to={navigationPath}
@@ -36,6 +46,27 @@ export function ServerCard({
         className="relative h-[174.5px] bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 cursor-pointer z-1 border border-foreground/40"
         style={{ ...(thumbnail && { backgroundImage: `url(${thumbnail})` }) }}
       >
+        {/* Favorite button */}
+        <button
+          onClick={handleFavoriteClick}
+          className="absolute top-3 right-3 z-10 p-2 rounded-full bg-background/80 hover:bg-background transition-colors duration-200"
+          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            className="w-5 h-5 transition-colors duration-200"
+            fill={isFavorite ? "currentColor" : "none"}
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ color: isFavorite ? "var(--primary)" : "currentColor" }}
+          >
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+          </svg>
+        </button>
+
         {/* Content overlay - not part of hero transition */}
         <div className="relative h-full w-full bg-background/80 rounded-xl flex flex-col gap-4 p-4 items-start text-start">
           <div className="w-full flex flex-1 flex-col justify-between gap-4">
@@ -63,15 +94,17 @@ export function ServerCard({
                 </p>
               )}
               {tags && tags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {tags.map((tag, index) => (
-                    <span
-                      key={index}
-                      className="px-2 py-1 bg-secondary text-primary text-xs font-medium rounded truncate max-w-[120px]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
+                <div className="w-full overflow-x-auto scrollbar-hide mt-1">
+                  <div className="flex gap-1.5 min-w-max">
+                    {tags.map((tag, index) => (
+                      <span
+                        key={index}
+                        className="px-2 py-1 bg-secondary text-primary text-xs font-medium rounded whitespace-nowrap"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
               {owner && (
