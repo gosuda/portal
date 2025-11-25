@@ -10,7 +10,7 @@ import { generateRandomServers } from "@/lib/testUtils";
 
 const INITIAL_VISIBLE = 12;
 const LOAD_CHUNK = 6;
-const useDebug = true;
+const useDebug = false;
 
 export type ClientServer = {
   id: number;
