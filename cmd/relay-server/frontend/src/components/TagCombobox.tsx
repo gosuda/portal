@@ -33,9 +33,7 @@ export function TagCombobox({
     const query = inputValue.trim().toLowerCase();
     const pool = availableTags.filter((tag) => !selectedTags.includes(tag));
     if (!query) return pool.slice(0, 8);
-    return pool
-      .filter((tag) => tag.toLowerCase().includes(query))
-      .slice(0, 8);
+    return pool.filter((tag) => tag.toLowerCase().includes(query)).slice(0, 8);
   }, [availableTags, selectedTags, inputValue]);
 
   useEffect(() => {
@@ -106,18 +104,18 @@ export function TagCombobox({
       className="flex w-full sm:w-auto sm:min-w-[320px] flex-1 items-center gap-2 overflow-visible"
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-2 py-1.5 min-h-10">
-        <div className="flex flex-wrap items-center gap-2 overflow-hidden">
+        <div className="flex flex-1 flex-wrap items-center gap-2 overflow-hidden">
           {selectedTags.map((tag) => (
             <Button
               key={tag}
               variant="secondary"
               size="sm"
-              className="h-7 rounded-full px-3 text-xs"
+              className="h-7 rounded px-3 bg-secondary text-primary text-xs"
               onClick={() => onRemove(tag)}
               aria-label={`Remove tag ${tag}`}
             >
               {tag}
-              <span className="ml-2 text-foreground/70">×</span>
+              <span className="ml-2 bg-secondary text-primary">×</span>
             </Button>
           ))}
           <input
@@ -140,7 +138,7 @@ export function TagCombobox({
         </div>
       </div>
 
-      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden h-10 flex-shrink-0">
+      <div className="flex items-center rounded-md bg-border text-xs font-semibold text-foreground/80 overflow-hidden h-10 shrink-0">
         <button
           type="button"
           className={cn(
@@ -165,11 +163,13 @@ export function TagCombobox({
         </button>
       </div>
 
-      {open && filtered.length > 0 && panelStyle &&
+      {open &&
+        filtered.length > 0 &&
+        panelStyle &&
         createPortal(
           <div
             style={panelStyle}
-            className="rounded-lg border border-border bg-background shadow-lg"
+            className="rounded-lg border border-border bg-background shadow-lg overflow-hidden"
           >
             <ul
               id={listId}

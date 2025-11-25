@@ -98,7 +98,9 @@ export function ServerList() {
         counts.set(tag, (counts.get(tag) || 0) + 1);
       });
     });
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
   }, [servers]);
 
   // Filter and sort servers
@@ -109,7 +111,9 @@ export function ServerList() {
       if (selectedTags.length === 0) return true;
       const tagsLower = server.tags.map((t) => t.toLowerCase());
       if (tagMode === "AND") {
-        return selectedTags.every((tag) => tagsLower.includes(tag.toLowerCase()));
+        return selectedTags.every((tag) =>
+          tagsLower.includes(tag.toLowerCase())
+        );
       }
       return selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
     };
@@ -254,7 +258,7 @@ export function ServerList() {
                         online={server.online}
                         dns={server.dns}
                         serverUrl={server.link}
-                        navigationPath={`/server/${server.id}`}
+                        navigationPath={server.link}
                         navigationState={{
                           id: server.id,
                           name: server.name,
