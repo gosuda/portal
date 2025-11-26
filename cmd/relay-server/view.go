@@ -257,7 +257,7 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.Rel
 		return
 	}
 
-	http.NotFound(w, r)
+	serveAppStatic(w, r, "", serv)
 }
 
 func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
