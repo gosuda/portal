@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -104,6 +106,11 @@ func serveHTTP(addr string, serv *portal.RelayServer, nodeID string, bootstraps 
 		w.Write([]byte("{\"status\":\"ok\"}"))
 	})
 
+	// Admin API
+	appMux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+		handleAdminRequest(w, r, serv)
+	})
+
 	// Create portal frontend mux (routes only)
 	portalMux := http.NewServeMux()
 
@@ -185,6 +192,74 @@ type leaseRow struct {
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
+func handleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	if !isLocalhost(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Simple routing for admin
+	p := strings.TrimPrefix(r.URL.Path, "/admin/")
+
+	if p == "leases" && r.Method == http.MethodGet {
+		// List all leases
+		leases := serv.GetAllLeaseEntries()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(leases)
+		return
+	}
+
+	if p == "stats" && r.Method == http.MethodGet {
+		// Basic stats
+		stats := map[string]interface{}{
+			"leases_count": len(serv.GetAllLeaseEntries()),
+			"uptime":       "TODO", // We could add start time to server
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
+		return
+	}
+
+	if strings.HasPrefix(p, "leases/") && strings.HasSuffix(p, "/ban") {
+		parts := strings.Split(p, "/")
+		if len(parts) == 3 {
+			encodedID := parts[1]
+
+			// Decode ID (expecting URL-safe base64 from frontend)
+			idBytes, err := base64.URLEncoding.DecodeString(encodedID)
+			if err != nil {
+				// Try Raw URL encoding
+				idBytes, err = base64.RawURLEncoding.DecodeString(encodedID)
+			}
+
+			leaseID := encodedID
+			if err == nil {
+				leaseID = string(idBytes)
+			}
+
+			if r.Method == http.MethodPost {
+				serv.GetLeaseManager().BanLease(leaseID)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if r.Method == http.MethodDelete {
+				serv.GetLeaseManager().UnbanLease(leaseID)
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+	}
+
+	if p == "leases/banned" && r.Method == http.MethodGet {
+		banned := serv.GetLeaseManager().GetBannedLeases()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(banned)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
 func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	// Get all lease entries directly from the lease manager
 	leaseEntries := serv.GetAllLeaseEntries()
@@ -304,3 +379,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 
 	return rows
 }
+
+func isLocalhost(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return host == "127.0.0.1" || host == "::1"
+}
+

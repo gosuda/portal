@@ -158,6 +158,12 @@ func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
 	defer lm.leasesLock.RUnlock()
 
 	identityID := string(identity.Id)
+	
+	// Check if banned
+	if _, banned := lm.bannedLeases[identityID]; banned {
+		return nil, false
+	}
+
 	lease, exists := lm.leases[identityID]
 	if !exists {
 		return nil, false
@@ -174,6 +180,11 @@ func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
 func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
+
+	// Check if banned
+	if _, banned := lm.bannedLeases[leaseID]; banned {
+		return nil, false
+	}
 
 	lease, exists := lm.leases[leaseID]
 	if !exists {
@@ -215,6 +226,16 @@ func (lm *LeaseManager) UnbanLease(leaseID string) {
 	lm.leasesLock.Lock()
 	delete(lm.bannedLeases, leaseID)
 	lm.leasesLock.Unlock()
+}
+
+func (lm *LeaseManager) GetBannedLeases() [][]byte {
+	lm.leasesLock.RLock()
+	defer lm.leasesLock.RUnlock()
+	banned := make([][]byte, 0, len(lm.bannedLeases))
+	for id := range lm.bannedLeases {
+		banned = append(banned, []byte(id))
+	}
+	return banned
 }
 
 func (lm *LeaseManager) SetNamePattern(pattern string) error {
