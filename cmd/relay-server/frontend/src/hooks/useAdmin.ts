@@ -1,16 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
 
-export interface LeaseEntry {
-  Lease: {
-    Identity: { Id: string };
-    Name: string;
-  };
+export interface LeaseMetadata {
+  description: string;
+  tags: string[];
+  thumbnail: string;
+  owner: string;
+  hide: boolean;
+}
+
+export interface LeaseEntryParsed {
+  ConnectionID: number;
   Expires: string;
   LastSeen: string;
+  Lease: {
+    identity: { id: string; public_key: string };
+    expires: number;
+    name: string;
+    alpn: string[];
+    metadata: LeaseMetadata;
+  };
 }
 
 export function useAdmin() {
-  const [leases, setLeases] = useState<LeaseEntry[]>([]);
+  const [leases, setLeases] = useState<LeaseEntryParsed[]>([]);
   const [bannedLeases, setBannedLeases] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

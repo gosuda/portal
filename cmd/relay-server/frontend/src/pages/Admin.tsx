@@ -16,12 +16,12 @@ export function Admin() {
           <h2 className="text-2xl font-semibold mb-4">Active Leases</h2>
           <div className="grid gap-4">
             {leases.map((entry, i) => {
-              const id = entry.Lease.Identity.Id;
+              const id = entry.Lease.identity.id;
               const isBanned = bannedLeases.includes(id);
               return (
                 <div key={i} className="bg-card p-4 rounded-lg flex justify-between items-center border border-border">
                   <div>
-                    <p className="font-bold text-lg">{entry.Lease.Name || "(Unnamed)"}</p>
+                    <p className="font-bold text-lg">{entry.Lease.name || "(Unnamed)"}</p>
                     <p className="text-sm text-muted-foreground font-mono break-all">{id}</p>
                     <p className="text-xs text-muted-foreground">Expires: {new Date(entry.Expires).toLocaleString()}</p>
                   </div>
@@ -34,7 +34,7 @@ export function Admin() {
                     }`}
                   >
                     {isBanned ? "Unban" : "Ban"}
-                  </button>
+                  </button> 
                 </div>
               );
             })}
