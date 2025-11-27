@@ -39,10 +39,18 @@ export function useAdmin() {
       }
 
       const leasesData = await leasesRes.json();
-      const bannedData = await bannedRes.json();
+      const bannedData: string[] = await bannedRes.json();
 
       setLeases(leasesData || []);
-      setBannedLeases(bannedData || []);
+      // bannedData is base64 encoded byte arrays, decode them
+      const decodedBanned = (bannedData || []).map((b64: string) => {
+        try {
+          return atob(b64);
+        } catch {
+          return b64;
+        }
+      });
+      setBannedLeases(decodedBanned);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -54,15 +62,12 @@ export function useAdmin() {
     fetchData();
   }, [fetchData]);
 
-  const toUrlSafe = (base64: string) => {
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  };
-
-  const handleBanStatus = async (base64Id: string, isBan: boolean) => {
+  const handleBanStatus = async (leaseId: string, isBan: boolean) => {
     try {
-      const safeId = toUrlSafe(base64Id);
-      await fetch(`/admin/leases/${safeId}/ban`, { 
-        method: isBan ? "POST" : "DELETE" 
+      // URL-safe base64 encode the lease ID
+      const safeId = btoa(leaseId).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      await fetch(`/admin/leases/${safeId}/ban`, {
+        method: isBan ? "POST" : "DELETE"
       });
       fetchData();
     } catch (err) {

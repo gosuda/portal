@@ -158,11 +158,6 @@ func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
 	defer lm.leasesLock.RUnlock()
 
 	identityID := string(identity.Id)
-	
-	// Check if banned
-	if _, banned := lm.bannedLeases[identityID]; banned {
-		return nil, false
-	}
 
 	lease, exists := lm.leases[identityID]
 	if !exists {

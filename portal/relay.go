@@ -301,18 +301,6 @@ func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
 	return exists
 }
 
-// CloseConnection closes the connection with the given ID
-func (g *RelayServer) CloseConnection(connectionID int64) {
-	g.connectionsLock.Lock()
-	connection, exists := g.connections[connectionID]
-	g.connectionsLock.Unlock()
-
-	if exists {
-		log.Info().Int64("conn_id", connectionID).Msg("[RelayServer] Force closing connection")
-		connection.conn.Close()
-	}
-}
-
 // GetAllLeaseEntries returns all lease entries from the lease manager
 func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
 	g.leaseManager.leasesLock.RLock()

@@ -277,6 +277,11 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
 
+		// Skip banned leases for user-facing list
+		if isLeaseBanned(serv, identityID) {
+			continue
+		}
+
 		// Metadata parsing
 		var meta sdk.Metadata
 		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
@@ -386,5 +391,22 @@ func isLocalhost(r *http.Request) bool {
 		host = r.RemoteAddr
 	}
 	return host == "127.0.0.1" || host == "::1"
+}
+
+// isLeaseBanned checks if a lease ID is in the banned list
+func isLeaseBanned(serv *portal.RelayServer, leaseID string) bool {
+	bannedList := serv.GetLeaseManager().GetBannedLeases()
+	for _, banned := range bannedList {
+		bannedStr := string(banned)
+		log.Debug().
+			Str("checking_lease", leaseID).
+			Str("banned_entry", bannedStr).
+			Bool("match", bannedStr == leaseID).
+			Msg("[BanCheck] Comparing lease IDs")
+		if bannedStr == leaseID {
+			return true
+		}
+	}
+	return false
 }
 
