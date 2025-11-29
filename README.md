@@ -39,7 +39,7 @@ You can attach to any Portal instance you know. Don't you have any portal instan
 	--relay "wss://portal.gosuda.org/relay" \
 	--port 8080 \
 	--name "my-app" \
-	--description "My cool local app" \
+	--description "my-cool-local-app" \
 ```
 
 Once running, your local app becomes **publicly reachable from anywhere in the world** with **end-to-end encryption**.
