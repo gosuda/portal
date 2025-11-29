@@ -30,7 +30,7 @@ make build
 ./bin/portal-tunnel expose --port 8080  # if your app is running on 8080
 ```
 
-This connects to the **local relay server** you started in step 1-1 and exposes your app running on port `8080`.
+This connects to the **local relay server** you started in the previous step and exposes your app running on port `8080`.
 
 You can attach to any Portal instance you know. Don't you have any portal instances? Choose the one you like from the [Portal List](https://portal-list.portal.gosuda.org/):
 
@@ -58,7 +58,7 @@ Visit any Portal instance (like the public one at [portal.gosuda.org](https://po
 
 There are already many tunneling, proxy, and ingress services available. Portal stands out for several key reasons:
 
-### 3-1. Open-source tunnel and relay both
+### Open-source tunnel and relay both
 
 Most commercial tunneling services only ship a **client binary**, while the server infrastructure that actually relays traffic is completely opaque.
 
