@@ -470,7 +470,9 @@ Highlights of what Portal provides:
 - **App directory & discoverability**: app developers can register their services in the portal list to get organic exposure and an easy, UI-driven health check.
 - **Fun factor — Portal animation**: on a user's very first visit via Portal, while the E2EE WASM bundle is downloading, they'll see a **cute gopher animation**:
 
-	![Portal Animation](portal.jpg)
+	<p align="center">
+      <img src="/portal.jpg" alt="Portal logo" width="540" />
+    </p>
 
 	- The animation appears **only once across all apps** relayed by a given Portal: once the WASM is cached, it's reused.
 
