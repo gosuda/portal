@@ -2,7 +2,7 @@
 
 What if you could take an app that only runs on your laptop and **safely expose it to the Internet** without touching firewalls, domains, or TLS certificates? **Portal** is an E2EE-based public relay/tunneling solution built exactly for that.
 
-For **app developers**, Portal turns any local service into a shareable, internet‑reachable multiple endpoints in seconds with **end‑to‑end encrypted** protection for your app server's and users' data. For **relay operators**, Portal offers an open‑source relay server with a built‑in web UI, sensible defaults, and tunable policies so you can easily run your own secure public or private portal.
+For **app developers**, Portal turns any local service into a shareable, internet‑reachable **multiple endpoints** in seconds with **end‑to‑end encrypted** protection for your app server's and users' data. For **relay operators**, Portal offers an open‑source relay server with a built‑in web UI, sensible defaults, and tunable policies so you can easily run your own secure public or private portal.
 
 ## Quick Start — Three Ways In
 
