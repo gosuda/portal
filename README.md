@@ -97,7 +97,7 @@ Simply specify multiple `--relay` flags to connect to different Portal instances
 	--relay "wss://portal.example-usa.org/relay" \
 	--relay "wss://portal.example-asia.org/relay" \
 	--relay "wss://portal.example-europe/relay" \
-  --relay "wss://portal.any-portal-around-the-world/relay" \
+    --relay "wss://portal.any-portal-around-the-world/relay" \
 	--host localhost \
 	--port 8080 \
 	--name "my-global-app" \
