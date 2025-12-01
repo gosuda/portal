@@ -94,9 +94,10 @@ Simply specify multiple `--relay` flags to connect to different Portal instances
 
 ```bash
 ./bin/portal-tunnel expose \
-	--relay "wss://portal.example-a.org/relay" \
-	--relay "wss://portal.example-b.org/relay" \
-	--relay "wss://portal.example-c/relay" \
+	--relay "wss://portal.example-usa.org/relay" \
+	--relay "wss://portal.example-asia.org/relay" \
+	--relay "wss://portal.example-europe/relay" \
+  --relay "wss://portal.any-portal-around-the-world/relay" \
 	--host localhost \
 	--port 8080 \
 	--name "my-global-app" \
