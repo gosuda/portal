@@ -26,11 +26,6 @@ A Client is the end-user entity that attempts to access services published by an
 * A Client requests a connection to the Portal by specifying a Lease ID or name. The Portal matches this request to the App owning that Lease, then performs an RDSEC handshake to establish a SecureConnection and exchange data.
 * A Client must also possess a credential, which grants connection-request permission and enables mutual authentication with the App (E2EE).
 
-
-### Tunnel (portal-tunnel CLI)
-
-Tunnel is a deployment tool used to publish services to the Portal without modifying App code.
-
 ### Lease (Advertising Slot)
 
 A Lease is the advertisement unit an App publishes to the Portal.
