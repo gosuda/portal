@@ -86,6 +86,33 @@ You also don’t need to worry about issuing/renewing TLS certificates or mainta
 
 If your Relay Server itself is behind TLS, your effective stack becomes **E2EE over TLS**—a double protection layer with no extra setup, installs, or service bills.
 
+### Multi-Relay Tunneling for Redundancy and Reach
+
+Unlike most tunneling solutions that connect to a single relay, Portal supports **connecting to multiple relay servers simultaneously** with a single tunnel command. This means your local app can be exposed through multiple endpoints at once—improving availability, geographic reach, and fault tolerance.
+
+Simply specify multiple `--relay` flags to connect to different Portal instances:
+
+```bash
+./bin/portal-tunnel expose \
+	--relay "wss://portal.example-a.org/relay" \
+	--relay "wss://portal.example-b.org/relay" \
+	--relay "wss://portal.example-c/relay" \
+	--host localhost \
+	--port 8080 \
+	--name "my-global-app" \
+	--description "Globally distributed app" \
+	--tags "web,global" \
+	--owner "alice"
+```
+
+With this single command, your local service becomes reachable from **three different Portals** around the world. If one relay goes down, others remain available.
+
+This multi-relay capability is a key differentiator:
+
+- **High Availability**: No single point of failure. If one relay is unavailable, clients can use another.
+- **Global Distribution**: Expose your app to users worldwide through geographically distributed relays.
+- **Load Distribution**: Spread traffic across multiple relays to avoid bottlenecks.
+
 ### Easy Relay Operation with Built-in UI, Admin, and Utilities
 
 The Portal Relay Server does much more than simply "open a port and forward bytes." As soon as it comes up, you get:
