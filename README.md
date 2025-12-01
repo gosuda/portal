@@ -103,7 +103,7 @@ Simply specify multiple `--relay` flags to connect to different Portal instances
 	--name "my-global-app" \
 	--description "Globally distributed app" \
 	--tags "web,global" \
-	--owner "alice"
+	--owner "gosuda"
 ```
 
 With this single command, your local service becomes reachable from **three different Portals** around the world. If one relay goes down, others remain available.
