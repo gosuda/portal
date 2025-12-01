@@ -3,7 +3,6 @@ package portal
 import (
 	"encoding/binary"
 	"io"
-	"sync"
 
 	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
@@ -11,7 +10,6 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
-	"gosuda.org/portal/portal/utils/ratelimit"
 )
 
 type StreamContext struct {
@@ -275,7 +273,7 @@ func (g *RelayServer) sendConnectionResponse(stream *yamux.Stream, code rdverb.R
 }
 
 func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream *yamux.Stream, leaseID string) {
-	// Register connection
+	// Register connection for tracking
 	g.limitsLock.Lock()
 	g.relayedPerLeaseCount[leaseID]++
 	g.limitsLock.Unlock()
@@ -304,24 +302,18 @@ func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream *yamu
 		g.relayedConnectionsLock.Unlock()
 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Client -> Lease
-	go func() {
-		defer wg.Done()
-		ratelimit.Copy(leaseStream, clientStream, g.getLeaseBPSBucket(leaseID))
-		leaseStream.Close()
-	}()
-
-	// Lease -> Client
-	go func() {
-		defer wg.Done()
-		ratelimit.Copy(clientStream, leaseStream, g.getLeaseBPSBucket(leaseID))
+	// Use callback for actual relay (handles BPS limiting in relay-server)
+	if g.onEstablishRelay != nil {
+		g.onEstablishRelay(clientStream, leaseStream, leaseID)
+	} else {
+		// Fallback: simple copy without rate limiting
+		go func() {
+			io.Copy(leaseStream, clientStream)
+			leaseStream.Close()
+		}()
+		io.Copy(clientStream, leaseStream)
 		clientStream.Close()
-	}()
-
-	wg.Wait()
+	}
 }
 
 // Helper function to read packet from stream

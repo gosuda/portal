@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -81,13 +82,25 @@ func runServer() error {
 	if flagMaxLease > 0 {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
+
+	// Create BPS manager for rate limiting
+	bpsManager := NewBPSManager()
 	if flagLeaseBPS > 0 {
-		serv.GetLeaseManager().SetDefaultBPS(int64(flagLeaseBPS))
+		bpsManager.SetDefaultBPS(int64(flagLeaseBPS))
 	}
+
+	// Load persisted admin settings (ban list, BPS limits)
+	loadAdminSettings(serv, bpsManager)
+
+	// Register relay callback for BPS handling
+	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
+		establishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
+	})
+
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, cred.ID(), flagBootstraps, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, bpsManager, cred.ID(), flagBootstraps, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

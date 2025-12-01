@@ -21,6 +21,7 @@ export interface ServerData {
   StaleRed: boolean;
   Hide: boolean;
   Metadata: string;
+  BPS?: number; // bytes-per-second limit (0 = unlimited), admin only
 }
 
 /**
