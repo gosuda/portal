@@ -1,30 +1,36 @@
 import { SsgoiTransition } from "@ssgoi/react";
-import { useServerList } from "@/hooks/useServerList";
+import { useAdmin } from "@/hooks/useAdmin";
 import { ServerListView } from "@/components/ServerListView";
 
-// Re-export for backwards compatibility
-export type { ClientServer } from "@/hooks/useServerList";
-
-export function ServerList() {
-  // Controller: useServerList hook handles all server list logic
+export function Admin() {
   const {
+    filteredServers,
+    availableTags,
     searchQuery,
     status,
     sortBy,
     selectedTags,
-    availableTags,
-    filteredServers,
+    banFilter,
     favorites,
+    loading,
+    error,
     handleSearchChange,
     handleStatusChange,
     handleSortByChange,
     handleTagToggle,
+    handleBanFilterChange,
     handleToggleFavorite,
-  } = useServerList();
+    handleBanStatus,
+    handleBPSChange,
+  } = useAdmin();
+
+  if (loading) return <div className="p-8 text-foreground">Loading...</div>;
+  if (error) return <div className="p-8 text-red-500">Error: {error}</div>;
 
   return (
-    <SsgoiTransition id="/">
+    <SsgoiTransition id="admin">
       <ServerListView
+        title="PORTAL ADMIN"
         searchQuery={searchQuery}
         status={status}
         sortBy={sortBy}
@@ -37,6 +43,12 @@ export function ServerList() {
         onSortByChange={handleSortByChange}
         onTagToggle={handleTagToggle}
         onToggleFavorite={handleToggleFavorite}
+        // Admin-specific props
+        isAdmin={true}
+        banFilter={banFilter}
+        onBanFilterChange={handleBanFilterChange}
+        onBanStatusChange={handleBanStatus}
+        onBPSChange={handleBPSChange}
       />
     </SsgoiTransition>
   );

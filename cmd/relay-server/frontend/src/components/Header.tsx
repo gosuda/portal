@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
-export function Header() {
+interface HeaderProps {
+  title?: string;
+}
+
+export function Header({ title = "PORTAL" }: HeaderProps) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
 
   useEffect(() => {
@@ -47,7 +51,7 @@ export function Header() {
           </svg>
         </div>
         <h2 className="text-foreground text-lg font-bold leading-tight tracking-[-0.015em]">
-          PORTAL
+          {title}
         </h2>
       </div>
       <div className="flex items-center gap-3">

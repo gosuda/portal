@@ -1,12 +1,14 @@
-import { Routes, Route } from "react-router-dom";
-import { ServerList } from "@/pages/ServerList";
+import { Admin } from "@/pages/Admin";
 import { ServerDetail } from "@/pages/ServerDetail";
+import { ServerList } from "@/pages/ServerList";
+import { Route, Routes } from "react-router-dom";
 
 function App() {
   return (
     <Routes>
       <Route path="/" element={<ServerList />} />
       <Route path="/server/:id" element={<ServerDetail />} />
+      <Route path="/admin" element={<Admin />} />
     </Routes>
   );
 }
