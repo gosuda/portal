@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+*.log
 *.exe
 *.exe~
 *.dll
@@ -39,7 +40,8 @@ profile.cov
 docker-compose.override.yml
 docker-compose.override.yaml
 
-*.log
+# Added by goreleaser init:
+dist/
 
 # Created by https://www.toptal.com/developers/gitignore/api/goland+all
 # Edit at https://www.toptal.com/developers/gitignore?templates=goland+all
