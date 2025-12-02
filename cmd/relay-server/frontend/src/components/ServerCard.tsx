@@ -54,7 +54,7 @@ export function ServerCard({
 
   const bpsToSliderIndex = (value: number): number => {
     if (value === 0) return 0;
-    const idx = bpsSteps.findIndex(step => step >= value);
+    const idx = bpsSteps.findIndex((step) => step >= value);
     return idx === -1 ? bpsSteps.length - 1 : idx;
   };
 
@@ -137,7 +137,7 @@ export function ServerCard({
       <Link
         to={navigationPath}
         state={navigationState}
-        className="cursor-pointer"
+        className="relative cursor-pointer"
       >
         {children}
       </Link>
@@ -306,7 +306,9 @@ export function ServerCard({
             </div>
             {/* Manual input */}
             <div className="mb-4">
-              <label className="text-xs text-text-muted mb-1 block">Custom value (B/s)</label>
+              <label className="text-xs text-text-muted mb-1 block">
+                Custom value (B/s)
+              </label>
               <input
                 type="number"
                 value={bpsInput}
