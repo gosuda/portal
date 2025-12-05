@@ -149,14 +149,6 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 		serveDynamicServiceWorker(w, r)
 	})
 
-	// Tunnel script and binaries for portal subdomains as well
-	portalMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelScript(w, r)
-	})
-	portalMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelBinary(w, r)
-	})
-
 	// Root and SPA fallback for portal subdomains
 	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		utils.SetCORSHeaders(w)
