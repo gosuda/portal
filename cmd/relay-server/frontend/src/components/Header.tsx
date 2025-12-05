@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 
 interface HeaderProps {
   title?: string;
@@ -74,7 +76,7 @@ export function Header({ title = "PORTAL" }: HeaderProps) {
         </a>
         <button
           onClick={toggleTheme}
-          className="text-foreground hover:text-primary transition-colors p-1 rounded-lg hover:bg-secondary"
+          className="text-foreground hover:text-primary transition-colors p-1 rounded-md hover:bg-secondary"
           aria-label="Toggle theme"
         >
           {theme === "dark" ? (
@@ -83,9 +85,13 @@ export function Header({ title = "PORTAL" }: HeaderProps) {
             <Moon className="w-6 h-6" />
           )}
         </button>
-        {/* <Button>
-          <span className="truncate">Add Your Server</span>
-        </Button> */}
+        <TunnelCommandModal
+          trigger={
+            <Button>
+              <span className="truncate">Add Your Server</span>
+            </Button>
+          }
+        />
       </div>
     </header>
   );

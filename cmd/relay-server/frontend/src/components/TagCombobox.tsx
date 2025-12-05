@@ -98,14 +98,14 @@ export function TagCombobox({
       ref={containerRef}
       className="flex w-full sm:w-auto sm:min-w-[320px] flex-1 items-center gap-2 overflow-visible"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-2 py-1.5 min-h-10">
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 min-h-10">
         <div className="flex flex-1 flex-wrap items-center gap-2 overflow-hidden">
           {selectedTags.map((tag) => (
             <Button
               key={tag}
               variant="secondary"
               size="sm"
-              className="h-7 rounded px-3 bg-secondary text-primary text-xs"
+              className="h-7 rounded-md px-3 bg-secondary text-primary text-xs"
               onClick={() => onRemove(tag)}
               aria-label={`Remove tag ${tag}`}
             >
@@ -140,7 +140,7 @@ export function TagCombobox({
         createPortal(
           <div
             style={panelStyle}
-            className="rounded-lg border border-border bg-background shadow-lg overflow-hidden"
+            className="rounded-md border border-border bg-background shadow-lg overflow-hidden"
           >
             <ul
               id={listId}
