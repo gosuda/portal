@@ -54,14 +54,18 @@ BOOTSTRAP_URIS: wss://portal.example.com/relay
 
 ```
 
-### Running a Portal App
+### Running a Portal App using Tunnel
 
-1. Start your local service
+```bash
+# 1. Start your local service
 
-2. Run the tunnel client to expose
-```sh
+# 2. Run the tunnel client to expose
 curl -fsSL http://localhost:4017/tunnel | PORT=3000 NAME=myapp sh
+
 ```
+
+### Running a Portal App using the SDK
+See [portal-toys](https://github.com/gosuda/portal-toys)
 
 ## Architecture
 
