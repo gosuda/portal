@@ -82,6 +82,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 		servePortalStaticFile(w, r, p)
 	})
 
+	// Tunnel installer script and binaries
+	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelScript(w, r)
+	})
+	appMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelBinary(w, r)
+	})
+
 	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -684,4 +692,3 @@ func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 		Int("bps_limits_count", len(settings.BPSLimits)).
 		Msg("[Admin] Loaded admin settings")
 }
-

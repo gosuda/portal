@@ -1,5 +1,4 @@
 bin/
-docker-compose.override.yaml
 
 # Git
 .git
@@ -33,3 +32,7 @@ coverage.html
 *.test
 *.prof
 vendor/
+
+# Frontend deps/build artifacts
+node_modules/
+**/node_modules/

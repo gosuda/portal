@@ -193,6 +193,71 @@ func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
 
+// ForwardedHost returns the host from X-Forwarded-Host (first value) or falls back to r.Host.
+func ForwardedHost(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
+		parts := strings.Split(h, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	return r.Host
+}
+
+// IsHTTPS reports whether the request is HTTPS, checking TLS or X-Forwarded-Proto.
+func IsHTTPS(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	return strings.EqualFold(proto, "https")
+}
+
+// RequestScheme returns "https" when the request is HTTPS and "http" otherwise.
+func RequestScheme(r *http.Request) string {
+	if IsHTTPS(r) {
+		return "https"
+	}
+	return "http"
+}
+
+// DetectBaseURL builds a base URL (scheme://host) using request headers with a fallback portal URL.
+func DetectBaseURL(r *http.Request, fallbackPortalURL string) string {
+	scheme := RequestScheme(r)
+	host := ForwardedHost(r)
+	if host == "" && fallbackPortalURL != "" {
+		if u, err := url.Parse(fallbackPortalURL); err == nil {
+			host = u.Host
+			if u.Scheme != "" {
+				scheme = u.Scheme
+			}
+		}
+	}
+	return fmt.Sprintf("%s://%s", scheme, host)
+}
+
+// DetectRelayURL builds a relay WebSocket URL (ws[s]://host/relay) using request headers with a fallback portal URL.
+func DetectRelayURL(r *http.Request, fallbackPortalURL string) string {
+	wsScheme := "ws"
+	if IsHTTPS(r) {
+		wsScheme = "wss"
+	}
+	host := ForwardedHost(r)
+	if host == "" && fallbackPortalURL != "" {
+		if u, err := url.Parse(fallbackPortalURL); err == nil {
+			host = u.Host
+			if u.Scheme == "https" {
+				wsScheme = "wss"
+			}
+		}
+	}
+	return fmt.Sprintf("%s://%s/relay", wsScheme, host)
+}
+
 // IsSubdomain reports whether host matches the given domain pattern.
 // Supports patterns like:
 //   - "*.example.com" (wildcard for any subdomain of example.com)
