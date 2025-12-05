@@ -18,7 +18,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
-  make build-wasm && \
+  make build-wasm build-tunnel && \
   GOOS=${TARGETOS} GOARCH=${TARGETARCH} make build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -82,6 +82,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 		servePortalStaticFile(w, r, p)
 	})
 
+	// Tunnel installer script and binaries
+	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelScript(w, r)
+	})
+	appMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelBinary(w, r)
+	})
+
 	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -139,6 +147,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 	// Service worker for portal subdomains (serve from dist/wasm)
 	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
 		serveDynamicServiceWorker(w, r)
+	})
+
+	// Tunnel script and binaries for portal subdomains as well
+	portalMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelScript(w, r)
+	})
+	portalMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelBinary(w, r)
 	})
 
 	// Root and SPA fallback for portal subdomains
@@ -684,4 +700,3 @@ func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 		Int("bps_limits_count", len(settings.BPSLimits)).
 		Msg("[Admin] Loaded admin settings")
 }
-

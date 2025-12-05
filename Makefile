@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: help run build build-wasm compress-wasm build-frontend build-server clean
+.PHONY: help run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
@@ -18,7 +18,7 @@ run:
 	./bin/relay-server
 
 # Convenience target
-build: build-wasm build-frontend build-server
+build: build-wasm build-frontend build-tunnel build-server
 
 build-protoc:
 	protoc -I . \
@@ -84,7 +84,19 @@ build-frontend:
 	@cd cmd/relay-server/frontend && npm i && npm run build
 	@echo "[frontend] build complete"
 
-# Build Go relay server (embeds WASM from cmd/relay-server/static)
+# Build portal-tunnel binaries for distribution
+build-tunnel:
+	@echo "[tunnel] building portal-tunnel binaries..."
+	@mkdir -p cmd/relay-server/dist/tunnel
+	@for GOOS in linux darwin; do \
+		for GOARCH in amd64 arm64; do \
+			OUT="cmd/relay-server/dist/tunnel/portal-tunnel-$${GOOS}-$${GOARCH}"; \
+			echo " - $${OUT}"; \
+			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
+		done; \
+	done
+
+# Build Go relay server
 build-server:
 	@echo "[server] building Go portal..."
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
@@ -93,3 +105,4 @@ clean:
 	rm -rf bin
 	rm -rf cmd/relay-server/dist/app
 	rm -rf cmd/relay-server/dist/wasm
+	rm -rf cmd/relay-server/dist/tunnel
