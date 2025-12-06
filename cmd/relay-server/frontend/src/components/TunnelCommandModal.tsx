@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Copy, Check, Terminal } from "lucide-react";
+import { useState, useMemo, useRef } from "react";
+import { Copy, Check, Terminal, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -19,24 +19,55 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const defaultPort = "3000";
   const defaultName = "myapp";
 
-  const [port, setPort] = useState(defaultPort);
-  const [name, setName] = useState(defaultName);
-  const [copied, setCopied] = useState(false);
-
   // Get current host URL dynamically
-  const hostUrl = useMemo(() => {
+  const currentOrigin = useMemo(() => {
     if (typeof window !== "undefined") {
       return window.location.origin;
     }
     return "http://localhost:4017";
   }, []);
 
+  const [port, setPort] = useState(defaultPort);
+  const [name, setName] = useState(defaultName);
+  const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
+  const [urlInput, setUrlInput] = useState("");
+  const [copied, setCopied] = useState(false);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+
+  const addRelayUrl = (url: string) => {
+    const trimmed = url.trim();
+    if (!trimmed || relayUrls.includes(trimmed)) return;
+    // Basic URL validation
+    try {
+      new URL(trimmed);
+      setRelayUrls([...relayUrls, trimmed]);
+      setUrlInput("");
+    } catch {
+      // Invalid URL, ignore
+    }
+  };
+
+  const removeRelayUrl = (url: string) => {
+    setRelayUrls(relayUrls.filter((u) => u !== url));
+  };
+
+  const handleUrlKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addRelayUrl(urlInput);
+    } else if (e.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
+      // Remove last URL when backspace on empty input
+      setRelayUrls(relayUrls.slice(0, -1));
+    }
+  };
+
   // Generate the tunnel command
   const command = useMemo(() => {
-    return `curl -fsSL ${hostUrl}/tunnel | PORT=${
-      port === "" ? defaultPort : port
-    } NAME=${name === "" ? defaultName : name} sh`;
-  }, [hostUrl, port, name]);
+    const portVal = port === "" ? defaultPort : port;
+    const nameVal = name === "" ? defaultName : name;
+    const relayUrlVal = relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+    return `curl -fsSL ${currentOrigin}/tunnel | PORT=${portVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
+  }, [currentOrigin, port, name, relayUrls]);
 
   const handleCopy = async () => {
     try {
@@ -115,6 +146,43 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </div>
             <p className="text-xs text-text-muted">
               A unique identifier for your tunnel
+            </p>
+          </div>
+
+          {/* Relay URLs Input */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">
+              Relay URLs
+            </label>
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-transparent p-2 min-h-10">
+              {relayUrls.map((url) => (
+                <span
+                  key={url}
+                  className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground"
+                >
+                  {url}
+                  <button
+                    type="button"
+                    onClick={() => removeRelayUrl(url)}
+                    className="ml-1 rounded-sm hover:bg-destructive/20 p-0.5"
+                    aria-label={`Remove ${url}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <input
+                ref={urlInputRef}
+                type="text"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onKeyDown={handleUrlKeyDown}
+                placeholder="Add relay URL..."
+                className="min-w-[140px] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+            <p className="text-xs text-text-muted">
+              Press Enter to add. Multiple relay servers for redundancy.
             </p>
           </div>
 
