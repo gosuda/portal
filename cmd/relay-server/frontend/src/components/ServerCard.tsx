@@ -266,7 +266,7 @@ export function ServerCard({
           onClick={handleBPSModalClose}
         >
           <div
-            className="bg-background rounded-lg p-6 w-96 shadow-xl border border-foreground/20"
+            className="bg-background rounded-md p-6 w-96 shadow-xl border border-foreground/20"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-bold mb-4">BPS Settings</h3>
@@ -287,7 +287,7 @@ export function ServerCard({
                 const idx = parseInt(e.target.value, 10);
                 handleSliderChange(idx);
               }}
-              className="w-full h-2 bg-secondary rounded-lg appearance-none cursor-pointer mb-2"
+              className="w-full h-2 bg-secondary rounded-md appearance-none cursor-pointer mb-2"
             />
             {/* Step labels */}
             <div className="flex justify-between text-xs text-text-muted mb-4">
