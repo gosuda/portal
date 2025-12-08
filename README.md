@@ -42,17 +42,9 @@ docker compose up
 # 2. Open in browser
 http://localhost:4017
 
-# 3. Domain setup (optional)
-# Point DNS to this server:
-#   A record for portal.example.com → server IP
-#   A (wildcard) for *.example.com (or *.portal.example.com) → server IP
-#
-# Then edit docker-compose.yml environment for your domain:
-PORTAL_URL: https://portal.example.com
-PORTAL_APP_URL: https://*.example.com
-BOOTSTRAP_URIS: wss://portal.example.com/relay
-
 ```
+
+For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
 
 ### Running a Portal App using Tunnel
 
@@ -61,7 +53,6 @@ BOOTSTRAP_URIS: wss://portal.example.com/relay
 
 # 2. Run the tunnel client to expose
 curl -fsSL http://localhost:4017/tunnel | PORT=3000 NAME=myapp sh
-
 ```
 
 ### Running a Portal App using the SDK
