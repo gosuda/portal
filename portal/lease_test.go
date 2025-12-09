@@ -10,6 +10,7 @@ import (
 
 func TestLeaseManager_NameConflict(t *testing.T) {
 	lm := NewLeaseManager(30 * time.Second)
+	lm.Start()
 	defer lm.Stop()
 
 	// Create two different identities
@@ -67,6 +68,7 @@ func TestLeaseManager_NameConflict(t *testing.T) {
 
 func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
 	lm := NewLeaseManager(30 * time.Second)
+	lm.Start()
 	defer lm.Stop()
 
 	identity := &rdsec.Identity{
@@ -112,6 +114,7 @@ func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
 
 func TestLeaseManager_EmptyNameAllowed(t *testing.T) {
 	lm := NewLeaseManager(30 * time.Second)
+	lm.Start()
 	defer lm.Stop()
 
 	identity1 := &rdsec.Identity{
@@ -150,6 +153,7 @@ func TestLeaseManager_EmptyNameAllowed(t *testing.T) {
 
 func TestLeaseManager_UnnamedAllowed(t *testing.T) {
 	lm := NewLeaseManager(30 * time.Second)
+	lm.Start()
 	defer lm.Stop()
 
 	identity1 := &rdsec.Identity{
@@ -188,6 +192,7 @@ func TestLeaseManager_UnnamedAllowed(t *testing.T) {
 
 func TestLeaseManager_UnicodeNameConflict(t *testing.T) {
 	lm := NewLeaseManager(30 * time.Second)
+	lm.Start()
 	defer lm.Stop()
 
 	identity1 := &rdsec.Identity{

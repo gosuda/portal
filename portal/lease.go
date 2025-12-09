@@ -9,6 +9,7 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
+// LeaseEntry represents a registered lease with expiration tracking.
 type LeaseEntry struct {
 	Lease        *rdverb.Lease
 	Expires      time.Time
@@ -16,11 +17,109 @@ type LeaseEntry struct {
 	ConnectionID int64 // Store the connection ID
 }
 
+// leaseCmd is the command interface for LeaseManager event loop.
+type leaseCmd interface{ leaseCmd() }
+
+type cmdUpdateLease struct {
+	lease  *rdverb.Lease
+	connID int64
+	reply  chan<- bool
+}
+
+type cmdDeleteLease struct {
+	identity *rdsec.Identity
+	reply    chan<- bool
+}
+
+type cmdGetLease struct {
+	identity *rdsec.Identity
+	reply    chan<- leaseResult
+}
+
+type cmdGetLeaseByID struct {
+	leaseID string
+	reply   chan<- leaseResult
+}
+
+type cmdGetAllLeases struct {
+	reply chan<- []*rdverb.Lease
+}
+
+type cmdCleanupByConnID struct {
+	connID int64
+	reply  chan<- []string
+}
+
+type cmdBan struct {
+	leaseID string
+	done    chan<- struct{}
+}
+
+type cmdUnban struct {
+	leaseID string
+	done    chan<- struct{}
+}
+
+type cmdGetBanned struct {
+	reply chan<- [][]byte
+}
+
+type cmdSetPattern struct {
+	pattern string
+	reply   chan<- error
+}
+
+type cmdSetTTL struct {
+	min  time.Duration
+	max  time.Duration
+	done chan<- struct{}
+}
+
+type cmdCleanExpired struct {
+	done chan<- struct{}
+}
+
+type cmdGetAllEntries struct {
+	reply chan<- []*LeaseEntry
+}
+
+type cmdGetLeaseALPNs struct {
+	leaseID string
+	reply   chan<- []string
+}
+
+// leaseResult carries a LeaseEntry lookup result.
+type leaseResult struct {
+	entry  *LeaseEntry
+	exists bool
+}
+
+// Command interface markers
+func (cmdUpdateLease) leaseCmd()     {}
+func (cmdDeleteLease) leaseCmd()     {}
+func (cmdGetLease) leaseCmd()        {}
+func (cmdGetLeaseByID) leaseCmd()    {}
+func (cmdGetAllLeases) leaseCmd()    {}
+func (cmdCleanupByConnID) leaseCmd() {}
+func (cmdBan) leaseCmd()             {}
+func (cmdUnban) leaseCmd()           {}
+func (cmdGetBanned) leaseCmd()       {}
+func (cmdSetPattern) leaseCmd()      {}
+func (cmdSetTTL) leaseCmd()          {}
+func (cmdCleanExpired) leaseCmd()    {}
+func (cmdGetAllEntries) leaseCmd()   {}
+func (cmdGetLeaseALPNs) leaseCmd()   {}
+
+// LeaseManager manages lease registrations using a single-threaded event loop.
+// All state mutations are processed sequentially via the command channel.
 type LeaseManager struct {
 	leases      map[string]*LeaseEntry // Key: identity ID
-	leasesLock  sync.RWMutex
 	stopCh      chan struct{}
 	ttlInterval time.Duration
+
+	// Event loop
+	cmdCh chan leaseCmd
+	runWg sync.WaitGroup
 
 	// policy controls
 	bannedLeases map[string]struct{}
@@ -34,48 +133,156 @@ func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
 		leases:       make(map[string]*LeaseEntry),
 		stopCh:       make(chan struct{}),
 		ttlInterval:  ttlInterval,
+		cmdCh:        make(chan leaseCmd, 256),
 		bannedLeases: make(map[string]struct{}),
 	}
 }
 
 func (lm *LeaseManager) Start() {
+	lm.runWg.Add(1)
+	go lm.run()
 	go lm.ttlWorker()
 }
 
 func (lm *LeaseManager) Stop() {
 	close(lm.stopCh)
+	lm.runWg.Wait()
 }
 
-func (lm *LeaseManager) ttlWorker() {
-	ticker := time.NewTicker(lm.ttlInterval)
-	defer ticker.Stop()
-
+// run is the main event loop that processes all commands sequentially.
+func (lm *LeaseManager) run() {
+	defer lm.runWg.Done()
 	for {
 		select {
-		case <-ticker.C:
-			lm.cleanupExpiredLeases()
+		case cmd := <-lm.cmdCh:
+			lm.handleCmd(cmd)
 		case <-lm.stopCh:
 			return
 		}
 	}
 }
 
-func (lm *LeaseManager) cleanupExpiredLeases() {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
+// handleCmd dispatches commands to their handlers.
+func (lm *LeaseManager) handleCmd(cmd leaseCmd) {
+	switch c := cmd.(type) {
+	case *cmdUpdateLease:
+		c.reply <- lm.updateLeaseInternal(c.lease, c.connID)
 
-	now := time.Now()
-	for id, lease := range lm.leases {
-		if now.After(lease.Expires) {
-			delete(lm.leases, id)
+	case *cmdDeleteLease:
+		identityID := string(c.identity.Id)
+		if _, exists := lm.leases[identityID]; exists {
+			delete(lm.leases, identityID)
+			c.reply <- true
+		} else {
+			c.reply <- false
+		}
+
+	case *cmdGetLease:
+		identityID := string(c.identity.Id)
+		entry, exists := lm.leases[identityID]
+		if !exists || time.Now().After(entry.Expires) {
+			c.reply <- leaseResult{nil, false}
+		} else {
+			c.reply <- leaseResult{entry, true}
+		}
+
+	case *cmdGetLeaseByID:
+		if _, banned := lm.bannedLeases[c.leaseID]; banned {
+			c.reply <- leaseResult{nil, false}
+			return
+		}
+		entry, exists := lm.leases[c.leaseID]
+		if !exists || time.Now().After(entry.Expires) {
+			c.reply <- leaseResult{nil, false}
+		} else {
+			c.reply <- leaseResult{entry, true}
+		}
+
+	case *cmdGetAllLeases:
+		now := time.Now()
+		var valid []*rdverb.Lease
+		for _, entry := range lm.leases {
+			if now.Before(entry.Expires) {
+				valid = append(valid, entry.Lease)
+			}
+		}
+		c.reply <- valid
+
+	case *cmdCleanupByConnID:
+		var cleaned []string
+		for leaseID, entry := range lm.leases {
+			if entry.ConnectionID == c.connID {
+				delete(lm.leases, leaseID)
+				cleaned = append(cleaned, leaseID)
+			}
+		}
+		c.reply <- cleaned
+
+	case *cmdBan:
+		lm.bannedLeases[c.leaseID] = struct{}{}
+		c.done <- struct{}{}
+
+	case *cmdUnban:
+		delete(lm.bannedLeases, c.leaseID)
+		c.done <- struct{}{}
+
+	case *cmdGetBanned:
+		banned := make([][]byte, 0, len(lm.bannedLeases))
+		for id := range lm.bannedLeases {
+			banned = append(banned, []byte(id))
+		}
+		c.reply <- banned
+
+	case *cmdSetPattern:
+		if c.pattern == "" {
+			lm.namePattern = nil
+			c.reply <- nil
+			return
+		}
+		re, err := regexp.Compile(c.pattern)
+		if err != nil {
+			c.reply <- err
+			return
+		}
+		lm.namePattern = re
+		c.reply <- nil
+
+	case *cmdSetTTL:
+		lm.minTTL = c.min
+		lm.maxTTL = c.max
+		c.done <- struct{}{}
+
+	case *cmdCleanExpired:
+		now := time.Now()
+		for id, entry := range lm.leases {
+			if now.After(entry.Expires) {
+				delete(lm.leases, id)
+			}
+		}
+		c.done <- struct{}{}
+
+	case *cmdGetAllEntries:
+		now := time.Now()
+		var entries []*LeaseEntry
+		for _, entry := range lm.leases {
+			if now.Before(entry.Expires) {
+				entries = append(entries, entry)
+			}
+		}
+		c.reply <- entries
+
+	case *cmdGetLeaseALPNs:
+		entry, exists := lm.leases[c.leaseID]
+		if !exists || time.Now().After(entry.Expires) {
+			c.reply <- nil
+		} else {
+			c.reply <- entry.Lease.Alpn
 		}
 	}
 }
 
-func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) bool {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-
+// updateLeaseInternal contains the lease update logic, called within the event loop.
+func (lm *LeaseManager) updateLeaseInternal(lease *rdverb.Lease, connectionID int64) bool {
 	identityID := string(lease.Identity.Id)
 	expires := time.Unix(lease.Expires, 0)
 
@@ -91,7 +298,6 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 	if lm.namePattern != nil && lease.Name != "" && !lm.namePattern.MatchString(lease.Name) {
 		return false
 	}
-	// reserved prefix check removed
 	if lm.minTTL > 0 || lm.maxTTL > 0 {
 		ttl := time.Until(expires)
 		if lm.minTTL > 0 && ttl < lm.minTTL {
@@ -105,13 +311,10 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 	// Check for name conflicts (only if name is not empty)
 	if lease.Name != "" && lease.Name != "(unnamed)" {
 		for existingID, existingEntry := range lm.leases {
-			// Skip if it's the same identity (updating own lease)
 			if existingID == identityID {
 				continue
 			}
-			// Check if another identity is using the same name
 			if existingEntry.Lease.Name == lease.Name {
-				// Name conflict with a different identity
 				return false
 			}
 		}
@@ -127,133 +330,109 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 	return true
 }
 
-func (lm *LeaseManager) DeleteLease(identity *rdsec.Identity) bool {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
+func (lm *LeaseManager) ttlWorker() {
+	ticker := time.NewTicker(lm.ttlInterval)
+	defer ticker.Stop()
 
-	identityID := string(identity.Id)
-	if _, exists := lm.leases[identityID]; exists {
-		delete(lm.leases, identityID)
-		return true
+	for {
+		select {
+		case <-ticker.C:
+			done := make(chan struct{}, 1)
+			select {
+			case lm.cmdCh <- &cmdCleanExpired{done: done}:
+				<-done
+			case <-lm.stopCh:
+				return
+			}
+		case <-lm.stopCh:
+			return
+		}
 	}
-	return false
+}
+
+func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) bool {
+	reply := make(chan bool, 1)
+	lm.cmdCh <- &cmdUpdateLease{lease: lease, connID: connectionID, reply: reply}
+	return <-reply
+}
+
+func (lm *LeaseManager) DeleteLease(identity *rdsec.Identity) bool {
+	reply := make(chan bool, 1)
+	lm.cmdCh <- &cmdDeleteLease{identity: identity, reply: reply}
+	return <-reply
 }
 
 func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	identityID := string(identity.Id)
-
-	lease, exists := lm.leases[identityID]
-	if !exists {
-		return nil, false
-	}
-
-	// Check if lease is expired
-	if time.Now().After(lease.Expires) {
-		return nil, false
-	}
-
-	return lease, true
+	reply := make(chan leaseResult, 1)
+	lm.cmdCh <- &cmdGetLease{identity: identity, reply: reply}
+	result := <-reply
+	return result.entry, result.exists
 }
 
 func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	// Check if banned
-	if _, banned := lm.bannedLeases[leaseID]; banned {
-		return nil, false
-	}
-
-	lease, exists := lm.leases[leaseID]
-	if !exists {
-		return nil, false
-	}
-
-	// Check if lease is expired
-	if time.Now().After(lease.Expires) {
-		return nil, false
-	}
-
-	return lease, true
+	reply := make(chan leaseResult, 1)
+	lm.cmdCh <- &cmdGetLeaseByID{leaseID: leaseID, reply: reply}
+	result := <-reply
+	return result.entry, result.exists
 }
 
 func (lm *LeaseManager) GetAllLeases() []*rdverb.Lease {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	now := time.Now()
-	var validLeases []*rdverb.Lease
-
-	for _, lease := range lm.leases {
-		if now.Before(lease.Expires) {
-			validLeases = append(validLeases, lease.Lease)
-		}
-	}
-
-	return validLeases
+	reply := make(chan []*rdverb.Lease, 1)
+	lm.cmdCh <- &cmdGetAllLeases{reply: reply}
+	return <-reply
 }
 
 // Lease policy configuration helpers
 func (lm *LeaseManager) BanLease(leaseID string) {
-	lm.leasesLock.Lock()
-	lm.bannedLeases[leaseID] = struct{}{}
-	lm.leasesLock.Unlock()
+	done := make(chan struct{}, 1)
+	lm.cmdCh <- &cmdBan{leaseID: leaseID, done: done}
+	<-done
 }
 
 func (lm *LeaseManager) UnbanLease(leaseID string) {
-	lm.leasesLock.Lock()
-	delete(lm.bannedLeases, leaseID)
-	lm.leasesLock.Unlock()
+	done := make(chan struct{}, 1)
+	lm.cmdCh <- &cmdUnban{leaseID: leaseID, done: done}
+	<-done
 }
 
 func (lm *LeaseManager) GetBannedLeases() [][]byte {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-	banned := make([][]byte, 0, len(lm.bannedLeases))
-	for id := range lm.bannedLeases {
-		banned = append(banned, []byte(id))
-	}
-	return banned
+	reply := make(chan [][]byte, 1)
+	lm.cmdCh <- &cmdGetBanned{reply: reply}
+	return <-reply
 }
 
 func (lm *LeaseManager) SetNamePattern(pattern string) error {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-	if pattern == "" {
-		lm.namePattern = nil
-		return nil
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-	lm.namePattern = re
-	return nil
+	reply := make(chan error, 1)
+	lm.cmdCh <- &cmdSetPattern{pattern: pattern, reply: reply}
+	return <-reply
 }
 
 // SetReservedPrefixes removed: reserved prefix policy no longer supported
 
 func (lm *LeaseManager) SetTTLBounds(min, max time.Duration) {
-	lm.leasesLock.Lock()
-	lm.minTTL = min
-	lm.maxTTL = max
-	lm.leasesLock.Unlock()
+	done := make(chan struct{}, 1)
+	lm.cmdCh <- &cmdSetTTL{min: min, max: max, done: done}
+	<-done
 }
 
 func (lm *LeaseManager) CleanupLeasesByConnectionID(connectionID int64) []string {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
+	reply := make(chan []string, 1)
+	lm.cmdCh <- &cmdCleanupByConnID{connID: connectionID, reply: reply}
+	return <-reply
+}
 
-	var cleanedLeaseIDs []string
-	for leaseID, lease := range lm.leases {
-		if lease.ConnectionID == connectionID {
-			delete(lm.leases, leaseID)
-			cleanedLeaseIDs = append(cleanedLeaseIDs, leaseID)
-		}
-	}
+// GetAllEntries returns all valid (non-expired) lease entries.
+// This method is used by RelayServer.GetAllLeaseEntries.
+func (lm *LeaseManager) GetAllEntries() []*LeaseEntry {
+	reply := make(chan []*LeaseEntry, 1)
+	lm.cmdCh <- &cmdGetAllEntries{reply: reply}
+	return <-reply
+}
 
-	return cleanedLeaseIDs
+// GetLeaseALPNs returns the ALPN identifiers for a given lease ID.
+// This method is used by RelayServer.GetLeaseALPNs.
+func (lm *LeaseManager) GetLeaseALPNs(leaseID string) []string {
+	reply := make(chan []string, 1)
+	lm.cmdCh <- &cmdGetLeaseALPNs{leaseID: leaseID, reply: reply}
+	return <-reply
 }

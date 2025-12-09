@@ -66,11 +66,11 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 	if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID) {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
-		// Register lease connection
+		// Register lease connection via event loop
 		leaseID := string(req.Lease.Identity.Id)
-		g.leaseConnectionsLock.Lock()
-		g.leaseConnections[leaseID] = ctx.Connection
-		g.leaseConnectionsLock.Unlock()
+		done := make(chan struct{}, 1)
+		g.cmdCh <- &cmdRegisterLeaseConn{leaseID: leaseID, conn: ctx.Connection, done: done}
+		<-done
 
 		// Log lease update completion
 		log.Debug().
@@ -123,11 +123,11 @@ func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdver
 	if g.leaseManager.DeleteLease(req.Identity) {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
-		// Remove lease connection
+		// Remove lease connection via event loop
 		leaseID := string(req.Identity.Id)
-		g.leaseConnectionsLock.Lock()
-		delete(g.leaseConnections, leaseID)
-		g.leaseConnectionsLock.Unlock()
+		done := make(chan struct{}, 1)
+		g.cmdCh <- &cmdUnregisterLeaseConn{leaseID: leaseID, done: done}
+		<-done
 
 		// Log lease deletion completion
 		log.Debug().
@@ -168,12 +168,12 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		return g.sendConnectionResponse(ctx.Stream, rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY)
 	}
 
-	// Get the lease connection
-	g.connectionsLock.RLock()
-	leaseConn, leaseExists := g.connections[leaseEntry.ConnectionID]
-	g.connectionsLock.RUnlock()
+	// Get the lease connection via event loop
+	reply := make(chan *Connection, 1)
+	g.cmdCh <- &cmdGetConnByLeaseEntry{connID: leaseEntry.ConnectionID, reply: reply}
+	leaseConn := <-reply
 
-	if !leaseExists {
+	if leaseConn == nil {
 		return g.sendConnectionResponse(ctx.Stream, rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY)
 	}
 
@@ -190,11 +190,12 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	// Enforce relayed connection limits
 	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		leaseID := string(leaseEntry.Lease.Identity.Id)
-		g.limitsLock.Lock()
-		overPerLease := g.maxRelayedPerLease > 0 && g.relayedPerLeaseCount[leaseID] >= g.maxRelayedPerLease
-		g.limitsLock.Unlock()
+		// Atomically check and increment limit via event loop
+		reply := make(chan bool, 1)
+		g.cmdCh <- &cmdCheckAndIncLimit{leaseID: leaseID, reply: reply}
+		underLimit := <-reply
 
-		if overPerLease {
+		if !underLimit {
 			log.Warn().Str("lease_id", leaseID).Msg("[RelayServer] Relayed connection per-lease limit reached")
 			respCode = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 			leaseStream.Close()
@@ -203,6 +204,13 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 
 	// Send response to client
 	if err := g.sendConnectionResponse(ctx.Stream, respCode); err != nil {
+		// If we already incremented the limit, decrement it
+		if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+			leaseID := string(leaseEntry.Lease.Identity.Id)
+			done := make(chan struct{}, 1)
+			g.cmdCh <- &cmdDecLimit{leaseID: leaseID, done: done}
+			<-done
+		}
 		leaseStream.Close()
 		return err
 	}
@@ -273,33 +281,23 @@ func (g *RelayServer) sendConnectionResponse(stream *yamux.Stream, code rdverb.R
 }
 
 func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream *yamux.Stream, leaseID string) {
-	// Register connection for tracking
-	g.limitsLock.Lock()
-	g.relayedPerLeaseCount[leaseID]++
-	g.limitsLock.Unlock()
-
-	g.relayedConnectionsLock.Lock()
-	g.relayedConnections[leaseID] = append(g.relayedConnections[leaseID], clientStream)
-	g.relayedConnectionsLock.Unlock()
+	// Register stream for tracking via event loop
+	// Note: limit was already incremented in handleConnectionRequest
+	done := make(chan struct{}, 1)
+	g.cmdCh <- &cmdAddRelayed{leaseID: leaseID, stream: clientStream, done: done}
+	<-done
 
 	// Cleanup function
 	defer func() {
-		g.limitsLock.Lock()
-		if g.relayedPerLeaseCount[leaseID] > 0 {
-			g.relayedPerLeaseCount[leaseID]--
-		}
-		g.limitsLock.Unlock()
+		// Decrement limit via event loop
+		done := make(chan struct{}, 1)
+		g.cmdCh <- &cmdDecLimit{leaseID: leaseID, done: done}
+		<-done
 
-		g.relayedConnectionsLock.Lock()
-		if streams, ok := g.relayedConnections[leaseID]; ok {
-			for i, s := range streams {
-				if s == clientStream {
-					g.relayedConnections[leaseID] = append(streams[:i], streams[i+1:]...)
-					break
-				}
-			}
-		}
-		g.relayedConnectionsLock.Unlock()
+		// Remove stream from tracking via event loop
+		done2 := make(chan struct{}, 1)
+		g.cmdCh <- &cmdRemoveRelayed{leaseID: leaseID, stream: clientStream, done: done2}
+		<-done2
 	}()
 
 	// Use callback for actual relay (handles BPS limiting in relay-server)

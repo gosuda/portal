@@ -13,6 +13,10 @@ linters:
     - govet # Standard vet
     - errcheck # Unchecked errors are fatal
     - staticcheck # Dominant static analysis
+    - gochecknoglobals # Disallows global variables (improves concurrency safety)
+    - gochecknoinits # Disallows init functions (can have concurrency implications)
+    - gocritic # General linter with many checks, including some concurrency-related ones like deferInLoop
+    - containedctx # Ensures context.Context is the first argument (improves context propagation)
 
     # --- The Dark Arts (Performance & Concurrency) ---
     - prealloc # Encourages slice pre-allocation (critical for low latency)
