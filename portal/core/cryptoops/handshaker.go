@@ -158,7 +158,7 @@ func (sc *SecureConnection) Write(p []byte) (int, error) {
 
 	const fragSize = maxRawPacketSize / 2
 	if len(p) > fragSize {
-		for i := 0; i < (len(p)+fragSize-1)/fragSize; i++ {
+		for i := range  / fragSize {
 			start := i * fragSize
 			end := min(start+fragSize, len(p))
 			_, err := sc.writeFragmentation(p[start:end])
