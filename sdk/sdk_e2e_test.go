@@ -59,18 +59,14 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 		}
 	})
 
-	// Create TCP listener with TCP_NODELAY enabled for low-latency relay protocol
-	relayListener, err := net.Listen("tcp", relayAddr)
-	require.NoError(t, err, "Failed to create relay listener")
-	noDelayListener := utils.NewTCPNoDelayListener(relayListener)
-
 	relayHTTPServer := &http.Server{
+		Addr:    relayAddr,
 		Handler: relayMux,
 	}
 
 	go func() {
 		log.Info().Str("addr", relayAddr).Msg("[TEST] Relay HTTP server starting")
-		if err := relayHTTPServer.Serve(noDelayListener); err != nil && err != http.ErrServerClosed {
+		if err := relayHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[TEST] Relay HTTP server error")
 		}
 	}()
@@ -223,16 +219,12 @@ func TestE2E_MultipleConnections(t *testing.T) {
 		relayServer.HandleConnection(stream)
 	})
 
-	// Create TCP listener with TCP_NODELAY enabled
-	relayListener, err := net.Listen("tcp", relayAddr)
-	require.NoError(t, err, "Failed to create relay listener")
-	noDelayListener := utils.NewTCPNoDelayListener(relayListener)
-
 	relayHTTPServer := &http.Server{
+		Addr:    relayAddr,
 		Handler: relayMux,
 	}
 
-	go relayHTTPServer.Serve(noDelayListener)
+	go relayHTTPServer.ListenAndServe()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -367,16 +359,12 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 		relayServer.HandleConnection(stream)
 	})
 
-	// Create TCP listener with TCP_NODELAY enabled
-	relayListener, err := net.Listen("tcp", relayAddr)
-	require.NoError(t, err, "Failed to create relay listener")
-	noDelayListener := utils.NewTCPNoDelayListener(relayListener)
-
 	relayHTTPServer := &http.Server{
+		Addr:    relayAddr,
 		Handler: relayMux,
 	}
 
-	go relayHTTPServer.Serve(noDelayListener)
+	go relayHTTPServer.ListenAndServe()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

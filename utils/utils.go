@@ -5,70 +5,21 @@ import (
 	"fmt"
 	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal/utils/wsstream"
 )
 
-// SetTCPNoDelay enables TCP_NODELAY on a TCP connection to disable Nagle's algorithm.
-// Returns nil for non-TCP connections (e.g., Unix sockets, WebSocket over WASM).
-func SetTCPNoDelay(conn net.Conn) error {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		return tcpConn.SetNoDelay(true)
-	}
-	return nil
-}
-
-// TCPNoDelayListener wraps a net.Listener to enable TCP_NODELAY on accepted connections.
-type TCPNoDelayListener struct {
-	net.Listener
-}
-
-// Accept accepts a connection and enables TCP_NODELAY.
-func (l *TCPNoDelayListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	if err := SetTCPNoDelay(conn); err != nil {
-		log.Debug().Err(err).Msg("failed to set TCP_NODELAY on accepted connection")
-	}
-	return conn, nil
-}
-
-// NewTCPNoDelayListener wraps a listener to enable TCP_NODELAY on accepted connections.
-func NewTCPNoDelayListener(l net.Listener) *TCPNoDelayListener {
-	return &TCPNoDelayListener{Listener: l}
-}
-
 // NewWebSocketDialer returns a dialer that establishes WebSocket connections
-// and wraps them as io.ReadWriteCloser. TCP_NODELAY is enabled on the underlying
-// TCP connection to minimize latency for interactive relay protocols.
+// and wraps them as io.ReadWriteCloser.
 func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
-	dialer := &websocket.Dialer{
-		NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			d := &net.Dialer{}
-			conn, err := d.DialContext(ctx, network, addr)
-			if err != nil {
-				return nil, err
-			}
-			if err := SetTCPNoDelay(conn); err != nil {
-				log.Debug().Err(err).Msg("failed to set TCP_NODELAY on WebSocket connection")
-			}
-			return conn, nil
-		},
-		HandshakeTimeout: websocket.DefaultDialer.HandshakeTimeout,
-	}
-
 	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := dialer.DialContext(ctx, url, nil)
+		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			return nil, err
 		}

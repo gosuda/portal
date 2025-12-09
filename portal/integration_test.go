@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdverb"
-	"gosuda.org/portal/utils"
 )
 
 // generateTestCredential creates a new credential for testing
@@ -27,10 +26,9 @@ func TestIntegration_FullFlow(t *testing.T) {
 	server.Start()
 	defer server.Stop()
 
-	// Create a listener for the server with TCP_NODELAY enabled
-	rawListener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Create a listener for the server
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	listener := utils.NewTCPNoDelayListener(rawListener)
 	defer listener.Close()
 
 	go func() {
@@ -49,7 +47,6 @@ func TestIntegration_FullFlow(t *testing.T) {
 	hostCred := generateTestCredential(t)
 	hostConn, err := net.Dial("tcp", serverAddr)
 	require.NoError(t, err)
-	require.NoError(t, utils.SetTCPNoDelay(hostConn))
 
 	hostClient := NewRelayClient(hostConn)
 	require.NotNil(t, hostClient)
@@ -78,7 +75,6 @@ func TestIntegration_FullFlow(t *testing.T) {
 	peerCred := generateTestCredential(t)
 	peerConn, err := net.Dial("tcp", serverAddr)
 	require.NoError(t, err)
-	require.NoError(t, utils.SetTCPNoDelay(peerConn))
 
 	peerClient := NewRelayClient(peerConn)
 	require.NotNil(t, peerClient)
