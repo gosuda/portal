@@ -3,7 +3,6 @@ package portal
 import (
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -21,102 +20,22 @@ type Connection struct {
 	streamsLock sync.Mutex
 }
 
-// relayCmd is the command interface for RelayServer event loop.
-type relayCmd interface{ relayCmd() }
-
-// Connection management commands
-type cmdRegisterConn struct {
-	id   int64
-	conn *Connection
-	done chan<- struct{}
-}
-
-type cmdRemoveConn struct {
-	id   int64
-	done chan<- []string // returns cleaned lease IDs
-}
-
-type cmdIsConnActive struct {
-	id    int64
-	reply chan<- bool
-}
-
-type cmdGetConnByLeaseEntry struct {
-	connID int64
-	reply  chan<- *Connection
-}
-
-// Lease connection management commands
-type cmdRegisterLeaseConn struct {
-	leaseID string
-	conn    *Connection
-	done    chan<- struct{}
-}
-
-type cmdUnregisterLeaseConn struct {
-	leaseID string
-	done    chan<- struct{}
-}
-
-// Relayed connection tracking commands
-type cmdAddRelayed struct {
-	leaseID string
-	stream  *yamux.Stream
-	done    chan<- struct{}
-}
-
-type cmdRemoveRelayed struct {
-	leaseID string
-	stream  *yamux.Stream
-	done    chan<- struct{}
-}
-
-// Limit management commands
-type cmdCheckAndIncLimit struct {
-	leaseID string
-	reply   chan<- bool // true if under limit and incremented
-}
-
-type cmdDecLimit struct {
-	leaseID string
-	done    chan<- struct{}
-}
-
-type cmdSetMaxRelayed struct {
-	max  int
-	done chan<- struct{}
-}
-
-// Command interface markers
-func (cmdRegisterConn) relayCmd()        {}
-func (cmdRemoveConn) relayCmd()          {}
-func (cmdIsConnActive) relayCmd()        {}
-func (cmdGetConnByLeaseEntry) relayCmd() {}
-func (cmdRegisterLeaseConn) relayCmd()   {}
-func (cmdUnregisterLeaseConn) relayCmd() {}
-func (cmdAddRelayed) relayCmd()          {}
-func (cmdRemoveRelayed) relayCmd()       {}
-func (cmdCheckAndIncLimit) relayCmd()    {}
-func (cmdDecLimit) relayCmd()            {}
-func (cmdSetMaxRelayed) relayCmd()       {}
-
-// RelayServer handles relay connections using a single-threaded event loop.
-// All state mutations are processed sequentially via the command channel.
 type RelayServer struct {
 	credential *cryptoops.Credential
 	identity   *rdsec.Identity
 	address    []string
 
-	connidCounter      int64
-	connections        map[int64]*Connection
-	leaseConnections   map[string]*Connection     // Key: lease ID, Value: Connection
-	relayedConnections map[string][]*yamux.Stream // Key: lease ID, Value: slice of relayed streams
+	connidCounter   int64
+	connections     map[int64]*Connection
+	connectionsLock sync.RWMutex
+
+	leaseConnections     map[string]*Connection // Key: lease ID, Value: Connection
+	leaseConnectionsLock sync.RWMutex
+
+	relayedConnections     map[string][]*yamux.Stream // Key: lease ID, Value: slice of relayed streams
+	relayedConnectionsLock sync.RWMutex
 
 	leaseManager *LeaseManager
-
-	// Event loop
-	cmdCh chan relayCmd
-	runWg sync.WaitGroup
 
 	stopch    chan struct{}
 	waitgroup sync.WaitGroup
@@ -124,6 +43,7 @@ type RelayServer struct {
 	// Traffic control limits and counters
 	maxRelayedPerLease   int
 	relayedPerLeaseCount map[string]int
+	limitsLock           sync.Mutex
 
 	// Callback for relay connection establishment (set by relay-server for BPS handling)
 	onEstablishRelay func(clientStream, leaseStream *yamux.Stream, leaseID string)
@@ -142,7 +62,6 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 		leaseConnections:     make(map[string]*Connection),
 		relayedConnections:   make(map[string][]*yamux.Stream),
 		leaseManager:         NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
-		cmdCh:                make(chan relayCmd, 256),
 		stopch:               make(chan struct{}),
 		relayedPerLeaseCount: make(map[string]int),
 	}
@@ -162,10 +81,8 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 	defer func() {
 		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection closing, cleaning up")
 
-		// Remove connection and clean up all associated state via event loop
-		done := make(chan []string, 1)
-		g.cmdCh <- &cmdRemoveConn{id: id, done: done}
-		cleanedLeaseIDs := <-done
+		// Clean up leases associated with this connection when it closes
+		cleanedLeaseIDs := g.leaseManager.CleanupLeasesByConnectionID(id)
 
 		if len(cleanedLeaseIDs) > 0 {
 			log.Debug().
@@ -173,6 +90,31 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 				Strs("lease_ids", cleanedLeaseIDs).
 				Msg("[RelayServer] Cleaned up leases for connection")
 		}
+
+		// Also clean up lease connections mapping
+		g.leaseConnectionsLock.Lock()
+		for _, leaseID := range cleanedLeaseIDs {
+			delete(g.leaseConnections, leaseID)
+		}
+		g.leaseConnectionsLock.Unlock()
+
+		// Clean up relayed connections for these leases
+		g.relayedConnectionsLock.Lock()
+		for _, leaseID := range cleanedLeaseIDs {
+			if streams, exists := g.relayedConnections[leaseID]; exists {
+				// Close all relayed streams
+				for _, stream := range streams {
+					stream.Close()
+				}
+				delete(g.relayedConnections, leaseID)
+			}
+		}
+		g.relayedConnectionsLock.Unlock()
+
+		// Remove the connection itself
+		g.connectionsLock.Lock()
+		delete(g.connections, id)
+		g.connectionsLock.Unlock()
 
 		// Close the underlying connection
 		connection.conn.Close()
@@ -297,17 +239,16 @@ func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
 		return err
 	}
 
-	connID := atomic.AddInt64(&g.connidCounter, 1)
+	g.connectionsLock.Lock()
+	g.connidCounter++
+	connID := g.connidCounter
 	connection := &Connection{
 		conn:    conn,
 		sess:    sess,
 		streams: make(map[uint32]*yamux.Stream),
 	}
-
-	// Register connection via event loop
-	done := make(chan struct{}, 1)
-	g.cmdCh <- &cmdRegisterConn{id: connID, conn: connection, done: done}
-	<-done
+	g.connections[connID] = connection
+	g.connectionsLock.Unlock()
 
 	log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Connection registered, starting handler")
 	go g.handleConn(connID, connection)
@@ -330,131 +271,63 @@ func (g *RelayServer) GetLeaseManager() *LeaseManager {
 
 // IsConnectionActive checks if a connection with the given ID is still active
 func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
-	reply := make(chan bool, 1)
-	g.cmdCh <- &cmdIsConnActive{id: connectionID, reply: reply}
-	return <-reply
+	g.connectionsLock.RLock()
+	defer g.connectionsLock.RUnlock()
+
+	_, exists := g.connections[connectionID]
+	return exists
 }
 
 // GetAllLeaseEntries returns all lease entries from the lease manager
 func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
-	return g.leaseManager.GetAllEntries()
+	g.leaseManager.leasesLock.RLock()
+	defer g.leaseManager.leasesLock.RUnlock()
+
+	var entries []*LeaseEntry
+	now := time.Now()
+
+	for _, entry := range g.leaseManager.leases {
+		if now.Before(entry.Expires) {
+			entries = append(entries, entry)
+		}
+	}
+
+	return entries
 }
 
 // GetLeaseALPNs returns the ALPN identifiers for a given lease ID
 func (g *RelayServer) GetLeaseALPNs(leaseID string) []string {
-	return g.leaseManager.GetLeaseALPNs(leaseID)
+	g.leaseManager.leasesLock.RLock()
+	defer g.leaseManager.leasesLock.RUnlock()
+
+	entry, exists := g.leaseManager.leases[leaseID]
+	if !exists {
+		return nil
+	}
+
+	now := time.Now()
+	if now.After(entry.Expires) {
+		return nil
+	}
+
+	return entry.Lease.Alpn
 }
 
 func (g *RelayServer) Start() {
-	g.runWg.Add(1)
-	go g.run()
 	g.leaseManager.Start()
 }
 
 func (g *RelayServer) Stop() {
 	close(g.stopch)
-	g.runWg.Wait()
 	g.leaseManager.Stop()
 	g.waitgroup.Wait()
 }
 
-// run is the main event loop that processes all commands sequentially.
-func (g *RelayServer) run() {
-	defer g.runWg.Done()
-	for {
-		select {
-		case cmd := <-g.cmdCh:
-			g.handleCmd(cmd)
-		case <-g.stopch:
-			return
-		}
-	}
-}
-
-// handleCmd dispatches commands to their handlers.
-func (g *RelayServer) handleCmd(cmd relayCmd) {
-	switch c := cmd.(type) {
-	case *cmdRegisterConn:
-		g.connections[c.id] = c.conn
-		c.done <- struct{}{}
-
-	case *cmdRemoveConn:
-		delete(g.connections, c.id)
-		// Clean up leases associated with this connection
-		cleanedLeaseIDs := g.leaseManager.CleanupLeasesByConnectionID(c.id)
-		// Clean up lease connections and relayed connections
-		for _, leaseID := range cleanedLeaseIDs {
-			delete(g.leaseConnections, leaseID)
-			if streams, exists := g.relayedConnections[leaseID]; exists {
-				for _, stream := range streams {
-					stream.Close()
-				}
-				delete(g.relayedConnections, leaseID)
-			}
-			delete(g.relayedPerLeaseCount, leaseID)
-		}
-		c.done <- cleanedLeaseIDs
-
-	case *cmdIsConnActive:
-		_, exists := g.connections[c.id]
-		c.reply <- exists
-
-	case *cmdGetConnByLeaseEntry:
-		conn, exists := g.connections[c.connID]
-		if exists {
-			c.reply <- conn
-		} else {
-			c.reply <- nil
-		}
-
-	case *cmdRegisterLeaseConn:
-		g.leaseConnections[c.leaseID] = c.conn
-		c.done <- struct{}{}
-
-	case *cmdUnregisterLeaseConn:
-		delete(g.leaseConnections, c.leaseID)
-		c.done <- struct{}{}
-
-	case *cmdAddRelayed:
-		g.relayedConnections[c.leaseID] = append(g.relayedConnections[c.leaseID], c.stream)
-		c.done <- struct{}{}
-
-	case *cmdRemoveRelayed:
-		if streams, ok := g.relayedConnections[c.leaseID]; ok {
-			for i, s := range streams {
-				if s == c.stream {
-					g.relayedConnections[c.leaseID] = append(streams[:i], streams[i+1:]...)
-					break
-				}
-			}
-		}
-		c.done <- struct{}{}
-
-	case *cmdCheckAndIncLimit:
-		if g.maxRelayedPerLease > 0 && g.relayedPerLeaseCount[c.leaseID] >= g.maxRelayedPerLease {
-			c.reply <- false
-		} else {
-			g.relayedPerLeaseCount[c.leaseID]++
-			c.reply <- true
-		}
-
-	case *cmdDecLimit:
-		if g.relayedPerLeaseCount[c.leaseID] > 0 {
-			g.relayedPerLeaseCount[c.leaseID]--
-		}
-		c.done <- struct{}{}
-
-	case *cmdSetMaxRelayed:
-		g.maxRelayedPerLease = c.max
-		c.done <- struct{}{}
-	}
-}
-
 // Traffic control setters
 func (g *RelayServer) SetMaxRelayedPerLease(n int) {
-	done := make(chan struct{}, 1)
-	g.cmdCh <- &cmdSetMaxRelayed{max: n, done: done}
-	<-done
+	g.limitsLock.Lock()
+	g.maxRelayedPerLease = n
+	g.limitsLock.Unlock()
 }
 
 // SetEstablishRelayCallback sets the callback for relay connection establishment
