@@ -188,6 +188,31 @@
       });
     }
 
+    // Build HTTP upgrade request bytes (used for pipelining)
+    _buildUpgradeRequest() {
+      // Parse URL to get path with query parameters
+      const path = (this._parsedUrl.pathname || "/") + (this._parsedUrl.search || "");
+      const host = this._parsedUrl.host;
+
+      // Build HTTP Upgrade request
+      let upgradeRequest = `GET ${path} HTTP/1.1\r\n`;
+      upgradeRequest += `Host: ${host}\r\n`;
+      upgradeRequest += `Upgrade: websocket\r\n`;
+      upgradeRequest += `Connection: Upgrade\r\n`;
+      upgradeRequest += `Sec-WebSocket-Key: ${this._wsKey}\r\n`;
+      upgradeRequest += `Sec-WebSocket-Version: 13\r\n`;
+
+      if (this._protocols) {
+        const protocolStr = Array.isArray(this._protocols)
+          ? this._protocols.join(', ')
+          : this._protocols;
+        upgradeRequest += `Sec-WebSocket-Protocol: ${protocolStr}\r\n`;
+      }
+
+      upgradeRequest += `\r\n`;
+      return upgradeRequest;
+    }
+
     async _connect() {
       debugLog("[WebSocket Polyfill] Connecting via Service Worker SDK to:", this._url);
       try {
@@ -204,14 +229,27 @@
 
         debugLog("[WebSocket Polyfill] Lease name:", leaseName);
 
+        // Build upgrade request for pipelining (reduces RTT from 2 to 1)
+        const upgradeRequest = this._buildUpgradeRequest();
+        debugLog("[WebSocket Polyfill] Pipelining upgrade request with connect");
+
+        // Set up for upgrade response before sending
+        this._waitingForUpgrade = true;
+        this._upgradeBuffer = new Uint8Array(0);
+
         // Wait for Service Worker to be ready
         await navigator.serviceWorker.ready;
 
-        // Send connect message to Service Worker (note: connId not set yet, so we manually include clientId)
+        // Convert upgrade request to bytes for pipelining
+        const encoder = new TextEncoder();
+        const upgradeBytes = encoder.encode(upgradeRequest);
+
+        // Send connect message with bundled upgrade request (pipelining)
         navigator.serviceWorker.controller.postMessage({
           type: "SDK_CONNECT",
           clientId: this._clientId,
           leaseName: leaseName,
+          upgradeRequest: upgradeBytes,  // Bundled for pipelining
         });
 
       } catch (error) {
@@ -223,10 +261,9 @@
     _handleConnectSuccess(data) {
       this._connId = data.connId;
 
-      debugLog("[WebSocket Polyfill] E2EE connection established, sending WebSocket upgrade");
-
-      // Send WebSocket HTTP Upgrade request
-      this._sendWebSocketUpgrade();
+      // Upgrade request was already pipelined with SDK_CONNECT
+      // Just wait for upgrade response in _handleData
+      debugLog("[WebSocket Polyfill] E2EE tunnel established, upgrade request already sent (pipelined)");
     }
 
     _sendWebSocketUpgrade() {
