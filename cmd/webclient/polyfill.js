@@ -266,44 +266,6 @@
       debugLog("[WebSocket Polyfill] E2EE tunnel established, upgrade request already sent (pipelined)");
     }
 
-    _sendWebSocketUpgrade() {
-      // Parse URL to get path with query parameters
-      const path = (this._parsedUrl.pathname || "/") + (this._parsedUrl.search || "");
-      const host = this._parsedUrl.host;
-
-      // Build HTTP Upgrade request
-      let upgradeRequest = `GET ${path} HTTP/1.1\r\n`;
-      upgradeRequest += `Host: ${host}\r\n`;
-      upgradeRequest += `Upgrade: websocket\r\n`;
-      upgradeRequest += `Connection: Upgrade\r\n`;
-      upgradeRequest += `Sec-WebSocket-Key: ${this._wsKey}\r\n`;
-      upgradeRequest += `Sec-WebSocket-Version: 13\r\n`;
-
-      if (this._protocols) {
-        const protocolStr = Array.isArray(this._protocols)
-          ? this._protocols.join(', ')
-          : this._protocols;
-        upgradeRequest += `Sec-WebSocket-Protocol: ${protocolStr}\r\n`;
-      }
-
-      upgradeRequest += `\r\n`;
-
-      debugLog("[WebSocket Polyfill] Sending upgrade request:", upgradeRequest);
-
-      // Convert to bytes and send
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(upgradeRequest);
-
-      this._postToServiceWorker({
-        type: "SDK_SEND",
-        data: bytes,
-      });
-
-      // Wait for upgrade response in _handleData
-      this._waitingForUpgrade = true;
-      this._upgradeBuffer = new Uint8Array(0);
-    }
-
     _handleConnectError(data) {
       console.error("[WebSocket Polyfill] Connection error:", data.error);
       this._handleError(new Error(data.error));

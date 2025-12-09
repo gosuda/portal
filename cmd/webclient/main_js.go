@@ -105,6 +105,26 @@ func storeDNSCache(name, leaseID string) {
 	})
 }
 
+// isValidUpgradeRequest validates that the upgrade request is a well-formed HTTP WebSocket upgrade
+func isValidUpgradeRequest(req []byte) bool {
+	if len(req) < 20 { // Minimum: "GET / HTTP/1.1\r\n\r\n"
+		return false
+	}
+	s := string(req)
+	// Must start with GET and end with double CRLF
+	if !strings.HasPrefix(s, "GET ") {
+		return false
+	}
+	if !strings.HasSuffix(s, "\r\n\r\n") {
+		return false
+	}
+	// Must contain Upgrade header (case-insensitive check)
+	if !strings.Contains(strings.ToLower(s), "upgrade:") {
+		return false
+	}
+	return true
+}
+
 var rdDialer = func(ctx context.Context, network, address string) (net.Conn, error) {
 	originalAddr := address
 	address = strings.TrimSuffix(address, ":80")
@@ -681,20 +701,27 @@ func handleSDKConnect(data js.Value) {
 		normalizedLeaseName := getLeaseID(leaseName)
 		log.Debug().Str("original", leaseName).Str("normalized", normalizedLeaseName).Msg("[SDK Connect] Normalized lease name")
 
-		// Lookup lease by name to get lease ID
-		lease, err := client.LookupName(normalizedLeaseName)
-		if err != nil {
-			log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
-			js.Global().Call("__sdk_post_message", map[string]interface{}{
-				"type":     "SDK_CONNECT_ERROR",
-				"clientId": clientId,
-				"error":    err.Error(),
-			})
-			return
+		// Check DNS cache first, then lookup if needed
+		var leaseID string
+		if cachedID, ok := lookupDNSCache(normalizedLeaseName); ok {
+			log.Debug().Str("name", normalizedLeaseName).Str("id", cachedID).Msg("[SDK Connect] DNS cache hit")
+			leaseID = cachedID
+		} else {
+			// Cache miss - perform lookup
+			lease, err := client.LookupName(normalizedLeaseName)
+			if err != nil {
+				log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
+				js.Global().Call("__sdk_post_message", map[string]interface{}{
+					"type":     "SDK_CONNECT_ERROR",
+					"clientId": clientId,
+					"error":    err.Error(),
+				})
+				return
+			}
+			leaseID = lease.GetIdentity().GetId()
+			storeDNSCache(normalizedLeaseName, leaseID)
+			log.Info().Str("leaseName", leaseName).Str("leaseID", leaseID).Msg("[SDK Connect] Lease found, cached")
 		}
-
-		leaseID := lease.GetIdentity().GetId()
-		log.Info().Str("leaseName", leaseName).Str("leaseID", leaseID).Msg("[SDK Connect] Lease found")
 
 		// Create E2EE connection using SDK with lease ID
 		cred := sdk.NewCredential()
@@ -711,20 +738,24 @@ func handleSDKConnect(data js.Value) {
 			return
 		}
 
-		// If pipelined upgrade request is present, send it immediately (saves 1 RTT)
+		// If pipelined upgrade request is present, validate and send it immediately (saves 1 RTT)
 		if len(upgradeRequest) > 0 {
-			_, err := conn.Write(upgradeRequest)
-			if err != nil {
-				log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed to send pipelined upgrade request")
-				conn.Close()
-				js.Global().Call("__sdk_post_message", map[string]interface{}{
-					"type":     "SDK_CONNECT_ERROR",
-					"clientId": clientId,
-					"error":    err.Error(),
-				})
-				return
+			if !isValidUpgradeRequest(upgradeRequest) {
+				log.Warn().Str("leaseID", leaseID).Msg("[SDK Connect] Invalid pipelined upgrade request, skipping")
+			} else {
+				_, err := conn.Write(upgradeRequest)
+				if err != nil {
+					log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed to send pipelined upgrade request")
+					conn.Close()
+					js.Global().Call("__sdk_post_message", map[string]interface{}{
+						"type":     "SDK_CONNECT_ERROR",
+						"clientId": clientId,
+						"error":    err.Error(),
+					})
+					return
+				}
+				log.Debug().Str("leaseID", leaseID).Msg("[SDK Connect] Pipelined upgrade request sent")
 			}
-			log.Debug().Str("leaseID", leaseID).Msg("[SDK Connect] Pipelined upgrade request sent")
 		}
 
 		// Generate connection ID
