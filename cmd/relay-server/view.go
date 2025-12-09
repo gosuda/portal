@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
 
@@ -344,10 +343,6 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
 
-		// Metadata parsing
-		var meta sdk.Metadata
-		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
-
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
@@ -430,7 +425,7 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        meta.Hide,
+			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:    lease.Metadata,
 			BPS:         bps,
 		}
@@ -466,10 +461,8 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			continue
 		}
 
-		// Metadata parsing
-		var meta sdk.Metadata
-		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
-		if meta.Hide {
+		// Use cached parsed metadata
+		if leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide {
 			continue
 		}
 
@@ -557,10 +550,11 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        meta.Hide,
+			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:    lease.Metadata,
 		}
 
+		// Hidden entries are already filtered above, but keep check for safety
 		if !row.Hide {
 			rows = append(rows, row)
 		}
