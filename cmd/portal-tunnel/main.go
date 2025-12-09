@@ -17,6 +17,12 @@ import (
 	"gosuda.org/portal/utils"
 )
 
+// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
+// per-copy allocations and reduce GC pressure under high concurrency.
+var bufferPool = sync.Pool{
+	New: func() any { return make([]byte, 64*1024) },
+}
+
 var (
 	flagConfigPath string
 	flagRelayURLs  string
@@ -174,12 +180,16 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	}()
 
 	go func() {
-		_, err := io.Copy(localConn, relayConn)
+		buf := bufferPool.Get().([]byte)
+		_, err := io.CopyBuffer(localConn, relayConn, buf)
+		bufferPool.Put(buf)
 		errCh <- err
 	}()
 
 	go func() {
-		_, err := io.Copy(relayConn, localConn)
+		buf := bufferPool.Get().([]byte)
+		_, err := io.CopyBuffer(relayConn, localConn, buf)
+		bufferPool.Put(buf)
 		errCh <- err
 	}()
 

@@ -148,7 +148,13 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 	}
 }
 
-var _yamux_config = yamux.DefaultConfig()
+var _yamux_config = func() *yamux.Config {
+	cfg := yamux.DefaultConfig()
+	cfg.MaxStreamWindowSize = 16 * 1024 * 1024 // 16MB for high-BDP scenarios
+	cfg.StreamOpenTimeout = 75 * time.Second
+	cfg.StreamCloseTimeout = 5 * time.Minute
+	return cfg
+}()
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
 	log.Debug().Int64("conn_id", id).Msg("[RelayServer] Handling new connection")
