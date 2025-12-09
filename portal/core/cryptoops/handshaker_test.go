@@ -11,14 +11,17 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 	"gosuda.org/portal/portal/core/proto/rdsec"
+	"gosuda.org/portal/utils"
 )
 
-// pipeConn creates a bidirectional pipe for testing using TCP loopback
+// pipeConn creates a bidirectional pipe for testing using TCP loopback.
+// TCP_NODELAY is enabled on both connections for low-latency testing.
 func pipeConn() (net.Conn, net.Conn) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	rawListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
+	listener := utils.NewTCPNoDelayListener(rawListener)
 
 	connCh := make(chan net.Conn, 1)
 	go func() {
@@ -32,6 +35,9 @@ func pipeConn() (net.Conn, net.Conn) {
 
 	clientConn, err := net.Dial("tcp", listener.Addr().String())
 	if err != nil {
+		panic(err)
+	}
+	if err := utils.SetTCPNoDelay(clientConn); err != nil {
 		panic(err)
 	}
 
@@ -682,11 +688,12 @@ func TestRealNetworkConnection(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
 
-	// Start server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start server with TCP_NODELAY enabled
+	rawListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start listener: %v", err)
 	}
+	listener := utils.NewTCPNoDelayListener(rawListener)
 	defer listener.Close()
 
 	serverAddr := listener.Addr().String()
@@ -707,10 +714,13 @@ func TestRealNetworkConnection(t *testing.T) {
 		serverSecure, serverErr = serverHandshaker.ServerHandshake(conn, []string{"test-alpn"})
 	}()
 
-	// Connect client
+	// Connect client with TCP_NODELAY enabled
 	clientConn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
+	}
+	if err := utils.SetTCPNoDelay(clientConn); err != nil {
+		t.Fatalf("Failed to set TCP_NODELAY: %v", err)
 	}
 
 	clientHandshaker := NewHandshaker(clientCred)

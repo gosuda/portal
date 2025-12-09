@@ -176,13 +176,19 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 	})
 
 	srv := &http.Server{
-		Addr:    addr,
 		Handler: handler,
 	}
 
+	// Create TCP listener with TCP_NODELAY enabled for low-latency relay protocol
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal().Err(err).Msgf("[server] failed to listen on %s", addr)
+	}
+	noDelayListener := utils.NewTCPNoDelayListener(listener)
+
 	go func() {
 		log.Info().Msgf("[server] http: %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(noDelayListener); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[server] http error")
 			cancel()
 		}
@@ -558,7 +564,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			Metadata:    lease.Metadata,
 		}
 
-		if row.Hide != true {
+		if !row.Hide {
 			rows = append(rows, row)
 		}
 	}

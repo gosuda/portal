@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsURLSafeName(t *testing.T) {
@@ -257,4 +259,74 @@ func TestIsSubdomain(t *testing.T) {
 			assert.Equal(t, got, tc.want, tc.name)
 		})
 	}
+}
+
+func TestSetTCPNoDelay(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	go func() {
+		conn, _ := listener.Accept()
+		if conn != nil {
+			conn.Close()
+		}
+	}()
+
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Should succeed on TCP connection
+	err = SetTCPNoDelay(conn)
+	require.NoError(t, err)
+
+	// Verify it's a TCP connection
+	_, ok := conn.(*net.TCPConn)
+	require.True(t, ok, "expected *net.TCPConn")
+}
+
+func TestSetTCPNoDelay_NonTCP(t *testing.T) {
+	// Test with a non-TCP connection (using a pipe)
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	// Should return nil for non-TCP connections (no-op)
+	err := SetTCPNoDelay(client)
+	require.NoError(t, err)
+}
+
+func TestTCPNoDelayListener(t *testing.T) {
+	rawListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	listener := NewTCPNoDelayListener(rawListener)
+	defer listener.Close()
+
+	go func() {
+		conn, err := net.Dial("tcp", listener.Addr().String())
+		if err == nil {
+			conn.Close()
+		}
+	}()
+
+	conn, err := listener.Accept()
+	require.NoError(t, err)
+	defer conn.Close()
+
+	// Verify it's a TCP connection (TCP_NODELAY was set during Accept)
+	_, ok := conn.(*net.TCPConn)
+	require.True(t, ok, "expected *net.TCPConn from TCPNoDelayListener")
+}
+
+func TestTCPNoDelayListener_Addr(t *testing.T) {
+	rawListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	listener := NewTCPNoDelayListener(rawListener)
+	defer listener.Close()
+
+	// Verify Addr() returns the correct address
+	require.Equal(t, rawListener.Addr(), listener.Addr())
 }

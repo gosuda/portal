@@ -12,7 +12,7 @@ import (
 // BPSManager manages per-lease bytes-per-second rate limiting
 type BPSManager struct {
 	mu         sync.Mutex
-	bpsLimits  map[string]int64            // leaseID -> bytes-per-second (0 = unlimited)
+	bpsLimits  map[string]int64             // leaseID -> bytes-per-second (0 = unlimited)
 	bpsBuckets map[string]*ratelimit.Bucket // leaseID -> rate limit bucket
 	defaultBPS int64                        // default bytes-per-second for new leases
 }
