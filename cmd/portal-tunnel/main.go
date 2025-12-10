@@ -181,15 +181,15 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	go func() {
 		buf := bufferPool.Get().([]byte)
+		defer bufferPool.Put(buf)
 		_, err := io.CopyBuffer(localConn, relayConn, buf)
-		bufferPool.Put(buf)
 		errCh <- err
 	}()
 
 	go func() {
 		buf := bufferPool.Get().([]byte)
+		defer bufferPool.Put(buf)
 		_, err := io.CopyBuffer(relayConn, localConn, buf)
-		bufferPool.Put(buf)
 		errCh <- err
 	}()
 
