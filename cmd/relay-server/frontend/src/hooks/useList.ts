@@ -48,7 +48,7 @@ export function useList<T extends BaseServer>({
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("default");
+  const [sortBy, setSortBy] = useState<SortOption>("duration");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<number[]>(() => {
     const stored = localStorage.getItem(storageKey);
