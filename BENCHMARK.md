@@ -1,6 +1,6 @@
 # Benchmarking
 
-This document describes the benchmarking setup for the `relaydns` project.
+This document describes the benchmarking setup for the `portal` project.
 
 ## Portal Benchmark
 
