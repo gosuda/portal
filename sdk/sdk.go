@@ -34,8 +34,9 @@ type Client struct {
 	relays    map[string]*connRelay
 	listeners map[string]*listener
 
-	stopch    chan struct{}
-	stopOnce  sync.Once      // Ensure stopch is closed only once
+	ctx       context.Context //nolint:containedctx // lifecycle management for graceful shutdown
+	cancel    context.CancelFunc
+	stopOnce  sync.Once      // Ensure cancel is called only once
 	waitGroup sync.WaitGroup // Track all listener workers
 }
 
@@ -53,11 +54,13 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 		o(config)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	client := &Client{
 		relays:    make(map[string]*connRelay),
 		listeners: make(map[string]*listener),
 		config:    config,
-		stopch:    make(chan struct{}),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 
 	// Initialize relays from bootstrap servers
@@ -207,7 +210,7 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 
 	// Check if client is closed
 	select {
-	case <-g.stopch:
+	case <-g.ctx.Done():
 		log.Error().Msg("[SDK] Cannot create listener, client is closed")
 		return nil, ErrClientClosed
 	default:
@@ -347,7 +350,7 @@ func (g *Client) Close() error {
 
 	// Signal all goroutines to stop (only once)
 	g.stopOnce.Do(func() {
-		close(g.stopch)
+		g.cancel()
 	})
 
 	g.mu.Lock()
@@ -399,7 +402,7 @@ func (g *Client) healthCheckWorker(relay *connRelay) {
 
 	for {
 		select {
-		case <-g.stopch:
+		case <-g.ctx.Done():
 			log.Debug().Str("relay", relay.addr).Msg("[SDK] Health check worker stopped (client closing)")
 			return
 		case <-relay.stop:
@@ -408,7 +411,7 @@ func (g *Client) healthCheckWorker(relay *connRelay) {
 		case <-ticker.C:
 			// Check if client is still active
 			select {
-			case <-g.stopch:
+			case <-g.ctx.Done():
 				return
 			case <-relay.stop:
 				return
@@ -463,7 +466,7 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 		for {
 			// Check if client is shutting down
 			select {
-			case <-g.stopch:
+			case <-g.ctx.Done():
 				log.Debug().Str("relay", addr).Msg("[SDK] Reconnection cancelled (client closing)")
 				return
 			default:
@@ -501,7 +504,7 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 
 			// Wait before next retry with context awareness
 			select {
-			case <-g.stopch:
+			case <-g.ctx.Done():
 				log.Debug().Str("relay", addr).Msg("[SDK] Reconnection cancelled during wait")
 				return
 			case <-time.After(g.config.ReconnectInterval):

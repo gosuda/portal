@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"context"
 	"regexp"
 	"sync"
 	"time"
@@ -20,7 +21,8 @@ type LeaseEntry struct {
 type LeaseManager struct {
 	leases      map[string]*LeaseEntry // Key: identity ID
 	leasesLock  sync.RWMutex
-	stopCh      chan struct{}
+	ctx         context.Context //nolint:containedctx // lifecycle management for graceful shutdown
+	cancel      context.CancelFunc
 	ttlInterval time.Duration
 
 	// policy controls
@@ -31,20 +33,25 @@ type LeaseManager struct {
 }
 
 func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &LeaseManager{
 		leases:       make(map[string]*LeaseEntry),
-		stopCh:       make(chan struct{}),
+		ctx:          ctx,
+		cancel:       cancel,
 		ttlInterval:  ttlInterval,
 		bannedLeases: make(map[string]struct{}),
 	}
 }
 
-func (lm *LeaseManager) Start() {
+func (lm *LeaseManager) Start(ctx context.Context) {
+	// Cancel the default context and replace with child of provided context
+	lm.cancel()
+	lm.ctx, lm.cancel = context.WithCancel(ctx)
 	go lm.ttlWorker()
 }
 
 func (lm *LeaseManager) Stop() {
-	close(lm.stopCh)
+	lm.cancel()
 }
 
 func (lm *LeaseManager) ttlWorker() {
@@ -55,7 +62,7 @@ func (lm *LeaseManager) ttlWorker() {
 		select {
 		case <-ticker.C:
 			lm.cleanupExpiredLeases()
-		case <-lm.stopCh:
+		case <-lm.ctx.Done():
 			return
 		}
 	}

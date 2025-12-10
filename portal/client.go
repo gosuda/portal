@@ -4,6 +4,7 @@
 package portal
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -68,10 +69,11 @@ type RelayClient struct {
 	leases   map[string]*leaseWithCred
 	leasesMu sync.Mutex
 
-	// stopClientCh signals background workers to shut down
-	stopClientCh chan struct{}
-	stopOnce     sync.Once // Ensure stopClientCh is closed only once
-	waitGroup    sync.WaitGroup
+	// ctx and cancel for signaling background workers to shut down
+	ctx       context.Context //nolint:containedctx // lifecycle management for graceful shutdown
+	cancel    context.CancelFunc
+	stopOnce  sync.Once // Ensure cancel is called only once
+	waitGroup sync.WaitGroup
 
 	// incomingConnCh delivers incoming connections to the application
 	incomingConnCh chan *IncomingConn
@@ -115,11 +117,13 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 
 	log.Debug().Msg("[RelayClient] Yamux session created successfully")
 
+	ctx, cancel := context.WithCancel(context.Background())
 	g := &RelayClient{
 		conn:           conn,
 		sess:           sess,
 		leases:         make(map[string]*leaseWithCred),
-		stopClientCh:   make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
 		incomingConnCh: make(chan *IncomingConn),
 	}
 
@@ -146,7 +150,7 @@ func (g *RelayClient) Close() error {
 
 	// Signal workers to stop (only once)
 	g.stopOnce.Do(func() {
-		close(g.stopClientCh)
+		g.cancel()
 	})
 
 	var errs []error
@@ -189,7 +193,7 @@ func (g *RelayClient) leaseUpdateWorker() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-g.stopClientCh:
+		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
 			// Clear the map for the next update cycle
@@ -228,7 +232,7 @@ func (g *RelayClient) leaseListenWorker() {
 
 	for {
 		select {
-		case <-g.stopClientCh:
+		case <-g.ctx.Done():
 			log.Debug().Msg("[RelayClient] Lease listen worker stopped")
 			return
 		default:
@@ -242,7 +246,7 @@ func (g *RelayClient) leaseListenWorker() {
 			if err != nil {
 				// Check if we're supposed to stop
 				select {
-				case <-g.stopClientCh:
+				case <-g.ctx.Done():
 					return
 				default:
 					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
