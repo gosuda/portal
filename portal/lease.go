@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"encoding/json"
 	"regexp"
 	"sync"
 	"time"
@@ -9,11 +10,23 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
+// ParsedMetadata contains pre-parsed lease metadata fields.
+// Defined locally to avoid sdk dependency in core package.
+type ParsedMetadata struct {
+	Description string
+	Tags        []string
+	Thumbnail   string
+	Owner       string
+	Hide        bool
+}
+
+// LeaseEntry represents a registered lease with expiration tracking.
 type LeaseEntry struct {
-	Lease        *rdverb.Lease
-	Expires      time.Time
-	LastSeen     time.Time
-	ConnectionID int64 // Store the connection ID
+	Lease          *rdverb.Lease
+	Expires        time.Time
+	LastSeen       time.Time
+	ConnectionID   int64
+	ParsedMetadata *ParsedMetadata // Cached parsed metadata
 }
 
 type LeaseManager struct {
@@ -117,11 +130,33 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 		}
 	}
 
+	// Parse metadata once for cached access
+	var parsedMeta *ParsedMetadata
+	if lease.Metadata != "" {
+		var meta struct {
+			Description string   `json:"description"`
+			Tags        []string `json:"tags"`
+			Thumbnail   string   `json:"thumbnail"`
+			Owner       string   `json:"owner"`
+			Hide        bool     `json:"hide"`
+		}
+		if err := json.Unmarshal([]byte(lease.Metadata), &meta); err == nil {
+			parsedMeta = &ParsedMetadata{
+				Description: meta.Description,
+				Tags:        meta.Tags,
+				Thumbnail:   meta.Thumbnail,
+				Owner:       meta.Owner,
+				Hide:        meta.Hide,
+			}
+		}
+	}
+
 	lm.leases[identityID] = &LeaseEntry{
-		Lease:        lease,
-		Expires:      expires,
-		LastSeen:     time.Now(),
-		ConnectionID: connectionID,
+		Lease:          lease,
+		Expires:        expires,
+		LastSeen:       time.Now(),
+		ConnectionID:   connectionID,
+		ParsedMetadata: parsedMeta,
 	}
 
 	return true

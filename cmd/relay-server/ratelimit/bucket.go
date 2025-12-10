@@ -187,8 +187,8 @@ func (b *Bucket) Stats() (totalBytes, throttleHits int64, totalWaited time.Durat
 		time.Duration(atomic.LoadInt64(&b.totalWaited))
 }
 
-// internal buffer pool for Copy - use smaller buffer for finer-grained rate limiting
-var bufPool = sync.Pool{New: func() any { return make([]byte, 16*1024) }}
+// internal buffer pool for Copy - 64KB reduces Take() call frequency and lock contention
+var bufPool = sync.Pool{New: func() any { return make([]byte, 64*1024) }}
 
 // Copy copies from src to dst, enforcing the provided byte-rate bucket if not nil.
 // Multiple Copy calls sharing the same bucket will fairly share the bandwidth.

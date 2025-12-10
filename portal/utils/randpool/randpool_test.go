@@ -38,14 +38,14 @@ func TestRandConcurrency(t *testing.T) {
 	// Just run a bunch of goroutines to trigger the pool and potential race conditions
 	// (though the fallback race is hard to trigger without fault injection)
 	done := make(chan bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		go func() {
 			buf := make([]byte, 32)
 			Rand(buf)
 			done <- true
 		}()
 	}
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		<-done
 	}
 }

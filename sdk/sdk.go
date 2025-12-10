@@ -302,7 +302,7 @@ func (g *Client) listenerWorker(server *connRelay) {
 
 			if !exists {
 				log.Warn().Str("lease_id", lease).Msg("[SDK] No listener found for lease, closing connection")
-				incoming.SecureConnection.Close() // Close unused connection
+				incoming.Close() // Close unused connection
 				continue
 			}
 

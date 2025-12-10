@@ -12,7 +12,7 @@ import (
 // BPSManager manages per-lease bytes-per-second rate limiting
 type BPSManager struct {
 	mu         sync.Mutex
-	bpsLimits  map[string]int64            // leaseID -> bytes-per-second (0 = unlimited)
+	bpsLimits  map[string]int64             // leaseID -> bytes-per-second (0 = unlimited)
 	bpsBuckets map[string]*ratelimit.Bucket // leaseID -> rate limit bucket
 	defaultBPS int64                        // default bytes-per-second for new leases
 }
@@ -116,40 +116,18 @@ func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, 
 	return ratelimit.Copy(dst, src, bucket)
 }
 
-// Connection tracking for relay (package level)
-var (
-	relayedPerLeaseCount = make(map[string]int)
-	relayLimitsLock      sync.Mutex
-)
-
-// establishRelayWithBPS sets up bidirectional relay with BPS limiting
+// establishRelayWithBPS sets up bidirectional relay with BPS limiting.
+// Connection tracking is handled by RelayServer's event loop (cmdCheckAndIncLimit/cmdDecLimit).
 func establishRelayWithBPS(clientStream, leaseStream *yamux.Stream, leaseID string, bpsManager *BPSManager) {
-	// Register connection
-	relayLimitsLock.Lock()
-	relayedPerLeaseCount[leaseID]++
-	connectionCount := relayedPerLeaseCount[leaseID]
-	relayLimitsLock.Unlock()
-
-	// Log relay start
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().
 		Str("lease_id", leaseID).
 		Int64("bps_limit", bpsLimit).
-		Int("active_connections", connectionCount).
 		Msg("[Relay] Starting relay connection")
 
-	// Cleanup function
 	defer func() {
-		relayLimitsLock.Lock()
-		if relayedPerLeaseCount[leaseID] > 0 {
-			relayedPerLeaseCount[leaseID]--
-		}
-		remainingCount := relayedPerLeaseCount[leaseID]
-		relayLimitsLock.Unlock()
-
 		log.Info().
 			Str("lease_id", leaseID).
-			Int("remaining_connections", remainingCount).
 			Msg("[Relay] Relay connection closed")
 	}()
 

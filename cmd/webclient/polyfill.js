@@ -188,48 +188,8 @@
       });
     }
 
-    async _connect() {
-      debugLog("[WebSocket Polyfill] Connecting via Service Worker SDK to:", this._url);
-      try {
-        // Extract and normalize hostname (already parsed in constructor)
-        let hostname = this._parsedUrl.hostname;
-
-        // Normalize punycode to lowercase (punycode is case-insensitive per RFC 3492)
-        // This ensures XN--CW4B85OB9G becomes xn--cw4b85ob9g before processing
-        hostname = hostname.toLowerCase();
-
-        // Extract first label (keep lowercase for punycode conversion in Go backend)
-        // Go backend will convert punycode->unicode and then uppercase
-        const leaseName = hostname.split('.')[0];
-
-        debugLog("[WebSocket Polyfill] Lease name:", leaseName);
-
-        // Wait for Service Worker to be ready
-        await navigator.serviceWorker.ready;
-
-        // Send connect message to Service Worker (note: connId not set yet, so we manually include clientId)
-        navigator.serviceWorker.controller.postMessage({
-          type: "SDK_CONNECT",
-          clientId: this._clientId,
-          leaseName: leaseName,
-        });
-
-      } catch (error) {
-        console.error("[WebSocket Polyfill] Failed to connect:", error);
-        this._handleError(new Error(error));
-      }
-    }
-
-    _handleConnectSuccess(data) {
-      this._connId = data.connId;
-
-      debugLog("[WebSocket Polyfill] E2EE connection established, sending WebSocket upgrade");
-
-      // Send WebSocket HTTP Upgrade request
-      this._sendWebSocketUpgrade();
-    }
-
-    _sendWebSocketUpgrade() {
+    // Build HTTP upgrade request bytes (used for pipelining)
+    _buildUpgradeRequest() {
       // Parse URL to get path with query parameters
       const path = (this._parsedUrl.pathname || "/") + (this._parsedUrl.search || "");
       const host = this._parsedUrl.host;
@@ -250,21 +210,60 @@
       }
 
       upgradeRequest += `\r\n`;
+      return upgradeRequest;
+    }
 
-      debugLog("[WebSocket Polyfill] Sending upgrade request:", upgradeRequest);
+    async _connect() {
+      debugLog("[WebSocket Polyfill] Connecting via Service Worker SDK to:", this._url);
+      try {
+        // Extract and normalize hostname (already parsed in constructor)
+        let hostname = this._parsedUrl.hostname;
 
-      // Convert to bytes and send
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(upgradeRequest);
+        // Normalize punycode to lowercase (punycode is case-insensitive per RFC 3492)
+        // This ensures XN--CW4B85OB9G becomes xn--cw4b85ob9g before processing
+        hostname = hostname.toLowerCase();
 
-      this._postToServiceWorker({
-        type: "SDK_SEND",
-        data: bytes,
-      });
+        // Extract first label (keep lowercase for punycode conversion in Go backend)
+        // Go backend will convert punycode->unicode and then uppercase
+        const leaseName = hostname.split('.')[0];
 
-      // Wait for upgrade response in _handleData
-      this._waitingForUpgrade = true;
-      this._upgradeBuffer = new Uint8Array(0);
+        debugLog("[WebSocket Polyfill] Lease name:", leaseName);
+
+        // Build upgrade request for pipelining (reduces RTT from 2 to 1)
+        const upgradeRequest = this._buildUpgradeRequest();
+        debugLog("[WebSocket Polyfill] Pipelining upgrade request with connect");
+
+        // Set up for upgrade response before sending
+        this._waitingForUpgrade = true;
+        this._upgradeBuffer = new Uint8Array(0);
+
+        // Wait for Service Worker to be ready
+        await navigator.serviceWorker.ready;
+
+        // Convert upgrade request to bytes for pipelining
+        const encoder = new TextEncoder();
+        const upgradeBytes = encoder.encode(upgradeRequest);
+
+        // Send connect message with bundled upgrade request (pipelining)
+        navigator.serviceWorker.controller.postMessage({
+          type: "SDK_CONNECT",
+          clientId: this._clientId,
+          leaseName: leaseName,
+          upgradeRequest: upgradeBytes,  // Bundled for pipelining
+        });
+
+      } catch (error) {
+        console.error("[WebSocket Polyfill] Failed to connect:", error);
+        this._handleError(new Error(error));
+      }
+    }
+
+    _handleConnectSuccess(data) {
+      this._connId = data.connId;
+
+      // Upgrade request was already pipelined with SDK_CONNECT
+      // Just wait for upgrade response in _handleData
+      debugLog("[WebSocket Polyfill] E2EE tunnel established, upgrade request already sent (pipelined)");
     }
 
     _handleConnectError(data) {

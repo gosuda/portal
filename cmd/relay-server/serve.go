@@ -13,6 +13,18 @@ import (
 	"gosuda.org/portal/utils"
 )
 
+// Cached portal.html template for efficient SSR
+var (
+	cachedPortalHTML     []byte
+	cachedPortalHTMLOnce sync.Once
+)
+
+func initPortalHTMLCache() error {
+	var err error
+	cachedPortalHTML, err = distFS.ReadFile("dist/app/portal.html")
+	return err
+}
+
 func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 		// Read from dist/app subdirectory of the embedded FS
@@ -34,17 +46,20 @@ func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	utils.SetCORSHeaders(w)
 
-	// Read portal.html from embedded FS
-	fullPath := path.Join("dist", "app", "portal.html")
-	htmlContent, err := distFS.ReadFile(fullPath)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to read portal.html")
+	// Initialize cache on first use
+	cachedPortalHTMLOnce.Do(func() {
+		if err := initPortalHTMLCache(); err != nil {
+			log.Error().Err(err).Msg("Failed to cache portal.html")
+		}
+	})
+
+	if cachedPortalHTML == nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Inject SSR data
-	injectedHTML := injectServerData(string(htmlContent), serv)
+	// Inject SSR data into cached template
+	injectedHTML := injectServerData(string(cachedPortalHTML), serv)
 
 	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

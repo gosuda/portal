@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
 
@@ -344,10 +343,6 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 		lease := leaseEntry.Lease
 		identityID := string(lease.Identity.Id)
 
-		// Metadata parsing
-		var meta sdk.Metadata
-		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
-
 		// Calculate TTL
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
@@ -430,7 +425,7 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        meta.Hide,
+			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:    lease.Metadata,
 			BPS:         bps,
 		}
@@ -449,6 +444,9 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 	rows := []leaseRow{}
 	now := time.Now()
 
+	// Build banned map once for O(1) lookup per lease
+	bannedMap := buildBannedMap(serv.GetLeaseManager().GetBannedLeases())
+
 	for _, leaseEntry := range leaseEntries {
 		// Check if lease is still valid
 		if now.After(leaseEntry.Expires) {
@@ -459,14 +457,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		identityID := string(lease.Identity.Id)
 
 		// Skip banned leases for user-facing list
-		if isLeaseBanned(serv, identityID) {
+		if _, banned := bannedMap[identityID]; banned {
 			continue
 		}
 
-		// Metadata parsing
-		var meta sdk.Metadata
-		_ = json.Unmarshal([]byte(lease.Metadata), &meta)
-		if meta.Hide {
+		// Use cached parsed metadata
+		if leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide {
 			continue
 		}
 
@@ -554,11 +550,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        meta.Hide,
+			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:    lease.Metadata,
 		}
 
-		if row.Hide != true {
+		// Hidden entries are already filtered above, but keep check for safety
+		if !row.Hide {
 			rows = append(rows, row)
 		}
 	}
@@ -574,21 +571,13 @@ func isLocalhost(r *http.Request) bool {
 	return host == "127.0.0.1" || host == "::1"
 }
 
-// isLeaseBanned checks if a lease ID is in the banned list
-func isLeaseBanned(serv *portal.RelayServer, leaseID string) bool {
-	bannedList := serv.GetLeaseManager().GetBannedLeases()
-	for _, banned := range bannedList {
-		bannedStr := string(banned)
-		log.Debug().
-			Str("checking_lease", leaseID).
-			Str("banned_entry", bannedStr).
-			Bool("match", bannedStr == leaseID).
-			Msg("[BanCheck] Comparing lease IDs")
-		if bannedStr == leaseID {
-			return true
-		}
+// buildBannedMap converts banned list to O(1) lookup map
+func buildBannedMap(bannedList [][]byte) map[string]struct{} {
+	m := make(map[string]struct{}, len(bannedList))
+	for _, b := range bannedList {
+		m[string(b)] = struct{}{}
 	}
-	return false
+	return m
 }
 
 // AdminSettings stores persistent admin configuration

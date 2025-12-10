@@ -44,7 +44,7 @@ func main() {
 	)
 
 	// Start worker goroutines
-	for i := 0; i < *workers; i++ {
+	for range *workers {
 		wg.Add(1)
 		go worker(*prefix, &attempts, &found, results, &wg, *maxResults, ctx)
 	}

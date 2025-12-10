@@ -346,13 +346,13 @@ func TestConcurrentWrites(t *testing.T) {
 
 	const numMessages = 100
 	messages := make([][]byte, numMessages)
-	for i := 0; i < numMessages; i++ {
+	for i := range numMessages {
 		messages[i] = []byte{byte(i), byte(i >> 8)}
 	}
 
 	// Write concurrently from client
 	var writeWg sync.WaitGroup
-	for i := 0; i < numMessages; i++ {
+	for i := range numMessages {
 		writeWg.Add(1)
 		go func(msg []byte) {
 			defer writeWg.Done()
@@ -363,7 +363,7 @@ func TestConcurrentWrites(t *testing.T) {
 
 	// Read all messages
 	received := make(map[string]bool)
-	for i := 0; i < numMessages; i++ {
+	for range numMessages {
 		buf := make([]byte, 2)
 		_, err := io.ReadFull(serverSecure, buf)
 		if err != nil {
@@ -753,7 +753,7 @@ func BenchmarkHandshake(b *testing.B) {
 	serverCred, _ := NewCredential()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		clientConn, serverConn := pipeConn()
 
 		clientHandshaker := NewHandshaker(clientCred)
@@ -814,7 +814,7 @@ func BenchmarkEncryption(b *testing.B) {
 	b.ResetTimer()
 	b.SetBytes(int64(len(message)))
 
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		clientSecure.Write(message)
 	}
 

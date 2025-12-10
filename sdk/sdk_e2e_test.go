@@ -277,8 +277,8 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	numConnections := 5
 	log.Info().Int("count", numConnections).Msg("[TEST] Testing multiple concurrent connections")
 
-	for i := 0; i < numConnections; i++ {
-		i := i
+	for i := range numConnections {
+
 		go func() {
 			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
 

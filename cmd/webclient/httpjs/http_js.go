@@ -256,7 +256,7 @@ func (resp *Response) ReadAll() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 32*1024) // 32KB buffer to reduce Go-JS boundary crossings
 
 	for {
 		n, err := resp.bodyReader.Read(buffer)

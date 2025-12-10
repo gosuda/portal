@@ -98,7 +98,10 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 
 	// Create yamux session as client
 	config := yamux.DefaultConfig()
-	config.Logger = nil // Disable logging for cleaner output
+	config.Logger = nil                          // Disable logging for cleaner output
+	config.MaxStreamWindowSize = 16 * 1024 * 1024 // 16MB for high-BDP scenarios
+	config.StreamOpenTimeout = 75 * time.Second
+	config.StreamCloseTimeout = 5 * time.Minute
 	sess, err := yamux.Client(conn, config)
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to create yamux session")
