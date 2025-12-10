@@ -69,6 +69,7 @@ export function SearchBar({
           <SelectItem value="name-asc">Name (A-Z)</SelectItem>
           <SelectItem value="name-desc">Name (Z-A)</SelectItem>
           <SelectItem value="updated">Recently Updated</SelectItem>
+          <SelectItem value="duration">Duration (Maintained)</SelectItem>
           <SelectItem value="description">Description</SelectItem>
           <SelectItem value="tags">Tags</SelectItem>
           <SelectItem value="owner">Owner</SelectItem>

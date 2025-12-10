@@ -16,6 +16,7 @@ export interface ServerData {
   DNS: string;
   LastSeen: string;
   LastSeenISO: string;
+  FirstSeenISO: string;
   TTL: string;
   Link: string;
   StaleRed: boolean;

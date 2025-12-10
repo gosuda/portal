@@ -25,6 +25,7 @@ type LeaseEntry struct {
 	Lease          *rdverb.Lease
 	Expires        time.Time
 	LastSeen       time.Time
+	FirstSeen      time.Time
 	ConnectionID   int64
 	ParsedMetadata *ParsedMetadata // Cached parsed metadata
 }
@@ -151,10 +152,19 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 		}
 	}
 
+	var firstSeen time.Time
+	if existing, exists := lm.leases[identityID]; exists {
+		firstSeen = existing.FirstSeen
+	}
+	if firstSeen.IsZero() {
+		firstSeen = time.Now()
+	}
+
 	lm.leases[identityID] = &LeaseEntry{
 		Lease:          lease,
 		Expires:        expires,
 		LastSeen:       time.Now(),
+		FirstSeen:      firstSeen,
 		ConnectionID:   connectionID,
 		ParsedMetadata: parsedMeta,
 	}

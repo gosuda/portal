@@ -191,19 +191,20 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 }
 
 type leaseRow struct {
-	Peer        string
-	Name        string
-	Kind        string
-	Connected   bool
-	DNS         string
-	LastSeen    string
-	LastSeenISO string
-	TTL         string
-	Link        string
-	StaleRed    bool
-	Hide        bool
-	Metadata    string
-	BPS         int64 // bytes-per-second limit (0 = unlimited)
+	Peer         string
+	Name         string
+	Kind         string
+	Connected    bool
+	DNS          string
+	LastSeen     string
+	LastSeenISO  string
+	FirstSeenISO string
+	TTL          string
+	Link         string
+	StaleRed     bool
+	Hide         bool
+	Metadata     string
+	BPS          int64 // bytes-per-second limit (0 = unlimited)
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
@@ -382,6 +383,7 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			return fmt.Sprintf("%ds", s)
 		}(since)
 		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
+		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
 
 		// Check if connection is still active
 		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
@@ -415,19 +417,20 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 		bps := globalBPSManager.GetBPSLimit(identityID)
 
 		row := leaseRow{
-			Peer:        identityID,
-			Name:        name,
-			Kind:        kind,
-			Connected:   connected,
-			DNS:         dnsLabel,
-			LastSeen:    lastSeenStr,
-			LastSeenISO: lastSeenISO,
-			TTL:         ttlStr,
-			Link:        link,
-			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:    lease.Metadata,
-			BPS:         bps,
+			Peer:         identityID,
+			Name:         name,
+			Kind:         kind,
+			Connected:    connected,
+			DNS:          dnsLabel,
+			LastSeen:     lastSeenStr,
+			LastSeenISO:  lastSeenISO,
+			FirstSeenISO: firstSeenISO,
+			TTL:          ttlStr,
+			Link:         link,
+			StaleRed:     !connected && since >= 15*time.Second,
+			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
+			Metadata:     lease.Metadata,
+			BPS:          bps,
 		}
 
 		rows = append(rows, row)
@@ -505,6 +508,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			return fmt.Sprintf("%ds", s)
 		}(since)
 		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
+		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
 
 		// Check if connection is still active
 		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
@@ -540,18 +544,19 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
 		row := leaseRow{
-			Peer:        identityID,
-			Name:        name,
-			Kind:        kind,
-			Connected:   connected,
-			DNS:         dnsLabel,
-			LastSeen:    lastSeenStr,
-			LastSeenISO: lastSeenISO,
-			TTL:         ttlStr,
-			Link:        link,
-			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:    lease.Metadata,
+			Peer:         identityID,
+			Name:         name,
+			Kind:         kind,
+			Connected:    connected,
+			DNS:          dnsLabel,
+			LastSeen:     lastSeenStr,
+			LastSeenISO:  lastSeenISO,
+			FirstSeenISO: firstSeenISO,
+			TTL:          ttlStr,
+			Link:         link,
+			StaleRed:     !connected && since >= 15*time.Second,
+			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
+			Metadata:     lease.Metadata,
 		}
 
 		// Hidden entries are already filtered above, but keep check for safety
