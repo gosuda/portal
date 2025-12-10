@@ -10,6 +10,8 @@
 *.dylib
 bin/
 chat
+.cache/
+.gopath/
 
 cmd/relay-server/dist/app
 cmd/relay-server/dist/wasm
