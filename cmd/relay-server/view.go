@@ -425,7 +425,7 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
+			Hide:        parseHideFromMetadata(lease.Metadata),
 			Metadata:    lease.Metadata,
 			BPS:         bps,
 		}
@@ -461,8 +461,8 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			continue
 		}
 
-		// Use cached parsed metadata
-		if leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide {
+		// Check hidden status
+		if parseHideFromMetadata(lease.Metadata) {
 			continue
 		}
 
@@ -550,7 +550,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 			TTL:         ttlStr,
 			Link:        link,
 			StaleRed:    !connected && since >= 15*time.Second,
-			Hide:        leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
+			Hide:        parseHideFromMetadata(lease.Metadata),
 			Metadata:    lease.Metadata,
 		}
 
@@ -680,4 +680,17 @@ func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 		Int("banned_count", len(settings.BannedLeases)).
 		Int("bps_limits_count", len(settings.BPSLimits)).
 		Msg("[Admin] Loaded admin settings")
+}
+
+func parseHideFromMetadata(metadata string) bool {
+	if metadata == "" {
+		return false
+	}
+	var pm struct {
+		Hide bool `json:"hide"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &pm); err != nil {
+		return false
+	}
+	return pm.Hide
 }
