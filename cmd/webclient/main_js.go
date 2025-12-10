@@ -991,6 +991,30 @@ func main() {
 	}))
 	log.Info().Msg("SDK message handler registered as __sdk_message_handler")
 
+	// Expose benchmark function
+	js.Global().Set("benchmarkCrypto", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		iterations := 100
+		if len(args) > 0 && args[0].Type() == js.TypeNumber {
+			iterations = args[0].Int()
+		}
+
+		startTime := time.Now()
+		for i := 0; i < iterations; i++ {
+			_, err := cryptoops.NewCredential()
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to create credential during benchmark")
+				return nil
+			}
+		}
+		duration := time.Since(startTime)
+
+		return duration.Milliseconds()
+	}))
+	log.Info().Msg("WASM benchmark function registered as benchmarkCrypto")
+
+	// Signal to JS that the WASM module is ready
+	js.Global().Call("wasmIsReady")
+
 	if runtime.Compiler == "tinygo" {
 		return
 	}

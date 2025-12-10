@@ -161,6 +161,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv
 // wasmCache stores pre-loaded WASM files in memory (optional)
 type wasmCacheEntry struct {
 	brotli []byte
+	raw    []byte
 	hash   string
 }
 
@@ -220,8 +221,20 @@ func cacheWasmFile(name, fullPath string) error {
 		brData = data
 	}
 
+	// Load uncompressed WASM (<hash>.wasm) for clients without Brotli support
+	var rawData []byte
+	rawPath := strings.TrimSuffix(fullPath, ".br")
+	if rawPath != fullPath {
+		if data, err := distFS.ReadFile(rawPath); err == nil {
+			rawData = data
+		} else {
+			log.Warn().Err(err).Str("file", rawPath).Msg("failed to read uncompressed WASM")
+		}
+	}
+
 	entry := &wasmCacheEntry{
 		brotli: brData,
+		raw:    rawData,
 		hash:   hashHex,
 	}
 
@@ -274,27 +287,48 @@ func serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string
 	w.Header().Set("Content-Type", "application/wasm")
 
 	// Check Accept-Encoding header for brotli support
-	acceptEncoding := r.Header.Get("Accept-Encoding")
+	acceptEncoding := strings.ToLower(r.Header.Get("Accept-Encoding"))
+	hasBrotli := strings.Contains(acceptEncoding, "br") && len(entry.brotli) > 0
 
-	// Require brotli-compressed WASM
-	if !strings.Contains(acceptEncoding, "br") || len(entry.brotli) == 0 {
+	switch {
+	case hasBrotli:
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(entry.brotli)
+		log.Debug().
+			Str("path", filePath).
+			Int("size", len(entry.brotli)).
+			Str("encoding", "brotli").
+			Msg("served compressed WASM")
+	case len(entry.raw) > 0:
+		w.Header().Del("Content-Encoding")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.raw)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(entry.raw)
 		log.Warn().
 			Str("path", filePath).
 			Str("acceptEncoding", acceptEncoding).
-			Msg("client does not support brotli or brotli variant missing for WASM")
-		http.Error(w, "brotli-compressed WASM required", http.StatusNotAcceptable)
-		return
-	}
+			Int("size", len(entry.raw)).
+			Msg("client missing brotli support, served uncompressed WASM")
+	default:
+		fullPath := path.Join("dist", "wasm", filePath)
+		if data, err := distFS.ReadFile(fullPath); err == nil {
+			w.Header().Del("Content-Encoding")
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			log.Warn().
+				Str("path", filePath).
+				Msg("fallback served WASM from embedded FS without cache entry")
+			return
+		}
 
-	w.Header().Set("Content-Encoding", "br")
-	w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
-	w.WriteHeader(http.StatusOK)
-	w.Write(entry.brotli)
-	log.Debug().
-		Str("path", filePath).
-		Int("size", len(entry.brotli)).
-		Str("encoding", "brotli").
-		Msg("served compressed WASM")
+		log.Error().
+			Str("path", filePath).
+			Msg("no WASM asset available to serve")
+		http.Error(w, "WASM asset unavailable", http.StatusInternalServerError)
+	}
 }
 
 // servePortalStatic serves static files for portal frontend with appropriate cache headers
