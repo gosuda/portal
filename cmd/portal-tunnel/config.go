@@ -11,8 +11,8 @@ import (
 
 var defaultProtocols = []string{"http/1.1", "h2"}
 
-// ServiceConfig describes a local service exposed through the tunnel.
-type ServiceConfig struct {
+// AppConfig describes a local app exposed through the tunnel.
+type AppConfig struct {
 	Name      string       `yaml:"name"`
 	Target    string       `yaml:"target"`
 	Protocols []string     `yaml:"protocols"`
@@ -21,11 +21,11 @@ type ServiceConfig struct {
 
 // TunnelConfig represents the YAML configuration schema for portal-tunnel.
 type TunnelConfig struct {
-	Relays  []string      `yaml:"relays"`
-	Service ServiceConfig `yaml:"service"`
+	Relays []string  `yaml:"relays"`
+	App    AppConfig `yaml:"app"`
 }
 
-// LoadConfig reads the YAML file at path, parses it into TunnelConfig, and validates it for single-service use.
+// LoadConfig reads the YAML file at path, parses it into TunnelConfig, and validates it for single-app use.
 func LoadConfig(path string) (*TunnelConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -36,8 +36,8 @@ func LoadConfig(path string) (*TunnelConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	if len(cfg.Service.Protocols) == 0 {
-		cfg.Service.Protocols = append([]string(nil), defaultProtocols...)
+	if len(cfg.App.Protocols) == 0 {
+		cfg.App.Protocols = append([]string(nil), defaultProtocols...)
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -59,18 +59,18 @@ func (cfg *TunnelConfig) validate() error {
 		}
 	}
 
-	service := cfg.Service
-	name := strings.TrimSpace(service.Name)
+	app := cfg.App
+	name := strings.TrimSpace(app.Name)
 	if name == "" {
-		errs = append(errs, "service: name is required")
+		errs = append(errs, "app: name is required")
 	}
-	target := strings.TrimSpace(service.Target)
+	target := strings.TrimSpace(app.Target)
 	if target == "" {
-		errs = append(errs, "service: target is required")
+		errs = append(errs, "app: target is required")
 	}
-	for i, proto := range service.Protocols {
+	for i, proto := range app.Protocols {
 		if strings.TrimSpace(proto) == "" {
-			errs = append(errs, fmt.Sprintf("service.protocols[%d]: protocol cannot be empty", i))
+			errs = append(errs, fmt.Sprintf("app.protocols[%d]: protocol cannot be empty", i))
 		}
 	}
 

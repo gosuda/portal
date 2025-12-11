@@ -24,19 +24,19 @@ var bufferPool = sync.Pool{
 }
 
 type Config struct {
-	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
+	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local apps through Portal relay"`
 
 	ConfigPath string `flag:"config" alias:"c" env:"TUNNEL_CONFIG" about:"Path to portal-tunnel config file"`
 	RelayURLs  string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs when config is not provided (comma-separated)"`
 	Host       string `flag:"host" env:"APP_HOST" about:"target host to proxy to when config is not provided (host:port or URL)"`
-	Name       string `flag:"name" env:"APP_NAME" about:"Service name when config is not provided"`
+	Name       string `flag:"name" env:"APP_NAME" about:"App name when config is not provided"`
 
 	// Metadata
-	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
-	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
-	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
-	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
-	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
+	Description string `flag:"description" env:"APP_DESCRIPTION" about:"App description metadata"`
+	Tags        string `flag:"tags" env:"APP_TAGS" about:"App tags metadata (comma-separated)"`
+	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"App thumbnail URL metadata"`
+	Owner       string `flag:"owner" env:"APP_OWNER" about:"App owner metadata"`
+	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide app from discovery (metadata)"`
 }
 
 func main() {
@@ -99,7 +99,7 @@ func runExposeWithConfig(configPath string) error {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, &cfg.Service, fmt.Sprintf("config=%s", configPath)); err != nil {
+	if err := runAppTunnel(ctx, relayURLs, &cfg.App, fmt.Sprintf("config=%s", configPath)); err != nil {
 		return err
 	}
 
@@ -140,7 +140,7 @@ func runExposeWithFlags(cfg Config) error {
 		metadata.Hide = cfg.Hide
 	}
 
-	service := &ServiceConfig{
+	app := &AppConfig{
 		Name:     strings.TrimSpace(cfg.Name),
 		Target:   cfg.Host,
 		Metadata: metadata,
@@ -158,7 +158,7 @@ func runExposeWithFlags(cfg Config) error {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, service, "flags"); err != nil {
+	if err := runAppTunnel(ctx, relayURLs, app, "flags"); err != nil {
 		return err
 	}
 
@@ -171,7 +171,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	localConn, err := net.Dial("tcp", localAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to local service %s: %w", localAddr, err)
+		return fmt.Errorf("failed to connect to local app %s: %w", localAddr, err)
 	}
 	defer localConn.Close()
 
@@ -208,9 +208,9 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	return err
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceConfig, origin string) error {
-	localAddr := service.Target
-	serviceName := strings.TrimSpace(service.Name)
+func runAppTunnel(ctx context.Context, relayURLs []string, app *AppConfig, origin string) error {
+	localAddr := app.Target
+	appName := strings.TrimSpace(app.Name)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
@@ -218,33 +218,33 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 
 	cred := sdk.NewCredential()
 	leaseID := cred.ID()
-	if serviceName == "" {
-		serviceName = fmt.Sprintf("tunnel-%s", leaseID[:8])
-		log.Info().Str("service", serviceName).Msg("No service name provided; generated automatically")
+	if appName == "" {
+		appName = fmt.Sprintf("tunnel-%s", leaseID[:8])
+		log.Info().Str("app", appName).Msg("No app name provided; generated automatically")
 	}
-	log.Info().Str("service", serviceName).Msgf("Local service is reachable at %s", localAddr)
-	log.Info().Str("service", serviceName).Msgf("Starting Portal Tunnel (%s)...", origin)
-	log.Info().Str("service", serviceName).Msgf("  Local:    %s", localAddr)
-	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
-	log.Info().Str("service", serviceName).Msgf("  Lease ID: %s", leaseID)
+	log.Info().Str("app", appName).Msgf("Local app is reachable at %s", localAddr)
+	log.Info().Str("app", appName).Msgf("Starting Portal Tunnel (%s)...", origin)
+	log.Info().Str("app", appName).Msgf("  Local:    %s", localAddr)
+	log.Info().Str("app", appName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
+	log.Info().Str("app", appName).Msgf("  Lease ID: %s", leaseID)
 
 	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
 		c.BootstrapServers = bootstrapServers
 	})
 	if err != nil {
-		return fmt.Errorf("service %s: failed to connect to relay: %w", serviceName, err)
+		return fmt.Errorf("app %s: failed to connect to relay: %w", appName, err)
 	}
 	defer client.Close()
 
-	listener, err := client.Listen(cred, serviceName, service.Protocols,
-		sdk.WithDescription(service.Metadata.Description),
-		sdk.WithTags(service.Metadata.Tags),
-		sdk.WithOwner(service.Metadata.Owner),
-		sdk.WithThumbnail(service.Metadata.Thumbnail),
-		sdk.WithHide(service.Metadata.Hide),
+	listener, err := client.Listen(cred, appName, app.Protocols,
+		sdk.WithDescription(app.Metadata.Description),
+		sdk.WithTags(app.Metadata.Tags),
+		sdk.WithOwner(app.Metadata.Owner),
+		sdk.WithThumbnail(app.Metadata.Thumbnail),
+		sdk.WithHide(app.Metadata.Hide),
 	)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to register service: %w", serviceName, err)
+		return fmt.Errorf("app %s: failed to register app: %w", appName, err)
 	}
 	defer listener.Close()
 
@@ -253,13 +253,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 		_ = listener.Close()
 	}()
 
-	log.Info().Str("service", serviceName).Msg("")
-	log.Info().Str("service", serviceName).Msg("Access via:")
-	log.Info().Str("service", serviceName).Msgf("- Name:     /peer/%s", serviceName)
-	log.Info().Str("service", serviceName).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", serviceName).Msgf("- Example:  http://%s/peer/%s", bootstrapServers[0], serviceName)
+	log.Info().Str("app", appName).Msg("")
+	log.Info().Str("app", appName).Msg("Access via:")
+	log.Info().Str("app", appName).Msgf("- Name:     /peer/%s", appName)
+	log.Info().Str("app", appName).Msgf("- Lease ID: /peer/%s", leaseID)
+	log.Info().Str("app", appName).Msgf("- Example:  http://%s/peer/%s", bootstrapServers[0], appName)
 
-	log.Info().Str("service", serviceName).Msg("")
+	log.Info().Str("app", appName).Msg("")
 
 	connCount := 0
 	var connWG sync.WaitGroup
@@ -277,21 +277,21 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 			case <-ctx.Done():
 				return nil
 			default:
-				log.Error().Str("service", serviceName).Err(err).Msg("Failed to accept connection")
+				log.Error().Str("app", appName).Err(err).Msg("Failed to accept connection")
 				continue
 			}
 		}
 
 		connCount++
-		log.Info().Str("service", serviceName).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
+		log.Info().Str("app", appName).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
 
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
 			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-				log.Error().Str("service", serviceName).Err(err).Msg("Proxy error")
+				log.Error().Str("app", appName).Err(err).Msg("Proxy error")
 			}
-			log.Info().Str("service", serviceName).Msg("Connection closed")
+			log.Info().Str("app", appName).Msg("Connection closed")
 		}(relayConn)
 	}
 }
