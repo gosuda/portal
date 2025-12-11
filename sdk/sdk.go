@@ -192,13 +192,11 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 		option(&metadata)
 	}
 
-	metadataValue := ""
-	if !metadata.isEmpty() {
-		metadataJSON, err := json.Marshal(metadata)
-		if err != nil {
-			log.Error().Err(err).Msg("[SDK] Failed to marshal metadata")
-			return nil, ErrInvalidMetadata
-		}
+	var metadataValue string
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		log.Warn().Err(err).Msg("[SDK] Failed to marshal metadata")
+	} else {
 		metadataValue = string(metadataJSON)
 	}
 
