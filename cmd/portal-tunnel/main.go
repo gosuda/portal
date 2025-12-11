@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
+	"gopkg.eu.org/broccoli"
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
@@ -23,49 +23,60 @@ var bufferPool = sync.Pool{
 	New: func() any { return make([]byte, 64*1024) },
 }
 
-var (
-	flagConfigPath string
-	flagRelayURLs  string
-	flagHost       string
-	flagName       string
-	flagDesc       string
-	flagTags       string
-	flagThumbnail  string
-	flagOwner      string
-	flagHide       bool
-)
+type Config struct {
+	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
-var rootCmd = &cobra.Command{
-	Use:   "portal-tunnel",
-	Short: "Expose local services through Portal relay",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if flagConfigPath == "" {
-			return runExposeWithFlags()
-		}
-		return runExposeWithConfig()
-	},
-}
+	ConfigPath string `flag:"config" alias:"c" env:"TUNNEL_CONFIG" about:"Path to portal-tunnel config file"`
+	RelayURLs  string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs when config is not provided (comma-separated)"`
+	Host       string `flag:"host" env:"APP_HOST" about:"target host to proxy to when config is not provided (host:port or URL)"`
+	Name       string `flag:"name" env:"APP_NAME" about:"Service name when config is not provided"`
 
-func init() {
-	rootCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
-	rootCmd.Flags().StringVar(&flagRelayURLs, "relay", "ws://localhost:4017/relay", "Portal relay server URLs when config is not provided (comma-separated)")
-	rootCmd.Flags().StringVar(&flagHost, "host", "localhost:3000", "target host to proxy to when config is not provided (host:port or URL)")
-	rootCmd.Flags().StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
-	rootCmd.Flags().StringVar(&flagDesc, "description", "", "Service description metadata")
-	rootCmd.Flags().StringVar(&flagTags, "tags", "", "Service tags metadata (comma-separated)")
-	rootCmd.Flags().StringVar(&flagThumbnail, "thumbnail", "", "Service thumbnail URL metadata")
-	rootCmd.Flags().StringVar(&flagOwner, "owner", "", "Service owner metadata")
-	rootCmd.Flags().BoolVar(&flagHide, "hide", false, "Hide service from discovery (metadata)")
+	// Metadata
+	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
+	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
+	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
+	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
+	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
 }
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	var cfg Config
+	app, err := broccoli.NewApp(&cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", err)
+		os.Exit(1)
+	}
+
+	_, _, err = app.Bind(&cfg, os.Args[1:])
+	if err != nil {
+		if err == broccoli.ErrHelp {
+			fmt.Print(app.Help())
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		fmt.Print(app.Help())
+		os.Exit(1)
+	}
+
+	var runErr error
+	if cfg.ConfigPath != "" {
+		runErr = runExposeWithConfig(cfg.ConfigPath)
+	} else {
+		if cfg.Host == "" || cfg.Name == "" {
+			fmt.Print(app.Help())
+			os.Exit(1)
+		}
+		runErr = runExposeWithFlags(cfg)
+	}
+
+	if runErr != nil {
+		log.Error().Err(runErr).Msg("Exited with error")
 		os.Exit(1)
 	}
 }
 
-func runExposeWithConfig() error {
-	cfg, err := LoadConfig(flagConfigPath)
+func runExposeWithConfig(configPath string) error {
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -88,7 +99,7 @@ func runExposeWithConfig() error {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, &cfg.Service, fmt.Sprintf("config=%s", flagConfigPath)); err != nil {
+	if err := runServiceTunnel(ctx, relayURLs, &cfg.Service, fmt.Sprintf("config=%s", configPath)); err != nil {
 		return err
 	}
 
@@ -96,18 +107,18 @@ func runExposeWithConfig() error {
 	return nil
 }
 
-func runExposeWithFlags() error {
-	relayURLs := utils.ParseURLs(flagRelayURLs)
+func runExposeWithFlags(cfg Config) error {
+	relayURLs := utils.ParseURLs(cfg.RelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
 
 	var metadata sdk.Metadata
-	if strings.TrimSpace(flagDesc) != "" {
-		metadata.Description = flagDesc
+	if strings.TrimSpace(cfg.Description) != "" {
+		metadata.Description = cfg.Description
 	}
-	if strings.TrimSpace(flagTags) != "" {
-		tags := strings.Split(flagTags, ",")
+	if strings.TrimSpace(cfg.Tags) != "" {
+		tags := strings.Split(cfg.Tags, ",")
 		for i := range tags {
 			tags[i] = strings.TrimSpace(tags[i])
 		}
@@ -119,19 +130,19 @@ func runExposeWithFlags() error {
 		}
 		metadata.Tags = filtered
 	}
-	if strings.TrimSpace(flagThumbnail) != "" {
-		metadata.Thumbnail = flagThumbnail
+	if strings.TrimSpace(cfg.Thumbnail) != "" {
+		metadata.Thumbnail = cfg.Thumbnail
 	}
-	if strings.TrimSpace(flagOwner) != "" {
-		metadata.Owner = flagOwner
+	if strings.TrimSpace(cfg.Owner) != "" {
+		metadata.Owner = cfg.Owner
 	}
-	if flagHide {
-		metadata.Hide = flagHide
+	if cfg.Hide {
+		metadata.Hide = cfg.Hide
 	}
 
 	service := &ServiceConfig{
-		Name:     strings.TrimSpace(flagName),
-		Target:   flagHost,
+		Name:     strings.TrimSpace(cfg.Name),
+		Target:   cfg.Host,
 		Metadata: metadata,
 	}
 	applyServiceDefaults(service)
