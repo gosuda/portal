@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -288,4 +289,36 @@ func DefaultBootstrapFrom(base string) string {
 		return "ws://localhost:4017/relay"
 	}
 	return "ws://" + host + "/relay"
+}
+
+func IsLocalhost(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	// Normal localhost
+	if ip.IsLoopback() {
+		return true
+	}
+
+	// Docker networks & private networks
+	dockerRanges := []string{
+		"172.17.0.0/16",   // Linux Docker
+		"192.168.64.0/24", // Docker Desktop macOS/Windows
+		"192.168.65.0/24",
+	}
+
+	for _, cidr := range dockerRanges {
+		_, subnet, _ := net.ParseCIDR(cidr)
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }

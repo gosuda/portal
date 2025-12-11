@@ -13,7 +13,6 @@ require (
 	golang.org/x/net v0.47.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.eu.org/broccoli v1.2.2
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -23,4 +22,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
