@@ -34,17 +34,17 @@ build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p cmd/relay-server/dist/wasm
 	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
-	
+
 	@echo "[wasm] optimizing with wasm-opt..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
+		wasm-opt -Oz --enable-bulk-memory --strip-debug --converge cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
 		mv cmd/relay-server/dist/wasm/portal.wasm.tmp cmd/relay-server/dist/wasm/portal.wasm; \
 		echo "[wasm] optimization complete"; \
 	else \
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
 		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
 	fi
-	
+
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
@@ -53,7 +53,7 @@ build-wasm:
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
-	
+
 	@echo "[wasm] copying additional resources..."
 	@cp cmd/webclient/wasm_exec.js cmd/relay-server/dist/wasm/wasm_exec.js
 	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/wasm/service-worker.js
@@ -72,10 +72,9 @@ build-wasm:
 		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
 		exit 1; \
 	fi; \
-	brotli -f "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	brotli -Z -f "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
 	rm -f "$$WASM_FILE"; \
 	echo "[wasm] brotli: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"
-
 
 # Build React frontend with Tailwind CSS 4
 build-frontend:

@@ -1,6 +1,7 @@
 package portal
 
 import (
+	"context"
 	"io"
 	"sync"
 	"time"
@@ -37,7 +38,8 @@ type RelayServer struct {
 
 	leaseManager *LeaseManager
 
-	stopch    chan struct{}
+	ctx       context.Context //nolint:containedctx // lifecycle management for graceful shutdown
+	cancel    context.CancelFunc
 	waitgroup sync.WaitGroup
 
 	// Traffic control limits and counters
@@ -62,7 +64,6 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 		leaseConnections:     make(map[string]*Connection),
 		relayedConnections:   make(map[string][]*yamux.Stream),
 		leaseManager:         NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
-		stopch:               make(chan struct{}),
 		relayedPerLeaseCount: make(map[string]int),
 	}
 }
@@ -314,11 +315,12 @@ func (g *RelayServer) GetLeaseALPNs(leaseID string) []string {
 }
 
 func (g *RelayServer) Start() {
-	g.leaseManager.Start()
+	g.ctx, g.cancel = context.WithCancel(context.Background())
+	g.leaseManager.Start(g.ctx)
 }
 
 func (g *RelayServer) Stop() {
-	close(g.stopch)
+	g.cancel()
 	g.leaseManager.Stop()
 	g.waitgroup.Wait()
 }
