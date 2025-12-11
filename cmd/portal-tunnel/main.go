@@ -70,8 +70,7 @@ func runExposeWithConfig() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	relayURLs := normalizeRelayURLs(cfg.Relays)
-	if len(relayURLs) == 0 {
+	if len(cfg.Relays) == 0 {
 		return fmt.Errorf("config: relays must include at least one URL")
 	}
 
@@ -88,7 +87,7 @@ func runExposeWithConfig() error {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, &cfg.Service, fmt.Sprintf("config=%s", flagConfigPath)); err != nil {
+	if err := runServiceTunnel(ctx, cfg.Relays, &cfg.Service, fmt.Sprintf("config=%s", flagConfigPath)); err != nil {
 		return err
 	}
 
@@ -102,39 +101,17 @@ func runExposeWithFlags() error {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
 
-	var metadata sdk.Metadata
-	if strings.TrimSpace(flagDesc) != "" {
-		metadata.Description = flagDesc
-	}
-	if strings.TrimSpace(flagTags) != "" {
-		tags := strings.Split(flagTags, ",")
-		for i := range tags {
-			tags[i] = strings.TrimSpace(tags[i])
-		}
-		filtered := tags[:0]
-		for _, t := range tags {
-			if t != "" {
-				filtered = append(filtered, t)
-			}
-		}
-		metadata.Tags = filtered
-	}
-	if strings.TrimSpace(flagThumbnail) != "" {
-		metadata.Thumbnail = flagThumbnail
-	}
-	if strings.TrimSpace(flagOwner) != "" {
-		metadata.Owner = flagOwner
-	}
-	if flagHide {
-		metadata.Hide = flagHide
-	}
-
 	service := &ServiceConfig{
-		Name:     strings.TrimSpace(flagName),
-		Target:   flagHost,
-		Metadata: metadata,
+		Name:   flagName,
+		Target: flagHost,
+		Metadata: sdk.Metadata{
+			Description: flagDesc,
+			Tags:        strings.Split(flagTags, ","),
+			Thumbnail:   flagThumbnail,
+			Owner:       flagOwner,
+			Hide:        flagHide,
+		},
 	}
-	applyServiceDefaults(service)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -200,11 +177,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceConfig, origin string) error {
 	localAddr := service.Target
-	serviceName := strings.TrimSpace(service.Name)
-	if len(relayURLs) == 0 {
-		return fmt.Errorf("no relay URLs provided")
-	}
-	bootstrapServers := relayURLs
+	serviceName := service.Name
 
 	cred := sdk.NewCredential()
 	leaseID := cred.ID()
@@ -215,11 +188,11 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 	log.Info().Str("service", serviceName).Msgf("Local service is reachable at %s", localAddr)
 	log.Info().Str("service", serviceName).Msgf("Starting Portal Tunnel (%s)...", origin)
 	log.Info().Str("service", serviceName).Msgf("  Local:    %s", localAddr)
-	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
+	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
 	log.Info().Str("service", serviceName).Msgf("  Lease ID: %s", leaseID)
 
 	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = bootstrapServers
+		c.BootstrapServers = relayURLs
 	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to connect to relay: %w", serviceName, err)
@@ -247,7 +220,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 	log.Info().Str("service", serviceName).Msg("Access via:")
 	log.Info().Str("service", serviceName).Msgf("- Name:     /peer/%s", serviceName)
 	log.Info().Str("service", serviceName).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", serviceName).Msgf("- Example:  http://%s/peer/%s", bootstrapServers[0], serviceName)
+	log.Info().Str("service", serviceName).Msgf("- Example:  %s/peer/%s", relayURLs[0], serviceName)
 
 	log.Info().Str("service", serviceName).Msg("")
 
@@ -284,22 +257,4 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 			log.Info().Str("service", serviceName).Msg("Connection closed")
 		}(relayConn)
 	}
-}
-
-// normalizeRelayURLs trims, de-duplicates, and filters empty relay URLs.
-func normalizeRelayURLs(urls []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u == "" {
-			continue
-		}
-		if _, ok := seen[u]; ok {
-			continue
-		}
-		seen[u] = struct{}{}
-		out = append(out, u)
-	}
-	return out
 }
