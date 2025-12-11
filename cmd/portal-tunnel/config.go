@@ -11,7 +11,7 @@ import (
 
 var defaultProtocols = []string{"http/1.1", "h2"}
 
-// AppConfig describes a local app exposed through the tunnel.
+// AppConfig describes a local app tunneled through Portal.
 type AppConfig struct {
 	Name      string       `yaml:"name"`
 	Target    string       `yaml:"target"`

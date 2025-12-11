@@ -24,7 +24,7 @@ var bufferPool = sync.Pool{
 }
 
 type Config struct {
-	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local apps through Portal relay"`
+	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Tunnel local apps through Portal relay"`
 
 	ConfigPath string `flag:"config" alias:"c" env:"TUNNEL_CONFIG" about:"Path to portal-tunnel config file"`
 	RelayURLs  string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs when config is not provided (comma-separated)"`
@@ -60,13 +60,13 @@ func main() {
 
 	var runErr error
 	if cfg.ConfigPath != "" {
-		runErr = runExposeWithConfig(cfg.ConfigPath)
+		runErr = runTunnelWithConfig(cfg.ConfigPath)
 	} else {
 		if cfg.Host == "" || cfg.Name == "" {
 			fmt.Print(app.Help())
 			os.Exit(1)
 		}
-		runErr = runExposeWithFlags(cfg)
+		runErr = runTunnelWithFlags(cfg)
 	}
 
 	if runErr != nil {
@@ -75,7 +75,7 @@ func main() {
 	}
 }
 
-func runExposeWithConfig(configPath string) error {
+func runTunnelWithConfig(configPath string) error {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -107,7 +107,7 @@ func runExposeWithConfig(configPath string) error {
 	return nil
 }
 
-func runExposeWithFlags(cfg Config) error {
+func runTunnelWithFlags(cfg Config) error {
 	relayURLs := utils.ParseURLs(cfg.RelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
