@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -125,6 +126,19 @@ func ParseURLs(raw string) []string {
 		}
 	}
 	return out
+}
+
+// IsHTMLContentType checks if the Content-Type header indicates HTML content
+// It properly handles media type parsing with parameters like charset
+func IsHTMLContentType(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
+	}
+	return mediaType == "text/html"
 }
 
 // GetContentType returns the MIME type for a file extension
