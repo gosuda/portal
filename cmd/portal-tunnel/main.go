@@ -27,7 +27,6 @@ var (
 	flagConfigPath string
 	flagRelayURLs  string
 	flagHost       string
-	flagPort       string
 	flagName       string
 	flagDesc       string
 	flagTags       string
@@ -50,8 +49,7 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
 	rootCmd.Flags().StringVar(&flagRelayURLs, "relay", "ws://localhost:4017/relay", "Portal relay server URLs when config is not provided (comma-separated)")
-	rootCmd.Flags().StringVar(&flagHost, "host", "localhost", "Local host to proxy to when config is not provided")
-	rootCmd.Flags().StringVar(&flagPort, "port", "4018", "Local port to proxy to when config is not provided")
+	rootCmd.Flags().StringVar(&flagHost, "host", "localhost:3000", "target host to proxy to when config is not provided (host:port or URL)")
 	rootCmd.Flags().StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
 	rootCmd.Flags().StringVar(&flagDesc, "description", "", "Service description metadata")
 	rootCmd.Flags().StringVar(&flagTags, "tags", "", "Service tags metadata (comma-separated)")
@@ -131,10 +129,9 @@ func runExposeWithFlags() error {
 		metadata.Hide = flagHide
 	}
 
-	target := net.JoinHostPort(flagHost, flagPort)
 	service := &ServiceConfig{
 		Name:     strings.TrimSpace(flagName),
-		Target:   target,
+		Target:   flagHost,
 		Metadata: metadata,
 	}
 	applyServiceDefaults(service)
