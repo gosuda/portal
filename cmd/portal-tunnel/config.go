@@ -11,7 +11,6 @@ import (
 
 var defaultProtocols = []string{"http/1.1", "h2"}
 
-// AppConfig describes a local app tunneled through Portal.
 type AppConfig struct {
 	Name      string       `yaml:"name"`
 	Target    string       `yaml:"target"`
@@ -19,13 +18,11 @@ type AppConfig struct {
 	Metadata  sdk.Metadata `yaml:"metadata,omitempty"`
 }
 
-// TunnelConfig represents the YAML configuration schema for portal-tunnel.
 type TunnelConfig struct {
 	Relays []string  `yaml:"relays"`
 	App    AppConfig `yaml:"app"`
 }
 
-// LoadConfig reads the YAML file at path, parses it into TunnelConfig, and validates it for single-app use.
 func LoadConfig(path string) (*TunnelConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

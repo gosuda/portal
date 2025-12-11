@@ -39,78 +39,30 @@ type Config struct {
 	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide app from discovery (metadata)"`
 }
 
-func main() {
-	var cfg Config
-	app, err := broccoli.NewApp(&cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", err)
-		os.Exit(1)
-	}
-
-	_, _, err = app.Bind(&cfg, os.Args[1:])
-	if err != nil {
-		if err == broccoli.ErrHelp {
-			fmt.Print(app.Help())
-			os.Exit(0)
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
-		fmt.Print(app.Help())
-		os.Exit(1)
-	}
-
-	var runErr error
-	if cfg.ConfigPath != "" {
-		runErr = runTunnelWithConfig(cfg.ConfigPath)
-	} else {
-		if cfg.Host == "" || cfg.Name == "" {
-			fmt.Print(app.Help())
-			os.Exit(1)
-		}
-		runErr = runTunnelWithFlags(cfg)
-	}
-
-	if runErr != nil {
-		log.Error().Err(runErr).Msg("Exited with error")
-		os.Exit(1)
-	}
+type Tunnel struct {
+	RelayURLs []string
+	App       *AppConfig
+	Origin    string
 }
 
-func runTunnelWithConfig(configPath string) error {
+func (t *Tunnel) ConfigureFromFile(configPath string) error {
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	relayURLs := normalizeRelayURLs(cfg.Relays)
-	if len(relayURLs) == 0 {
-		return fmt.Errorf("config: relays must include at least one URL")
+	if err := t.setRelayURLs(cfg.Relays); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		log.Info().Msg("")
-		log.Info().Msg("Shutting down tunnel...")
-		cancel()
-	}()
-
-	if err := runAppTunnel(ctx, relayURLs, &cfg.App, fmt.Sprintf("config=%s", configPath)); err != nil {
-		return err
-	}
-
-	log.Info().Msg("Tunnel stopped")
+	t.App = &cfg.App
+	t.Origin = fmt.Sprintf("config=%s", configPath)
 	return nil
 }
 
-func runTunnelWithFlags(cfg Config) error {
-	relayURLs := utils.ParseURLs(cfg.RelayURLs)
-	if len(relayURLs) == 0 {
-		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
+func (t *Tunnel) ConfigureFromFlags(cfg Config) error {
+	if err := t.setRelayURLsFromString(cfg.RelayURLs); err != nil {
+		return fmt.Errorf("relay urls: %w", err)
 	}
 
 	var metadata sdk.Metadata
@@ -140,81 +92,52 @@ func runTunnelWithFlags(cfg Config) error {
 		metadata.Hide = cfg.Hide
 	}
 
-	app := &AppConfig{
+	t.App = &AppConfig{
 		Name:     strings.TrimSpace(cfg.Name),
 		Target:   cfg.Host,
 		Metadata: metadata,
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		log.Info().Msg("")
-		log.Info().Msg("Shutting down tunnel...")
-		cancel()
-	}()
-
-	if err := runAppTunnel(ctx, relayURLs, app, "flags"); err != nil {
-		return err
-	}
-
-	log.Info().Msg("Tunnel stopped")
+	t.Origin = "flags"
 	return nil
 }
 
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
-	defer relayConn.Close()
-
-	localConn, err := net.Dial("tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to local app %s: %w", localAddr, err)
-	}
-	defer localConn.Close()
-
-	errCh := make(chan error, 2)
-	stopCh := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			relayConn.Close()
-			localConn.Close()
-		case <-stopCh:
-		}
-	}()
-
-	go func() {
-		buf := bufferPool.Get().([]byte)
-		defer bufferPool.Put(buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
-		errCh <- err
-	}()
-
-	go func() {
-		buf := bufferPool.Get().([]byte)
-		defer bufferPool.Put(buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
-		errCh <- err
-	}()
-
-	err = <-errCh
-	close(stopCh)
-	relayConn.Close()
-	<-errCh
-
-	return err
+func (t *Tunnel) setRelayURLsFromString(raw string) error {
+	urls := utils.ParseURLs(raw)
+	return t.setRelayURLs(urls)
 }
 
-func runAppTunnel(ctx context.Context, relayURLs []string, app *AppConfig, origin string) error {
-	localAddr := app.Target
-	appName := strings.TrimSpace(app.Name)
-	if len(relayURLs) == 0 {
+func (t *Tunnel) setRelayURLs(urls []string) error {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("relays must include at least one URL")
+	}
+	t.RelayURLs = out
+	return nil
+}
+
+func (t Tunnel) Run(ctx context.Context) error {
+	if t.App == nil {
+		return fmt.Errorf("app config is required")
+	}
+
+	localAddr := t.App.Target
+	appName := strings.TrimSpace(t.App.Name)
+	if len(t.RelayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
-	bootstrapServers := relayURLs
+	bootstrapServers := t.RelayURLs
 
 	cred := sdk.NewCredential()
 	leaseID := cred.ID()
@@ -223,7 +146,7 @@ func runAppTunnel(ctx context.Context, relayURLs []string, app *AppConfig, origi
 		log.Info().Str("app", appName).Msg("No app name provided; generated automatically")
 	}
 	log.Info().Str("app", appName).Msgf("Local app is reachable at %s", localAddr)
-	log.Info().Str("app", appName).Msgf("Starting Portal Tunnel (%s)...", origin)
+	log.Info().Str("app", appName).Msgf("Starting Portal Tunnel (%s)...", t.Origin)
 	log.Info().Str("app", appName).Msgf("  Local:    %s", localAddr)
 	log.Info().Str("app", appName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
 	log.Info().Str("app", appName).Msgf("  Lease ID: %s", leaseID)
@@ -236,12 +159,12 @@ func runAppTunnel(ctx context.Context, relayURLs []string, app *AppConfig, origi
 	}
 	defer client.Close()
 
-	listener, err := client.Listen(cred, appName, app.Protocols,
-		sdk.WithDescription(app.Metadata.Description),
-		sdk.WithTags(app.Metadata.Tags),
-		sdk.WithOwner(app.Metadata.Owner),
-		sdk.WithThumbnail(app.Metadata.Thumbnail),
-		sdk.WithHide(app.Metadata.Hide),
+	listener, err := client.Listen(cred, appName, t.App.Protocols,
+		sdk.WithDescription(t.App.Metadata.Description),
+		sdk.WithTags(t.App.Metadata.Tags),
+		sdk.WithOwner(t.App.Metadata.Owner),
+		sdk.WithThumbnail(t.App.Metadata.Thumbnail),
+		sdk.WithHide(t.App.Metadata.Hide),
 	)
 	if err != nil {
 		return fmt.Errorf("app %s: failed to register app: %w", appName, err)
@@ -296,20 +219,101 @@ func runAppTunnel(ctx context.Context, relayURLs []string, app *AppConfig, origi
 	}
 }
 
-// normalizeRelayURLs trims, de-duplicates, and filters empty relay URLs.
-func normalizeRelayURLs(urls []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u == "" {
-			continue
-		}
-		if _, ok := seen[u]; ok {
-			continue
-		}
-		seen[u] = struct{}{}
-		out = append(out, u)
+func main() {
+	var cfg Config
+	app, err := broccoli.NewApp(&cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", err)
+		os.Exit(1)
 	}
-	return out
+
+	_, _, err = app.Bind(&cfg, os.Args[1:])
+	if err != nil {
+		if err == broccoli.ErrHelp {
+			fmt.Print(app.Help())
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		fmt.Print(app.Help())
+		os.Exit(1)
+	}
+
+	var runErr error
+	tunnel := Tunnel{}
+	if cfg.ConfigPath != "" {
+		runErr = tunnel.ConfigureFromFile(cfg.ConfigPath)
+	} else {
+		if cfg.Host == "" || cfg.Name == "" {
+			fmt.Print(app.Help())
+			os.Exit(1)
+		}
+		runErr = tunnel.ConfigureFromFlags(cfg)
+	}
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", runErr)
+		fmt.Print(app.Help())
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		log.Info().Msg("")
+		log.Info().Msg("Shutting down tunnel...")
+		cancel()
+	}()
+
+	runErr = tunnel.Run(ctx)
+
+	if runErr != nil {
+		log.Error().Err(runErr).Msg("Exited with error")
+		os.Exit(1)
+	}
+}
+
+func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
+	defer relayConn.Close()
+
+	localConn, err := net.Dial("tcp", localAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to local app %s: %w", localAddr, err)
+	}
+	defer localConn.Close()
+
+	errCh := make(chan error, 2)
+	stopCh := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			relayConn.Close()
+			localConn.Close()
+		case <-stopCh:
+		}
+	}()
+
+	go func() {
+		buf := bufferPool.Get().([]byte)
+		defer bufferPool.Put(buf)
+		_, err := io.CopyBuffer(localConn, relayConn, buf)
+		errCh <- err
+	}()
+
+	go func() {
+		buf := bufferPool.Get().([]byte)
+		defer bufferPool.Put(buf)
+		_, err := io.CopyBuffer(relayConn, localConn, buf)
+		errCh <- err
+	}()
+
+	err = <-errCh
+	close(stopCh)
+	relayConn.Close()
+	<-errCh
+
+	return err
 }
