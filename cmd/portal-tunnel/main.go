@@ -145,7 +145,6 @@ func runExposeWithFlags(cfg Config) error {
 		Target:   cfg.Host,
 		Metadata: metadata,
 	}
-	applyServiceDefaults(service)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

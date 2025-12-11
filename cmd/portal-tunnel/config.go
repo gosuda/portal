@@ -36,7 +36,9 @@ func LoadConfig(path string) (*TunnelConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	cfg.applyDefaults()
+	if len(cfg.Service.Protocols) == 0 {
+		cfg.Service.Protocols = append([]string(nil), defaultProtocols...)
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -77,14 +79,4 @@ func (cfg *TunnelConfig) validate() error {
 	}
 
 	return nil
-}
-
-func (cfg *TunnelConfig) applyDefaults() {
-	applyServiceDefaults(&cfg.Service)
-}
-
-func applyServiceDefaults(svc *ServiceConfig) {
-	if len(svc.Protocols) == 0 {
-		svc.Protocols = append([]string(nil), defaultProtocols...)
-	}
 }

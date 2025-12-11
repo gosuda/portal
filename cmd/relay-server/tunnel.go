@@ -69,8 +69,7 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL := utils.DetectBaseURL(r, flagPortalURL)
-	script := fmt.Sprintf(tunnelScriptTemplate, baseURL)
+	script := fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
 
 	w.Header().Set("Content-Type", "text/x-shellscript")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

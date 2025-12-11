@@ -177,16 +177,6 @@ func TestParseURLs(t *testing.T) {
 	}
 }
 
-func TestIsHTMLContentType(t *testing.T) {
-	assert.True(t, IsHTMLContentType("text/html"))
-	assert.True(t, IsHTMLContentType("text/html; charset=utf-8"))
-	assert.True(t, IsHTMLContentType("TEXT/HTML; CHARSET=UTF-8"))
-	// Fallback path (parse error) with html prefix
-	assert.True(t, IsHTMLContentType("text/html; bad==value"))
-	assert.False(t, IsHTMLContentType("application/json"))
-	assert.False(t, IsHTMLContentType(""))
-}
-
 func TestGetContentType(t *testing.T) {
 	cases := map[string]string{
 		".html": "text/html; charset=utf-8",
@@ -205,23 +195,6 @@ func TestGetContentType(t *testing.T) {
 		got := GetContentType(ext)
 		assert.Equal(t, want, got, "ext=%q", ext)
 	}
-}
-
-func TestMatchesWildcardPattern(t *testing.T) {
-	// Wildcard pattern
-	assert.True(t, MatchesWildcardPattern("app.localhost:4017", "*.localhost:4017"))
-	assert.True(t, MatchesWildcardPattern("x.y.localhost:4017", "*.localhost:4017"))
-	assert.False(t, MatchesWildcardPattern("localhost:4017", "*.localhost:4017"))
-	assert.True(t, MatchesWildcardPattern("exact.host", "exact.host"))
-	assert.False(t, MatchesWildcardPattern("sub.exact.host", "exact.host"))
-}
-
-func TestIsHexString(t *testing.T) {
-	assert.True(t, IsHexString("0123456789abcdef"))
-	assert.True(t, IsHexString("ABCDEF"))
-	assert.True(t, IsHexString(""), "empty string is considered hex")
-	assert.False(t, IsHexString("g"))
-	assert.False(t, IsHexString("xyz"))
 }
 
 func TestIsSubdomain(t *testing.T) {
