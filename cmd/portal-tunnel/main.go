@@ -12,7 +12,7 @@ import (
 	"syscall"
 
 	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
+	"gopkg.eu.org/broccoli"
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
@@ -23,54 +23,66 @@ var bufferPool = sync.Pool{
 	New: func() any { return make([]byte, 64*1024) },
 }
 
-var (
-	flagConfigPath string
-	flagRelayURLs  string
-	flagHost       string
-	flagName       string
-	flagDesc       string
-	flagTags       string
-	flagThumbnail  string
-	flagOwner      string
-	flagHide       bool
-)
+type Config struct {
+	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
-var rootCmd = &cobra.Command{
-	Use:   "portal-tunnel",
-	Short: "Expose local services through Portal relay",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if flagConfigPath == "" {
-			return runExposeWithFlags()
-		}
-		return runExposeWithConfig()
-	},
-}
+	ConfigPath string `flag:"config" alias:"c" env:"TUNNEL_CONFIG" about:"Path to portal-tunnel config file"`
+	RelayURLs  string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs when config is not provided (comma-separated)"`
+	Host       string `flag:"host" env:"APP_HOST" about:"target host to proxy to when config is not provided (host:port or URL)"`
+	Name       string `flag:"name" env:"APP_NAME" about:"Service name when config is not provided"`
 
-func init() {
-	rootCmd.Flags().StringVar(&flagConfigPath, "config", "", "Path to portal-tunnel config file")
-	rootCmd.Flags().StringVar(&flagRelayURLs, "relay", "ws://localhost:4017/relay", "Portal relay server URLs when config is not provided (comma-separated)")
-	rootCmd.Flags().StringVar(&flagHost, "host", "localhost:3000", "target host to proxy to when config is not provided (host:port or URL)")
-	rootCmd.Flags().StringVar(&flagName, "name", "", "Service name when config is not provided (auto-generated if empty)")
-	rootCmd.Flags().StringVar(&flagDesc, "description", "", "Service description metadata")
-	rootCmd.Flags().StringVar(&flagTags, "tags", "", "Service tags metadata (comma-separated)")
-	rootCmd.Flags().StringVar(&flagThumbnail, "thumbnail", "", "Service thumbnail URL metadata")
-	rootCmd.Flags().StringVar(&flagOwner, "owner", "", "Service owner metadata")
-	rootCmd.Flags().BoolVar(&flagHide, "hide", false, "Hide service from discovery (metadata)")
+	// Metadata
+	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
+	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
+	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
+	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
+	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
 }
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	var cfg Config
+	app, err := broccoli.NewApp(&cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating app: %v\n", err)
+		os.Exit(1)
+	}
+
+	_, _, err = app.Bind(&cfg, os.Args[1:])
+	if err != nil {
+		if err == broccoli.ErrHelp {
+			fmt.Print(app.Help())
+			os.Exit(0)
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
+		fmt.Print(app.Help())
+		os.Exit(1)
+	}
+
+	var runErr error
+	if cfg.ConfigPath != "" {
+		runErr = runExposeWithConfig(cfg.ConfigPath)
+	} else {
+		if cfg.Host == "" || cfg.Name == "" {
+			fmt.Print(app.Help())
+			os.Exit(1)
+		}
+		runErr = runExposeWithFlags(cfg)
+	}
+
+	if runErr != nil {
+		log.Error().Err(runErr).Msg("Exited with error")
 		os.Exit(1)
 	}
 }
 
-func runExposeWithConfig() error {
-	cfg, err := LoadConfig(flagConfigPath)
+func runExposeWithConfig(configPath string) error {
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if len(cfg.Relays) == 0 {
+	relayURLs := normalizeRelayURLs(cfg.Relays)
+	if len(relayURLs) == 0 {
 		return fmt.Errorf("config: relays must include at least one URL")
 	}
 
@@ -87,7 +99,7 @@ func runExposeWithConfig() error {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, cfg.Relays, &cfg.Service, fmt.Sprintf("config=%s", flagConfigPath)); err != nil {
+	if err := runServiceTunnel(ctx, relayURLs, &cfg.Service, fmt.Sprintf("config=%s", configPath)); err != nil {
 		return err
 	}
 
@@ -95,22 +107,43 @@ func runExposeWithConfig() error {
 	return nil
 }
 
-func runExposeWithFlags() error {
-	relayURLs := utils.ParseURLs(flagRelayURLs)
+func runExposeWithFlags(cfg Config) error {
+	relayURLs := utils.ParseURLs(cfg.RelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("--relay must include at least one non-empty URL when --config is not provided")
 	}
 
+	var metadata sdk.Metadata
+	if strings.TrimSpace(cfg.Description) != "" {
+		metadata.Description = cfg.Description
+	}
+	if strings.TrimSpace(cfg.Tags) != "" {
+		tags := strings.Split(cfg.Tags, ",")
+		for i := range tags {
+			tags[i] = strings.TrimSpace(tags[i])
+		}
+		filtered := tags[:0]
+		for _, t := range tags {
+			if t != "" {
+				filtered = append(filtered, t)
+			}
+		}
+		metadata.Tags = filtered
+	}
+	if strings.TrimSpace(cfg.Thumbnail) != "" {
+		metadata.Thumbnail = cfg.Thumbnail
+	}
+	if strings.TrimSpace(cfg.Owner) != "" {
+		metadata.Owner = cfg.Owner
+	}
+	if cfg.Hide {
+		metadata.Hide = cfg.Hide
+	}
+
 	service := &ServiceConfig{
-		Name:   flagName,
-		Target: flagHost,
-		Metadata: sdk.Metadata{
-			Description: flagDesc,
-			Tags:        strings.Split(flagTags, ","),
-			Thumbnail:   flagThumbnail,
-			Owner:       flagOwner,
-			Hide:        flagHide,
-		},
+		Name:     strings.TrimSpace(cfg.Name),
+		Target:   cfg.Host,
+		Metadata: metadata,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -177,7 +210,11 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceConfig, origin string) error {
 	localAddr := service.Target
-	serviceName := service.Name
+	serviceName := strings.TrimSpace(service.Name)
+	if len(relayURLs) == 0 {
+		return fmt.Errorf("no relay URLs provided")
+	}
+	bootstrapServers := relayURLs
 
 	cred := sdk.NewCredential()
 	leaseID := cred.ID()
@@ -188,11 +225,11 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 	log.Info().Str("service", serviceName).Msgf("Local service is reachable at %s", localAddr)
 	log.Info().Str("service", serviceName).Msgf("Starting Portal Tunnel (%s)...", origin)
 	log.Info().Str("service", serviceName).Msgf("  Local:    %s", localAddr)
-	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
+	log.Info().Str("service", serviceName).Msgf("  Relays:   %s", strings.Join(bootstrapServers, ", "))
 	log.Info().Str("service", serviceName).Msgf("  Lease ID: %s", leaseID)
 
 	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = relayURLs
+		c.BootstrapServers = bootstrapServers
 	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to connect to relay: %w", serviceName, err)
@@ -220,7 +257,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 	log.Info().Str("service", serviceName).Msg("Access via:")
 	log.Info().Str("service", serviceName).Msgf("- Name:     /peer/%s", serviceName)
 	log.Info().Str("service", serviceName).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", serviceName).Msgf("- Example:  %s/peer/%s", relayURLs[0], serviceName)
+	log.Info().Str("service", serviceName).Msgf("- Example:  http://%s/peer/%s", bootstrapServers[0], serviceName)
 
 	log.Info().Str("service", serviceName).Msg("")
 
@@ -257,4 +294,22 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, service *ServiceC
 			log.Info().Str("service", serviceName).Msg("Connection closed")
 		}(relayConn)
 	}
+}
+
+// normalizeRelayURLs trims, de-duplicates, and filters empty relay URLs.
+func normalizeRelayURLs(urls []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		if _, ok := seen[u]; ok {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	return out
 }
