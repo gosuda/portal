@@ -66,13 +66,6 @@ type Metadata struct {
 	Hide        bool     `json:"hide"`
 }
 
-func (m Metadata) isEmpty() bool {
-	return m.Description == "" &&
-		len(m.Tags) == 0 &&
-		m.Thumbnail == "" &&
-		m.Owner == ""
-}
-
 type MetadataOption func(*Metadata)
 
 func WithDescription(description string) MetadataOption {

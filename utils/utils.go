@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -128,6 +129,19 @@ func ParseURLs(raw string) []string {
 	return out
 }
 
+// IsHTMLContentType checks if the Content-Type header indicates HTML content
+// It properly handles media type parsing with parameters like charset
+func IsHTMLContentType(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
+	}
+	return mediaType == "text/html"
+}
+
 // GetContentType returns the MIME type for a file extension
 func GetContentType(ext string) string {
 	switch ext {
@@ -154,15 +168,6 @@ func GetContentType(ext string) string {
 	}
 }
 
-// MatchesWildcardPattern checks if a host matches a wildcard pattern (e.g., *.localhost:4017)
-func MatchesWildcardPattern(host, pattern string) bool {
-	if strings.HasPrefix(pattern, "*.") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		return strings.HasSuffix(host, suffix)
-	}
-	return host == pattern
-}
-
 // IsHexString reports whether s contains only hexadecimal characters
 func IsHexString(s string) bool {
 	for _, c := range s {
@@ -173,89 +178,11 @@ func IsHexString(s string) bool {
 	return true
 }
 
-// IsHTMLContentType checks if the Content-Type header indicates HTML content
-// It properly handles media type parsing with parameters like charset
-func IsHTMLContentType(contentType string) bool {
-	if contentType == "" {
-		return false
-	}
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
-	}
-	return mediaType == "text/html"
-}
-
 // SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers
 func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
-}
-
-// ForwardedHost returns the host from X-Forwarded-Host (first value) or falls back to r.Host.
-func ForwardedHost(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		parts := strings.Split(h, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	return r.Host
-}
-
-// IsHTTPS reports whether the request is HTTPS, checking TLS or X-Forwarded-Proto.
-func IsHTTPS(r *http.Request) bool {
-	if r == nil {
-		return false
-	}
-	if r.TLS != nil {
-		return true
-	}
-	proto := r.Header.Get("X-Forwarded-Proto")
-	return strings.EqualFold(proto, "https")
-}
-
-// RequestScheme returns "https" when the request is HTTPS and "http" otherwise.
-func RequestScheme(r *http.Request) string {
-	if IsHTTPS(r) {
-		return "https"
-	}
-	return "http"
-}
-
-// DetectBaseURL builds a base URL (scheme://host) using request headers with a fallback portal URL.
-func DetectBaseURL(r *http.Request, fallbackPortalURL string) string {
-	scheme := RequestScheme(r)
-	host := ForwardedHost(r)
-	if host == "" && fallbackPortalURL != "" {
-		if u, err := url.Parse(fallbackPortalURL); err == nil {
-			host = u.Host
-			if u.Scheme != "" {
-				scheme = u.Scheme
-			}
-		}
-	}
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
-
-// DetectRelayURL builds a relay WebSocket URL (ws[s]://host/relay) using request headers with a fallback portal URL.
-func DetectRelayURL(r *http.Request, fallbackPortalURL string) string {
-	wsScheme := "ws"
-	if IsHTTPS(r) {
-		wsScheme = "wss"
-	}
-	host := ForwardedHost(r)
-	if host == "" && fallbackPortalURL != "" {
-		if u, err := url.Parse(fallbackPortalURL); err == nil {
-			host = u.Host
-			if u.Scheme == "https" {
-				wsScheme = "wss"
-			}
-		}
-	}
-	return fmt.Sprintf("%s://%s/relay", wsScheme, host)
 }
 
 // IsSubdomain reports whether host matches the given domain pattern.
@@ -362,4 +289,36 @@ func DefaultBootstrapFrom(base string) string {
 		return "ws://localhost:4017/relay"
 	}
 	return "ws://" + host + "/relay"
+}
+
+func IsLocalhost(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	// Normal localhost
+	if ip.IsLoopback() {
+		return true
+	}
+
+	// Docker networks & private networks
+	dockerRanges := []string{
+		"172.17.0.0/16",   // Linux Docker
+		"192.168.64.0/24", // Docker Desktop macOS/Windows
+		"192.168.65.0/24",
+	}
+
+	for _, cidr := range dockerRanges {
+		_, subnet, _ := net.ParseCIDR(cidr)
+		if subnet.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
 }

@@ -47,7 +47,7 @@ echo "Downloading portal-tunnel ($TUNNEL_OS/$TUNNEL_ARCH)..." >&2
 curl -fsSL "$BIN_URL" -o "$BIN_PATH"
 chmod +x "$BIN_PATH"
 
-set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost}" --port "${PORT:-4018}"
+set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost:3000}"
 [ -n "${NAME:-}" ] && set -- "$@" --name "$NAME"
 [ -n "${DESCRIPTION:-}" ] && set -- "$@" --description "$DESCRIPTION"
 [ -n "${TAGS:-}" ] && set -- "$@" --tags "$TAGS"
@@ -69,8 +69,7 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL := utils.DetectBaseURL(r, flagPortalURL)
-	script := fmt.Sprintf(tunnelScriptTemplate, baseURL)
+	script := fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
 
 	w.Header().Set("Content-Type", "text/x-shellscript")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

@@ -39,7 +39,7 @@ var (
 	dialerCredential *cryptoops.Credential
 
 	// DNS cache for lease name -> lease ID mapping
-	dnsCache   sync.Map // map[string]*dnsCacheEntry
+	dnsCache    sync.Map // map[string]*dnsCacheEntry
 	dnsCacheTTL = 5 * time.Minute
 )
 

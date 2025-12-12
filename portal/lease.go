@@ -10,14 +10,13 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
-// ParsedMetadata contains pre-parsed lease metadata fields.
-// Defined locally to avoid sdk dependency in core package.
+// ParsedMetadata holds struct-parsed metadata for better access
 type ParsedMetadata struct {
-	Description string
-	Tags        []string
-	Thumbnail   string
-	Owner       string
-	Hide        bool
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Thumbnail   string   `json:"thumbnail"`
+	Owner       string   `json:"owner"`
+	Hide        bool     `json:"hide"`
 }
 
 // LeaseEntry represents a registered lease with expiration tracking.
