@@ -92,11 +92,25 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 			return
 		}
 
+		// Check if IP is banned
+		clientIP := ExtractClientIP(r)
+		if globalIPManager != nil && globalIPManager.IsIPBanned(clientIP) {
+			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+
 		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
 		if err != nil {
 			log.Error().Err(err).Msg("[server] websocket upgrade failed")
 			return
 		}
+
+		// Store pending IP for lease association (will be linked when lease is registered)
+		if globalIPManager != nil && clientIP != "" {
+			storePendingIP(clientIP)
+		}
+
 		if err := serv.HandleConnection(stream); err != nil {
 			log.Error().Err(err).Msg("[server] websocket relay connection error")
 			wsConn.Close()
@@ -200,7 +214,11 @@ type leaseRow struct {
 	StaleRed     bool
 	Hide         bool
 	Metadata     string
-	BPS          int64 // bytes-per-second limit (0 = unlimited)
+	BPS          int64  // bytes-per-second limit (0 = unlimited)
+	IsApproved   bool   // whether lease is approved (for manual mode)
+	IsDenied     bool   // whether lease is denied (for manual mode)
+	IP           string // client IP address (for IP-based ban)
+	IsIPBanned   bool   // whether the IP is banned
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
@@ -233,6 +251,11 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 
 		// Skip banned leases for user-facing list
 		if _, banned := bannedMap[identityID]; banned {
+			continue
+		}
+
+		// Skip unapproved leases in manual mode for user-facing list
+		if getApprovalMode() == ApprovalModeManual && !isLeaseApproved(identityID) {
 			continue
 		}
 

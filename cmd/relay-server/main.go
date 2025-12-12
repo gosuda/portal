@@ -89,11 +89,19 @@ func runServer() error {
 		bpsManager.SetDefaultBPS(int64(flagLeaseBPS))
 	}
 
-	// Load persisted admin settings (ban list, BPS limits)
-	loadAdminSettings(serv, bpsManager)
+	// Create IP manager for IP-based bans
+	ipManager := NewIPManager()
+	globalIPManager = ipManager
 
-	// Register relay callback for BPS handling
+	// Load persisted admin settings (ban list, BPS limits, IP bans)
+	loadAdminSettings(serv, bpsManager, ipManager)
+
+	// Register relay callback for BPS handling and IP tracking
 	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
+		// Associate pending IP with this lease
+		if ip := popPendingIP(); ip != "" && globalIPManager != nil {
+			globalIPManager.RegisterLeaseIP(leaseID, ip)
+		}
 		establishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
 	})
 

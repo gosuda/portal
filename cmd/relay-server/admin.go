@@ -37,10 +37,20 @@ func handleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.Rel
 			"leases_count": len(serv.GetAllLeaseEntries()),
 			"uptime":       "TODO",
 		})
+	case route == "settings" && r.Method == http.MethodGet:
+		handleGetSettings(w)
+	case route == "settings/approval-mode":
+		handleApprovalModeRequest(w, r, serv)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/ban"):
 		handleLeaseBanRequest(w, r, serv, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/bps"):
 		handleLeaseBPSRequest(w, r, serv, route)
+	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/approve"):
+		handleLeaseApproveRequest(w, r, serv, route)
+	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/deny"):
+		handleLeaseDenyRequest(w, r, serv, route)
+	case strings.HasPrefix(route, "ips/") && strings.HasSuffix(route, "/ban"):
+		handleIPBanRequest(w, r, serv, route)
 	default:
 		http.NotFound(w, r)
 	}
@@ -67,6 +77,103 @@ func handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.
 	case http.MethodDelete:
 		serv.GetLeaseManager().UnbanLease(leaseID)
 		saveAdminSettings(serv, globalBPSManager)
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleGetSettings(w http.ResponseWriter) {
+	writeJSON(w, map[string]interface{}{
+		"approval_mode":   getApprovalMode(),
+		"approved_leases": getApprovedLeases(),
+		"denied_leases":   getDeniedLeases(),
+	})
+}
+
+func handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, map[string]interface{}{
+			"approval_mode": getApprovalMode(),
+		})
+	case http.MethodPost:
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		mode := ApprovalMode(req.Mode)
+		if mode != ApprovalModeAuto && mode != ApprovalModeManual {
+			http.Error(w, "Invalid mode (must be 'auto' or 'manual')", http.StatusBadRequest)
+			return
+		}
+		setApprovalMode(mode)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
+		writeJSON(w, map[string]interface{}{
+			"approval_mode": mode,
+		})
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+	parts := strings.Split(route, "/")
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+
+	leaseID, ok := decodeLeaseID(parts[1])
+	if !ok {
+		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		approveLease(leaseID)
+		undenyLease(leaseID) // Remove from denied if exists
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approved")
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		revokeLease(leaseID)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approval revoked")
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+	parts := strings.Split(route, "/")
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+
+	leaseID, ok := decodeLeaseID(parts[1])
+	if !ok {
+		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		denyLease(leaseID)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denied")
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		undenyLease(leaseID)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denial removed")
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -112,6 +219,41 @@ func handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, serv *portal.
 			Int64("old_bps", oldBPS).
 			Msg("[Admin] BPS limit removed (now unlimited)")
 		saveAdminSettings(serv, globalBPSManager)
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+	// Route format: ips/{ip}/ban
+	parts := strings.Split(route, "/")
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+
+	ip := parts[1]
+	if ip == "" {
+		http.Error(w, "Invalid IP address", http.StatusBadRequest)
+		return
+	}
+
+	if globalIPManager == nil {
+		http.Error(w, "IP manager not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		globalIPManager.BanIP(ip)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("ip", ip).Msg("[Admin] IP banned")
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		globalIPManager.UnbanIP(ip)
+		saveAdminSettings(serv, globalBPSManager)
+		log.Info().Str("ip", ip).Msg("[Admin] IP unbanned")
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -206,6 +348,16 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 
 		bps := globalBPSManager.GetBPSLimit(identityID)
 
+		// Get IP info for this lease
+		var ip string
+		var isIPBanned bool
+		if globalIPManager != nil {
+			ip = globalIPManager.GetLeaseIP(identityID)
+			if ip != "" {
+				isIPBanned = globalIPManager.IsIPBanned(ip)
+			}
+		}
+
 		rows = append(rows, leaseRow{
 			Peer:         identityID,
 			Name:         name,
@@ -221,16 +373,112 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:     lease.Metadata,
 			BPS:          bps,
+			IsApproved:   getApprovalMode() == ApprovalModeAuto || isLeaseApproved(identityID),
+			IsDenied:     isLeaseDenied(identityID),
+			IP:           ip,
+			IsIPBanned:   isIPBanned,
 		})
 	}
 
 	return rows
 }
 
+// ApprovalMode represents the approval mode for new connections
+type ApprovalMode string
+
+const (
+	ApprovalModeAuto   ApprovalMode = "auto"
+	ApprovalModeManual ApprovalMode = "manual"
+)
+
 // AdminSettings stores persistent admin configuration
 type AdminSettings struct {
-	BannedLeases []string         `json:"banned_leases"`
-	BPSLimits    map[string]int64 `json:"bps_limits"`
+	BannedLeases   []string         `json:"banned_leases"`
+	BPSLimits      map[string]int64 `json:"bps_limits"`
+	ApprovalMode   ApprovalMode     `json:"approval_mode"`
+	ApprovedLeases []string         `json:"approved_leases,omitempty"`
+	DeniedLeases   []string         `json:"denied_leases,omitempty"`
+	BannedIPs      []string         `json:"banned_ips,omitempty"`
+}
+
+// Global approval mode (default: auto)
+var (
+	globalApprovalMode   ApprovalMode = ApprovalModeAuto
+	globalApprovedLeases              = make(map[string]struct{})
+	globalDeniedLeases                = make(map[string]struct{})
+	approvalMu           sync.RWMutex
+)
+
+func getApprovalMode() ApprovalMode {
+	approvalMu.RLock()
+	defer approvalMu.RUnlock()
+	return globalApprovalMode
+}
+
+func setApprovalMode(mode ApprovalMode) {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	globalApprovalMode = mode
+}
+
+func isLeaseApproved(leaseID string) bool {
+	approvalMu.RLock()
+	defer approvalMu.RUnlock()
+	_, ok := globalApprovedLeases[leaseID]
+	return ok
+}
+
+func approveLease(leaseID string) {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	globalApprovedLeases[leaseID] = struct{}{}
+}
+
+func revokeLease(leaseID string) {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	delete(globalApprovedLeases, leaseID)
+}
+
+func getApprovedLeases() []string {
+	approvalMu.RLock()
+	defer approvalMu.RUnlock()
+	result := make([]string, 0, len(globalApprovedLeases))
+	for id := range globalApprovedLeases {
+		result = append(result, id)
+	}
+	return result
+}
+
+func isLeaseDenied(leaseID string) bool {
+	approvalMu.RLock()
+	defer approvalMu.RUnlock()
+	_, ok := globalDeniedLeases[leaseID]
+	return ok
+}
+
+func denyLease(leaseID string) {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	globalDeniedLeases[leaseID] = struct{}{}
+	// Remove from approved if exists
+	delete(globalApprovedLeases, leaseID)
+}
+
+func undenyLease(leaseID string) {
+	approvalMu.Lock()
+	defer approvalMu.Unlock()
+	delete(globalDeniedLeases, leaseID)
+}
+
+func getDeniedLeases() []string {
+	approvalMu.RLock()
+	defer approvalMu.RUnlock()
+	result := make([]string, 0, len(globalDeniedLeases))
+	for id := range globalDeniedLeases {
+		result = append(result, id)
+	}
+	return result
 }
 
 var (
@@ -259,9 +507,18 @@ func saveAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 
 	bpsLimits := bpsManager.GetAllBPSLimits()
 
+	var bannedIPs []string
+	if globalIPManager != nil {
+		bannedIPs = globalIPManager.GetBannedIPs()
+	}
+
 	settings := AdminSettings{
-		BannedLeases: banned,
-		BPSLimits:    bpsLimits,
+		BannedLeases:   banned,
+		BPSLimits:      bpsLimits,
+		ApprovalMode:   getApprovalMode(),
+		ApprovedLeases: getApprovedLeases(),
+		DeniedLeases:   getDeniedLeases(),
+		BannedIPs:      bannedIPs,
 	}
 
 	data, err := json.MarshalIndent(settings, "", "  ")
@@ -286,7 +543,7 @@ func saveAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 	log.Debug().Str("path", adminSettingsPath).Msg("[Admin] Saved admin settings")
 }
 
-func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
+func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager, ipManager *IPManager) {
 	adminSettingsMu.Lock()
 	defer adminSettingsMu.Unlock()
 
@@ -316,8 +573,32 @@ func loadAdminSettings(serv *portal.RelayServer, bpsManager *BPSManager) {
 		bpsManager.SetBPSLimit(leaseID, bps)
 	}
 
+	// Load approval mode
+	if settings.ApprovalMode != "" {
+		setApprovalMode(settings.ApprovalMode)
+	}
+
+	// Load approved leases
+	for _, leaseID := range settings.ApprovedLeases {
+		approveLease(leaseID)
+	}
+
+	// Load denied leases
+	for _, leaseID := range settings.DeniedLeases {
+		denyLease(leaseID)
+	}
+
+	// Load banned IPs
+	if ipManager != nil && len(settings.BannedIPs) > 0 {
+		ipManager.SetBannedIPs(settings.BannedIPs)
+	}
+
 	log.Info().
 		Int("banned_count", len(settings.BannedLeases)).
 		Int("bps_limits_count", len(settings.BPSLimits)).
+		Str("approval_mode", string(getApprovalMode())).
+		Int("approved_count", len(settings.ApprovedLeases)).
+		Int("denied_count", len(settings.DeniedLeases)).
+		Int("banned_ips_count", len(settings.BannedIPs)).
 		Msg("[Admin] Loaded admin settings")
 }

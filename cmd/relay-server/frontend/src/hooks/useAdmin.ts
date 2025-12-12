@@ -3,11 +3,18 @@ import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
 
+// Approval mode type
+export type ApprovalMode = "auto" | "manual";
+
 // Extended BaseServer with admin-specific fields
 export interface AdminServer extends BaseServer {
   peerId: string;
   isBanned: boolean;
   bps: number; // bytes-per-second limit (0 = unlimited)
+  isApproved: boolean; // whether lease is approved (for manual mode)
+  isDenied: boolean; // whether lease is denied (for manual mode)
+  ip: string; // client IP address (for IP-based ban)
+  isIPBanned: boolean; // whether the IP is banned
 }
 
 // Convert ServerData (from API) to AdminServer format
@@ -54,12 +61,17 @@ function convertServerDataToAdminServer(
     peerId: row.Peer,
     isBanned: bannedLeases.includes(row.Peer),
     bps: row.BPS || 0,
+    isApproved: row.IsApproved || false,
+    isDenied: row.IsDenied || false,
+    ip: row.IP || "",
+    isIPBanned: row.IsIPBanned || false,
   };
 }
 
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
   const [bannedLeases, setBannedLeases] = useState<string[]>([]);
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -68,9 +80,10 @@ export function useAdmin() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [leasesRes, bannedRes] = await Promise.all([
+      const [leasesRes, bannedRes, settingsRes] = await Promise.all([
         fetch("/admin/leases"),
         fetch("/admin/leases/banned"),
+        fetch("/admin/settings"),
       ]);
 
       if (!leasesRes.ok || !bannedRes.ok) {
@@ -90,6 +103,12 @@ export function useAdmin() {
         }
       });
       setBannedLeases(decodedBanned);
+
+      // Load settings
+      if (settingsRes.ok) {
+        const settings = await settingsRes.json();
+        setApprovalMode(settings.approval_mode || "auto");
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -131,37 +150,173 @@ export function useAdmin() {
     setBanFilter(value);
   }, []);
 
-  const handleBanStatus = useCallback(async (peerId: string, isBan: boolean) => {
-    try {
-      // URL-safe base64 encode the peer ID
-      const safeId = btoa(peerId).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      await fetch(`/admin/leases/${safeId}/ban`, {
-        method: isBan ? "POST" : "DELETE"
-      });
-      fetchData();
-    } catch (err) {
-      console.error(err);
-    }
-  }, [fetchData]);
-
-  const handleBPSChange = useCallback(async (peerId: string, bps: number) => {
-    try {
-      // URL-safe base64 encode the peer ID
-      const safeId = btoa(peerId).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      if (bps <= 0) {
-        await fetch(`/admin/leases/${safeId}/bps`, { method: "DELETE" });
-      } else {
-        await fetch(`/admin/leases/${safeId}/bps`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ bps }),
+  const handleBanStatus = useCallback(
+    async (peerId: string, isBan: boolean) => {
+      try {
+        // URL-safe base64 encode the peer ID
+        const safeId = btoa(peerId)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        await fetch(`/admin/leases/${safeId}/ban`, {
+          method: isBan ? "POST" : "DELETE",
         });
+        fetchData();
+      } catch (err) {
+        console.error(err);
       }
-      fetchData();
+    },
+    [fetchData]
+  );
+
+  const handleBPSChange = useCallback(
+    async (peerId: string, bps: number) => {
+      try {
+        // URL-safe base64 encode the peer ID
+        const safeId = btoa(peerId)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        if (bps <= 0) {
+          await fetch(`/admin/leases/${safeId}/bps`, { method: "DELETE" });
+        } else {
+          await fetch(`/admin/leases/${safeId}/bps`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bps }),
+          });
+        }
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
+    try {
+      await fetch("/admin/settings/approval-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      setApprovalMode(mode);
     } catch (err) {
       console.error(err);
     }
-  }, [fetchData]);
+  }, []);
+
+  const handleApproveStatus = useCallback(
+    async (peerId: string, approve: boolean) => {
+      try {
+        const safeId = btoa(peerId)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        await fetch(`/admin/leases/${safeId}/approve`, {
+          method: approve ? "POST" : "DELETE",
+        });
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  const handleDenyStatus = useCallback(
+    async (peerId: string, deny: boolean) => {
+      try {
+        const safeId = btoa(peerId)
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        await fetch(`/admin/leases/${safeId}/deny`, {
+          method: deny ? "POST" : "DELETE",
+        });
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  const handleIPBanStatus = useCallback(
+    async (ip: string, isBan: boolean) => {
+      try {
+        await fetch(`/admin/ips/${ip}/ban`, {
+          method: isBan ? "POST" : "DELETE",
+        });
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  // Bulk action handlers
+  const handleBulkApprove = useCallback(
+    async (peerIds: string[]) => {
+      try {
+        await Promise.all(
+          peerIds.map((peerId) => {
+            const safeId = btoa(peerId)
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/, "");
+            return fetch(`/admin/leases/${safeId}/approve`, { method: "POST" });
+          })
+        );
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  const handleBulkDeny = useCallback(
+    async (peerIds: string[]) => {
+      try {
+        await Promise.all(
+          peerIds.map((peerId) => {
+            const safeId = btoa(peerId)
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/, "");
+            return fetch(`/admin/leases/${safeId}/deny`, { method: "POST" });
+          })
+        );
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
+
+  const handleBulkBan = useCallback(
+    async (peerIds: string[]) => {
+      try {
+        await Promise.all(
+          peerIds.map((peerId) => {
+            const safeId = btoa(peerId)
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/, "");
+            return fetch(`/admin/leases/${safeId}/ban`, { method: "POST" });
+          })
+        );
+        fetchData();
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [fetchData]
+  );
 
   return {
     // Raw data
@@ -173,6 +328,7 @@ export function useAdmin() {
     ...listState,
     // Admin-specific filter state
     banFilter,
+    approvalMode,
     // State
     loading,
     error,
@@ -180,6 +336,14 @@ export function useAdmin() {
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,
-    refresh: fetchData
+    handleApprovalModeChange,
+    handleApproveStatus,
+    handleDenyStatus,
+    handleIPBanStatus,
+    // Bulk action handlers
+    handleBulkApprove,
+    handleBulkDeny,
+    handleBulkBan,
+    refresh: fetchData,
   };
 }
