@@ -55,7 +55,11 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (e.key === "Enter") {
       e.preventDefault();
       addRelayUrl(urlInput);
-    } else if (e.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
+    } else if (
+      e.key === "Backspace" &&
+      urlInput === "" &&
+      relayUrls.length > 0
+    ) {
       // Remove last URL when backspace on empty input
       setRelayUrls(relayUrls.slice(0, -1));
     }
@@ -65,7 +69,8 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const command = useMemo(() => {
     const hostVal = host === "" ? defaultHost : host;
     const nameVal = name === "" ? defaultName : name;
-    const relayUrlVal = relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+    const relayUrlVal =
+      relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
     return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
   }, [currentOrigin, host, name, relayUrls]);
 
@@ -88,7 +93,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] rounded-sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
