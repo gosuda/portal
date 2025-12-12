@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
@@ -19,12 +20,8 @@ import (
 //go:embed dist/*
 var distFS embed.FS
 
-// Package-level BPS manager reference for admin handlers
-var globalBPSManager *BPSManager
-
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, nodeID string, bootstraps []string, noIndex bool, cancel context.CancelFunc) *http.Server {
-	globalBPSManager = bpsManager
+func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, noIndex bool, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -58,7 +55,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 			return
 		}
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
-		serveAppStatic(w, r, p, serv)
+		serveAppStatic(w, r, p, serv, admin)
 	})
 
 	// Portal frontend files (for unified caching)
@@ -93,8 +90,9 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 		}
 
 		// Check if IP is banned
-		clientIP := ExtractClientIP(r)
-		if globalIPManager != nil && globalIPManager.IsIPBanned(clientIP) {
+		clientIP := manager.ExtractClientIP(r)
+		ipManager := admin.GetIPManager()
+		if ipManager != nil && ipManager.IsIPBanned(clientIP) {
 			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -107,8 +105,8 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 		}
 
 		// Store pending IP for lease association (will be linked when lease is registered)
-		if globalIPManager != nil && clientIP != "" {
-			storePendingIP(clientIP)
+		if ipManager != nil && clientIP != "" {
+			ipManager.StorePendingIP(clientIP)
 		}
 
 		if err := serv.HandleConnection(stream); err != nil {
@@ -122,7 +120,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// serveAppStatic handles both "/" and 404 fallback with SSR
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		serveAppStatic(w, r, p, serv)
+		serveAppStatic(w, r, p, serv, admin)
 	})
 
 	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +130,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, bpsManager *BPSManager, no
 
 	// Admin API
 	appMux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
-		handleAdminRequest(w, r, serv)
+		admin.HandleAdminRequest(w, r, serv)
 	})
 
 	// Create portal frontend mux (routes only)
@@ -222,7 +220,7 @@ type leaseRow struct {
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page
-func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
+func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRow {
 	// Get all lease entries directly from the lease manager
 	leaseEntries := serv.GetAllLeaseEntries()
 
@@ -255,7 +253,8 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		}
 
 		// Skip unapproved leases in manual mode for user-facing list
-		if getApprovalMode() == ApprovalModeManual && !isLeaseApproved(identityID) {
+		approveManager := admin.GetApproveManager()
+		if approveManager.GetApprovalMode() == manager.ApprovalModeManual && !approveManager.IsLeaseApproved(identityID) {
 			continue
 		}
 
@@ -339,7 +338,11 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer) []leaseRow {
 		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
 		// Get BPS limit for this lease from BPSManager
-		bps := globalBPSManager.GetBPSLimit(identityID)
+		var bps int64
+		bpsMgr := admin.GetBPSManager()
+		if bpsMgr != nil {
+			bps = bpsMgr.GetBPSLimit(identityID)
+		}
 
 		row := leaseRow{
 			Peer:         identityID,

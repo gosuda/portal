@@ -1,4 +1,4 @@
-package main
+package manager
 
 import (
 	"net"
@@ -13,14 +13,20 @@ type IPManager struct {
 	bannedIPs  map[string]struct{} // set of banned IPs
 	leaseToIP  map[string]string   // lease ID -> IP address
 	ipToLeases map[string][]string // IP -> list of lease IDs (for lookup)
+
+	// pendingIPs stores recent connection IPs in a circular buffer for lease association
+	pendingIPsMu    sync.Mutex
+	pendingIPsQueue []string
+	pendingIPsMax   int // Keep last N IPs
 }
 
 // NewIPManager creates a new IP manager
 func NewIPManager() *IPManager {
 	return &IPManager{
-		bannedIPs:  make(map[string]struct{}),
-		leaseToIP:  make(map[string]string),
-		ipToLeases: make(map[string][]string),
+		bannedIPs:     make(map[string]struct{}),
+		leaseToIP:     make(map[string]string),
+		ipToLeases:    make(map[string][]string),
+		pendingIPsMax: 100,
 	}
 }
 
@@ -135,34 +141,27 @@ func ExtractClientIP(r *http.Request) string {
 	return ip
 }
 
-// Global IP manager instance
-var globalIPManager *IPManager
-
-// pendingIPs stores recent connection IPs in a circular buffer for lease association
-var (
-	pendingIPsMu    sync.Mutex
-	pendingIPsQueue []string
-	pendingIPsMax   = 100 // Keep last 100 IPs
-)
-
-// storePendingIP stores a client IP for later association with a lease
-func storePendingIP(ip string) {
-	pendingIPsMu.Lock()
-	defer pendingIPsMu.Unlock()
-	pendingIPsQueue = append(pendingIPsQueue, ip)
-	if len(pendingIPsQueue) > pendingIPsMax {
-		pendingIPsQueue = pendingIPsQueue[1:]
+// StorePendingIP stores a client IP for later association with a lease.
+func (m *IPManager) StorePendingIP(ip string) {
+	if ip == "" {
+		return
+	}
+	m.pendingIPsMu.Lock()
+	defer m.pendingIPsMu.Unlock()
+	m.pendingIPsQueue = append(m.pendingIPsQueue, ip)
+	if len(m.pendingIPsQueue) > m.pendingIPsMax {
+		m.pendingIPsQueue = m.pendingIPsQueue[1:]
 	}
 }
 
-// popPendingIP retrieves and removes the oldest pending IP
-func popPendingIP() string {
-	pendingIPsMu.Lock()
-	defer pendingIPsMu.Unlock()
-	if len(pendingIPsQueue) == 0 {
+// PopPendingIP retrieves and removes the oldest pending IP.
+func (m *IPManager) PopPendingIP() string {
+	m.pendingIPsMu.Lock()
+	defer m.pendingIPsMu.Unlock()
+	if len(m.pendingIPsQueue) == 0 {
 		return ""
 	}
-	ip := pendingIPsQueue[0]
-	pendingIPsQueue = pendingIPsQueue[1:]
+	ip := m.pendingIPsQueue[0]
+	m.pendingIPsQueue = m.pendingIPsQueue[1:]
 	return ip
 }

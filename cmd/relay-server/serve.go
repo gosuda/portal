@@ -43,7 +43,7 @@ func serveAsset(mux *http.ServeMux, route, assetPath, contentType string) {
 }
 
 // servePortalHTMLWithSSR serves portal.html with SSR data injection
-func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, admin *Admin) {
 	utils.SetCORSHeaders(w)
 
 	// Initialize cache on first use
@@ -59,7 +59,7 @@ func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal
 	}
 
 	// Inject SSR data into cached template
-	injectedHTML := injectServerData(string(cachedPortalHTML), serv)
+	injectedHTML := injectServerData(string(cachedPortalHTML), serv, admin)
 
 	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -73,9 +73,9 @@ func servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal
 }
 
 // injectServerData injects server data into HTML for SSR
-func injectServerData(htmlContent string, serv *portal.RelayServer) string {
+func injectServerData(htmlContent string, serv *portal.RelayServer, admin *Admin) string {
 	// Get server data from lease manager
-	rows := convertLeaseEntriesToRows(serv)
+	rows := convertLeaseEntriesToRows(serv, admin)
 
 	// Marshal to JSON
 	jsonData, err := json.Marshal(rows)
@@ -116,7 +116,7 @@ func servePortalStaticFile(w http.ResponseWriter, r *http.Request, filePath stri
 
 // serveAppStatic serves static files for app UI (React app) from embedded FS
 // Falls back to portal.html with SSR when path is root or file not found
-func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer) {
+func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer, admin *Admin) {
 	// Prevent directory traversal
 	if strings.Contains(appPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -127,7 +127,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv
 
 	// If path is empty or "/", serve portal.html with SSR
 	if appPath == "" || appPath == "/" {
-		servePortalHTMLWithSSR(w, r, serv)
+		servePortalHTMLWithSSR(w, r, serv, admin)
 		return
 	}
 
@@ -137,7 +137,7 @@ func serveAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv
 	if err != nil {
 		// File not found - fallback to portal.html with SSR for SPA routing
 		log.Debug().Err(err).Str("path", appPath).Msg("app static file not found, falling back to SSR")
-		servePortalHTMLWithSSR(w, r, serv)
+		servePortalHTMLWithSSR(w, r, serv, admin)
 		return
 	}
 
