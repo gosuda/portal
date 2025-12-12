@@ -292,33 +292,49 @@ func DefaultBootstrapFrom(base string) string {
 }
 
 func IsLocalhost(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = h
+	}
+
+	// If a proxy/adapter reports a hostname, allow Docker Desktop host alias.
+	if strings.EqualFold(host, "host.docker.internal") {
+		return true
 	}
 
 	ip := net.ParseIP(host)
 	if ip == nil {
+		// Try resolving hostnames to IPs (best-effort).
+		if addrs, err := net.LookupIP(host); err == nil {
+			for _, a := range addrs {
+				if a.IsLoopback() || isPrivateOrDockerIP(a) {
+					return true
+				}
+			}
+		}
 		return false
 	}
-	// Normal localhost
-	if ip.IsLoopback() {
-		return true
-	}
 
-	// Docker networks & private networks
-	dockerRanges := []string{
-		"172.17.0.0/16",   // Linux Docker
+	return ip.IsLoopback() || isPrivateOrDockerIP(ip)
+}
+
+func isPrivateOrDockerIP(ip net.IP) bool {
+	// Common Docker bridge/Desktop ranges only.
+	ranges := []string{
+		"172.16.0.0/12",   // Docker user-defined bridges (default pool)
+		"172.17.0.0/16",   // Linux Docker default bridge
 		"192.168.64.0/24", // Docker Desktop macOS/Windows
 		"192.168.65.0/24",
 	}
 
-	for _, cidr := range dockerRanges {
-		_, subnet, _ := net.ParseCIDR(cidr)
+	for _, cidr := range ranges {
+		_, subnet, err := net.ParseCIDR(cidr)
+		if err != nil || subnet == nil {
+			continue
+		}
 		if subnet.Contains(ip) {
 			return true
 		}
 	}
-
 	return false
 }
