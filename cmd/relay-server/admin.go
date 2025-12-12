@@ -179,6 +179,7 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 			return fmt.Sprintf("%ds", int(d/time.Second))
 		}(since)
 		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
+		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
 
 		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
 
@@ -206,18 +207,20 @@ func convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 		bps := globalBPSManager.GetBPSLimit(identityID)
 
 		rows = append(rows, leaseRow{
-			Peer:        identityID,
-			Name:        name,
-			Kind:        kind,
-			Connected:   connected,
-			DNS:         dnsLabel,
-			LastSeen:    lastSeenStr,
-			LastSeenISO: lastSeenISO,
-			TTL:         ttlStr,
-			Link:        link,
-			StaleRed:    !connected && since >= 15*time.Second,
-			Metadata:    lease.Metadata,
-			BPS:         bps,
+			Peer:         identityID,
+			Name:         name,
+			Kind:         kind,
+			Connected:    connected,
+			DNS:          dnsLabel,
+			LastSeen:     lastSeenStr,
+			LastSeenISO:  lastSeenISO,
+			FirstSeenISO: firstSeenISO,
+			TTL:          ttlStr,
+			Link:         link,
+			StaleRed:     !connected && since >= 15*time.Second,
+			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
+			Metadata:     lease.Metadata,
+			BPS:          bps,
 		})
 	}
 

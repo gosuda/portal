@@ -7,6 +7,7 @@ export type SortOption =
   | "owner"
   | "name-asc"
   | "name-desc"
-  | "updated";
+  | "updated"
+  | "duration";
 
 export type TagMode = "AND" | "OR";

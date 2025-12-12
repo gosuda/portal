@@ -141,6 +141,7 @@ export function ServerListView({
                         online: server.online,
                         serverUrl: server.link,
                       }}
+                      firstSeen={server.firstSeen}
                       isFavorite={favorites.includes(server.id)}
                       onToggleFavorite={onToggleFavorite}
                       // Admin controls

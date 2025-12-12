@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import clsx from "clsx";
-import { ReactNode, useState } from "react";
+import { ReactNode, useState, useMemo } from "react";
 
 interface ServerCardProps {
   serverId: number;
@@ -11,6 +11,7 @@ interface ServerCardProps {
   thumbnail: string;
   owner: string;
   online: boolean;
+  firstSeen?: string;
   dns: string;
   serverUrl: string;
   navigationPath: string;
@@ -34,6 +35,7 @@ export function ServerCard({
   thumbnail,
   owner,
   online,
+  firstSeen,
   navigationPath,
   navigationState,
   isFavorite = false,
@@ -130,6 +132,23 @@ export function ServerCard({
     return `${value} B/s`;
   };
 
+  const formattedDuration = useMemo(() => {
+    if (!firstSeen) return "";
+    const start = new Date(firstSeen).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, now - start);
+
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
+  }, [firstSeen]);
+
   const Wrapper = ({ children }: { children: ReactNode }) =>
     showAdminControls ? (
       <div className="relative">{children}</div>
@@ -194,9 +213,16 @@ export function ServerCard({
                   {online ? "Online" : "Offline"}
                 </p>
               </div>
-              <p className="text-foreground text-lg font-bold leading-tight truncate max-w-full">
-                {name}
-              </p>
+              <div className="flex items-center justify-between gap-2 max-w-full">
+                <p className="text-foreground text-lg font-bold leading-tight truncate flex-1">
+                  {name}
+                </p>
+                {formattedDuration && online && (
+                  <span className="text-xs text-text-muted font-medium whitespace-nowrap">
+                    ({formattedDuration})
+                  </span>
+                )}
+              </div>
               {description && (
                 <p className="text-text-muted text-sm font-normal leading-normal truncate max-w-full">
                   {description}

@@ -49,6 +49,7 @@ function convertServerDataToAdminServer(
     dns: row.DNS || "",
     link: row.Link,
     lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
+    firstSeen: row.FirstSeenISO || undefined,
     // Admin-specific fields
     peerId: row.Peer,
     isBanned: bannedLeases.includes(row.Peer),
