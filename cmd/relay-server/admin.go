@@ -26,9 +26,11 @@ type Admin struct {
 	approveManager *manager.ApproveManager
 	bpsManager     *manager.BPSManager
 	ipManager      *manager.IPManager
+
+	frontend *Frontend
 }
 
-func NewAdmin(defaultLeaseBPS int64) *Admin {
+func NewAdmin(defaultLeaseBPS int64, frontend *Frontend) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
@@ -38,6 +40,7 @@ func NewAdmin(defaultLeaseBPS int64) *Admin {
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
 		ipManager:      manager.NewIPManager(),
+		frontend:       frontend,
 	}
 }
 
@@ -194,7 +197,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 
 	switch {
 	case route == "":
-		serveAppStatic(w, r, "", serv, a)
+		a.frontend.ServeAppStatic(w, r, "", serv)
 	case route == "leases" && r.Method == http.MethodGet:
 		writeJSON(w, a.convertLeaseEntriesToAdminRows(serv))
 	case route == "leases/banned" && r.Method == http.MethodGet:
@@ -435,17 +438,6 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 	}
 }
 
-func decodeLeaseID(encoded string) (string, bool) {
-	idBytes, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		idBytes, err = base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", false
-		}
-	}
-	return string(idBytes), true
-}
-
 // convertLeaseEntriesToAdminRows converts LeaseEntry data to leaseRow format for admin API
 func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 	leaseEntries := serv.GetAllLeaseEntries()
@@ -559,4 +551,22 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 	}
 
 	return rows
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Error().Err(err).Msg("[HTTP] Failed to encode response")
+	}
+}
+
+func decodeLeaseID(encoded string) (string, bool) {
+	idBytes, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		idBytes, err = base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			return "", false
+		}
+	}
+	return string(idBytes), true
 }

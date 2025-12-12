@@ -84,8 +84,10 @@ func runServer() error {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
 
-	// Create Admin instance for approvals/settings (also initializes managers)
-	admin := NewAdmin(int64(flagLeaseBPS))
+	// Create Frontend first, then Admin, then attach Admin back to Frontend.
+	frontend := NewFrontend()
+	admin := NewAdmin(int64(flagLeaseBPS), frontend)
+	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
 	admin.LoadSettings(serv)
@@ -106,7 +108,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
