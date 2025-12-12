@@ -27,7 +27,7 @@ type Config struct {
 	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
 	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
-	Host      string `flag:"host" env:"APP_HOST" about:"target host to proxy to (host:port or URL)"`
+	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
 
 	// Metadata
@@ -49,15 +49,17 @@ func main() {
 
 	if _, _, err = app.Bind(&cfg, os.Args[1:]); err != nil {
 		if err == broccoli.ErrHelp {
-			log.Info().Msg(app.Help())
+			fmt.Println(app.Help())
 			os.Exit(0)
 		}
-		log.Error().Err(err).Str("help", app.Help()).Msg("Failed to bind CLI arguments")
+
+		fmt.Println(app.Help())
+		log.Error().Err(err).Msg("Failed to bind CLI arguments")
 		os.Exit(1)
 	}
 
 	if cfg.Host == "" || cfg.Name == "" {
-		log.Error().Str("help", app.Help()).Msg("Host and name must be provided")
+		fmt.Println(app.Help())
 		os.Exit(1)
 	}
 

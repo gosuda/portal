@@ -12,7 +12,7 @@ require (
 	golang.org/x/crypto v0.44.0
 	golang.org/x/net v0.47.0
 	google.golang.org/protobuf v1.36.10
-	gopkg.eu.org/broccoli v1.2.2
+	gopkg.eu.org/broccoli v1.2.3
 )
 
 require (
