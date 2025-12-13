@@ -4,8 +4,11 @@ FROM --platform=$BUILDPLATFORM golang:1 AS builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  nodejs npm brotli make binaryen zstd && \
+  nodejs npm brotli make binaryen zstd wget && \
   npm install -g esbuild && \
+  wget https://github.com/tinygo-org/tinygo/releases/download/v0.39.0/tinygo_0.39.0_amd64.deb && \
+  dpkg -i tinygo_0.39.0_amd64.deb && \
+  rm tinygo_0.39.0_amd64.deb && \
   rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
