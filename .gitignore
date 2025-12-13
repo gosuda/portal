@@ -13,6 +13,7 @@ chat
 
 cmd/relay-server/dist/app
 cmd/relay-server/dist/wasm
+cmd/webclient/polyfill.min.js
 
 # Test binary, built with `go test -c`
 *.test
