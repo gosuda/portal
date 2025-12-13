@@ -323,6 +323,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 type wasmCacheEntry struct {
 	brotli []byte
+	zstd   []byte
 	hash   string
 }
 
@@ -346,7 +347,7 @@ func (f *Frontend) InitWasmCache() error {
 			if utils.IsHexString(hash) {
 				fullPath := path.Join("dist", "wasm", name)
 				// Cache under the URL path (<hash>.wasm) while reading the
-				// brotli-compressed artifact (<hash>.wasm.br) from embed.FS.
+				// compressed artifacts from embed.FS.
 				cacheKey := hash + ".wasm"
 				if err := f.cacheWasmFile(cacheKey, fullPath); err != nil {
 					log.Warn().Err(err).Str("file", name).Msg("failed to cache WASM file")
@@ -368,17 +369,38 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
 	}
 
-	// Load precompressed variant (brotli) from embed.FS (<hash>.wasm.br)
+	// Load brotli variant (<hash>.wasm.br)
 	var brData []byte
-	data, err := f.distFS.ReadFile(fullPath)
+	brPath := fullPath
+	if !strings.HasSuffix(brPath, ".br") {
+		brPath += ".br" // Should be implied by caller logic, but safe
+	}
+
+	data, err := f.distFS.ReadFile(brPath)
 	if err != nil {
-		log.Warn().Err(err).Str("file", fullPath).Msg("failed to read brotli-compressed WASM")
+		log.Warn().Err(err).Str("file", brPath).Msg("failed to read brotli-compressed WASM")
 	} else {
 		brData = data
 	}
 
+	// Load zstd variant (<hash>.wasm.zst)
+	var zstdData []byte
+	// Construct zstd path from fullPath (replace .br with .zst or add .zst)
+	zstdPath := strings.TrimSuffix(fullPath, ".br") + ".zst"
+
+	// Check if zstd file exists in embed.FS
+	// Note: We need to use ReadDir or just try ReadFile. simpler to try ReadFile
+	zData, err := f.distFS.ReadFile(zstdPath)
+	if err == nil {
+		zstdData = zData
+	} else {
+		// Log at debug, as zstd might not be generated in all builds
+		log.Debug().Err(err).Str("file", zstdPath).Msg("zstd-compressed WASM not found")
+	}
+
 	entry := &wasmCacheEntry{
 		brotli: brData,
+		zstd:   zstdData,
 		hash:   hashHex,
 	}
 
@@ -389,6 +411,7 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 	log.Debug().
 		Str("file", name).
 		Int("brotli", len(entry.brotli)).
+		Int("zstd", len(entry.zstd)).
 		Msg("WASM file cached")
 
 	return nil
@@ -428,30 +451,48 @@ func (f *Frontend) serveCompressedWasm(w http.ResponseWriter, r *http.Request, f
 	// Set immutable cache headers for content-addressed files
 	utils.SetCORSHeaders(w)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Vary", "Accept-Encoding")
 	w.Header().Set("Content-Type", "application/wasm")
 
 	// Check Accept-Encoding header for brotli support
+	// Check Accept-Encoding header
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 
-	// Require brotli-compressed WASM
-	if !strings.Contains(acceptEncoding, "br") || len(entry.brotli) == 0 {
-		log.Warn().
+	// 1. Zstd (Preferred if available)
+	if strings.Contains(acceptEncoding, "zstd") && len(entry.zstd) > 0 {
+		w.Header().Set("Content-Encoding", "zstd")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.zstd)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(entry.zstd)
+		log.Debug().
 			Str("path", filePath).
-			Str("acceptEncoding", acceptEncoding).
-			Msg("client does not support brotli or brotli variant missing for WASM")
-		http.Error(w, "brotli-compressed WASM required", http.StatusNotAcceptable)
+			Int("size", len(entry.zstd)).
+			Str("encoding", "zstd").
+			Msg("served compressed WASM")
 		return
 	}
 
-	w.Header().Set("Content-Encoding", "br")
-	w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
-	w.WriteHeader(http.StatusOK)
-	w.Write(entry.brotli)
-	log.Debug().
+	// 2. Brotli
+	if strings.Contains(acceptEncoding, "br") && len(entry.brotli) > 0 {
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(entry.brotli)
+		log.Debug().
+			Str("path", filePath).
+			Int("size", len(entry.brotli)).
+			Str("encoding", "brotli").
+			Msg("served compressed WASM")
+		return
+	}
+
+	// 3. Fallback (error if no compatible encoding found for cached WASM)
+	log.Warn().
 		Str("path", filePath).
-		Int("size", len(entry.brotli)).
-		Str("encoding", "brotli").
-		Msg("served compressed WASM")
+		Str("acceptEncoding", acceptEncoding).
+		Msg("client does not support zstd/br or variants missing for WASM")
+	http.Error(w, "compressed WASM required (zstd or br)", http.StatusNotAcceptable)
+	return
 }
 
 // ServePortalStatic serves static files for portal frontend with appropriate cache headers.
