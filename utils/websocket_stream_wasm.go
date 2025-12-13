@@ -1,4 +1,6 @@
-package wsjs
+//go:build js && wasm
+
+package utils
 
 import (
 	"sync"
@@ -6,14 +8,14 @@ import (
 
 // WsStream provides an io.Reader and io.Writer interface for WebSocket connections
 type WsStream struct {
-	conn          *Conn
+	conn          *WsConn
 	currentBuffer []byte
 	readMu        sync.Mutex
 	writeMu       sync.Mutex
 }
 
 // NewWsStream creates a new WsStream from a WebSocket connection
-func NewWsStream(conn *Conn) *WsStream {
+func NewWsStream(conn *WsConn) *WsStream {
 	return &WsStream{
 		conn: conn,
 	}

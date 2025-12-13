@@ -1,7 +1,10 @@
-package wsjs
+//go:build js && wasm
+
+package utils
 
 import (
 	"errors"
+	"io"
 	"syscall/js"
 )
 
@@ -16,7 +19,7 @@ var (
 	_Uint8Array  = js.Global().Get("Uint8Array")
 )
 
-type Conn struct {
+type WsConn struct {
 	ws js.Value
 
 	messageChan chan []byte
@@ -25,19 +28,23 @@ type Conn struct {
 	funcsToBeReleased []js.Func
 }
 
-func (conn *Conn) freeFuncs() {
+func (conn *WsConn) freeFuncs() {
 	for _, f := range conn.funcsToBeReleased {
 		f.Release()
 	}
 }
 
-func Dial(uri string) (*Conn, error) {
+func DialWebSocket(uri string) (*WsConn, error) {
 	errCh := make(chan error, 1)
+
+	if _WebSocket.IsUndefined() {
+		return nil, errors.New("WebSocket not supported in this environment")
+	}
 
 	ws := _WebSocket.New(uri)
 	ws.Set("binaryType", "arraybuffer")
 
-	conn := &Conn{
+	conn := &WsConn{
 		ws:          ws,
 		messageChan: make(chan []byte, 32),
 		closeChan:   make(chan struct{}, 1),
@@ -85,32 +92,40 @@ func Dial(uri string) (*Conn, error) {
 	conn.ws.Call("addEventListener", "message", onMessage)
 	conn.ws.Call("addEventListener", "close", onClose)
 
-	err := <-errCh
-	if err != nil {
-		conn.freeFuncs()
-		return nil, err
+	select {
+	case err := <-errCh:
+		if err != nil {
+			conn.freeFuncs()
+			return nil, err
+		}
 	}
 
 	return conn, nil
 }
 
-func (conn *Conn) Close() error {
+func (conn *WsConn) Close() error {
 	conn.ws.Call("close")
-	<-conn.closeChan
+	// Do not wait for onClose here to avoid deadlocks if called from JS callback
+	// Let the event listener handle channel closing
 	conn.freeFuncs()
 	return nil
 }
 
-func (conn *Conn) NextMessage() ([]byte, error) {
+func (conn *WsConn) NextMessage() ([]byte, error) {
 	select {
 	case msg := <-conn.messageChan:
 		return msg, nil
 	case <-conn.closeChan:
-		return nil, ErrClosed
+		return nil, io.EOF // Use io.EOF for closed connection
 	}
 }
 
-func (conn *Conn) Send(data []byte) error {
+func (conn *WsConn) Send(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	// Copy data to JS Uint8Array
+	// Note: We might optimize this by using a pool of JS arrays if allocation is high
 	buffer := _ArrayBuffer.New(len(data))
 	array := _Uint8Array.New(buffer)
 	js.CopyBytesToJS(array, data)

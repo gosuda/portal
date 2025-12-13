@@ -1,4 +1,4 @@
-//go:build !tinygo
+//go:build !js || !wasm
 
 package utils
 

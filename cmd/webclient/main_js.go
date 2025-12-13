@@ -381,7 +381,6 @@ func main() {
 	var err error
 	client, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstraps),
-		sdk.WithDialer(WebSocketDialerJS()),
 	)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to initialize SDK client")
