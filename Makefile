@@ -43,7 +43,7 @@ build-wasm:
 	
 	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -O4 --enable-bulk-memory --strip-debug --strip-producers \
+		wasm-opt -O4 --gufa --remove-unused-module-elements --remove-unused-names --enable-bulk-memory --strip-debug --strip-dwarf --strip-producers --vacuum --flatten --rereloop --converge -Oz \
 			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm && \
 		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
