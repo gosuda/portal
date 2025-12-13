@@ -33,16 +33,33 @@ build-protoc:
 build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p cmd/relay-server/dist/wasm
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
 	
-	@echo "[wasm] optimizing with wasm-opt..."
+	@echo "[wasm] minifying JS assets..."
+	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
+	
+	GOOS=js GOARCH=wasm go build -tags '!debug' -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
+	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
+	
+	@echo "[wasm] optimizing with wasm-opt (multi-pass)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
-		mv cmd/relay-server/dist/wasm/portal.wasm.tmp cmd/relay-server/dist/wasm/portal.wasm; \
+		echo " [1/3] High optimization (-O4)..." && \
+		wasm-opt --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
+			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 && \
+		\
+		echo " [2/3] Shrinking (-Oz) and stripping debug info..." && \
+		wasm-opt --enable-bulk-memory --strip-debug --strip-producers --strip-dwarf \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
+		\
+		echo " [3/3] Final squeeze (--converge)..." && \
+		wasm-opt --enable-bulk-memory --vacuum --remove-unused-names --remove-unused-module-elements --converge \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm && \
+		\
+		rm cmd/relay-server/dist/wasm/portal.wasm.p1 cmd/relay-server/dist/wasm/portal.wasm.p2 && \
+		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
 	else \
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
-		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
+		echo "[wasm] Install binaryen for smaller WASM files"; \
 	fi
 	
 	@echo "[wasm] calculating SHA256 hash..."
@@ -55,8 +72,9 @@ build-wasm:
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
 	
 	@echo "[wasm] copying additional resources..."
-	@cp cmd/webclient/wasm_exec.js cmd/relay-server/dist/wasm/wasm_exec.js
-	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/wasm/service-worker.js
+	@echo "[wasm] copying and minifying additional resources..."
+	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
+	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
 	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
 	@echo "[wasm] build complete"
@@ -72,9 +90,16 @@ build-wasm:
 		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
 		exit 1; \
 	fi; \
-	brotli -f "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	rm -f "$$WASM_FILE"; \
-	echo "[wasm] brotli: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"
+	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	\
+	if command -v zstd >/dev/null 2>&1; then \
+		zstd --ultra -22 -f --long cmd/relay-server/dist/wasm/$$WASM_HASH.wasm -o cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst; \
+		echo "[wasm] zstd:   $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst" | cut -f1)"; \
+	else \
+		echo "[wasm] WARNING: zstd not found, skipping zstd compression"; \
+	fi; \
+	rm -f cmd/relay-server/dist/wasm/$$WASM_HASH.wasm
 
 
 # Build React frontend with Tailwind CSS 4
