@@ -37,13 +37,13 @@ build-wasm:
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
 	
-	tinygo build -target=wasm -opt=z -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
+	tinygo build -target=wasm -opt=2 -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
 	
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
 	
-	@echo "[wasm] optimizing with wasm-opt (aggressive multi-pass)..."
+	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory --strip-debug --strip-producers \
+		wasm-opt -O4 --enable-bulk-memory --strip-debug --strip-producers \
 			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm && \
 		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
@@ -103,9 +103,9 @@ build-wasm-std:
 	GOOS=js GOARCH=wasm go build -tags '!debug' -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
 	
-	@echo "[wasm] optimizing with wasm-opt (aggressive multi-pass)..."
+	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory --strip-debug --strip-producers \
+		wasm-opt -O4 --enable-bulk-memory --strip-debug --strip-producers \
 			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm && \
 		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
