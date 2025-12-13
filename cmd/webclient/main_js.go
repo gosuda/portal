@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,8 +18,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/net/idna"
 	"gosuda.org/portal/cmd/webclient/httpjs"
 	"gosuda.org/portal/portal/core/cryptoops"
@@ -39,7 +36,12 @@ var (
 	dialerCredential *cryptoops.Credential
 
 	// DNS cache for lease name -> lease ID mapping
-	dnsCache    sync.Map // map[string]*dnsCacheEntry
+	dnsCache = struct {
+		sync.RWMutex
+		cache map[string]dnsCacheEntry
+	}{
+		cache: make(map[string]dnsCacheEntry, 100),
+	}
 	dnsCacheTTL = 5 * time.Minute
 )
 
@@ -86,23 +88,30 @@ func getBootstrapServers() []string {
 
 // lookupDNSCache checks the DNS cache for a cached lease ID
 func lookupDNSCache(name string) (string, bool) {
-	if entry, ok := dnsCache.Load(name); ok {
-		cached := entry.(*dnsCacheEntry)
-		if time.Now().Before(cached.expiresAt) {
-			return cached.leaseID, true
+	dnsCache.RLock()
+	entry, ok := dnsCache.cache[name]
+	dnsCache.RUnlock()
+
+	if ok {
+		if time.Now().Before(entry.expiresAt) {
+			return entry.leaseID, true
 		}
 		// Expired entry, delete it
-		dnsCache.Delete(name)
+		dnsCache.Lock()
+		delete(dnsCache.cache, name)
+		dnsCache.Unlock()
 	}
 	return "", false
 }
 
 // storeDNSCache stores a lease ID in the DNS cache
 func storeDNSCache(name, leaseID string) {
-	dnsCache.Store(name, &dnsCacheEntry{
+	dnsCache.Lock()
+	dnsCache.cache[name] = dnsCacheEntry{
 		leaseID:   leaseID,
 		expiresAt: time.Now().Add(dnsCacheTTL),
-	})
+	}
+	dnsCache.Unlock()
 }
 
 // isValidUpgradeRequest validates that the upgrade request is a well-formed HTTP WebSocket upgrade
@@ -278,7 +287,7 @@ func (m *WebSocketManager) CreateConnection(uri string, protocols []string) (*WS
 	wsConn := &WSConnection{
 		id:           generateConnID(),
 		conn:         conn,
-		messageChan:  make(chan wsMessage, 100),
+		messageChan:  make(chan wsMessage, 32),
 		closeChan:    make(chan struct{}),
 		messageQueue: make([]StreamMessage, 0),
 	}
@@ -928,7 +937,6 @@ func handleSDKClose(data js.Value) {
 }
 
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
 
 	// Get bootstrap servers from global JavaScript variable

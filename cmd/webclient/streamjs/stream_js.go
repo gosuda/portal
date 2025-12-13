@@ -30,7 +30,7 @@ func NewReadableStream(r io.ReadCloser) *ReadableStream {
 	// 1. Go 래퍼 구조체를 먼저 생성합니다.
 	rs := &ReadableStream{
 		r:      r,
-		buffer: make([]byte, 32*1024), // 32KB buffer to reduce Go-JS boundary crossings
+		buffer: make([]byte, 16*1024), // 16KB buffer to reduce Go-JS boundary crossings
 	}
 
 	// 2. JS 콜백 함수들을 정의합니다. 이 함수들은 'rs' 포인터를 클로저로 캡처합니다.

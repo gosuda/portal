@@ -256,7 +256,7 @@ func (resp *Response) ReadAll() ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	buffer := make([]byte, 32*1024) // 32KB buffer to reduce Go-JS boundary crossings
+	buffer := make([]byte, 16*1024) // 16KB buffer to reduce Go-JS boundary crossings
 
 	for {
 		n, err := resp.bodyReader.Read(buffer)
@@ -295,22 +295,6 @@ func Post(url string, contentType string, body []byte) (*Response, error) {
 		req.SetHeader("Content-Type", contentType)
 	}
 	req.SetBody(body)
-	return req.Do()
-}
-
-// Put performs a PUT request with the given body
-func Put(url string, contentType string, body []byte) (*Response, error) {
-	req := NewRequest("PUT", url)
-	if contentType != "" {
-		req.SetHeader("Content-Type", contentType)
-	}
-	req.SetBody(body)
-	return req.Do()
-}
-
-// Delete performs a DELETE request
-func Delete(url string) (*Response, error) {
-	req := NewRequest("DELETE", url)
 	return req.Do()
 }
 

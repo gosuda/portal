@@ -39,7 +39,7 @@ func Dial(uri string) (*Conn, error) {
 
 	conn := &Conn{
 		ws:          ws,
-		messageChan: make(chan []byte, 128),
+		messageChan: make(chan []byte, 32),
 		closeChan:   make(chan struct{}, 1),
 	}
 
