@@ -1,54 +1,14 @@
 package utils
 
 import (
-	"context"
+	"errors"
 	"fmt"
-	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
-
-	"github.com/gorilla/websocket"
-
-	"gosuda.org/portal/portal/utils/wsstream"
+	"unicode"
 )
-
-// NewWebSocketDialer returns a dialer that establishes WebSocket connections
-// and wraps them as io.ReadWriteCloser.
-func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
-	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
-		if err != nil {
-			return nil, err
-		}
-		return &wsstream.WsStream{Conn: wsConn}, nil
-	}
-}
-
-// defaultWebSocketUpgrader provides a permissive upgrader used across cmd binaries
-var defaultWebSocketUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
-// UpgradeWebSocket upgrades the request/response to a WebSocket connection using DefaultWebSocketUpgrader
-func UpgradeWebSocket(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*websocket.Conn, error) {
-	return defaultWebSocketUpgrader.Upgrade(w, r, responseHeader)
-}
-
-// UpgradeToWSStream upgrades HTTP to WebSocket and wraps it as io.ReadWriteCloser
-func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (io.ReadWriteCloser, *websocket.Conn, error) {
-	wsConn, err := UpgradeWebSocket(w, r, responseHeader)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &wsstream.WsStream{Conn: wsConn}, wsConn, nil
-}
-
-// URL-safe name validation regex
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
 
 // IsURLSafeName checks if a name contains only URL-safe characters.
 // Disallows: spaces, special characters like /, ?, &, =, %, etc.
@@ -57,7 +17,12 @@ func IsURLSafeName(name string) bool {
 	if name == "" {
 		return true // Empty name is allowed (will be treated as unnamed)
 	}
-	return urlSafeNameRegex.MatchString(name)
+	for _, r := range name {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizePortalURL takes various user-friendly server inputs and
@@ -72,7 +37,7 @@ func IsURLSafeName(name string) bool {
 func NormalizePortalURL(raw string) (string, error) {
 	server := strings.TrimSpace(raw)
 	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
+		return "", errors.New("bootstrap server is empty")
 	}
 
 	// Already a WebSocket URL
@@ -84,7 +49,7 @@ func NormalizePortalURL(raw string) (string, error) {
 	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
 		u, err := url.Parse(server)
 		if err != nil {
-			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
+			return "", errors.New("invalid bootstrap server " + raw + ": " + err.Error())
 		}
 		switch u.Scheme {
 		case "http":
@@ -101,7 +66,7 @@ func NormalizePortalURL(raw string) (string, error) {
 	// Bare host[:port][/path] -> assume WSS and /relay if no path
 	u, err := url.Parse("wss://" + server)
 	if err != nil {
-		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
+		return "", errors.New("invalid bootstrap server " + raw + ": " + err.Error())
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
@@ -289,31 +254,4 @@ func DefaultBootstrapFrom(base string) string {
 		return "ws://localhost:4017/relay"
 	}
 	return "ws://" + host + "/relay"
-}
-
-func IsLocalhost(r *http.Request) bool {
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-
-	// If a proxy/adapter reports a hostname, allow Docker Desktop host alias.
-	if strings.EqualFold(host, "host.docker.internal") {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try resolving hostnames to IPs (best-effort).
-		if addrs, err := net.LookupIP(host); err == nil {
-			for _, a := range addrs {
-				if a.IsLoopback() || a.IsPrivate() {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	return ip.IsLoopback() || ip.IsPrivate()
 }

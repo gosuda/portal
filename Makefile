@@ -40,21 +40,25 @@ build-wasm:
 	GOOS=js GOARCH=wasm go build -tags '!debug' -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
 	
-	@echo "[wasm] optimizing with wasm-opt (multi-pass)..."
+	@echo "[wasm] optimizing with wasm-opt (aggressive multi-pass)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		echo " [1/3] High optimization (-O4)..." && \
-		wasm-opt --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
+		echo " [1/4] High optimization (-O4)..." && \
+		wasm-opt --no-validation --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
 			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 && \
 		\
-		echo " [2/3] Shrinking (-Oz) and stripping debug info..." && \
-		wasm-opt --enable-bulk-memory --strip-debug --strip-producers --strip-dwarf \
+		echo " [2/4] Shrinking with closed-world assumption..." && \
+		wasm-opt --closed-world --strip-debug --strip-producers --strip-dwarf \
 			-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
 		\
-		echo " [3/3] Final squeeze (--converge)..." && \
-		wasm-opt --enable-bulk-memory --vacuum --remove-unused-names --remove-unused-module-elements --converge \
-			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm && \
+		echo " [3/4] Control flow optimization..." && \
+		wasm-opt --flatten --rereloop --vacuum \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm.p3 && \
 		\
-		rm cmd/relay-server/dist/wasm/portal.wasm.p1 cmd/relay-server/dist/wasm/portal.wasm.p2 && \
+		echo " [4/4] Final convergence..." && \
+		wasm-opt --converge --remove-unused-names --remove-unused-module-elements --vacuum \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p3 -o cmd/relay-server/dist/wasm/portal.wasm && \
+		\
+		rm cmd/relay-server/dist/wasm/portal.wasm.p* && \
 		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
 	else \
@@ -95,6 +99,82 @@ build-wasm:
 	\
 	if command -v zstd >/dev/null 2>&1; then \
 		zstd --ultra -22 -f --long cmd/relay-server/dist/wasm/$$WASM_HASH.wasm -o cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst; \
+		echo "[wasm] zstd:   $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst" | cut -f1)"; \
+	else \
+		echo "[wasm] WARNING: zstd not found, skipping zstd compression"; \
+	fi; \
+	rm -f cmd/relay-server/dist/wasm/$$WASM_HASH.wasm
+
+build-wasm-tinygo:
+	@echo "[wasm] building webclient WASM with TinyGo..."
+	@mkdir -p cmd/relay-server/dist/wasm
+	
+	@echo "[wasm] minifying JS assets..."
+	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
+	
+	tinygo build -target=wasm -opt=z -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
+	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
+	
+	@echo "[wasm] optimizing with wasm-opt (aggressive)..."
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		echo " [1/4] High optimization (-O4)..." && \
+		(wasm-opt --no-validation --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
+			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 || echo "wasm-opt failed, skipping") && \
+		\
+		(if [ -f cmd/relay-server/dist/wasm/portal.wasm.p1 ]; then \
+			echo " [2/4] Shrinking with closed-world assumption..." && \
+			wasm-opt --closed-world --strip-debug --strip-producers --strip-dwarf \
+				-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
+			\
+			echo " [3/4] Control flow optimization..." && \
+			wasm-opt --flatten --rereloop --vacuum \
+				-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm.p3 && \
+			\
+			echo " [4/4] Final convergence..." && \
+			wasm-opt --converge --remove-unused-names --remove-unused-module-elements --vacuum \
+				-Oz cmd/relay-server/dist/wasm/portal.wasm.p3 -o cmd/relay-server/dist/wasm/portal.wasm && \
+			\
+			rm cmd/relay-server/dist/wasm/portal.wasm.p* && \
+			ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
+			echo "[wasm] optimization complete"; \
+		else \
+			echo "[wasm] WARNING: Optimization pass 1 failed, using unoptimized binary"; \
+		fi) \
+	else \
+		echo "[wasm] WARNING: wasm-opt not found"; \
+	fi
+	
+	@echo "[wasm] calculating SHA256 hash..."
+	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
+	echo "[wasm] SHA256: $$WASM_HASH"; \
+	find cmd/relay-server/dist/wasm -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
+	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
+	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
+	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
+	
+	@echo "[wasm] copying and minifying additional resources..."
+	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
+	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
+	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
+	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
+	@echo "[wasm] build complete"
+
+	@echo "[wasm] precompressing webclient WASM with brotli..."
+	@WASM_FILE=$$(ls cmd/relay-server/dist/wasm/[0-9a-f]*.wasm 2>/dev/null | head -n1); \
+	if [ -z "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: no content-addressed WASM found in cmd/relay-server/dist/wasm; run build-wasm first"; \
+		exit 1; \
+	fi; \
+	WASM_HASH=$$(basename "$$WASM_FILE" .wasm); \
+	if ! command -v brotli >/dev/null 2>&1; then \
+		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
+		exit 1; \
+	fi; \
+	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	\
+	if command -v zstd >/dev/null 2>&1; then \
+		zstd --ultra -22 -f --long=31 cmd/relay-server/dist/wasm/$$WASM_HASH.wasm -o cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst; \
 		echo "[wasm] zstd:   $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst" | cut -f1)"; \
 	else \
 		echo "[wasm] WARNING: zstd not found, skipping zstd compression"; \
