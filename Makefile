@@ -42,21 +42,17 @@ build-wasm:
 	
 	@echo "[wasm] optimizing with wasm-opt (aggressive multi-pass)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		echo " [1/4] High optimization (-O4)..." && \
+		echo " [1/3] High optimization (-O4)..." && \
 		wasm-opt --no-validation --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
 			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 && \
 		\
-		echo " [2/4] Shrinking with closed-world assumption..." && \
-		wasm-opt --closed-world --strip-debug --strip-producers --strip-dwarf \
+		echo " [2/3] Shrinking with closed-world assumption..." && \
+		wasm-opt --enable-bulk-memory --closed-world --strip-debug --strip-producers --strip-dwarf \
 			-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
 		\
-		echo " [3/4] Control flow optimization..." && \
-		wasm-opt --flatten --rereloop --vacuum \
-			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm.p3 && \
-		\
-		echo " [4/4] Final convergence..." && \
-		wasm-opt --converge --remove-unused-names --remove-unused-module-elements --vacuum \
-			-Oz cmd/relay-server/dist/wasm/portal.wasm.p3 -o cmd/relay-server/dist/wasm/portal.wasm && \
+		echo " [3/3] Control flow optimization..." && \
+		wasm-opt --enable-bulk-memory --converge --remove-unused-names --remove-unused-module-elements --flatten --rereloop --vacuum \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm && \
 		\
 		rm cmd/relay-server/dist/wasm/portal.wasm.p* && \
 		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
@@ -117,29 +113,21 @@ build-wasm-tinygo:
 	
 	@echo "[wasm] optimizing with wasm-opt (aggressive)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		echo " [1/4] High optimization (-O4)..." && \
-		(wasm-opt --no-validation --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
-			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 || echo "wasm-opt failed, skipping") && \
+		echo " [1/3] High optimization (-O4)..." && \
+		wasm-opt --no-validation --enable-bulk-memory --enable-simd --enable-sign-ext --enable-nontrapping-float-to-int \
+			-O4 cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.p1 && \
 		\
-		(if [ -f cmd/relay-server/dist/wasm/portal.wasm.p1 ]; then \
-			echo " [2/4] Shrinking with closed-world assumption..." && \
-			wasm-opt --closed-world --strip-debug --strip-producers --strip-dwarf \
-				-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
-			\
-			echo " [3/4] Control flow optimization..." && \
-			wasm-opt --flatten --rereloop --vacuum \
-				-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm.p3 && \
-			\
-			echo " [4/4] Final convergence..." && \
-			wasm-opt --converge --remove-unused-names --remove-unused-module-elements --vacuum \
-				-Oz cmd/relay-server/dist/wasm/portal.wasm.p3 -o cmd/relay-server/dist/wasm/portal.wasm && \
-			\
-			rm cmd/relay-server/dist/wasm/portal.wasm.p* && \
-			ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
-			echo "[wasm] optimization complete"; \
-		else \
-			echo "[wasm] WARNING: Optimization pass 1 failed, using unoptimized binary"; \
-		fi) \
+		echo " [2/3] Shrinking with closed-world assumption..." && \
+		wasm-opt --enable-bulk-memory --closed-world --strip-debug --strip-producers --strip-dwarf \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p1 -o cmd/relay-server/dist/wasm/portal.wasm.p2 && \
+		\
+		echo " [3/3] Control flow optimization..." && \
+		wasm-opt --enable-bulk-memory --converge --remove-unused-names --remove-unused-module-elements --flatten --rereloop --vacuum \
+			-Oz cmd/relay-server/dist/wasm/portal.wasm.p2 -o cmd/relay-server/dist/wasm/portal.wasm && \
+		\
+		rm cmd/relay-server/dist/wasm/portal.wasm.p* && \
+		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
+		echo "[wasm] optimization complete"; \
 	else \
 		echo "[wasm] WARNING: wasm-opt not found"; \
 	fi
