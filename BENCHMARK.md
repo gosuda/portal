@@ -18,7 +18,7 @@ This command will:
 
 1.  Run the benchmarks for the `portal` package using `go test`.
 2.  Enable CPU and memory profiling.
-3.  Generate a summary report in `bench/results/YYYY-MM-DD-bench-portal.md`.
+3.  Generate a summary report in `bench/results/YYYY-MM-DD-bench HH:MM:SS UTC-portal.md`.
 
 ## Benchmark Reporter
 
@@ -35,18 +35,3 @@ make run-report-server
 ```
 
 Then, open your web browser and navigate to `http://localhost:8081` to see a list of available reports.
-
-## WASM Performance Benchmark
-
-A separate web server is provided to benchmark the performance of the WebAssembly module directly in the browser. This test measures the speed of CPU-intensive cryptographic operations compiled to WASM.
-
-To run the WASM benchmark:
-
-1.  Ensure the WASM assets are built: `make build-wasm`
-2.  Start the benchmark server:
-
-    ```sh
-    make run-wasm-bench
-    ```
-
-3.  Open your web browser and navigate to `http://localhost:8082` to run the benchmark.

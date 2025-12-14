@@ -62,12 +62,8 @@ help:
 	@echo "  make build-server      - Build Go relay server (includes frontend build)"
 	@echo "  make run               - Run relay server"
 	@echo "  make run-report-server - Run the benchmark report server"
-	@echo "  make run-wasm-bench    - Run the WASM benchmark server"
+	@echo "  make bench-portal      - Run Benchmark"
 	@echo "  make clean             - Remove build artifacts"
-
-run-wasm-bench: build-wasm-bench
-	@echo "[server] running WASM benchmark server..."
-	go run ./cmd/wasm-bench-server
 
 
 run-report-server: seed-go-mod-cache
@@ -201,7 +197,7 @@ build-bench-reporter: seed-go-mod-cache
 
 bench-portal: build-bench-reporter seed-go-mod-cache
 	@echo "[bench] running portal benchmarks..."
-	@go test -v -run=^$ -bench=. -benchmem -cpuprofile=cpu.prof -memprofile=mem.prof ./portal/... 2>&1 | tee /tmp/bench.out
+	@go test -v -bench=Benchmark -benchmem -cpuprofile=cpu.prof -memprofile=mem.prof ./portal 2>&1 | tee /tmp/bench.out
 	@cat /tmp/bench.out | ./bin/bench-reporter
 	@echo "[bench] cleaning up profiles..."
 	@rm -f cpu.prof mem.prof /tmp/bench.out

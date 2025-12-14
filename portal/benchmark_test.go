@@ -2,13 +2,9 @@
 package portal
 
 import (
-	"fmt"
 	"io"
 	"net"
-	"os"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"gosuda.org/portal/portal/core/cryptoops"
@@ -19,7 +15,7 @@ import (
 // It creates a relay server, a host client that registers a lease,
 // and an echo server on the host side.
 // It returns the server address, the host's public ID, and a cleanup function.
-func setupBenchmarkEnv(b *testing.B) (serverAddr string, hostID cryptoops.ID, cleanup func()) {
+func setupBenchmarkEnv(b *testing.B) (serverAddr string, hostID string, cleanup func()) {
 	b.Helper()
 
 	// 1. Setup Relay Server

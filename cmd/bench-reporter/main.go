@@ -15,7 +15,16 @@ const (
 	reportDir = "bench/results"
 )
 
-var benchRegex = regexp.MustCompile(`^(Benchmark[a-zA-Z0-9_]+)\s+([0-9]+)\s+([0-9.]+) ns/op(\s+([0-9.]+) MB/s)?\s+([0-9.]+) B/op\s+([0-9.]+) allocs/op$`)
+// Fixed: Use \S+ because benchmark names can contain characters like '-' or '/'.
+// Capture group index explanation:
+// 1: Name
+// 2: Runs
+// 3: ns/op
+// 4: ( ... MB/s)? -> Whole optional group (ignored)
+// 5: MB/s numeric value
+// 6: B/op
+// 7: allocs/op
+var benchRegex = regexp.MustCompile(`^(Benchmark\S+)\s+([0-9]+)\s+([0-9.]+) ns/op(\s+([0-9.]+) MB/s)?\s+([0-9.]+) B/op\s+([0-9.]+) allocs/op$`)
 
 type BenchmarkResult struct {
 	Name        string
@@ -34,6 +43,7 @@ func main() {
 }
 
 func run() error {
+	// Read data from Stdin
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return fmt.Errorf("failed to read stdin: %w", err)
@@ -45,7 +55,7 @@ func run() error {
 	}
 
 	if len(results) == 0 {
-		fmt.Println("No benchmark results found in stdin.")
+		fmt.Println("No benchmark results found or parsed correctly.")
 		return nil
 	}
 
@@ -59,19 +69,21 @@ func parseBenchmarkOutput(input string) ([]BenchmarkResult, error) {
 		line := scanner.Text()
 		matches := benchRegex.FindStringSubmatch(line)
 
-		if len(matches) > 0 {
+		// matches length is fixed based on the number of regex groups (if matched)
+		if len(matches) > 7 {
 			mbps := "N/A"
-			if len(matches) > 4 && matches[4] != "" {
-				mbps = strings.TrimSpace(strings.Replace(matches[4], "MB/s", "", 1))
+			// If group 5 (MB/s number) is not empty, use it
+			if matches[5] != "" {
+				mbps = matches[5]
 			}
-			
+
 			results = append(results, BenchmarkResult{
 				Name:        matches[1],
 				Runs:        matches[2],
 				NanosPerOp:  matches[3],
 				MBPerSec:    mbps,
-				BPerOp:      matches[5],
-				AllocsPerOp: matches[6],
+				BPerOp:      matches[6], // Fixed: Adjusted index 5->6
+				AllocsPerOp: matches[7], // Fixed: Adjusted index 6->7
 			})
 		}
 	}
@@ -79,8 +91,14 @@ func parseBenchmarkOutput(input string) ([]BenchmarkResult, error) {
 }
 
 func generateReport(results []BenchmarkResult) error {
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().Format("2006-01-02 15:04:05 UTC")
 	fileName := fmt.Sprintf("%s-bench-portal.md", today)
+
+	// Fixed: Create directory if it does not exist
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		return fmt.Errorf("failed to create report directory: %w", err)
+	}
+
 	filePath := filepath.Join(reportDir, fileName)
 
 	f, err := os.Create(filePath)
@@ -94,39 +112,45 @@ func generateReport(results []BenchmarkResult) error {
 	b.WriteString(fmt.Sprintf("# Portal Benchmark Report - %s\n\n", today))
 	b.WriteString("## Benchmark Summary\n\n")
 	b.WriteString("| Benchmark Name | Iterations | ns/op (lower is better) | MB/s (higher is better) | B/op (lower is better) | allocs/op (lower is better) |\n")
-	b.WriteString("|---|---|---|---|---|---|
-")
+	b.WriteString("|---|---|---|---|---|---|\n") // Fixed: Corrected newline character position
 
 	for _, res := range results {
 		b.WriteString(fmt.Sprintf("| `%s` | %s | %s | %s | %s | %s |\n", res.Name, res.Runs, res.NanosPerOp, res.MBPerSec, res.BPerOp, res.AllocsPerOp))
 	}
 
+	// Add template text
 	b.WriteString("\n" + `## Performance Analysis
 
-### CPU Usage
+	### CPU Usage
 
-To analyze CPU usage, run the following command:
+	To analyze CPU usage, run the following command:
 
-` + "```" + "\nsh\ngo tool pprof cpu.prof\n" + "```" + "\n
-*TODO: Add automated analysis of top CPU consuming functions here.*
+	` + "```" + `sh
+	go tool pprof cpu.prof
+	` + "```" + `
 
-### Memory Usage
+	*TODO: Add automated analysis of top CPU consuming functions here.*
 
-To analyze memory allocation, run the following command:
+	### Memory Usage
 
-` + "```" + "\nsh\ngo tool pprof mem.prof\n" + "```" + "\n
-*TODO: Add automated analysis of top memory allocating functions here.*
+	To analyze memory allocation, run the following command:
 
-### Bottlenecks & Spikes
+	` + "```" + `sh
+	go tool pprof mem.prof
+	` + "```" + `
 
-*TODO: This section would contain analysis of detected performance bottlenecks or significant spikes in resource usage during the benchmark run. This requires more sophisticated analysis of the pprof data.*
+	*TODO: Add automated analysis of top memory allocating functions here.*
 
-### WASM Performance
+	### Bottlenecks & Spikes
 
-As requested, a separate web server for WASM benchmarking will be implemented. This server will provide a browser-based environment to measure performance and report the results as an HTML page.
+	*TODO: This section would contain analysis of detected performance bottlenecks or significant spikes in resource usage during the benchmark run. This requires more sophisticated analysis of the pprof data.*
 
-See ` + "`make run-wasm-bench`" + ` and the ` + "`BENCHMARK.md`" + ` file for more details.
-`)
+	### WASM Performance
+
+	As requested, a separate web server for WASM benchmarking will be implemented. This server will provide a browser-based environment to measure performance and report the results as an HTML page.
+
+	See ` + `the ` + "`BENCHMARK.md`" + ` file for more details.
+	`)
 
 	_, err = f.WriteString(b.String())
 	if err != nil {
