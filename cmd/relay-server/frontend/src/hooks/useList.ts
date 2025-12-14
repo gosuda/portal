@@ -13,6 +13,7 @@ export interface BaseServer {
   dns: string;
   link: string;
   lastUpdated?: string;
+  firstSeen?: string;
 }
 
 export interface UseListOptions<T extends BaseServer> {
@@ -47,7 +48,7 @@ export function useList<T extends BaseServer>({
 }: UseListOptions<T>): UseListReturn<T> {
   const [searchQuery, setSearchQuery] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [sortBy, setSortBy] = useState<SortOption>("default");
+  const [sortBy, setSortBy] = useState<SortOption>("duration");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<number[]>(() => {
     const stored = localStorage.getItem(storageKey);
@@ -112,6 +113,16 @@ export function useList<T extends BaseServer>({
           const aTime = a.lastUpdated ? Date.parse(a.lastUpdated) : 0;
           const bTime = b.lastUpdated ? Date.parse(b.lastUpdated) : 0;
           return bTime - aTime;
+        });
+        break;
+      case "duration":
+        sorted.sort((a, b) => {
+          // Duration = Now - FirstSeen.
+          // Longer duration = Older FirstSeen.
+          // Sort Descending (Longest/Oldest first) -> Ascending FirstSeen timestamp.
+          const aTime = a.firstSeen ? Date.parse(a.firstSeen) : Date.now();
+          const bTime = b.firstSeen ? Date.parse(b.firstSeen) : Date.now();
+          return aTime - bTime;
         });
         break;
       case "description":

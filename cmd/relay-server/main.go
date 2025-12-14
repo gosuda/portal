@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
@@ -83,24 +84,31 @@ func runServer() error {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
 
-	// Create BPS manager for rate limiting
-	bpsManager := NewBPSManager()
-	if flagLeaseBPS > 0 {
-		bpsManager.SetDefaultBPS(int64(flagLeaseBPS))
-	}
+	// Create Frontend first, then Admin, then attach Admin back to Frontend.
+	frontend := NewFrontend()
+	admin := NewAdmin(int64(flagLeaseBPS), frontend)
+	frontend.SetAdmin(admin)
 
-	// Load persisted admin settings (ban list, BPS limits)
-	loadAdminSettings(serv, bpsManager)
+	// Load persisted admin settings (ban list, BPS limits, IP bans)
+	admin.LoadSettings(serv)
 
-	// Register relay callback for BPS handling
+	// Register relay callback for BPS handling and IP tracking
 	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		establishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
+		// Associate pending IP with this lease
+		ipManager := admin.GetIPManager()
+		if ipManager != nil {
+			if ip := ipManager.PopPendingIP(); ip != "" {
+				ipManager.RegisterLeaseIP(leaseID, ip)
+			}
+		}
+		bpsManager := admin.GetBPSManager()
+		manager.EstablishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
 	})
 
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, bpsManager, cred.ID(), flagBootstraps, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

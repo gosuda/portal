@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
+import clsx from "clsx";
 
 interface HeaderProps {
   title?: string;
+  isAdmin?: boolean;
 }
 
-export function Header({ title = "PORTAL" }: HeaderProps) {
+export function Header({ title = "PORTAL", isAdmin }: HeaderProps) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
 
   useEffect(() => {
@@ -87,7 +89,7 @@ export function Header({ title = "PORTAL" }: HeaderProps) {
         </button>
         <TunnelCommandModal
           trigger={
-            <Button>
+            <Button className={clsx(isAdmin && "hidden sm:block")}>
               <span className="truncate">Add Your Server</span>
             </Button>
           }

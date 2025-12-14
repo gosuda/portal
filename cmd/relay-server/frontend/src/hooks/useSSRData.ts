@@ -16,12 +16,17 @@ export interface ServerData {
   DNS: string;
   LastSeen: string;
   LastSeenISO: string;
+  FirstSeenISO: string;
   TTL: string;
   Link: string;
   StaleRed: boolean;
   Hide: boolean;
   Metadata: string;
   BPS?: number; // bytes-per-second limit (0 = unlimited), admin only
+  IsApproved?: boolean; // whether lease is approved (for manual mode), admin only
+  IsDenied?: boolean; // whether lease is denied (for manual mode), admin only
+  IP?: string; // client IP address (for IP-based ban), admin only
+  IsIPBanned?: boolean; // whether the IP is banned, admin only
 }
 
 /**

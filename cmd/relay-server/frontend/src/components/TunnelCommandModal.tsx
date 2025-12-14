@@ -16,8 +16,8 @@ interface TunnelCommandModalProps {
 }
 
 export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
-  const defaultPort = "3000";
-  const defaultName = "myapp";
+  const defaultHost = "localhost:3000";
+  const defaultName = "your-app-name";
 
   // Get current host URL dynamically
   const currentOrigin = useMemo(() => {
@@ -27,7 +27,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     return "http://localhost:4017";
   }, []);
 
-  const [port, setPort] = useState(defaultPort);
+  const [host, setHost] = useState(defaultHost);
   const [name, setName] = useState(defaultName);
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
   const [urlInput, setUrlInput] = useState("");
@@ -55,7 +55,11 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (e.key === "Enter") {
       e.preventDefault();
       addRelayUrl(urlInput);
-    } else if (e.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
+    } else if (
+      e.key === "Backspace" &&
+      urlInput === "" &&
+      relayUrls.length > 0
+    ) {
       // Remove last URL when backspace on empty input
       setRelayUrls(relayUrls.slice(0, -1));
     }
@@ -63,11 +67,12 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
 
   // Generate the tunnel command
   const command = useMemo(() => {
-    const portVal = port === "" ? defaultPort : port;
+    const hostVal = host === "" ? defaultHost : host;
     const nameVal = name === "" ? defaultName : name;
-    const relayUrlVal = relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
-    return `curl -fsSL ${currentOrigin}/tunnel | PORT=${portVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
-  }, [currentOrigin, port, name, relayUrls]);
+    const relayUrlVal =
+      relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+    return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
+  }, [currentOrigin, host, name, relayUrls]);
 
   const handleCopy = async () => {
     try {
@@ -88,7 +93,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] rounded-sm">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
@@ -101,27 +106,27 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
         </DialogHeader>
 
         <div className="space-y-4 py-4 [&>div]:flex [&>div]:flex-col">
-          {/* Port Input */}
+          {/* Host Input */}
           <div className="space-y-2">
             <label
-              htmlFor="port"
+              htmlFor="host"
               className="text-sm font-medium text-foreground"
             >
-              Local Port
+              Host
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">PORT=</span>
+              <span className="px-3 text-sm text-text-muted">HOST=</span>
               <Input
-                id="port"
-                type="number"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                placeholder={defaultPort}
+                id="host"
+                type="text"
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder={defaultHost}
                 className="rounded-l-none"
               />
             </div>
             <p className="text-xs text-text-muted">
-              The port your local service is running on
+              The hostname or IP:Port where your service is running
             </p>
           </div>
 

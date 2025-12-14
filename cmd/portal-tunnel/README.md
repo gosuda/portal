@@ -9,8 +9,8 @@ You can run the tunnel using command-line flags or a configuration file.
 ### Run binary
 
 ```bash
-./bin/portal-tunnel --host localhost --port 8080 \
-  --relay portal.gosuda.org,portal.thumbgo.kr,portal.iwanhae.kr \
+./bin/portal-tunnel --host localhost:8080 \
+  --relay ws://portal.gosuda.org/relay,ws://portal.thumbgo.kr/relay,ws://portal.iwanhae.kr/relay \
   --name <service> \
   --description "Service description" \
   --tags tag1,tag2 \
@@ -20,19 +20,18 @@ You can run the tunnel using command-line flags or a configuration file.
 ## Flags
 
 ```text
-Usage:
-  portal-tunnel [flags]
+Usage: 
+        portal-tunnel [OPTIONS] [ARGUMENTS]
 
-Flags:
-      --config string        Path to portal-tunnel config file
-      --description string   Service description metadata
-  -h, --help                 help for portal-tunnel
-      --hide                 Hide service from discovery (metadata)
-      --host string          Local host to proxy to when config is not provided (default "localhost")
-      --name string          Service name when config is not provided (auto-generated if empty)
-      --owner string         Service owner metadata
-      --port string          Local port to proxy to when config is not provided (default "4018")
-      --relay string         Portal relay server URLs when config is not provided (comma-separated) (default "ws://localhost:4017/relay")
-      --tags string          Service tags metadata (comma-separated)
-      --thumbnail string     Service thumbnail URL metadata
+Options:
+        --relay           Portal relay server URLs (comma-separated) [default: ws://localhost:4017/relay] [env: RELAYS]
+        --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
+        --name            Service name  [env: APP_NAME]
+        --protocols       ALPN protocols (comma-separated) [default: http/1.1,h2] [env: APP_PROTOCOLS]
+        --description     Service description metadata  [env: APP_DESCRIPTION]
+        --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
+        --thumbnail       Service thumbnail URL metadata  [env: APP_THUMBNAIL]
+        --owner           Service owner metadata  [env: APP_OWNER]
+        --hide            Hide service from discovery (metadata)  [env: APP_HIDE]
+        -h, --help        Print this help message and exit
 ```

@@ -11,6 +11,7 @@ export function Admin() {
     sortBy,
     selectedTags,
     banFilter,
+    approvalMode,
     favorites,
     loading,
     error,
@@ -22,6 +23,13 @@ export function Admin() {
     handleToggleFavorite,
     handleBanStatus,
     handleBPSChange,
+    handleApprovalModeChange,
+    handleApproveStatus,
+    handleDenyStatus,
+    handleIPBanStatus,
+    handleBulkApprove,
+    handleBulkDeny,
+    handleBulkBan,
   } = useAdmin();
 
   if (loading) return <div className="p-8 text-foreground">Loading...</div>;
@@ -46,9 +54,17 @@ export function Admin() {
         // Admin-specific props
         isAdmin={true}
         banFilter={banFilter}
+        approvalMode={approvalMode}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}
+        onApprovalModeChange={handleApprovalModeChange}
+        onApproveStatusChange={handleApproveStatus}
+        onDenyStatusChange={handleDenyStatus}
+        onIPBanStatusChange={handleIPBanStatus}
+        onBulkApprove={handleBulkApprove}
+        onBulkDeny={handleBulkDeny}
+        onBulkBan={handleBulkBan}
       />
     </SsgoiTransition>
   );

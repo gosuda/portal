@@ -43,6 +43,7 @@ function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
       dns: row.DNS || "",
       link: row.Link,
       lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
+      firstSeen: row.FirstSeenISO || undefined,
     };
   });
 }
