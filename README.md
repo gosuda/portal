@@ -52,7 +52,7 @@ For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy
 # 1. Start your local service
 
 # 2. Run the tunnel client to expose
-curl -fsSL http://localhost:4017/tunnel | PORT=3000 NAME=myapp sh
+curl -fsSL http://localhost:4017/tunnel | HOST=localhost:3000 NAME=myapp sh
 ```
 
 ### Running a Portal App using the SDK
