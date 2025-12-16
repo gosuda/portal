@@ -1,51 +1,11 @@
 package utils
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"mime"
-	"net"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
-
-	"github.com/gorilla/websocket"
-
-	"gosuda.org/portal/portal/utils/wsstream"
 )
-
-// NewWebSocketDialer returns a dialer that establishes WebSocket connections
-// and wraps them as io.ReadWriteCloser.
-func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
-	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
-		if err != nil {
-			return nil, err
-		}
-		return &wsstream.WsStream{Conn: wsConn}, nil
-	}
-}
-
-// defaultWebSocketUpgrader provides a permissive upgrader used across cmd binaries
-var defaultWebSocketUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
-// UpgradeWebSocket upgrades the request/response to a WebSocket connection using DefaultWebSocketUpgrader
-func UpgradeWebSocket(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (*websocket.Conn, error) {
-	return defaultWebSocketUpgrader.Upgrade(w, r, responseHeader)
-}
-
-// UpgradeToWSStream upgrades HTTP to WebSocket and wraps it as io.ReadWriteCloser
-func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader http.Header) (io.ReadWriteCloser, *websocket.Conn, error) {
-	wsConn, err := UpgradeWebSocket(w, r, responseHeader)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &wsstream.WsStream{Conn: wsConn}, wsConn, nil
-}
 
 // URL-safe name validation regex
 var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
@@ -129,45 +89,6 @@ func ParseURLs(raw string) []string {
 	return out
 }
 
-// IsHTMLContentType checks if the Content-Type header indicates HTML content
-// It properly handles media type parsing with parameters like charset
-func IsHTMLContentType(contentType string) bool {
-	if contentType == "" {
-		return false
-	}
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
-	}
-	return mediaType == "text/html"
-}
-
-// GetContentType returns the MIME type for a file extension
-func GetContentType(ext string) string {
-	switch ext {
-	case ".html":
-		return "text/html; charset=utf-8"
-	case ".js":
-		return "application/javascript"
-	case ".json":
-		return "application/json"
-	case ".wasm":
-		return "application/wasm"
-	case ".css":
-		return "text/css"
-	case ".mp4":
-		return "video/mp4"
-	case ".svg":
-		return "image/svg+xml"
-	case ".png":
-		return "image/png"
-	case ".ico":
-		return "image/x-icon"
-	default:
-		return ""
-	}
-}
-
 // IsHexString reports whether s contains only hexadecimal characters
 func IsHexString(s string) bool {
 	for _, c := range s {
@@ -176,13 +97,6 @@ func IsHexString(s string) bool {
 		}
 	}
 	return true
-}
-
-// SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers
-func SetCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
 
 // IsSubdomain reports whether host matches the given domain pattern.
@@ -289,31 +203,4 @@ func DefaultBootstrapFrom(base string) string {
 		return "ws://localhost:4017/relay"
 	}
 	return "ws://" + host + "/relay"
-}
-
-func IsLocalhost(r *http.Request) bool {
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-
-	// If a proxy/adapter reports a hostname, allow Docker Desktop host alias.
-	if strings.EqualFold(host, "host.docker.internal") {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try resolving hostnames to IPs (best-effort).
-		if addrs, err := net.LookupIP(host); err == nil {
-			for _, a := range addrs {
-				if a.IsLoopback() || a.IsPrivate() {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	return ip.IsLoopback() || ip.IsPrivate()
 }

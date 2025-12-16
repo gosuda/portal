@@ -44,23 +44,13 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	}
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
-	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	appMux.HandleFunc("/app/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
 		frontend.ServeAppStatic(w, r, p, serv)
-	})
+	}))
 
 	// Portal frontend files (for unified caching)
-	appMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	appMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
 		if p == "manifest.json" {
 			frontend.ServeDynamicManifest(w, r)
@@ -68,7 +58,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		}
 
 		frontend.ServePortalStaticFile(w, r, p)
-	})
+	}))
 
 	// Tunnel installer script and binaries
 	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -133,19 +123,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	portalMux := http.NewServeMux()
 
 	// Static file handler for /frontend/ (for unified caching)
-	portalMux.HandleFunc("/frontend/", func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	portalMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
 		if p == "manifest.json" {
 			frontend.ServeDynamicManifest(w, r)
 			return
 		}
 		frontend.ServePortalStaticFile(w, r, p)
-	})
+	}))
 
 	// Service worker for portal subdomains (serve from dist/wasm)
 	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
@@ -153,19 +138,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	})
 
 	// Root and SPA fallback for portal subdomains
-	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	portalMux.HandleFunc("/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			// Serve portal HTML from dist/wasm
 			frontend.ServeStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
 			return
 		}
 		frontend.ServePortalStatic(w, r)
-	})
+	}))
 
 	// routes based on host and path
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +172,17 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	}()
 
 	return srv
+}
+
+func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		utils.SetCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		h(w, r)
+	}
 }
 
 type leaseRow struct {
