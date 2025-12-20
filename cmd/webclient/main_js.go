@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal/core/cryptoops"
+	"gosuda.org/portal/portal/core/proto/rdverb"
 	"gosuda.org/portal/sdk"
 )
 
@@ -39,6 +40,22 @@ var (
 		New: func() interface{} {
 			return make([]byte, 32*1024)
 		},
+	}
+)
+
+// Test hooks (overridable in tests)
+var (
+	sdkLookupLease = func(name string) (*rdverb.Lease, error) {
+		return client.LookupName(name)
+	}
+	sdkDialLease = func(cred *cryptoops.Credential, leaseID string, alpn string) (io.ReadWriteCloser, error) {
+		return client.Dial(cred, leaseID, alpn)
+	}
+	sdkNewCredential = func() *cryptoops.Credential {
+		return sdk.NewCredential()
+	}
+	sdkPostMessage = func(payload map[string]interface{}) {
+		js.Global().Call("__sdk_post_message", js.ValueOf(payload))
 	}
 )
 
@@ -198,14 +215,14 @@ func handleSDKConnect(data js.Value) {
 			leaseID = cachedID
 		} else {
 			// Cache miss - perform lookup
-			lease, err := client.LookupName(normalizedLeaseName)
+			lease, err := sdkLookupLease(normalizedLeaseName)
 			if err != nil {
 				log.Error().Err(err).Str("leaseName", leaseName).Msg("[SDK Connect] Lease lookup failed")
-				js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+				sdkPostMessage(map[string]interface{}{
 					"type":     "SDK_CONNECT_ERROR",
 					"clientId": clientId,
 					"error":    err.Error(),
-				}))
+				})
 				return
 			}
 			leaseID = lease.GetIdentity().GetId()
@@ -214,17 +231,17 @@ func handleSDKConnect(data js.Value) {
 		}
 
 		// Create E2EE connection using SDK with lease ID
-		cred := sdk.NewCredential()
-		conn, err := client.Dial(cred, leaseID, "http/1.1")
+		cred := sdkNewCredential()
+		conn, err := sdkDialLease(cred, leaseID, "http/1.1")
 		if err != nil {
 			log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed")
 
 			// Send error to client
-			js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+			sdkPostMessage(map[string]interface{}{
 				"type":     "SDK_CONNECT_ERROR",
 				"clientId": clientId,
 				"error":    err.Error(),
-			}))
+			})
 			return
 		}
 
@@ -237,11 +254,11 @@ func handleSDKConnect(data js.Value) {
 				if err != nil {
 					log.Error().Err(err).Str("leaseID", leaseID).Msg("[SDK Connect] Failed to send pipelined upgrade request")
 					conn.Close()
-					js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+					sdkPostMessage(map[string]interface{}{
 						"type":     "SDK_CONNECT_ERROR",
 						"clientId": clientId,
 						"error":    err.Error(),
-					}))
+					})
 					return
 				}
 				log.Debug().Str("leaseID", leaseID).Msg("[SDK Connect] Pipelined upgrade request sent")
@@ -259,11 +276,11 @@ func handleSDKConnect(data js.Value) {
 		log.Info().Str("leaseName", leaseName).Str("connId", connID).Msg("[SDK Connect] Connected")
 
 		// Send success to client
-		js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+		sdkPostMessage(map[string]interface{}{
 			"type":     "SDK_CONNECT_SUCCESS",
 			"clientId": clientId,
 			"connId":   connID,
-		}))
+		})
 
 		// Start reading from connection
 		go func() {
@@ -283,10 +300,10 @@ func handleSDKConnect(data js.Value) {
 					sdkConnectionsMu.Unlock()
 
 					// Notify client of closure
-					js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+					sdkPostMessage(map[string]interface{}{
 						"type":   "SDK_DISCONNECT",
 						"connId": connID,
-					}))
+					})
 					return
 				}
 
@@ -300,11 +317,11 @@ func handleSDKConnect(data js.Value) {
 					array := js.Global().Get("Uint8Array").New(n)
 					js.CopyBytesToJS(array, dataToSend)
 
-					js.Global().Call("__sdk_post_message", js.ValueOf(map[string]interface{}{
+					sdkPostMessage(map[string]interface{}{
 						"type":   "SDK_DATA",
 						"connId": connID,
 						"data":   array,
-					}))
+					})
 				}
 			}
 		}()

@@ -412,6 +412,36 @@ async function init() {
   return await ensureReady(ReadinessStage.READY);
 }
 
+function resolveWasmURL(manifest) {
+  const wasmFile =
+    typeof manifest.wasmFile === "string" ? manifest.wasmFile : "";
+  let wasm_URL = wasmFile ? `/frontend/${wasmFile}` : "";
+
+  if (manifest.wasmUrl) {
+    try {
+      const parsed = new URL(manifest.wasmUrl, self.location.origin);
+      const sameOrigin = parsed.origin === self.location.origin;
+      const isHttps = parsed.protocol === "https:";
+      const isHttp = parsed.protocol === "http:";
+      const allowHttp = isHttp && self.location.protocol === "http:";
+
+      if (sameOrigin || isHttps || allowHttp) {
+        wasm_URL = parsed.toString();
+      } else {
+        debugLog("[SW] Ignoring manifest.wasmUrl due to mixed content or origin:", parsed.toString());
+      }
+    } catch (error) {
+      console.warn("[SW] Invalid manifest.wasmUrl, falling back to local /frontend path:", error);
+    }
+  }
+
+  if (!wasm_URL) {
+    throw new Error("WASM manifest missing wasmFile/wasmUrl");
+  }
+
+  return wasm_URL;
+}
+
 async function runWASM() {
   // Check actual runtime state, not just if handler exists
   const currentStage = getCurrentStage();
@@ -425,31 +455,7 @@ async function runWASM() {
     const manifest = await loadManifest();
 
     // Determine WASM URL from manifest
-    const wasmFile =
-      typeof manifest.wasmFile === "string" ? manifest.wasmFile : "";
-    let wasm_URL = wasmFile ? `/frontend/${wasmFile}` : "";
-
-    if (manifest.wasmUrl) {
-      try {
-        const parsed = new URL(manifest.wasmUrl, self.location.origin);
-        const sameOrigin = parsed.origin === self.location.origin;
-        const isHttps = parsed.protocol === "https:";
-        const isHttp = parsed.protocol === "http:";
-        const allowHttp = isHttp && self.location.protocol === "http:";
-
-        if (sameOrigin || isHttps || allowHttp) {
-          wasm_URL = parsed.toString();
-        } else {
-          debugLog("[SW] Ignoring manifest.wasmUrl due to mixed content or origin:", parsed.toString());
-        }
-      } catch (error) {
-        console.warn("[SW] Invalid manifest.wasmUrl, falling back to local /frontend path:", error);
-      }
-    }
-
-    if (!wasm_URL) {
-      throw new Error("WASM manifest missing wasmFile/wasmUrl");
-    }
+    const wasm_URL = resolveWasmURL(manifest);
     debugLog("[SW] WASM URL:", wasm_URL);
 
     // Create Go runtime
@@ -705,6 +711,18 @@ setInterval(() => {
     });
   }
 }, healthCheckInterval);
+
+// Test hooks (no-op in production)
+if (self.__PORTAL_SW_TEST__) {
+  self.__PORTAL_SW_TEST__.resolveWasmURL = resolveWasmURL;
+  self.__PORTAL_SW_TEST__.isRecoverableError = isRecoverableError;
+  self.__PORTAL_SW_TEST__.fetchWithRetry = fetchWithRetry;
+  self.__PORTAL_SW_TEST__.ReadinessStage = ReadinessStage;
+  self.__PORTAL_SW_TEST__.setHandlers = (httpHandler, sdkHandler) => {
+    self.__go_jshttp = httpHandler;
+    self.__sdk_message_handler = sdkHandler;
+  };
+}
 
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "CLAIM_CLIENTS") {
