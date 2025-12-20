@@ -588,7 +588,7 @@ func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Re
 }
 
 // serveDynamicManifest generates and serves manifest.json dynamically
-func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) {
+func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, r *http.Request) {
 	utils.SetCORSHeaders(w)
 
 	// Find the content-addressed WASM file
@@ -606,6 +606,8 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) 
 	if wasmHash == "" {
 		entries, err := f.distFS.ReadDir("dist/wasm")
 		if err == nil {
+			var hashedWasm string
+			var fallbackWasm string
 			for _, entry := range entries {
 				if entry.IsDir() {
 					continue
@@ -620,12 +622,54 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) 
 						break
 					}
 				}
+
+				// Track uncompressed WASM files for fallback
+				if strings.HasSuffix(name, ".wasm") {
+					hash := strings.TrimSuffix(name, ".wasm")
+					if utils.IsHexString(hash) {
+						wasmHash = hash
+						hashedWasm = name
+					}
+					if fallbackWasm == "" {
+						fallbackWasm = name
+					}
+				}
+			}
+
+			if wasmFile == "" {
+				if hashedWasm != "" {
+					wasmFile = hashedWasm
+				} else if fallbackWasm != "" {
+					wasmFile = fallbackWasm
+				}
 			}
 		}
 	}
 
-	// Generate WASM URL
-	wasmURL := flagPortalURL + "/frontend/" + wasmFile
+	if wasmFile == "" {
+		log.Error().Msg("no wasm file found in dist/wasm; manifest will be incomplete")
+	}
+
+	origin := ""
+	if r != nil {
+		host := strings.TrimSpace(r.Host)
+		if host != "" {
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			origin = scheme + "://" + host
+		}
+	}
+	if origin == "" {
+		origin = strings.TrimSuffix(flagPortalURL, "/")
+	}
+
+	// Generate WASM URL (same-origin preferred)
+	wasmURL := ""
+	if wasmFile != "" && origin != "" {
+		wasmURL = origin + "/frontend/" + wasmFile
+	}
 
 	// Create manifest structure
 	manifest := map[string]string{
