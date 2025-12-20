@@ -61,6 +61,56 @@ echo "Starting portal-tunnel..." >&2
 exec "$@"
 `
 
+const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
+
+$BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
+$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $BaseUrl }
+
+$Arch = $env:PROCESSOR_ARCHITECTURE
+if ($Arch -eq "AMD64") {
+    $TunnelArch = "amd64"
+} elseif ($Arch -eq "ARM64") {
+    $TunnelArch = "arm64"
+} else {
+    Write-Error "Unsupported architecture: $Arch"
+    exit 1
+}
+
+$BinUrl = if ($env:BIN_URL) { $env:BIN_URL } else { "$BaseUrl/tunnel/bin/windows-$TunnelArch" }
+
+$WorkDir = Join-Path $env:TEMP ("portal-tunnel-" + [Guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+$BinPath = Join-Path $WorkDir "portal-tunnel.exe"
+
+try {
+    Write-Host "Downloading portal-tunnel (windows/$TunnelArch)..."
+    Invoke-WebRequest -Uri $BinUrl -OutFile $BinPath
+} catch {
+    Write-Error "Failed to download portal-tunnel: $_"
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ArgsList = @("--relay", $RelayUrl)
+
+if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
+if ($env:NAME) { $ArgsList += "--name", $env:NAME }
+if ($env:DESCRIPTION) { $ArgsList += "--description", $env:DESCRIPTION }
+if ($env:TAGS) { $ArgsList += "--tags", $env:TAGS }
+if ($env:THUMBNAIL) { $ArgsList += "--thumbnail", $env:THUMBNAIL }
+if ($env:OWNER) { $ArgsList += "--owner", $env:OWNER }
+if ($env:HIDE -eq "1" -or $env:HIDE -eq "true") { $ArgsList += "--hide" }
+
+Write-Host "Starting portal-tunnel..."
+try {
+    & $BinPath $ArgsList
+} finally {
+    if (Test-Path $WorkDir) {
+        Remove-Item -Recurse -Force $WorkDir
+    }
+}
+`
+
 func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	utils.SetCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -69,11 +119,33 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	script := fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
+	targetOS := r.URL.Query().Get("os")
+	isWindows := false
+	if targetOS != "" {
+		isWindows = strings.EqualFold(targetOS, "windows")
+	} else {
+		// Fallback: check User-Agent
+		ua := strings.ToLower(r.UserAgent())
+		isWindows = strings.Contains(ua, "windows")
+	}
 
-	w.Header().Set("Content-Type", "text/x-shellscript")
+	var script string
+	var contentType string
+	var filename string
+
+	if isWindows {
+		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, flagPortalURL)
+		contentType = "text/plain" // or application/x-powershell
+		filename = "tunnel.ps1"
+	} else {
+		script = fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
+		contentType = "text/x-shellscript"
+		filename = "tunnel.sh"
+	}
+
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Content-Disposition", "inline; filename=\"tunnel.sh\"")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		w.Write([]byte(script))
@@ -91,10 +163,12 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 	slug := strings.TrimPrefix(r.URL.Path, "/tunnel/bin/")
 	slug = strings.Trim(slug, "/")
 	path, ok := map[string]string{
-		"linux-amd64":  "dist/tunnel/portal-tunnel-linux-amd64",
-		"linux-arm64":  "dist/tunnel/portal-tunnel-linux-arm64",
-		"darwin-amd64": "dist/tunnel/portal-tunnel-darwin-amd64",
-		"darwin-arm64": "dist/tunnel/portal-tunnel-darwin-arm64",
+		"linux-amd64":   "dist/tunnel/portal-tunnel-linux-amd64",
+		"linux-arm64":   "dist/tunnel/portal-tunnel-linux-arm64",
+		"darwin-amd64":  "dist/tunnel/portal-tunnel-darwin-amd64",
+		"darwin-arm64":  "dist/tunnel/portal-tunnel-darwin-arm64",
+		"windows-amd64": "dist/tunnel/portal-tunnel-windows-amd64.exe",
+		"windows-arm64": "dist/tunnel/portal-tunnel-windows-arm64.exe",
 	}[slug]
 	if !ok {
 		http.NotFound(w, r)
