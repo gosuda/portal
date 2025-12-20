@@ -38,7 +38,7 @@ build-wasm:
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
 	
-	tinygo build -target=wasm -opt=2 -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
+	tinygo build -target=wasm -opt=s -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
 	
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
 	
