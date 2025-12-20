@@ -38,7 +38,7 @@ build-wasm:
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
 	
-	tinygo build -target=wasm -opt=s -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
+	tinygo build -target=wasm -opt=z -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
 	
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
 	
@@ -80,7 +80,16 @@ build-wasm:
 		exit 1; \
 	fi; \
 	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	if [ ! -f "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" ]; then \
+		echo "[wasm] ERROR: brotli WASM missing: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+		exit 1; \
+	fi; \
+	echo "[wasm] verified outputs: $$WASM_HASH.wasm and $$WASM_HASH.wasm.br"
 
 
 # Build WASM artifacts with standard Go (Legacy)
@@ -133,7 +142,16 @@ build-wasm-std:
 		exit 1; \
 	fi; \
 	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	if [ ! -f "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" ]; then \
+		echo "[wasm] ERROR: brotli WASM missing: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+		exit 1; \
+	fi; \
+	echo "[wasm] verified outputs: $$WASM_HASH.wasm and $$WASM_HASH.wasm.br"
 
 
 # Build React frontend with Tailwind CSS 4
