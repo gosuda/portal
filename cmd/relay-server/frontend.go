@@ -323,7 +323,6 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 type wasmCacheEntry struct {
 	brotli []byte
-	zstd   []byte
 	hash   string
 }
 
@@ -383,24 +382,8 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 		brData = data
 	}
 
-	// Load zstd variant (<hash>.wasm.zst)
-	var zstdData []byte
-	// Construct zstd path from fullPath (replace .br with .zst or add .zst)
-	zstdPath := strings.TrimSuffix(fullPath, ".br") + ".zst"
-
-	// Check if zstd file exists in embed.FS
-	// Note: We need to use ReadDir or just try ReadFile. simpler to try ReadFile
-	zData, err := f.distFS.ReadFile(zstdPath)
-	if err == nil {
-		zstdData = zData
-	} else {
-		// Log at debug, as zstd might not be generated in all builds
-		log.Debug().Err(err).Str("file", zstdPath).Msg("zstd-compressed WASM not found")
-	}
-
 	entry := &wasmCacheEntry{
 		brotli: brData,
-		zstd:   zstdData,
 		hash:   hashHex,
 	}
 
@@ -411,7 +394,6 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 	log.Debug().
 		Str("file", name).
 		Int("brotli", len(entry.brotli)).
-		Int("zstd", len(entry.zstd)).
 		Msg("WASM file cached")
 
 	return nil
@@ -458,21 +440,7 @@ func (f *Frontend) serveCompressedWasm(w http.ResponseWriter, r *http.Request, f
 	// Check Accept-Encoding header
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 
-	// 1. Zstd (Preferred if available)
-	if strings.Contains(acceptEncoding, "zstd") && len(entry.zstd) > 0 {
-		w.Header().Set("Content-Encoding", "zstd")
-		w.Header().Set("Content-Length", strconv.Itoa(len(entry.zstd)))
-		w.WriteHeader(http.StatusOK)
-		w.Write(entry.zstd)
-		log.Debug().
-			Str("path", filePath).
-			Int("size", len(entry.zstd)).
-			Str("encoding", "zstd").
-			Msg("served compressed WASM")
-		return
-	}
-
-	// 2. Brotli
+	// 1. Brotli
 	if strings.Contains(acceptEncoding, "br") && len(entry.brotli) > 0 {
 		w.Header().Set("Content-Encoding", "br")
 		w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
@@ -486,12 +454,29 @@ func (f *Frontend) serveCompressedWasm(w http.ResponseWriter, r *http.Request, f
 		return
 	}
 
-	// 3. Fallback (error if no compatible encoding found for cached WASM)
+	// 2. Fallback to uncompressed WASM from embedded FS.
+	// This ensures TinyGo WASM works even when clients/proxies don't advertise brotli.
 	log.Warn().
 		Str("path", filePath).
 		Str("acceptEncoding", acceptEncoding).
-		Msg("client does not support zstd/br or variants missing for WASM")
-	http.Error(w, "compressed WASM required (zstd or br)", http.StatusNotAcceptable)
+		Msg("falling back to uncompressed WASM")
+
+	fullPath := path.Join("dist", "wasm", filePath)
+	data, err := f.distFS.ReadFile(fullPath)
+	if err != nil {
+		log.Error().Err(err).Str("path", fullPath).Msg("uncompressed WASM not found in embedded FS")
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
+	log.Debug().
+		Str("path", filePath).
+		Int("size", len(data)).
+		Str("encoding", "identity").
+		Msg("served uncompressed WASM")
 	return
 }
 

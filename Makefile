@@ -33,6 +33,7 @@ build-protoc:
 build-wasm:
 	@echo "[wasm] building webclient WASM with TinyGo..."
 	@mkdir -p cmd/relay-server/dist/wasm
+	@rm -f cmd/relay-server/dist/wasm/*.wasm*
 	
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
@@ -55,8 +56,6 @@ build-wasm:
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
-	echo "[wasm] cleaning old hash files..."; \
-	find cmd/relay-server/dist/wasm -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
@@ -81,21 +80,14 @@ build-wasm:
 		exit 1; \
 	fi; \
 	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
-	\
-	if command -v zstd >/dev/null 2>&1; then \
-		zstd --ultra -22 -f --long=31 cmd/relay-server/dist/wasm/$$WASM_HASH.wasm -o cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst; \
-		echo "[wasm] zstd:   $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst" | cut -f1)"; \
-	else \
-		echo "[wasm] WARNING: zstd not found, skipping zstd compression"; \
-	fi; \
-	rm -f cmd/relay-server/dist/wasm/$$WASM_HASH.wasm
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"
 
 
 # Build WASM artifacts with standard Go (Legacy)
 build-wasm-std:
 	@echo "[wasm] building webclient WASM with standard Go..."
 	@mkdir -p cmd/relay-server/dist/wasm
+	@rm -f cmd/relay-server/dist/wasm/*.wasm*
 	
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
@@ -117,8 +109,6 @@ build-wasm-std:
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
-	echo "[wasm] cleaning old hash files..."; \
-	find cmd/relay-server/dist/wasm -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
@@ -143,15 +133,7 @@ build-wasm-std:
 		exit 1; \
 	fi; \
 	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
-	\
-	if command -v zstd >/dev/null 2>&1; then \
-		zstd --ultra -22 -f --long=31 cmd/relay-server/dist/wasm/$$WASM_HASH.wasm -o cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst; \
-		echo "[wasm] zstd:   $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.zst" | cut -f1)"; \
-	else \
-		echo "[wasm] WARNING: zstd not found, skipping zstd compression"; \
-	fi; \
-	rm -f cmd/relay-server/dist/wasm/$$WASM_HASH.wasm
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"
 
 
 # Build React frontend with Tailwind CSS 4
