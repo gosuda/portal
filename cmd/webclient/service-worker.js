@@ -425,11 +425,30 @@ async function runWASM() {
     const manifest = await loadManifest();
 
     // Determine WASM URL from manifest
-    let wasm_URL;
-    if (manifest.wasmUrl && new URL(manifest.wasmUrl).protocol !== "http:") {
-      wasm_URL = manifest.wasmUrl;
-    } else {
-      wasm_URL = `/frontend/${manifest.wasmFile}`;
+    const wasmFile =
+      typeof manifest.wasmFile === "string" ? manifest.wasmFile : "";
+    let wasm_URL = wasmFile ? `/frontend/${wasmFile}` : "";
+
+    if (manifest.wasmUrl) {
+      try {
+        const parsed = new URL(manifest.wasmUrl, self.location.origin);
+        const sameOrigin = parsed.origin === self.location.origin;
+        const isHttps = parsed.protocol === "https:";
+        const isHttp = parsed.protocol === "http:";
+        const allowHttp = isHttp && self.location.protocol === "http:";
+
+        if (sameOrigin || isHttps || allowHttp) {
+          wasm_URL = parsed.toString();
+        } else {
+          debugLog("[SW] Ignoring manifest.wasmUrl due to mixed content or origin:", parsed.toString());
+        }
+      } catch (error) {
+        console.warn("[SW] Invalid manifest.wasmUrl, falling back to local /frontend path:", error);
+      }
+    }
+
+    if (!wasm_URL) {
+      throw new Error("WASM manifest missing wasmFile/wasmUrl");
     }
     debugLog("[SW] WASM URL:", wasm_URL);
 
