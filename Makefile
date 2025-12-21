@@ -78,7 +78,7 @@ build-wasm:
 		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
 		exit 1; \
 	fi; \
-	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	brotli -f -k -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
 	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
 	if [ ! -f "$$WASM_FILE" ]; then \
 		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \
@@ -139,7 +139,7 @@ build-wasm-std:
 		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
 		exit 1; \
 	fi; \
-	brotli -f -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	brotli -f -k -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
 	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
 	if [ ! -f "$$WASM_FILE" ]; then \
 		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \

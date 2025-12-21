@@ -340,18 +340,15 @@ func (f *Frontend) InitWasmCache() error {
 		}
 
 		name := entry.Name()
-		// Look for content-addressed WASM files: <hex>.wasm.br
-		if strings.HasSuffix(name, ".wasm.br") {
-			hash := strings.TrimSuffix(name, ".wasm.br")
+		// Look for content-addressed WASM files: <hex>.wasm
+		if strings.HasSuffix(name, ".wasm") {
+			hash := strings.TrimSuffix(name, ".wasm")
 			if utils.IsHexString(hash) {
 				fullPath := path.Join("dist", "wasm", name)
-				// Cache under the URL path (<hash>.wasm) while reading the
-				// compressed artifacts from embed.FS.
-				cacheKey := hash + ".wasm"
-				if err := f.cacheWasmFile(cacheKey, fullPath); err != nil {
+				if err := f.cacheWasmFile(name, fullPath); err != nil {
 					log.Warn().Err(err).Str("file", name).Msg("failed to cache WASM file")
 				} else {
-					log.Info().Str("file", cacheKey).Msg("cached WASM file")
+					log.Info().Str("file", name).Msg("cached WASM file")
 				}
 			}
 		}
@@ -368,18 +365,17 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
 	}
 
-	// Load brotli variant (<hash>.wasm.br)
+	// Look for brotli variant (<hash>.wasm.br)
+	// fullPath is "dist/wasm/<hash>.wasm"
+	brPath := fullPath + ".br"
 	var brData []byte
-	brPath := fullPath
-	if !strings.HasSuffix(brPath, ".br") {
-		brPath += ".br" // Should be implied by caller logic, but safe
-	}
 
 	data, err := f.distFS.ReadFile(brPath)
-	if err != nil {
-		log.Warn().Err(err).Str("file", brPath).Msg("failed to read brotli-compressed WASM")
-	} else {
+	if err == nil {
 		brData = data
+	} else {
+		// It's okay if .br doesn't exist, we just won't serve compressed
+		log.Debug().Str("file", name).Msg("no pre-compressed brotli file found")
 	}
 
 	entry := &wasmCacheEntry{
@@ -642,7 +638,8 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, r *http.Request) 
 
 	if wasmFile == "" {
 		log.Error().Msg("no wasm file found in dist/wasm")
-		http.Error(w, "server configuration error: missing WASM artifact", http.StatusInternalServerError)
+		// Return 503 instead of 500 to indicate temporary unavailability (e.g. during build/startup)
+		http.Error(w, "server configuration error: missing WASM artifact", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -697,13 +694,26 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, r *http.Request) 
 
 // ServeDynamicServiceWorker serves service-worker.js with injected manifest and config.
 func (f *Frontend) ServeDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("Panic in ServeDynamicServiceWorker")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	utils.SetCORSHeaders(w)
+
+	if f.distFS == nil {
+		log.Error().Msg("distFS is nil")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
 	// Read the service-worker.js template
 	fullPath := path.Join("dist", "wasm", "service-worker.js")
 	content, err := f.distFS.ReadFile(fullPath)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to read service-worker.js")
+		log.Error().Err(err).Str("path", fullPath).Msg("Failed to read service-worker.js")
 		http.NotFound(w, r)
 		return
 	}
@@ -716,7 +726,9 @@ func (f *Frontend) ServeDynamicServiceWorker(w http.ResponseWriter, r *http.Requ
 
 	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write(content)
+	if _, err := w.Write(content); err != nil {
+		log.Error().Err(err).Msg("Failed to write service-worker.js response")
+	}
 
 	log.Debug().Msg("Served service-worker.js")
 }
