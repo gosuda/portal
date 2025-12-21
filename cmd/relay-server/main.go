@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -21,14 +23,15 @@ import (
 )
 
 var (
-	flagPortalURL    string
-	flagPortalAppURL string
-	flagBootstraps   []string
-	flagALPN         string
-	flagPort         int
-	flagMaxLease     int
-	flagLeaseBPS     int
-	flagNoIndex      bool
+	flagPortalURL      string
+	flagPortalAppURL   string
+	flagBootstraps     []string
+	flagALPN           string
+	flagPort           int
+	flagMaxLease       int
+	flagLeaseBPS       int
+	flagNoIndex        bool
+	flagAdminSecretKey string
 )
 
 func main() {
@@ -59,6 +62,9 @@ func main() {
 
 	defaultNoIndex := os.Getenv("NOINDEX") == "true"
 	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
+
+	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
+	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
 	flag.Parse()
 
 	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
@@ -84,9 +90,23 @@ func runServer() error {
 		serv.SetMaxRelayedPerLease(flagMaxLease)
 	}
 
+	// Create AuthManager for admin authentication
+	// Auto-generate secret key if not provided
+	if flagAdminSecretKey == "" {
+		randomBytes := make([]byte, 16)
+		if _, err := rand.Read(randomBytes); err != nil {
+			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
+		}
+		flagAdminSecretKey = hex.EncodeToString(randomBytes)
+		log.Warn().Str("key", flagAdminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+	} else {
+		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
+	}
+	authManager := manager.NewAuthManager(flagAdminSecretKey)
+
 	// Create Frontend first, then Admin, then attach Admin back to Frontend.
 	frontend := NewFrontend()
-	admin := NewAdmin(int64(flagLeaseBPS), frontend)
+	admin := NewAdmin(int64(flagLeaseBPS), frontend, authManager)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)

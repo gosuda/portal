@@ -223,7 +223,7 @@ export function ServerCard({
         data-hero-key={`server-bg-${serverId}`}
         className={clsx(
           "relative bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 z-1 border border-foreground dark:border-foreground/40",
-          showAdminControls ? "h-[263.5px]" : "h-[174.5px]"
+          showAdminControls ? "h-[286px]" : "h-[174.5px]"
         )}
         style={{ ...(thumbnail && { backgroundImage: `url(${thumbnail})` }) }}
       >
@@ -452,10 +452,16 @@ export function ServerCard({
             />
           </div>
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="secondary" onClick={() => setShowBPSModal(false)}>
+            <Button
+              className="cursor-pointer"
+              variant="secondary"
+              onClick={() => setShowBPSModal(false)}
+            >
               Cancel
             </Button>
-            <Button onClick={handleBPSSave}>Save</Button>
+            <Button className="cursor-pointer" onClick={handleBPSSave}>
+              Save
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

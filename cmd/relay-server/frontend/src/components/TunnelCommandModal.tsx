@@ -88,7 +88,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     <Dialog>
       <DialogTrigger asChild>
         {trigger || (
-          <Button>
+          <Button className="cursor-pointer">
             <span className="truncate">Add Your Server</span>
           </Button>
         )}

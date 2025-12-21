@@ -12,7 +12,7 @@ export const ApprovalModeToggle = ({
   <div className="flex rounded-lg overflow-hidden border border-foreground/20">
     <button
       onClick={() => onApprovalModeChange("auto")}
-      className={`px-4 h-10 text-sm font-medium transition-colors ${
+      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
         approvalMode === "auto"
           ? "bg-primary text-primary-foreground"
           : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -22,7 +22,7 @@ export const ApprovalModeToggle = ({
     </button>
     <button
       onClick={() => onApprovalModeChange("manual")}
-      className={`px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
         approvalMode === "manual"
           ? "bg-primary text-primary-foreground"
           : "bg-secondary text-secondary-foreground hover:bg-secondary/80"

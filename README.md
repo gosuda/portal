@@ -42,6 +42,10 @@ docker compose up
 # 2. Open in browser
 http://localhost:4017
 
+# 3. Access admin panel at http://localhost:4017/admin
+# If ADMIN_SECRET_KEY is not set, a random key will be auto-generated and shown in logs
+# To use your own key:
+ADMIN_SECRET_KEY=your-secret-key docker compose up
 ```
 
 For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
