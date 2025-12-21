@@ -34,14 +34,14 @@ build-wasm:
 	@echo "[wasm] building webclient WASM with TinyGo..."
 	@mkdir -p cmd/relay-server/dist/wasm
 	@rm -f cmd/relay-server/dist/wasm/*.wasm*
-	
+
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
-	
+
 	tinygo build -target=wasm -opt=z -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
-	
+
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
-	
+
 	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
 		wasm-opt -O4 --gufa --remove-unused-module-elements --remove-unused-names --enable-bulk-memory --strip-debug --strip-dwarf --strip-producers --vacuum --flatten --rereloop --converge -Oz \
@@ -52,14 +52,14 @@ build-wasm:
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
 		echo "[wasm] Install binaryen for smaller WASM files"; \
 	fi
-	
+
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
-	
+
 	@echo "[wasm] copying additional resources..."
 	@echo "[wasm] copying and minifying additional resources..."
 	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
@@ -96,13 +96,13 @@ build-wasm-std:
 	@echo "[wasm] building webclient WASM with standard Go..."
 	@mkdir -p cmd/relay-server/dist/wasm
 	@rm -f cmd/relay-server/dist/wasm/*.wasm*
-	
+
 	@echo "[wasm] minifying JS assets..."
 	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
-	
+
 	GOOS=js GOARCH=wasm go build -tags '!debug' -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
 	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
-	
+
 	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
 		wasm-opt -O4 --enable-bulk-memory --strip-debug --strip-producers \
@@ -113,14 +113,14 @@ build-wasm-std:
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
 		echo "[wasm] Install binaryen for smaller WASM files"; \
 	fi
-	
+
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
-	
+
 	@echo "[wasm] copying additional resources..."
 	@echo "[wasm] copying and minifying additional resources..."
 	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
