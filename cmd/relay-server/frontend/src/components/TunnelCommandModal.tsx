@@ -75,7 +75,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      return `irm ${currentOrigin}/tunnel?os=windows | iex; Start-PortalTunnel -HostAddr "${hostVal}" -Name "${nameVal}" -RelayUrl "${relayUrlVal}"`;
+      return `$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
     return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
@@ -224,7 +224,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                Windows
+                Windows (PowerShell)
               </button>
             </div>
           </div>
