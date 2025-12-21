@@ -62,7 +62,15 @@ build-wasm:
 
 	@echo "[wasm] copying additional resources..."
 	@echo "[wasm] copying and minifying additional resources..."
-	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
+	@echo "[wasm] preparing wasm_exec.js runtime (TinyGo preferred)..."
+	@TINYGOROOT=$$(tinygo env TINYGOROOT 2>/dev/null || true); \
+	if [ -n "$$TINYGOROOT" ] && [ -f "$$TINYGOROOT/targets/wasm_exec.js" ]; then \
+		echo "[wasm] using TinyGo wasm_exec.js: $$TINYGOROOT/targets/wasm_exec.js"; \
+		npx -y esbuild "$$TINYGOROOT/targets/wasm_exec.js" --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	else \
+		echo "[wasm] TinyGo wasm_exec.js not found; using repo fallback"; \
+		npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	fi
 	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
 	@echo "[wasm] build complete"
@@ -123,7 +131,15 @@ build-wasm-std:
 
 	@echo "[wasm] copying additional resources..."
 	@echo "[wasm] copying and minifying additional resources..."
-	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
+	@echo "[wasm] preparing wasm_exec.js runtime (Go stdlib preferred)..."
+	@GOROOT=$$(go env GOROOT 2>/dev/null || true); \
+	if [ -n "$$GOROOT" ] && [ -f "$$GOROOT/misc/wasm/wasm_exec.js" ]; then \
+		echo "[wasm] using Go wasm_exec.js: $$GOROOT/misc/wasm/wasm_exec.js"; \
+		npx -y esbuild "$$GOROOT/misc/wasm/wasm_exec.js" --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	else \
+		echo "[wasm] Go wasm_exec.js not found; using repo fallback"; \
+		npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	fi
 	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
 	@echo "[wasm] build complete"

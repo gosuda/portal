@@ -19,6 +19,9 @@ import (
 var (
 	client *sdk.Client
 
+	// JS handlers pinned to avoid GC
+	goHTTPHandler js.Func
+
 	// SDK connection manager for Service Worker messaging
 	sdkConnections   = make(map[string]io.ReadWriteCloser)
 	sdkConnectionsMu sync.RWMutex
@@ -414,7 +417,7 @@ func main() {
 	}
 
 	// Register SDK message handler
-	js.Global().Set("__sdk_handle_message", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	js.Global().Set("__sdk_message_handler", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if len(args) < 1 {
 			return nil
 		}
@@ -435,6 +438,19 @@ func main() {
 
 		return nil
 	}))
+
+	// Register HTTP handler for Service Worker fetch passthrough
+	goHTTPHandler = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if len(args) < 1 {
+			return nil
+		}
+		fetch := js.Global().Get("fetch")
+		if fetch.IsUndefined() || fetch.IsNull() {
+			return nil
+		}
+		return fetch.Invoke(args[0])
+	})
+	js.Global().Set("__go_jshttp", goHTTPHandler)
 
 	// Check for TinyGo runtime
 	if runtime.Compiler == "tinygo" {
