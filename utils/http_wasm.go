@@ -23,6 +23,8 @@ func Fetch(url string) ([]byte, error) {
 	resultCh := make(chan []byte, 1)
 	errCh := make(chan error, 1)
 
+	var bufSuccess, bufFailure js.Func
+
 	// Call fetch
 	promise := _Fetch.Invoke(url)
 
@@ -40,7 +42,7 @@ func Fetch(url string) ([]byte, error) {
 		promise := response.Call("arrayBuffer")
 
 		// Handle arrayBuffer
-		bufSuccess := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		bufSuccess = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			arrayBuffer := args[0]
 			uint8Array := js.Global().Get("Uint8Array").New(arrayBuffer)
 
@@ -51,7 +53,7 @@ func Fetch(url string) ([]byte, error) {
 			return nil
 		})
 
-		bufFailure := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		bufFailure = js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 			errCh <- errors.New("failed to read body")
 			return nil
 		})
@@ -65,6 +67,17 @@ func Fetch(url string) ([]byte, error) {
 		errCh <- errors.New(args[0].Get("message").String())
 		return nil
 	})
+
+	defer func() {
+		success.Release()
+		failure.Release()
+		if bufSuccess.Truthy() {
+			bufSuccess.Release()
+		}
+		if bufFailure.Truthy() {
+			bufFailure.Release()
+		}
+	}()
 
 	promise.Call("then", success).Call("catch", failure)
 

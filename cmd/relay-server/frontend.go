@@ -647,7 +647,9 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if wasmFile == "" {
-		log.Error().Msg("no wasm file found in dist/wasm; manifest will be incomplete")
+		log.Error().Msg("no wasm file found in dist/wasm")
+		http.Error(w, "server configuration error: missing WASM artifact", http.StatusInternalServerError)
+		return
 	}
 
 	origin := ""

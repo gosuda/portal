@@ -5,6 +5,7 @@ package utils
 import (
 	"errors"
 	"io"
+	"sync"
 	"syscall/js"
 )
 
@@ -26,12 +27,20 @@ type WsConn struct {
 	closeChan   chan struct{}
 
 	funcsToBeReleased []js.Func
+	cleanupOnce       sync.Once
 }
 
 func (conn *WsConn) freeFuncs() {
 	for _, f := range conn.funcsToBeReleased {
 		f.Release()
 	}
+}
+
+func (conn *WsConn) cleanup() {
+	conn.cleanupOnce.Do(func() {
+		close(conn.closeChan)
+		conn.freeFuncs()
+	})
 }
 
 func DialWebSocket(uri string) (*WsConn, error) {
@@ -81,7 +90,7 @@ func DialWebSocket(uri string) (*WsConn, error) {
 	})
 
 	onClose := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		close(conn.closeChan)
+		conn.cleanup()
 		return nil
 	})
 
@@ -95,7 +104,7 @@ func DialWebSocket(uri string) (*WsConn, error) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			conn.freeFuncs()
+			conn.cleanup()
 			return nil, err
 		}
 	}
@@ -105,9 +114,6 @@ func DialWebSocket(uri string) (*WsConn, error) {
 
 func (conn *WsConn) Close() error {
 	conn.ws.Call("close")
-	// Do not wait for onClose here to avoid deadlocks if called from JS callback
-	// Let the event listener handle channel closing
-	conn.freeFuncs()
 	return nil
 }
 

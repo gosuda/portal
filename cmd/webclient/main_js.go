@@ -23,9 +23,6 @@ var (
 	sdkConnections   = make(map[string]io.ReadWriteCloser)
 	sdkConnectionsMu sync.RWMutex
 
-	// Reusable credential for HTTP connections (enables Keep-Alive)
-	dialerCredential *cryptoops.Credential
-
 	// DNS cache for lease name -> lease ID mapping
 	dnsCache = struct {
 		sync.RWMutex
@@ -148,10 +145,12 @@ func isValidUpgradeRequest(req []byte) bool {
 	return true
 }
 
-func generateConnID() string {
+func generateConnID() (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func getLeaseID(hostname string) string {
@@ -266,7 +265,17 @@ func handleSDKConnect(data js.Value) {
 		}
 
 		// Generate connection ID
-		connID := generateConnID()
+		connID, err := generateConnID()
+		if err != nil {
+			log.Error().Err(err).Msg("[SDK Connect] Failed to generate connection ID")
+			conn.Close()
+			sdkPostMessage(map[string]interface{}{
+				"type":     "SDK_CONNECT_ERROR",
+				"clientId": clientId,
+				"error":    err.Error(),
+			})
+			return
+		}
 
 		// Store connection
 		sdkConnectionsMu.Lock()
@@ -403,9 +412,6 @@ func main() {
 		log.Error().Err(err).Msg("Failed to initialize SDK client")
 		return
 	}
-
-	// Initialize reusable credential for HTTP connections
-	dialerCredential = sdk.NewCredential()
 
 	// Register SDK message handler
 	js.Global().Set("__sdk_handle_message", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
