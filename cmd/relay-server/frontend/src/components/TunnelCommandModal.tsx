@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { Copy, Check, Terminal, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
+  const [os, setOs] = useState<"unix" | "windows">("unix");
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   const addRelayUrl = (url: string) => {
@@ -71,8 +73,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     const nameVal = name === "" ? defaultName : name;
     const relayUrlVal =
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+
+    if (os === "windows") {
+      return `$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+    }
+
     return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
-  }, [currentOrigin, host, name, relayUrls]);
+  }, [currentOrigin, host, name, relayUrls, os]);
 
   const handleCopy = async () => {
     try {
@@ -187,6 +194,42 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               />
             </div>
             <p className="text-xs text-text-muted">
+              Press Enter to add. Multiple relay servers for redundancy.
+            </p>
+          </div>
+
+          {/* OS Selection */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">
+              Operating System
+            </label>
+            <div className="flex p-1 bg-border rounded-md">
+              <button
+                onClick={() => setOs("unix")}
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-sm font-medium rounded-sm transition-all",
+                  os === "unix"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Linux / macOS
+              </button>
+              <button
+                onClick={() => setOs("windows")}
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-sm font-medium rounded-sm transition-all",
+                  os === "windows"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Windows (PowerShell)
+              </button>
+            </div>
+          </div>
+
+          {/*  className="text-xs text-text-muted">
               Press Enter to add. Multiple relay servers for redundancy.
             </p>
           </div>
