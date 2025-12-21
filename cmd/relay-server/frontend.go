@@ -507,12 +507,6 @@ func (f *Frontend) ServePortalStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		f.serveStaticFileWithFallback(w, r, staticPath, "application/javascript")
 		return
-
-	case "portal.mp4":
-		w.Header().Set("Cache-Control", "public, max-age=604800")
-		w.Header().Set("Content-Type", "video/mp4")
-		f.serveStaticFileWithFallback(w, r, staticPath, "video/mp4")
-		return
 	}
 
 	// Default caching for other files

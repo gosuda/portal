@@ -45,25 +45,14 @@
             container-type: inline-size;
         }
 
-        #loading-logo video {
-            width: 100%;
-            height: auto;
-            display: block;
-        }
-
         .logo-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
             width: 100%;
-            height: 100%;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
             align-items: center;
             padding: 10% 1%;
             box-sizing: border-box;
-            pointer-events: none;
         }
 
         .logo-title {
@@ -142,9 +131,6 @@
     <!-- Loading Screen -->
     <div id="loading-screen">
         <div id="loading-logo">
-            <video autoplay loop muted playsinline>
-                <source src="/portal.mp4" type="video/mp4" />
-            </video>
             <div class="logo-overlay">
                 <h1 class="logo-title">PORTAL</h1>
                 <p class="logo-subtitle">LOCAL TO WEB. INSTANT ACCESS.</p>

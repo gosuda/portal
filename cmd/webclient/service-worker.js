@@ -782,8 +782,7 @@ self.addEventListener("fetch", (e) => {
 
   // Skip Service Worker infrastructure files (prevent infinite loop during initialization)
   if (url.pathname.startsWith("/frontend/") ||
-      url.pathname === "/service-worker.js" ||
-      url.pathname === "/portal.mp4") {
+      url.pathname === "/service-worker.js") {
     e.respondWith(fetch(e.request));
     return;
   }

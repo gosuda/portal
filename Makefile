@@ -65,7 +65,6 @@ build-wasm:
 	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
 	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
-	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
 	@echo "[wasm] build complete"
 
 	@echo "[wasm] precompressing webclient WASM with brotli..."
@@ -127,7 +126,6 @@ build-wasm-std:
 	@npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js
 	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
-	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
 	@echo "[wasm] build complete"
 
 	@echo "[wasm] precompressing webclient WASM with brotli..."

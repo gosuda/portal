@@ -32,8 +32,6 @@ func GetContentType(ext string) string {
 		return "application/wasm"
 	case ".css":
 		return "text/css"
-	case ".mp4":
-		return "video/mp4"
 	case ".svg":
 		return "image/svg+xml"
 	case ".png":
