@@ -75,7 +75,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      return `irm ${currentOrigin}/tunnel/ps1 | iex; Start-PortalTunnel -HostAddr "${hostVal}" -Name "${nameVal}" -RelayUrl "${relayUrlVal}"`;
+      return `irm ${currentOrigin}/tunnel?os=windows | iex; Start-PortalTunnel -HostAddr "${hostVal}" -Name "${nameVal}" -RelayUrl "${relayUrlVal}"`;
     }
 
     return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
