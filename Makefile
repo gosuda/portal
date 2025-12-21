@@ -88,9 +88,11 @@ build-frontend:
 build-tunnel:
 	@echo "[tunnel] building portal-tunnel binaries..."
 	@mkdir -p cmd/relay-server/dist/tunnel
-	@for GOOS in linux darwin; do \
+	@for GOOS in linux darwin windows; do \
 		for GOARCH in amd64 arm64; do \
-			OUT="cmd/relay-server/dist/tunnel/portal-tunnel-$${GOOS}-$${GOARCH}"; \
+			EXT=""; \
+			if [ "$${GOOS}" = "windows" ]; then EXT=".exe"; fi; \
+			OUT="cmd/relay-server/dist/tunnel/portal-tunnel-$${GOOS}-$${GOARCH}$${EXT}"; \
 			echo " - $${OUT}"; \
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
