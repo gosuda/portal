@@ -1,15 +1,22 @@
 import { useEffect, useState } from "react";
-import { Moon, Sun } from "lucide-react";
+import { LogOut, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import clsx from "clsx";
 
 interface HeaderProps {
   title?: string;
   isAdmin?: boolean;
+  onLogout?: () => void;
 }
 
-export function Header({ title = "PORTAL", isAdmin }: HeaderProps) {
+export function Header({ title = "PORTAL", isAdmin, onLogout }: HeaderProps) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
 
   useEffect(() => {
@@ -78,7 +85,7 @@ export function Header({ title = "PORTAL", isAdmin }: HeaderProps) {
         </a>
         <button
           onClick={toggleTheme}
-          className="text-foreground hover:text-primary transition-colors p-1 rounded-md hover:bg-secondary"
+          className="cursor-pointer text-foreground hover:text-primary transition-colors p-1 rounded-md hover:bg-secondary"
           aria-label="Toggle theme"
         >
           {theme === "dark" ? (
@@ -89,11 +96,33 @@ export function Header({ title = "PORTAL", isAdmin }: HeaderProps) {
         </button>
         <TunnelCommandModal
           trigger={
-            <Button className={clsx(isAdmin && "hidden sm:block")}>
+            <Button
+              className={clsx(isAdmin && "hidden sm:block", "cursor-pointer")}
+            >
               <span className="truncate">Add Your Server</span>
             </Button>
           }
         />
+        {isAdmin && onLogout && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={onLogout}
+                  className="cursor-pointer text-foreground hover:text-destructive"
+                  aria-label="Logout"
+                >
+                  <LogOut className="w-5 h-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Logout</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
       </div>
     </header>
   );

@@ -28,6 +28,7 @@ COPY --from=builder /src/bin/relay-server /usr/bin/relay-server
 ENV PORTAL_URL=http://localhost:4017
 ENV PORTAL_APP_URL=http://*.localhost:4017
 ENV BOOTSTRAP_URIS=ws://localhost:4017/relay
+ENV ADMIN_SECRET_KEY=
 ENV NOINDEX=false
 ENV TZ=UTC
 

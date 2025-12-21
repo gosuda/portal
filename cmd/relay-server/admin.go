@@ -18,6 +18,8 @@ import (
 	"gosuda.org/portal/utils"
 )
 
+const adminCookieName = "portal_admin"
+
 // Admin manages approval state and persistence for relay-server.
 type Admin struct {
 	settingsPath string
@@ -26,11 +28,12 @@ type Admin struct {
 	approveManager *manager.ApproveManager
 	bpsManager     *manager.BPSManager
 	ipManager      *manager.IPManager
+	authManager    *manager.AuthManager
 
 	frontend *Frontend
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend) *Admin {
+func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
@@ -40,6 +43,7 @@ func NewAdmin(defaultLeaseBPS int64, frontend *Frontend) *Admin {
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
 		ipManager:      manager.NewIPManager(),
+		authManager:    authManager,
 		frontend:       frontend,
 	}
 }
@@ -186,14 +190,53 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 		Msg("[Admin] Loaded admin settings")
 }
 
+// isAuthenticated checks if the request has a valid admin session
+func (a *Admin) isAuthenticated(r *http.Request) bool {
+	// If no secret key is configured, deny all access
+	if a.authManager == nil || !a.authManager.HasSecretKey() {
+		return false
+	}
+
+	cookie, err := r.Cookie(adminCookieName)
+	if err != nil {
+		return false
+	}
+
+	return a.authManager.ValidateSession(cookie.Value)
+}
+
 // HandleAdminRequest routes /admin/* requests.
 func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	if !utils.IsLocalhost(r) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+	route := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin"), "/")
+
+	// Public routes (no authentication required)
+	switch {
+	case route == "login" && r.Method == http.MethodPost:
+		a.handleLogin(w, r)
+		return
+	case route == "login":
+		// Serve login page (GET)
+		a.frontend.ServeAppStatic(w, r, "", serv)
+		return
+	case route == "logout" && r.Method == http.MethodPost:
+		a.handleLogout(w, r)
+		return
+	case route == "auth/status" && r.Method == http.MethodGet:
+		a.handleAuthStatus(w, r)
 		return
 	}
 
-	route := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin"), "/")
+	// Protected routes - require authentication
+	if !a.isAuthenticated(r) {
+		// For page requests (no specific route), show login page
+		if route == "" {
+			a.frontend.ServeAppStatic(w, r, "", serv)
+			return
+		}
+		// For API requests, return 401
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	switch {
 	case route == "":
@@ -224,6 +267,103 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleLogin handles POST /admin/login
+func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
+	clientIP := manager.ExtractClientIP(r)
+
+	// Check if IP is locked
+	if a.authManager.IsIPLocked(clientIP) {
+		remaining := a.authManager.GetLockRemainingSeconds(clientIP)
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]interface{}{
+			"success":           false,
+			"error":             "Too many failed attempts. Please try again later.",
+			"locked":            true,
+			"remaining_seconds": remaining,
+		})
+		return
+	}
+
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if !a.authManager.ValidateKey(req.Key) {
+		// Record failed attempt
+		nowLocked := a.authManager.RecordFailedLogin(clientIP)
+		log.Warn().Str("ip", clientIP).Bool("now_locked", nowLocked).Msg("[Admin] Failed login attempt")
+
+		response := map[string]interface{}{
+			"success": false,
+			"error":   "Invalid key",
+			"locked":  nowLocked,
+		}
+		if nowLocked {
+			response["remaining_seconds"] = 60
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		writeJSON(w, response)
+		return
+	}
+
+	// Successful login
+	a.authManager.ResetFailedLogin(clientIP)
+	token := a.authManager.CreateSession()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    token,
+		Path:     "/admin",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   86400, // 24 hours
+	})
+
+	log.Info().Str("ip", clientIP).Msg("[Admin] Successful login")
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+	})
+}
+
+// handleLogout handles POST /admin/logout
+func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie(adminCookieName)
+	if err == nil && cookie.Value != "" {
+		a.authManager.DeleteSession(cookie.Value)
+	}
+
+	// Clear the cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    "",
+		Path:     "/admin",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1, // Delete cookie
+	})
+
+	writeJSON(w, map[string]interface{}{
+		"success": true,
+	})
+}
+
+// handleAuthStatus handles GET /admin/auth/status
+func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	authenticated := a.isAuthenticated(r)
+
+	// Check if secret key is configured
+	authEnabled := a.authManager != nil && a.authManager.HasSecretKey()
+
+	writeJSON(w, map[string]interface{}{
+		"authenticated": authenticated,
+		"auth_enabled":  authEnabled,
+	})
 }
 
 func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {

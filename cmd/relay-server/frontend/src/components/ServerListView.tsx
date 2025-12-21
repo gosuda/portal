@@ -54,6 +54,8 @@ interface ServerListViewProps {
   onBulkApprove?: (leaseIds: string[]) => void;
   onBulkDeny?: (leaseIds: string[]) => void;
   onBulkBan?: (leaseIds: string[]) => void;
+  // Logout handler (admin only)
+  onLogout?: () => void;
 }
 
 function isAdminServer(
@@ -91,6 +93,8 @@ export function ServerListView({
   onBulkApprove,
   onBulkDeny,
   onBulkBan,
+  // Logout handler
+  onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
@@ -191,7 +195,7 @@ export function ServerListView({
         <div className="flex flex-1 justify-center">
           <div className="flex flex-col w-full max-w-6xl flex-1 px-0 md:px-8">
             <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
-              <Header title={title} isAdmin={isAdmin} />
+              <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
               <div className="flex items-center gap-2">
                 <div className="flex-1">
                   <SearchBar

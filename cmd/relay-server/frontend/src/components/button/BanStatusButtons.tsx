@@ -20,7 +20,7 @@ export const BanStatusButtons = ({
   >
     <button
       onClick={() => onBanFilterChange("all")}
-      className={`px-4 h-10 text-sm font-medium transition-colors ${
+      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
         banFilter === "all"
           ? "bg-primary text-primary-foreground"
           : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -30,7 +30,7 @@ export const BanStatusButtons = ({
     </button>
     <button
       onClick={() => onBanFilterChange("active")}
-      className={`px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
         banFilter === "active"
           ? "bg-green-600 text-white"
           : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -40,7 +40,7 @@ export const BanStatusButtons = ({
     </button>
     <button
       onClick={() => onBanFilterChange("banned")}
-      className={`px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
         banFilter === "banned"
           ? "bg-red-600 text-white"
           : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
