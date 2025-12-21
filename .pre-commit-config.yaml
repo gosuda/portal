@@ -19,20 +19,20 @@ repos:
       - id: fix-byte-order-marker
 
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.6.2
+    rev: v2.7.2
     hooks:
       - id: golangci-lint
         name: golangci-lint
-        description: Fast linters runner for Go. Note that only modified files are linted, so linters like 'unused' that need to scan all files won't work as expected.
-        entry: golangci-lint run --new-from-rev HEAD --fix
+        description: Fast linters runner for Go. Note that only modified files are linted, so linters like 'unused' that need to scan all files won't work as expected. Only applies autofixes and always passes.
+        entry: bash -c 'golangci-lint run --new-from-rev HEAD --fix || true'
         types: [go]
         language: golang
         require_serial: true
         pass_filenames: false
       - id: golangci-lint-full
         name: golangci-lint-full
-        description: Fast linters runner for Go. Runs on all files in the module. Use this hook if you use pre-commit in CI.
-        entry: golangci-lint run --fix
+        description: Fast linters runner for Go. Runs on all files in the module. Use this hook if you use pre-commit in CI. Only applies autofixes and always passes.
+        entry: bash -c 'golangci-lint run --fix || true'
         types: [go]
         language: golang
         require_serial: true

@@ -99,22 +99,23 @@ let declaredStage = ReadinessStage.UNINITIALIZED; // What we think the stage is
 function areHandlersAvailable() {
   return {
     http: typeof __go_jshttp !== "undefined",
-    sdk: typeof __sdk_message_handler !== "undefined"
+    sdk: typeof __sdk_message_handler !== "undefined" || typeof __sdk_handle_message !== "undefined"
   };
 }
 
 // Compute actual stage based on runtime state
 function getCurrentStage() {
-  if (loading) {
-    return ReadinessStage.WASM_LOADING;
-  }
-
   const { http, sdk } = areHandlersAvailable();
 
-  if (http && sdk) {
+  const sdkHandler = __sdk_message_handler || __sdk_handle_message;
+  if (http && sdkHandler) {
     return ReadinessStage.READY;
-  } else if (http && !sdk) {
+  } else if (http && !sdkHandler) {
     return ReadinessStage.WASM_LOADED;
+  } else if (sdkHandler && !http) {
+    return ReadinessStage.WASM_LOADED;
+  } else if (loading) {
+    return ReadinessStage.WASM_LOADING;
   } else {
     return ReadinessStage.UNINITIALIZED;
   }
@@ -132,6 +133,14 @@ function isRecoverableError(error, currentStage, targetStage) {
 
   // Check for fatal errors that we should not retry infinitely
   const errorMsg = error.message.toLowerCase();
+
+  // Deterministic import/runtime mismatch (e.g. TinyGo WASI imports)
+  if (errorMsg.includes('wasi_snapshot_preview1') ||
+      errorMsg.includes('linkerror') ||
+      errorMsg.includes('unknown import') ||
+      errorMsg.includes('import #')) {
+    return false;
+  }
 
   // Fatal errors - should throw immediately
   if (errorMsg.includes('out of memory') ||
@@ -412,6 +421,36 @@ async function init() {
   return await ensureReady(ReadinessStage.READY);
 }
 
+function resolveWasmURL(manifest) {
+  const wasmFile =
+    typeof manifest.wasmFile === "string" ? manifest.wasmFile : "";
+  let wasm_URL = wasmFile ? `/frontend/${wasmFile}` : "";
+
+  if (manifest.wasmUrl) {
+    try {
+      const parsed = new URL(manifest.wasmUrl, self.location.origin);
+      const sameOrigin = parsed.origin === self.location.origin;
+      const isHttps = parsed.protocol === "https:";
+      const isHttp = parsed.protocol === "http:";
+      const allowHttp = isHttp && self.location.protocol === "http:";
+
+      if (sameOrigin || isHttps || allowHttp) {
+        wasm_URL = parsed.toString();
+      } else {
+        debugLog("[SW] Ignoring manifest.wasmUrl due to mixed content or origin:", parsed.toString());
+      }
+    } catch (error) {
+      console.warn("[SW] Invalid manifest.wasmUrl, falling back to local /frontend path:", error);
+    }
+  }
+
+  if (!wasm_URL) {
+    throw new Error("WASM manifest missing wasmFile/wasmUrl");
+  }
+
+  return wasm_URL;
+}
+
 async function runWASM() {
   // Check actual runtime state, not just if handler exists
   const currentStage = getCurrentStage();
@@ -425,12 +464,7 @@ async function runWASM() {
     const manifest = await loadManifest();
 
     // Determine WASM URL from manifest
-    let wasm_URL;
-    if (manifest.wasmUrl && new URL(manifest.wasmUrl).protocol !== "http:") {
-      wasm_URL = manifest.wasmUrl;
-    } else {
-      wasm_URL = `/frontend/${manifest.wasmFile}`;
-    }
+    const wasm_URL = resolveWasmURL(manifest);
     debugLog("[SW] WASM URL:", wasm_URL);
 
     // Create Go runtime
@@ -674,6 +708,10 @@ setInterval(() => {
   // Auto-recovery if stage is too low
   const recoveryStage = syncStage(); // Get actual stage for recovery check
   if (recoveryStage < ReadinessStage.READY && !loading) {
+    if (initError && !isRecoverableError(initError, recoveryStage, ReadinessStage.READY)) {
+      console.error("[SW] Fatal init error detected, skipping auto-recovery:", initError.message);
+      return;
+    }
     // Allow recovery even if initError exists (clear it and try again)
     if (initError) {
       console.warn("[SW] Previous init error detected, clearing and retrying...", initError.message);
@@ -686,6 +724,18 @@ setInterval(() => {
     });
   }
 }, healthCheckInterval);
+
+// Test hooks (no-op in production)
+if (self.__PORTAL_SW_TEST__) {
+  self.__PORTAL_SW_TEST__.resolveWasmURL = resolveWasmURL;
+  self.__PORTAL_SW_TEST__.isRecoverableError = isRecoverableError;
+  self.__PORTAL_SW_TEST__.fetchWithRetry = fetchWithRetry;
+  self.__PORTAL_SW_TEST__.ReadinessStage = ReadinessStage;
+  self.__PORTAL_SW_TEST__.setHandlers = (httpHandler, sdkHandler) => {
+    self.__go_jshttp = httpHandler;
+    self.__sdk_message_handler = sdkHandler;
+  };
+}
 
 self.addEventListener("message", (event) => {
   if (event.data && event.data.type === "CLAIM_CLIENTS") {
@@ -713,12 +763,13 @@ self.addEventListener("message", (event) => {
         await ensureReady(ReadinessStage.READY);
 
         // Handlers should now be available
-        if (typeof __sdk_message_handler === "undefined") {
+        const sdkHandler = __sdk_message_handler || __sdk_handle_message;
+        if (typeof sdkHandler === "undefined") {
           throw new Error("SDK message handler still not available after centralized recovery");
         }
 
         // Call WASM message handler
-        __sdk_message_handler(event.data.type, event.data);
+        sdkHandler(event.data.type, event.data);
       } catch (error) {
         console.error("[SW] SDK message handling failed:", error);
         // Send error back to client
@@ -745,8 +796,7 @@ self.addEventListener("fetch", (e) => {
 
   // Skip Service Worker infrastructure files (prevent infinite loop during initialization)
   if (url.pathname.startsWith("/frontend/") ||
-      url.pathname === "/service-worker.js" ||
-      url.pathname === "/portal.mp4") {
+      url.pathname === "/service-worker.js") {
     e.respondWith(fetch(e.request));
     return;
   }

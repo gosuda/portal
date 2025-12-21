@@ -340,18 +340,15 @@ func (f *Frontend) InitWasmCache() error {
 		}
 
 		name := entry.Name()
-		// Look for content-addressed WASM files: <hex>.wasm.br
-		if strings.HasSuffix(name, ".wasm.br") {
-			hash := strings.TrimSuffix(name, ".wasm.br")
+		// Look for content-addressed WASM files: <hex>.wasm
+		if strings.HasSuffix(name, ".wasm") {
+			hash := strings.TrimSuffix(name, ".wasm")
 			if utils.IsHexString(hash) {
 				fullPath := path.Join("dist", "wasm", name)
-				// Cache under the URL path (<hash>.wasm) while reading the
-				// brotli-compressed artifact (<hash>.wasm.br) from embed.FS.
-				cacheKey := hash + ".wasm"
-				if err := f.cacheWasmFile(cacheKey, fullPath); err != nil {
+				if err := f.cacheWasmFile(name, fullPath); err != nil {
 					log.Warn().Err(err).Str("file", name).Msg("failed to cache WASM file")
 				} else {
-					log.Info().Str("file", cacheKey).Msg("cached WASM file")
+					log.Info().Str("file", name).Msg("cached WASM file")
 				}
 			}
 		}
@@ -368,13 +365,17 @@ func (f *Frontend) cacheWasmFile(name, fullPath string) error {
 		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
 	}
 
-	// Load precompressed variant (brotli) from embed.FS (<hash>.wasm.br)
+	// Look for brotli variant (<hash>.wasm.br)
+	// fullPath is "dist/wasm/<hash>.wasm"
+	brPath := fullPath + ".br"
 	var brData []byte
-	data, err := f.distFS.ReadFile(fullPath)
-	if err != nil {
-		log.Warn().Err(err).Str("file", fullPath).Msg("failed to read brotli-compressed WASM")
-	} else {
+
+	data, err := f.distFS.ReadFile(brPath)
+	if err == nil {
 		brData = data
+	} else {
+		// It's okay if .br doesn't exist, we just won't serve compressed
+		log.Debug().Str("file", name).Msg("no pre-compressed brotli file found")
 	}
 
 	entry := &wasmCacheEntry{
@@ -428,30 +429,51 @@ func (f *Frontend) serveCompressedWasm(w http.ResponseWriter, r *http.Request, f
 	// Set immutable cache headers for content-addressed files
 	utils.SetCORSHeaders(w)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Vary", "Accept-Encoding")
 	w.Header().Set("Content-Type", "application/wasm")
 
 	// Check Accept-Encoding header for brotli support
+	// Check Accept-Encoding header
 	acceptEncoding := r.Header.Get("Accept-Encoding")
 
-	// Require brotli-compressed WASM
-	if !strings.Contains(acceptEncoding, "br") || len(entry.brotli) == 0 {
-		log.Warn().
+	// 1. Brotli
+	if strings.Contains(acceptEncoding, "br") && len(entry.brotli) > 0 {
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(entry.brotli)
+		log.Debug().
 			Str("path", filePath).
-			Str("acceptEncoding", acceptEncoding).
-			Msg("client does not support brotli or brotli variant missing for WASM")
-		http.Error(w, "brotli-compressed WASM required", http.StatusNotAcceptable)
+			Int("size", len(entry.brotli)).
+			Str("encoding", "brotli").
+			Msg("served compressed WASM")
 		return
 	}
 
-	w.Header().Set("Content-Encoding", "br")
-	w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
+	// 2. Fallback to uncompressed WASM from embedded FS.
+	// This ensures TinyGo WASM works even when clients/proxies don't advertise brotli.
+	log.Warn().
+		Str("path", filePath).
+		Str("acceptEncoding", acceptEncoding).
+		Msg("falling back to uncompressed WASM")
+
+	fullPath := path.Join("dist", "wasm", filePath)
+	data, err := f.distFS.ReadFile(fullPath)
+	if err != nil {
+		log.Error().Err(err).Str("path", fullPath).Msg("uncompressed WASM not found in embedded FS")
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(entry.brotli)
+	w.Write(data)
 	log.Debug().
 		Str("path", filePath).
-		Int("size", len(entry.brotli)).
-		Str("encoding", "brotli").
-		Msg("served compressed WASM")
+		Int("size", len(data)).
+		Str("encoding", "identity").
+		Msg("served uncompressed WASM")
+	return
 }
 
 // ServePortalStatic serves static files for portal frontend with appropriate cache headers.
@@ -480,12 +502,6 @@ func (f *Frontend) ServePortalStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		w.Header().Set("Content-Type", "application/javascript")
 		f.serveStaticFileWithFallback(w, r, staticPath, "application/javascript")
-		return
-
-	case "portal.mp4":
-		w.Header().Set("Cache-Control", "public, max-age=604800")
-		w.Header().Set("Content-Type", "video/mp4")
-		f.serveStaticFileWithFallback(w, r, staticPath, "video/mp4")
 		return
 	}
 
@@ -562,7 +578,7 @@ func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Re
 }
 
 // serveDynamicManifest generates and serves manifest.json dynamically
-func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) {
+func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, r *http.Request) {
 	utils.SetCORSHeaders(w)
 
 	// Find the content-addressed WASM file
@@ -580,6 +596,8 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) 
 	if wasmHash == "" {
 		entries, err := f.distFS.ReadDir("dist/wasm")
 		if err == nil {
+			var hashedWasm string
+			var fallbackWasm string
 			for _, entry := range entries {
 				if entry.IsDir() {
 					continue
@@ -594,12 +612,57 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) 
 						break
 					}
 				}
+
+				// Track uncompressed WASM files for fallback
+				if strings.HasSuffix(name, ".wasm") {
+					hash := strings.TrimSuffix(name, ".wasm")
+					if utils.IsHexString(hash) {
+						wasmHash = hash
+						hashedWasm = name
+					}
+					if fallbackWasm == "" {
+						fallbackWasm = name
+					}
+				}
+			}
+
+			if wasmFile == "" {
+				if hashedWasm != "" {
+					wasmFile = hashedWasm
+				} else if fallbackWasm != "" {
+					wasmFile = fallbackWasm
+				}
 			}
 		}
 	}
 
-	// Generate WASM URL
-	wasmURL := flagPortalURL + "/frontend/" + wasmFile
+	if wasmFile == "" {
+		log.Error().Msg("no wasm file found in dist/wasm")
+		// Return 503 instead of 500 to indicate temporary unavailability (e.g. during build/startup)
+		http.Error(w, "server configuration error: missing WASM artifact", http.StatusServiceUnavailable)
+		return
+	}
+
+	origin := ""
+	if r != nil {
+		host := strings.TrimSpace(r.Host)
+		if host != "" {
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			origin = scheme + "://" + host
+		}
+	}
+	if origin == "" {
+		origin = strings.TrimSuffix(flagPortalURL, "/")
+	}
+
+	// Generate WASM URL (same-origin preferred)
+	wasmURL := ""
+	if wasmFile != "" && origin != "" {
+		wasmURL = origin + "/frontend/" + wasmFile
+	}
 
 	// Create manifest structure
 	manifest := map[string]string{
@@ -631,13 +694,26 @@ func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) 
 
 // ServeDynamicServiceWorker serves service-worker.js with injected manifest and config.
 func (f *Frontend) ServeDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Interface("panic", r).Msg("Panic in ServeDynamicServiceWorker")
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	utils.SetCORSHeaders(w)
+
+	if f.distFS == nil {
+		log.Error().Msg("distFS is nil")
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 
 	// Read the service-worker.js template
 	fullPath := path.Join("dist", "wasm", "service-worker.js")
 	content, err := f.distFS.ReadFile(fullPath)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to read service-worker.js")
+		log.Error().Err(err).Str("path", fullPath).Msg("Failed to read service-worker.js")
 		http.NotFound(w, r)
 		return
 	}
@@ -650,7 +726,9 @@ func (f *Frontend) ServeDynamicServiceWorker(w http.ResponseWriter, r *http.Requ
 
 	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write(content)
+	if _, err := w.Write(content); err != nil {
+		log.Error().Err(err).Msg("Failed to write service-worker.js response")
+	}
 
 	log.Debug().Msg("Served service-worker.js")
 }

@@ -2,7 +2,6 @@ package utils
 
 import (
 	"mime"
-	"net"
 	"net/http"
 	"strings"
 )
@@ -33,8 +32,6 @@ func GetContentType(ext string) string {
 		return "application/wasm"
 	case ".css":
 		return "text/css"
-	case ".mp4":
-		return "video/mp4"
 	case ".svg":
 		return "image/svg+xml"
 	case ".png":
@@ -51,31 +48,4 @@ func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
-}
-
-func IsLocalhost(r *http.Request) bool {
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-
-	// If a proxy/adapter reports a hostname, allow Docker Desktop host alias.
-	if strings.EqualFold(host, "host.docker.internal") {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try resolving hostnames to IPs (best-effort).
-		if addrs, err := net.LookupIP(host); err == nil {
-			for _, a := range addrs {
-				if a.IsLoopback() || a.IsPrivate() {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	return ip.IsLoopback() || ip.IsPrivate()
 }

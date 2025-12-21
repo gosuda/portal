@@ -1,14 +1,12 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
+	"unicode"
 )
-
-// URL-safe name validation regex
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
 
 // IsURLSafeName checks if a name contains only URL-safe characters.
 // Disallows: spaces, special characters like /, ?, &, =, %, etc.
@@ -17,7 +15,12 @@ func IsURLSafeName(name string) bool {
 	if name == "" {
 		return true // Empty name is allowed (will be treated as unnamed)
 	}
-	return urlSafeNameRegex.MatchString(name)
+	for _, r := range name {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizePortalURL takes various user-friendly server inputs and
@@ -32,7 +35,7 @@ func IsURLSafeName(name string) bool {
 func NormalizePortalURL(raw string) (string, error) {
 	server := strings.TrimSpace(raw)
 	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
+		return "", errors.New("bootstrap server is empty")
 	}
 
 	// Already a WebSocket URL
@@ -44,7 +47,7 @@ func NormalizePortalURL(raw string) (string, error) {
 	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
 		u, err := url.Parse(server)
 		if err != nil {
-			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
+			return "", errors.New("invalid bootstrap server " + raw + ": " + err.Error())
 		}
 		switch u.Scheme {
 		case "http":
@@ -61,7 +64,7 @@ func NormalizePortalURL(raw string) (string, error) {
 	// Bare host[:port][/path] -> assume WSS and /relay if no path
 	u, err := url.Parse("wss://" + server)
 	if err != nil {
-		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
+		return "", errors.New("invalid bootstrap server " + raw + ": " + err.Error())
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)

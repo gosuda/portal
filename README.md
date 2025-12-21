@@ -13,6 +13,7 @@ Portal is a permissionless, open hosting network that transforms your local proj
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [Contributing](#contributing)
+- [WASM Client Tests](#wasm-client-tests)
 - [License](#license)
 
 ## Overview
@@ -84,6 +85,29 @@ Before getting started, please check the [development guide](docs/development.md
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
+## WASM Client Tests
+
+Run the JavaScript asset tests:
+
+```bash
+node --test cmd/webclient/*.test.js
+```
+
+Run the Go WASM client tests with the Node test runner:
+
+```bash
+GOCACHE=/tmp/portal-go-cache GOOS=js GOARCH=wasm \
+go test -exec "node $(go env GOROOT)/lib/wasm/wasm_exec_node.js" \
+./cmd/webclient
+```
+
+Run the TinyGo WASM tests:
+
+```bash
+GOCACHE=/tmp/portal-go-cache GOMODCACHE=/tmp/portal-gomodcache XDG_CACHE_HOME=/tmp/portal-cache \
+tinygo test -target=wasm -tags debug ./cmd/webclient
+```
 
 ## License
 

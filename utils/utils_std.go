@@ -1,12 +1,15 @@
+//go:build !js || !wasm
+
 package utils
 
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/websocket"
-
 	"gosuda.org/portal/portal/utils/wsstream"
 )
 
@@ -39,4 +42,31 @@ func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader ht
 		return nil, nil, err
 	}
 	return &wsstream.WsStream{Conn: wsConn}, wsConn, nil
+}
+
+func IsLocalhost(r *http.Request) bool {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = h
+	}
+
+	// If a proxy/adapter reports a hostname, allow Docker Desktop host alias.
+	if strings.EqualFold(host, "host.docker.internal") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Try resolving hostnames to IPs (best-effort).
+		if addrs, err := net.LookupIP(host); err == nil {
+			for _, a := range addrs {
+				if a.IsLoopback() || a.IsPrivate() {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	return ip.IsLoopback() || ip.IsPrivate()
 }

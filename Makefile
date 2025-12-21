@@ -29,36 +29,50 @@ build-protoc:
 		portal/core/proto/rdsec/rdsec.proto \
 		portal/core/proto/rdverb/rdverb.proto
 
-# Build WASM artifacts with wasm-opt optimization and generate manifest
+# Build WASM artifacts with TinyGo (Default)
 build-wasm:
-	@echo "[wasm] building webclient WASM..."
+	@echo "[wasm] building webclient WASM with TinyGo..."
 	@mkdir -p cmd/relay-server/dist/wasm
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
-	
-	@echo "[wasm] optimizing with wasm-opt..."
+	@rm -f cmd/relay-server/dist/wasm/*.wasm*
+
+	@echo "[wasm] minifying JS assets..."
+	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
+
+	tinygo build -target=wasm -opt=z -no-debug -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient; \
+
+	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
+
+	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
-		mv cmd/relay-server/dist/wasm/portal.wasm.tmp cmd/relay-server/dist/wasm/portal.wasm; \
+		wasm-opt -O4 --gufa --remove-unused-module-elements --remove-unused-names --enable-bulk-memory --strip-debug --strip-dwarf --strip-producers --vacuum --flatten --rereloop --converge -Oz \
+			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm && \
+		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
 		echo "[wasm] optimization complete"; \
 	else \
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
-		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
+		echo "[wasm] Install binaryen for smaller WASM files"; \
 	fi
-	
+
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
-	echo "[wasm] cleaning old hash files..."; \
-	find cmd/relay-server/dist/wasm -name '[0-9a-f]*.wasm' ! -name "$$WASM_HASH.wasm" -type f -delete 2>/dev/null || true; \
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
-	
+
 	@echo "[wasm] copying additional resources..."
-	@cp cmd/webclient/wasm_exec.js cmd/relay-server/dist/wasm/wasm_exec.js
-	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/wasm/service-worker.js
+	@echo "[wasm] copying and minifying additional resources..."
+	@echo "[wasm] preparing wasm_exec.js runtime (TinyGo preferred)..."
+	@TINYGOROOT=$$(tinygo env TINYGOROOT 2>/dev/null || true); \
+	if [ -n "$$TINYGOROOT" ] && [ -f "$$TINYGOROOT/targets/wasm_exec.js" ]; then \
+		echo "[wasm] using TinyGo wasm_exec.js: $$TINYGOROOT/targets/wasm_exec.js"; \
+		npx -y esbuild "$$TINYGOROOT/targets/wasm_exec.js" --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	else \
+		echo "[wasm] TinyGo wasm_exec.js not found; using repo fallback"; \
+		npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	fi
+	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
-	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
 	@echo "[wasm] build complete"
 
 	@echo "[wasm] precompressing webclient WASM with brotli..."
@@ -72,9 +86,86 @@ build-wasm:
 		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
 		exit 1; \
 	fi; \
-	brotli -f "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
-	rm -f "$$WASM_FILE"; \
-	echo "[wasm] brotli: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"
+	brotli -f -k -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	if [ ! -f "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" ]; then \
+		echo "[wasm] ERROR: brotli WASM missing: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+		exit 1; \
+	fi; \
+	echo "[wasm] verified outputs: $$WASM_HASH.wasm and $$WASM_HASH.wasm.br"
+
+
+# Build WASM artifacts with standard Go (Legacy)
+build-wasm-std:
+	@echo "[wasm] building webclient WASM with standard Go..."
+	@mkdir -p cmd/relay-server/dist/wasm
+	@rm -f cmd/relay-server/dist/wasm/*.wasm*
+
+	@echo "[wasm] minifying JS assets..."
+	@npx -y esbuild cmd/webclient/polyfill.js --minify --outfile=cmd/webclient/polyfill.min.js
+
+	GOOS=js GOARCH=wasm go build -tags '!debug' -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
+	@ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (raw): " $$5}'
+
+	@echo "[wasm] optimizing with wasm-opt (with the O4 flag)..."
+	@if command -v wasm-opt >/dev/null 2>&1; then \
+		wasm-opt -O4 --enable-bulk-memory --strip-debug --strip-producers \
+			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm && \
+		ls -lh cmd/relay-server/dist/wasm/portal.wasm | awk '{print "[wasm] Size (opt): " $$5}' && \
+		echo "[wasm] optimization complete"; \
+	else \
+		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
+		echo "[wasm] Install binaryen for smaller WASM files"; \
+	fi
+
+	@echo "[wasm] calculating SHA256 hash..."
+	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
+	echo "[wasm] SHA256: $$WASM_HASH"; \
+	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
+	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
+	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
+
+	@echo "[wasm] copying additional resources..."
+	@echo "[wasm] copying and minifying additional resources..."
+	@echo "[wasm] preparing wasm_exec.js runtime (Go stdlib preferred)..."
+	@GOROOT=$$(go env GOROOT 2>/dev/null || true); \
+	if [ -n "$$GOROOT" ] && [ -f "$$GOROOT/misc/wasm/wasm_exec.js" ]; then \
+		echo "[wasm] using Go wasm_exec.js: $$GOROOT/misc/wasm/wasm_exec.js"; \
+		npx -y esbuild "$$GOROOT/misc/wasm/wasm_exec.js" --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	else \
+		echo "[wasm] Go wasm_exec.js not found; using repo fallback"; \
+		npx -y esbuild cmd/webclient/wasm_exec.js --minify --outfile=cmd/relay-server/dist/wasm/wasm_exec.js; \
+	fi
+	@npx -y esbuild cmd/webclient/service-worker.js --minify --outfile=cmd/relay-server/dist/wasm/service-worker.js
+	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
+	@echo "[wasm] build complete"
+
+	@echo "[wasm] precompressing webclient WASM with brotli..."
+	@WASM_FILE=$$(ls cmd/relay-server/dist/wasm/[0-9a-f]*.wasm 2>/dev/null | head -n1); \
+	if [ -z "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: no content-addressed WASM found in cmd/relay-server/dist/wasm; run build-wasm first"; \
+		exit 1; \
+	fi; \
+	WASM_HASH=$$(basename "$$WASM_FILE" .wasm); \
+	if ! command -v brotli >/dev/null 2>&1; then \
+		echo "[wasm] ERROR: brotli not found; install brotli to build compressed WASM"; \
+		exit 1; \
+	fi; \
+	brotli -f -k -Z "$$WASM_FILE" -o "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+	echo "[wasm] brotli: $$(du -h "$$WASM_FILE" | cut -f1) -> $$(du -h "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" | cut -f1)"; \
+	if [ ! -f "$$WASM_FILE" ]; then \
+		echo "[wasm] ERROR: raw WASM missing: $$WASM_FILE"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br" ]; then \
+		echo "[wasm] ERROR: brotli WASM missing: cmd/relay-server/dist/wasm/$$WASM_HASH.wasm.br"; \
+		exit 1; \
+	fi; \
+	echo "[wasm] verified outputs: $$WASM_HASH.wasm and $$WASM_HASH.wasm.br"
 
 
 # Build React frontend with Tailwind CSS 4
