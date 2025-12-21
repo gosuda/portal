@@ -163,14 +163,20 @@ func TestIsValidUpgradeRequest(t *testing.T) {
 }
 
 func TestGenerateConnID(t *testing.T) {
-	id := generateConnID()
+	id, err := generateConnID()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(id) != 32 {
 		t.Fatalf("expected 32 hex chars, got %q", id)
 	}
 	if _, err := hex.DecodeString(id); err != nil {
 		t.Fatalf("expected hex string, got %q", id)
 	}
-	id2 := generateConnID()
+	id2, err := generateConnID()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if id == id2 {
 		t.Fatalf("expected different IDs, got same %q", id)
 	}
