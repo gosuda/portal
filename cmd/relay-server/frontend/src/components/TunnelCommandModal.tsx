@@ -75,7 +75,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      return `$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
     return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
