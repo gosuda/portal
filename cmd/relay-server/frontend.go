@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"path"
@@ -88,6 +89,9 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	// Inject SSR data into cached template
 	injectedHTML := f.injectServerData(string(f.cachedPortalHTML), serv)
 
+	// Inject OG metadata (defaults for main app)
+	injectedHTML = f.injectOGMetadata(injectedHTML, "", "", "")
+
 	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -97,6 +101,84 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	w.Write([]byte(injectedHTML))
 
 	log.Debug().Msg("Served portal.html with SSR data")
+}
+
+// ServePortalHTMLWithSSR serves portal.html for subdomain requests with SSR OG metadata.
+func (f *Frontend) ServePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	utils.SetCORSHeaders(w)
+
+	// Read portal.html from dist/wasm
+	data, err := f.distFS.ReadFile("dist/wasm/portal.html")
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to read dist/wasm/portal.html")
+		http.NotFound(w, r)
+		return
+	}
+
+	htmlContent := string(data)
+	title := ""
+	description := ""
+	imageURL := ""
+
+	// Extract lease name from host
+	leaseName := ""
+	h := strings.ToLower(utils.StripPort(utils.StripScheme(r.Host)))
+	p := strings.ToLower(utils.StripPort(utils.StripScheme(flagPortalAppURL)))
+	if strings.HasPrefix(p, "*.") {
+		suffix := p[1:] // .example.com
+		if strings.HasSuffix(h, suffix) {
+			leaseName = h[:len(h)-len(suffix)]
+		}
+	}
+
+	if leaseName != "" {
+		if lease, ok := serv.GetLeaseByName(leaseName); ok {
+			title = lease.Lease.Name
+			if lease.ParsedMetadata != nil {
+				description = lease.ParsedMetadata.Description
+				imageURL = lease.ParsedMetadata.Thumbnail
+			}
+		}
+	}
+
+	// Inject OG metadata
+	htmlContent = f.injectOGMetadata(htmlContent, title, description, imageURL)
+
+	// Set headers
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+
+	// Send response
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(htmlContent))
+
+	log.Debug().Str("lease", leaseName).Msg("Served portal.html with subdomain SSR OG metadata")
+}
+
+// injectOGMetadata replaces OG placeholders with actual values.
+func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL string) string {
+	if title == "" {
+		title = "Portal Proxy Gateway"
+	}
+	if description == "" {
+		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
+	}
+	if imageURL == "" {
+		// Use absolute URL if possible
+		base := strings.TrimSuffix(flagPortalURL, "/")
+		if !strings.HasPrefix(base, "http") {
+			base = "https://" + base
+		}
+		imageURL = base + "/portal.jpg"
+	}
+
+	replacer := strings.NewReplacer(
+		"[%OG_TITLE%]", html.EscapeString(title),
+		"[%OG_DESCRIPTION%]", html.EscapeString(description),
+		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
+	)
+
+	return replacer.Replace(htmlContent)
 }
 
 // injectServerData injects server data into HTML for SSR
@@ -486,6 +568,12 @@ func (f *Frontend) ServePortalStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 		w.Header().Set("Content-Type", "video/mp4")
 		f.serveStaticFileWithFallback(w, r, staticPath, "video/mp4")
+		return
+
+	case "portal.jpg":
+		w.Header().Set("Cache-Control", "public, max-age=604800")
+		w.Header().Set("Content-Type", "image/jpeg")
+		f.serveStaticFileWithFallback(w, r, staticPath, "image/jpeg")
 		return
 	}
 

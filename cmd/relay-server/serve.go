@@ -140,8 +140,8 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	// Root and SPA fallback for portal subdomains
 	portalMux.HandleFunc("/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			// Serve portal HTML from dist/wasm
-			frontend.ServeStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
+			// Serve portal HTML with SSR for OG metadata
+			frontend.ServePortalHTMLWithSSR(w, r, serv)
 			return
 		}
 		frontend.ServePortalStatic(w, r)

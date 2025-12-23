@@ -59,6 +59,7 @@ build-wasm:
 	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/wasm/service-worker.js
 	@cp cmd/webclient/index.html cmd/relay-server/dist/wasm/portal.html
 	@cp cmd/webclient/portal.mp4 cmd/relay-server/dist/wasm/portal.mp4
+	@cp cmd/webclient/portal.jpg cmd/relay-server/dist/wasm/portal.jpg
 	@echo "[wasm] build complete"
 
 	@echo "[wasm] precompressing webclient WASM with brotli..."

@@ -224,6 +224,31 @@ func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
 	return lease, true
 }
 
+func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
+	lm.leasesLock.RLock()
+	defer lm.leasesLock.RUnlock()
+
+	if name == "" {
+		return nil, false
+	}
+
+	now := time.Now()
+	for _, lease := range lm.leases {
+		if lease.Lease.Name == name {
+			// Check if banned
+			if _, banned := lm.bannedLeases[string(lease.Lease.Identity.Id)]; banned {
+				continue
+			}
+			// Check if expired
+			if now.After(lease.Expires) {
+				continue
+			}
+			return lease, true
+		}
+	}
+	return nil, false
+}
+
 func (lm *LeaseManager) GetAllLeases() []*rdverb.Lease {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
