@@ -269,6 +269,11 @@ func (g *RelayServer) GetLeaseManager() *LeaseManager {
 	return g.leaseManager
 }
 
+// GetLeaseByName returns a lease entry by its name
+func (g *RelayServer) GetLeaseByName(name string) (*LeaseEntry, bool) {
+	return g.leaseManager.GetLeaseByName(name)
+}
+
 // IsConnectionActive checks if a connection with the given ID is still active
 func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
 	g.connectionsLock.RLock()
