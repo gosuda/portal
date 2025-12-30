@@ -104,9 +104,8 @@ func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (
 		Str("alpn", alpn).
 		Msg("[SDK] Dialing to lease")
 
-	var relays []*connRelay
-
 	g.mu.Lock()
+	relays := make([]*connRelay, 0, len(g.relays))
 	for _, server := range g.relays {
 		relays = append(relays, server)
 	}
@@ -626,9 +625,9 @@ func (g *Client) GetRelays() []string {
 
 func (g *Client) LookupName(name string) (*rdverb.Lease, error) {
 	log.Debug().Str("name", name).Msg("[SDK] Looking up name")
-	var relays []*connRelay
 
 	g.mu.Lock()
+	relays := make([]*connRelay, 0, len(g.relays))
 	for _, server := range g.relays {
 		relays = append(relays, server)
 	}
