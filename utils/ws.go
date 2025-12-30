@@ -14,10 +14,14 @@ import (
 // and wraps them as io.ReadWriteCloser.
 func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
 	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		wsConn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
 			return nil, err
 		}
+		// Response body is closed by the Dialer on successful connection
 		return &wsstream.WsStream{Conn: wsConn}, nil
 	}
 }
