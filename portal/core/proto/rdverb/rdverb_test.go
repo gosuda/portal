@@ -979,7 +979,7 @@ func BenchmarkPacket_MarshalVT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = msg.MarshalVT()
 	}
 }
@@ -994,7 +994,7 @@ func BenchmarkPacket_UnmarshalVT(b *testing.B) {
 	data, _ := msg.MarshalVT()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		got := &Packet{}
 		_ = got.UnmarshalVT(data)
 	}
@@ -1025,7 +1025,7 @@ func BenchmarkRelayInfo_MarshalVT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = msg.MarshalVT()
 	}
 }
@@ -1044,7 +1044,7 @@ func BenchmarkLease_MarshalVT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = msg.MarshalVT()
 	}
 }

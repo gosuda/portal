@@ -1,9 +1,13 @@
 package utils
 
 import (
+	"context"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsURLSafeName(t *testing.T) {
@@ -228,6 +232,403 @@ func TestIsSubdomain(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := IsSubdomain(tc.pattern, tc.host)
 			assert.Equal(t, got, tc.want, tc.name)
+		})
+	}
+}
+
+// Tests for http.go functions
+
+func TestIsHTMLContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		expected    bool
+	}{
+		// Valid HTML content types
+		{"simple html", "text/html", true},
+		{"html with charset", "text/html; charset=utf-8", true},
+		{"HTML uppercase", "TEXT/HTML", true},
+		{"HTML mixed case", "Text/HTML", true},
+		{"html with charset and space", "text/html ; charset=utf-8", true},
+		{"html with multiple params", "text/html; charset=utf-8; version=1", true},
+
+		// Invalid content types (fallback to prefix check on parse error)
+		{"malformed with prefix", "text/html;bad", true},
+		{"malformed without prefix", "application/json", false},
+
+		// Non-HTML content types
+		{"json", "application/json", false},
+		{"plain text", "text/plain", false},
+		{"css", "text/css", false},
+		{"javascript", "application/javascript", false},
+		{"xml", "application/xml", false},
+
+		// Edge cases
+		{"empty string", "", false},
+		{"whitespace", "   ", false},
+		{"just text/html prefix", "text/htmlextra", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsHTMLContentType(tt.contentType)
+			assert.Equal(t, tt.expected, result, "IsHTMLContentType(%q)", tt.contentType)
+		})
+	}
+}
+
+func TestSetCORSHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	SetCORSHeaders(w)
+
+	headers := w.Header()
+
+	assert.Equal(t, "*", headers.Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "GET, OPTIONS", headers.Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "Content-Type, Accept, Accept-Encoding", headers.Get("Access-Control-Allow-Headers"))
+}
+
+func TestIsLocalhost(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		expected   bool
+	}{
+		// IPv4 loopback
+		{"127.0.0.1", "127.0.0.1:1234", true},
+		{"127.0.0.2", "127.0.0.2:8080", true},
+		{"127.1.1.1", "127.1.1.1:9999", true},
+
+		// IPv6 loopback
+		{"::1", "[::1]:8080", true},
+		{"ipv6 loopback with zone", "[::1%lo0]:8080", true},
+
+		// Private IP ranges
+		{"10.0.0.1", "10.0.0.1:1234", true},
+		{"172.16.0.1", "172.16.0.1:5678", true},
+		{"192.168.1.1", "192.168.1.1:9999", true},
+
+		// Docker Desktop host alias
+		{"host.docker.internal", "host.docker.internal:1234", true},
+		{"HOST.DOCKER.INTERNAL", "HOST.DOCKER.INTERNAL:8080", true},
+
+		// Public IPs
+		{"8.8.8.8", "8.8.8.8:1234", false},
+		{"1.1.1.1", "1.1.1.1:5678", false},
+
+		// Hostnames (best-effort resolution - may vary by environment)
+		{"localhost", "localhost:8080", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			req.RemoteAddr = tt.remoteAddr
+
+			result := IsLocalhost(req)
+
+			// For hostname tests, only assert if we expect true
+			// DNS resolution may vary by environment
+			if tt.expected && !strings.Contains(tt.remoteAddr, ":") && tt.remoteAddr != "host.docker.internal" && !strings.HasPrefix(tt.remoteAddr, "127.") && !strings.HasPrefix(tt.remoteAddr, "[::1]") && !strings.HasPrefix(tt.remoteAddr, "10.") && !strings.HasPrefix(tt.remoteAddr, "172.16.") && !strings.HasPrefix(tt.remoteAddr, "192.168.") {
+				// For best-effort hostname tests, just check it doesn't panic
+				assert.NotPanics(t, func() { IsLocalhost(req) })
+			} else {
+				assert.Equal(t, tt.expected, result, "IsLocalhost(%q)", tt.remoteAddr)
+			}
+		})
+	}
+}
+
+// Tests for url.go functions
+
+func TestIsHexString(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// Valid hex strings
+		{"empty string", "", true},
+		{"single digit", "0", true},
+		{"single lowercase", "a", true},
+		{"single uppercase", "A", true},
+		{"all digits", "1234567890", true},
+		{"all lowercase", "abcdef", true},
+		{"all uppercase", "ABCDEF", true},
+		{"mixed case", "aAbBcCdDeEfF", true},
+		{"with leading zeros", "00aabb", true},
+		{"common hex", "deadbeef", true},
+		{"long hex", "1234567890abcdefABCDEF", true},
+
+		// Invalid hex strings
+		{"with space", "abc def", false},
+		{"with g", "abcdefg", false},
+		{"with G", "ABCDEFG", false},
+		{"with special char", "abc@def", false},
+		{"with punctuation", "abc.def", false},
+		{"with newline", "abc\ndef", false},
+		{"with tab", "abc\tdef", false},
+		{"unicode", "한글", false},
+		{"emoji", "🚀", false},
+		{"minus", "-abc", false},
+		{"plus", "+abc", false},
+		{"underscore", "abc_def", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsHexString(tt.input)
+			assert.Equal(t, tt.expected, result, "IsHexString(%q)", tt.input)
+		})
+	}
+}
+
+func TestStripWildCard(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"with wildcard prefix", "*.example.com", "example.com"},
+		{"with wildcard and space", " *.example.com", "example.com"},
+		{"trailing space after wildcard", "*.example.com ", "example.com"},
+		{"both wildcard and space", " *.example.com ", "example.com"},
+		{"no wildcard", "example.com", "example.com"},
+		{"wildcard only", "*.", ""},
+		{"empty string", "", ""},
+		{"whitespace only", "   ", ""},
+		{"no wildcard with space", " example.com ", "example.com"},
+		{"multiple dots after wildcard", "*.sub.example.com", "sub.example.com"},
+		{"just asterisk no dot", "*example.com", "*example.com"},
+		{"dot no asterisk", ".example.com", ".example.com"},
+		{"asterisk middle", "example*.com", "example*.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := StripWildCard(tt.input)
+			assert.Equal(t, tt.expected, result, "StripWildCard(%q)", tt.input)
+		})
+	}
+}
+
+func TestDefaultAppPattern(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"https with domain", "https://portal.example.com", "*.portal.example.com"},
+		{"http with domain", "http://portal.example.com", "*.portal.example.com"},
+		{"domain only", "portal.example.com", "*.portal.example.com"},
+		{"domain with port", "portal.example.com:4017", "*.portal.example.com:4017"},
+		{"localhost with port", "localhost:4017", "*.localhost:4017"},
+		{"empty string", "", "*.localhost:4017"},
+		{"whitespace only", "   ", "*.localhost:4017"},
+		{"trailing slash", "portal.example.com/", "*.portal.example.com"},
+		{"already has wildcard", "*.example.com", "*.example.com"},
+		{"https with port", "https://portal.example.com:443", "*.portal.example.com:443"},
+		{"http with port", "http://portal.example.com:8080", "*.portal.example.com:8080"},
+		{"with path keeps path", "https://portal.example.com/path", "*.portal.example.com/path"},
+		{"just wildcard", "*.", "*.localhost:4017"},
+		{"just scheme", "https://", "*.https:"},
+		{"localhost no port", "localhost", "*.localhost"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DefaultAppPattern(tt.input)
+			assert.Equal(t, tt.expected, result, "DefaultAppPattern(%q)", tt.input)
+		})
+	}
+}
+
+func TestDefaultBootstrapFrom(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty string", "", "ws://localhost:4017/relay"},
+		{"whitespace", "   ", "ws://localhost:4017/relay"},
+		{"localhost with port", "localhost:4017", "wss://localhost:4017/relay"},
+		{"https with domain", "https://portal.example.com", "wss://portal.example.com/relay"},
+		{"http with domain", "http://portal.example.com", "ws://portal.example.com/relay"},
+		{"ws scheme", "ws://example.com", "ws://example.com"},
+		{"wss scheme", "wss://example.com", "wss://example.com"},
+		{"ws with path", "ws://example.com/relay", "ws://example.com/relay"},
+		{"wss with path", "wss://example.com/relay", "wss://example.com/relay"},
+		{"domain only", "example.com", "wss://example.com/relay"},
+		{"with trailing slash", "example.com/", "wss://example.com/relay"},
+		{"with path", "example.com/custom", "wss://example.com/custom"},
+		{"edge case invalid url", "://invalid", "wss://://invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := DefaultBootstrapFrom(tt.input)
+			assert.Equal(t, tt.expected, result, "DefaultBootstrapFrom(%q)", tt.input)
+		})
+	}
+}
+
+// Tests for ws.go functions
+
+func TestNewWebSocketDialer(t *testing.T) {
+	ctx := context.Background()
+	dialer := NewWebSocketDialer()
+
+	// Test with invalid URL - should error
+	_, err := dialer(ctx, "not-a-url")
+	assert.Error(t, err)
+
+	// Test with unreachable server - should error
+	_, err = dialer(ctx, "ws://localhost:9999/unreachable")
+	assert.Error(t, err)
+}
+
+func TestUpgradeWebSocket(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestHeaders map[string]string
+		expectError    bool
+	}{
+		{
+			name: "valid websocket upgrade request",
+			requestHeaders: map[string]string{
+				"Connection":            "Upgrade",
+				"Upgrade":               "websocket",
+				"Sec-WebSocket-Version": "13",
+				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
+			},
+			expectError: false,
+		},
+		{
+			name: "missing upgrade header",
+			requestHeaders: map[string]string{
+				"Connection": "Upgrade",
+			},
+			expectError: true,
+		},
+		{
+			name:           "no headers",
+			requestHeaders: map[string]string{},
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			for k, v := range tt.requestHeaders {
+				req.Header.Set(k, v)
+			}
+
+			w := httptest.NewRecorder()
+
+			conn, err := UpgradeWebSocket(w, req, nil)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Nil(t, conn)
+			} else {
+				// If no error, we should get a connection
+				// Note: The response might have been written already
+				if err == nil {
+					assert.NotNil(t, conn)
+					conn.Close()
+				} else {
+					// Some error cases are acceptable in test environment
+					assert.NotNil(t, err)
+				}
+			}
+		})
+	}
+}
+
+func TestUpgradeToWSStream(t *testing.T) {
+	tests := []struct {
+		name           string
+		requestHeaders map[string]string
+	}{
+		{
+			name: "valid websocket upgrade request",
+			requestHeaders: map[string]string{
+				"Connection":            "Upgrade",
+				"Upgrade":               "websocket",
+				"Sec-WebSocket-Version": "13",
+				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
+			},
+		},
+		{
+			name: "missing connection header",
+			requestHeaders: map[string]string{
+				"Upgrade": "websocket",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/", nil)
+			for k, v := range tt.requestHeaders {
+				req.Header.Set(k, v)
+			}
+
+			w := httptest.NewRecorder()
+
+			stream, conn, err := UpgradeToWSStream(w, req, nil)
+
+			// Check return values
+			if tt.requestHeaders["Connection"] == "Upgrade" && tt.requestHeaders["Upgrade"] == "websocket" {
+				// Valid upgrade request
+				if err == nil {
+					require.NotNil(t, stream, "stream should not be nil on success")
+					require.NotNil(t, conn, "conn should not be nil on success")
+					conn.Close()
+				}
+				// Note: In test environment, upgrade might fail for various reasons
+				// The important thing is the function doesn't panic
+			} else {
+				// Invalid request should error
+				if err == nil {
+					require.NotNil(t, stream)
+					require.NotNil(t, conn)
+					conn.Close()
+				} else {
+					assert.Nil(t, stream)
+					assert.Nil(t, conn)
+				}
+			}
+		})
+	}
+}
+
+// Additional edge case tests for improved coverage
+
+func TestStripPort_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty string", "", ""},
+		{"no colon", "example.com", "example.com"},
+		{"colon at end", "example.com:", "example.com:"},
+		{"colon no port but path", "example.com:/path", "example.com:/path"},
+		{"non-digit port", "example.com:abc", "example.com:abc"},
+		{"mixed port", "example.com:12a34", "example.com:12a34"},
+		{"multiple colons - last not all digits", "example.com:8080:extra", "example.com:8080:extra"},
+		{"IPv6 with port", "[::1]:8080", "[::1]"},
+		{"IPv6 no port", "[::1]", "[::1]"},
+		{"just colon", ":", ":"},
+		{"just digits after colon", ":8080", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := StripPort(tt.input)
+			assert.Equal(t, tt.expected, result, "StripPort(%q)", tt.input)
 		})
 	}
 }

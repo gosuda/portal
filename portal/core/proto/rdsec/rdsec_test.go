@@ -493,7 +493,7 @@ func TestConcurrentSerialization(t *testing.T) {
 
 	// Run concurrent unmarshals
 	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		go func() {
 			got := &ClientInitPayload{}
 			if err := got.UnmarshalVT(data); err != nil {
@@ -506,7 +506,7 @@ func TestConcurrentSerialization(t *testing.T) {
 		}()
 	}
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 }
@@ -683,7 +683,7 @@ func BenchmarkIdentity_MarshalVT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = msg.MarshalVT()
 	}
 }
@@ -698,7 +698,7 @@ func BenchmarkIdentity_UnmarshalVT(b *testing.B) {
 	data, _ := msg.MarshalVT()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		got := &Identity{}
 		_ = got.UnmarshalVT(data)
 	}
@@ -716,7 +716,7 @@ func BenchmarkClientInitPayload_MarshalVT(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = msg.MarshalVT()
 	}
 }
@@ -735,7 +735,7 @@ func BenchmarkClientInitPayload_UnmarshalVT(b *testing.B) {
 	data, _ := msg.MarshalVT()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		got := &ClientInitPayload{}
 		_ = got.UnmarshalVT(data)
 	}

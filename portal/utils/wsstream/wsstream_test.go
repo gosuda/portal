@@ -211,7 +211,7 @@ func TestWsStream_Read(t *testing.T) {
 		var wg sync.WaitGroup
 		errors := make(chan error, 2)
 
-		for i := 0; i < 2; i++ {
+		for range 2 {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -319,7 +319,7 @@ func TestWsStream_Write(t *testing.T) {
 		stream := &WsStream{Conn: mock}
 
 		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			wg.Add(1)
 			go func(b byte) {
 				defer wg.Done()
@@ -427,7 +427,7 @@ func BenchmarkWsStream_Read(b *testing.B) {
 	buf := make([]byte, 1024)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		stream.Read(buf)
 		// Reset for next iteration
 		if i%1000 == 999 {
@@ -444,7 +444,7 @@ func BenchmarkWsStream_Write(b *testing.B) {
 	data := make([]byte, 1024)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		stream.Write(data)
 	}
 }

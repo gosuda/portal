@@ -17,4 +17,4 @@ vet:
 test:
     go test -race -v ./...
 
-all: fmt lint-fix vet test
+all: fmt vet test tidy lint-fix
