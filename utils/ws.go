@@ -22,7 +22,7 @@ func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, err
 			return nil, err
 		}
 		// Response body is closed by the Dialer on successful connection
-		return &wsstream.WsStream{Conn: wsConn}, nil
+		return wsstream.New(wsConn), nil
 	}
 }
 
@@ -42,5 +42,5 @@ func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader ht
 	if err != nil {
 		return nil, nil, err
 	}
-	return &wsstream.WsStream{Conn: wsConn}, wsConn, nil
+	return wsstream.New(wsConn), wsConn, nil
 }
