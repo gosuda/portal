@@ -1,5 +1,5 @@
 fmt:
-    golangci-lint run --fast-only --allow-parallel-runners --fix
+    golangci-lint run --fast-only --allow-parallel-runners --fix > /dev/null || true
     gofmt -w .
 
 lint:
