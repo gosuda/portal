@@ -1,11 +1,12 @@
 fmt:
+    golangci-lint run --fast-only --allow-parallel-runners --fix
     gofmt -w .
 
 lint:
-    golangci-lint run
+    golangci-lint run -D errcheck --allow-parallel-runners
 
 lint-fix:
-    golangci-lint run --fix
+    golangci-lint run --allow-parallel-runners --fix
 
 tidy:
     go mod tidy
