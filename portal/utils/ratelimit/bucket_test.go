@@ -138,6 +138,9 @@ func TestTakeSlackRefill(t *testing.T) {
 	// Wait for slack to refill (more than maxSlack duration)
 	time.Sleep(time.Duration(2*burst*int64(time.Second)/rate) + 100*time.Millisecond)
 
+	// Force state update since refill is lazy
+	b.Take(1)
+
 	b.mu.Lock()
 	allowAtAfterSleep := b.allowAt
 	b.mu.Unlock()
@@ -152,7 +155,7 @@ func TestTakeSlackRefill(t *testing.T) {
 // TestTakeConcurrent tests concurrent Take calls
 func TestTakeConcurrent(t *testing.T) {
 	rate := int64(100 * 1024) // 100 KiB/s
-	burst := rate
+	burst := rate / 10
 	b := NewBucket(rate, burst)
 	if b == nil {
 		t.Fatal("NewBucket failed")
@@ -285,7 +288,7 @@ func TestCopyShortWrite(t *testing.T) {
 // TestCopyConcurrent tests concurrent Copy operations
 func TestCopyConcurrent(t *testing.T) {
 	rate := int64(100 * 1024) // 100 KiB/s
-	burst := rate
+	burst := rate / 10
 	b := NewBucket(rate, burst)
 	if b == nil {
 		t.Fatal("NewBucket failed")
@@ -337,7 +340,7 @@ func TestCopyWriteError(t *testing.T) {
 // TestTakeLargeBytes tests Take with very large byte counts
 func TestTakeLargeBytes(t *testing.T) {
 	rate := int64(1024) // 1 KiB/s
-	burst := rate * 10
+	burst := rate       // 1 second burst
 	b := NewBucket(rate, burst)
 	if b == nil {
 		t.Fatal("NewBucket failed")
@@ -359,7 +362,7 @@ func TestBufferPool(t *testing.T) {
 	data := make([]byte, 64*1024) // Exactly buffer size
 	src := bytes.NewReader(data)
 	var dst bytes.Buffer
-	b := NewBucket(1000, 1000)
+	b := NewBucket(100*1024*1024, 100*1024*1024)
 
 	n, err := Copy(&dst, src, b)
 	if err != nil {
