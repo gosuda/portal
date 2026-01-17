@@ -24,7 +24,7 @@ export const SortbySelect = ({
   <Select value={sortBy} onValueChange={onSortByChange}>
     <SelectTrigger
       className={clsx(
-        "w-[150px] h-10",
+        "w-[150px] h-10 border-border!",
         hideFiltersOnMobile && "hidden sm:flex",
         className
       )}

@@ -211,7 +211,7 @@ export function ServerCard({
       <Link
         to={navigationPath}
         state={navigationState}
-        className="relative cursor-pointer"
+        className="relative cursor-pointer block"
       >
         {children}
       </Link>
@@ -219,151 +219,202 @@ export function ServerCard({
 
   return (
     <Wrapper>
-      <div
+      <article
         data-hero-key={`server-bg-${serverId}`}
         className={clsx(
-          "relative bg-center bg-no-repeat bg-cover rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 z-1 border border-foreground dark:border-foreground/40",
+          "relative w-full overflow-hidden rounded-3xl group border border-white/10 shadow-lg",
           showAdminControls ? "h-[286px]" : "h-[174.5px]"
         )}
-        style={{ ...(thumbnail && { backgroundImage: `url(${thumbnail})` }) }}
       >
-        {/* Admin mode: Checkbox for selection / Normal mode: Favorite star */}
-        {showAdminControls ? (
-          <button
-            onClick={handleSelectClick}
-            className={clsx(
-              "absolute top-3 right-3 z-10 p-1.5 rounded-full transition-colors duration-200 cursor-pointer border",
-              isSelected
-                ? "bg-primary border-primary"
-                : "bg-background/80 hover:bg-background border-foreground/30"
-            )}
-            aria-label={isSelected ? "Deselect" : "Select"}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              className="w-5 h-5 transition-colors duration-200"
-              fill="none"
-              stroke={isSelected ? "white" : "currentColor"}
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {isSelected && <polyline points="20 6 9 17 4 12" />}
-            </svg>
-          </button>
-        ) : (
-          <button
-            onClick={handleFavoriteClick}
-            className="absolute top-3 right-3 z-10 p-2 rounded-full bg-background/80 hover:bg-background transition-colors duration-200 cursor-pointer"
-            aria-label={
-              isFavorite ? "Remove from favorites" : "Add to favorites"
-            }
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              className="w-5 h-5 transition-colors duration-200"
-              fill={isFavorite ? "currentColor" : "none"}
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ color: isFavorite ? "var(--primary)" : "currentColor" }}
-            >
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-            </svg>
-          </button>
-        )}
+        {/* Background Image */}
+        <div
+          className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105"
+          style={{
+            backgroundImage: thumbnail
+              ? `url(${thumbnail})`
+              : "linear-gradient(135deg, var(--card) 0%, var(--background) 100%)",
+          }}
+        />
 
-        {/* Content overlay - not part of hero transition */}
-        <div className="relative h-full w-full bg-background/80 rounded-xl flex flex-col gap-4 p-4 items-start text-start">
-          <div className="w-full flex flex-1 flex-col justify-between gap-4">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <div
-                  className={clsx(
-                    "w-2.5 h-2.5 rounded-full",
-                    online ? "bg-green-status" : "bg-red-500"
-                  )}
-                />
-                <p
-                  className={clsx(
-                    "text-sm font-medium leading-normal",
-                    online ? "text-green-status" : "text-red-500"
-                  )}
+        {/* Gradient Overlay */}
+        <div className="absolute inset-0 bg-linear-to-t from-black via-black/60 to-transparent" />
+
+        {/* Content */}
+        <div className="relative z-10 flex h-full flex-col justify-between p-5">
+          {/* Top Row: Status Badge + Action Button */}
+          <div className="flex items-start justify-between">
+            {/* Online/Offline Status Badge */}
+            <div className="flex items-center gap-2 rounded-full bg-black/40 px-3 py-1 backdrop-blur-sm border border-white/5">
+              <div
+                className={clsx(
+                  "size-2 rounded-full",
+                  online
+                    ? "bg-primary shadow-[0_0_8px_rgba(0,219,219,0.8)] animate-pulse"
+                    : "bg-gray-500"
+                )}
+              />
+              <span
+                className={clsx(
+                  "text-[10px] font-bold uppercase tracking-wider",
+                  online ? "text-white" : "text-white/60"
+                )}
+              >
+                {online ? "Online" : "Offline"}
+                {formattedDuration && online && ` · ${formattedDuration}`}
+              </span>
+            </div>
+
+            {/* Admin mode: Checkbox / Normal mode: Favorite star */}
+            {showAdminControls ? (
+              <button
+                onClick={handleSelectClick}
+                className={clsx(
+                  "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
+                  isSelected
+                    ? "bg-primary text-black"
+                    : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
+                )}
+                aria-label={isSelected ? "Deselect" : "Select"}
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  className="w-[18px] h-[18px]"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 >
-                  {online ? "Online" : "Offline"}
-                  {formattedDuration && online && ` (${formattedDuration})`}
-                </p>
+                  {isSelected && <polyline points="20 6 9 17 4 12" />}
+                </svg>
+              </button>
+            ) : (
+              <button
+                onClick={handleFavoriteClick}
+                className={clsx(
+                  "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
+                  isFavorite
+                    ? "bg-primary text-black"
+                    : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
+                )}
+                aria-label={
+                  isFavorite ? "Remove from favorites" : "Add to favorites"
+                }
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  className="w-[18px] h-[18px]"
+                  fill={isFavorite ? "currentColor" : "none"}
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {/* Bottom Content */}
+          <div className="flex flex-col gap-3">
+            {/* Server Info Row */}
+            <div className="flex items-end justify-between gap-3">
+              <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                {/* Server Name */}
+                <h3 className="font-display text-xl font-bold leading-tight text-white truncate">
+                  {name}
+                </h3>
+
+                {/* Description */}
+                {description && (
+                  <p className="text-xs text-white/70 line-clamp-1 font-medium">
+                    {description}
+                  </p>
+                )}
+
+                {/* Tags */}
+                {tags && tags.length > 0 && (
+                  <ScrollArea className="w-full mt-1">
+                    <div className="flex gap-1.5 min-w-max">
+                      {tags.map((tag, index) => (
+                        <span
+                          key={index}
+                          className="rounded bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-primary/30 whitespace-nowrap"
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                    <ScrollBar orientation="horizontal" />
+                  </ScrollArea>
+                )}
+
+                {/* Owner */}
+                {owner && (
+                  <span className="text-[10px] font-medium text-white/50">
+                    by {owner}
+                  </span>
+                )}
               </div>
-              <p className="text-foreground text-lg font-bold leading-tight truncate max-w-full">
-                {name}
-              </p>
-              {description && (
-                <p className="text-text-muted text-sm font-normal leading-normal truncate max-w-full">
-                  {description}
-                </p>
-              )}
-              {tags && tags.length > 0 && (
-                <ScrollArea className="w-full mt-1">
-                  <div className="flex gap-1.5 min-w-max">
-                    {tags.map((tag, index) => (
-                      <span
-                        key={index}
-                        className="px-2 py-1 bg-secondary text-primary text-xs font-medium rounded whitespace-nowrap"
-                      >
-                        {tag}
-                      </span>
-                    ))}
+
+              {/* Thumbnail Avatar (if no admin controls) */}
+              {!showAdminControls && thumbnail && (
+                <div className="shrink-0">
+                  <div className="size-10 overflow-hidden rounded-xl border border-white/20 shadow-lg">
+                    <img
+                      alt={`${name} avatar`}
+                      className="h-full w-full object-cover"
+                      src={thumbnail}
+                    />
                   </div>
-                  <ScrollBar orientation="horizontal" />
-                </ScrollArea>
-              )}
-              {owner && (
-                <p className="text-text-muted text-xs font-normal leading-normal truncate max-w-full">
-                  by {owner}
-                </p>
+                </div>
               )}
             </div>
+
+            {/* Admin Controls */}
             {showAdminControls && leaseId && (
-              <div className="flex flex-col gap-2 w-full">
-                {/* BPS Row: display on left, settings button on right */}
+              <div className="flex flex-col gap-2 w-full mt-2">
+                {/* BPS Row */}
                 <div className="flex items-center justify-between w-full">
-                  <span className="text-sm text-text-muted">
+                  <span className="text-xs text-white/60">
                     BPS:{" "}
-                    <span className="font-medium text-foreground">
+                    <span className="font-medium text-white">
                       {formatBPS(bps)}
                     </span>
                   </span>
                   <button
                     onClick={handleBPSSettingsClick}
-                    className="px-3 py-1 text-xs rounded bg-secondary hover:bg-secondary/80 text-secondary-foreground transition-colors cursor-pointer"
+                    className="px-3 py-1 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
                   >
                     Settings
                   </button>
                 </div>
-                {/* IP display (for approved items in both auto and manual mode) */}
+
+                {/* IP display */}
                 {isApproved && ip && (
-                  <div className="text-xs text-text-muted">
+                  <div className="text-[10px] text-white/50">
                     IP: <span className="font-mono">{ip}</span>
                     {isIPBanned && (
-                      <span className="ml-2 text-red-500">(Banned)</span>
+                      <span className="ml-2 text-red-400">(Banned)</span>
                     )}
                   </div>
                 )}
-                {/* Approve/Deny buttons: show only for unapproved items (both manual and auto mode) */}
+
+                {/* Approve/Deny buttons */}
                 {!isApproved && !isDenied ? (
                   <div className="flex gap-2 w-full">
                     <button
                       onClick={handleApproveClick}
-                      className="flex-1 px-4 py-2 rounded font-medium transition-colors cursor-pointer text-white bg-green-600 hover:bg-green-700"
+                      className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-green-600/80 hover:bg-green-600 backdrop-blur-sm"
                     >
                       Approve
                     </button>
                     <button
                       onClick={handleDenyClick}
-                      className="flex-1 px-4 py-2 rounded font-medium transition-colors cursor-pointer text-white bg-red-600 hover:bg-red-700"
+                      className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-red-600/80 hover:bg-red-600 backdrop-blur-sm"
                     >
                       Deny
                     </button>
@@ -372,10 +423,10 @@ export function ServerCard({
                   <button
                     onClick={ip ? handleIPBanClick : handleBanClick}
                     className={clsx(
-                      "w-full px-4 py-2 rounded font-medium transition-colors cursor-pointer text-white",
+                      "w-full px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white backdrop-blur-sm",
                       (ip ? isIPBanned : isBanned)
-                        ? "bg-green-600 hover:bg-green-700"
-                        : "bg-red-600 hover:bg-red-700"
+                        ? "bg-green-600/80 hover:bg-green-600"
+                        : "bg-red-600/80 hover:bg-red-600"
                     )}
                   >
                     {ip
@@ -391,12 +442,11 @@ export function ServerCard({
             )}
           </div>
         </div>
-      </div>
-      <div className="absolute top-2 left-2 h-full w-full bg-secondary/70 rounded-xl z-0" />
+      </article>
 
       {/* BPS Settings Modal */}
       <Dialog open={showBPSModal} onOpenChange={setShowBPSModal}>
-        <DialogContent className="max-w-sm rounded-sm">
+        <DialogContent className="max-w-sm rounded-xl">
           <DialogHeader>
             <DialogTitle>BPS Settings</DialogTitle>
             <DialogDescription>

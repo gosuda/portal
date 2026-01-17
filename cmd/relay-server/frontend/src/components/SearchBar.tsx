@@ -38,15 +38,15 @@ export function SearchBar({
   return (
     <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-4 sm:px-6">
       <div className="flex gap-2 items-center w-full">
-        <label className="flex min-w-[220px] flex-1 items-stretch h-10">
-          <div className="text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border">
+        <label className="flex min-w-[220px] flex-1 items-stretch h-10 relative">
+          <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
             <Search className="w-4 h-4" />
           </div>
           <Input
             placeholder="Search by server name..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="rounded-l-none h-10"
+            className="h-10 pl-12 border border-border rounded-md"
           />
         </label>
         {/* Mobile filter button - only show for admin */}

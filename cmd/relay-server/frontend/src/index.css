@@ -1,17 +1,22 @@
-@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   /* Font families */
-  --font-family-display: "Public Sans", sans-serif;
+  --font-family-display: "Space Grotesk", sans-serif;
+  --font-family-sans: "Noto Sans", sans-serif;
 
   /* Border radius */
   --radius: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
-  
+
+  /* Glass effect tokens */
+  --glass-blur: 12px;
+
+  /* Color mappings */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -33,61 +38,88 @@
   --color-ring: var(--ring);
   --color-green-status: var(--green-status);
   --color-text-muted: var(--text-muted);
+
+  /* Cyberpunk accent colors */
+  --color-accent-orange: var(--accent-orange);
+  --color-accent-magenta: var(--accent-magenta);
+  --color-neon-cyan: var(--neon-cyan);
 }
 
 @layer base {
   :root {
-    /* Light Theme (OKLCH) - Maintains the color tone of dark theme while inverting lightness */
-    --background: oklch(98% 0.005 240); /* Soft white instead of pure white */
-    --foreground: oklch(20% 0.03 215); /* Deep blue-gray text */
-    --card: oklch(100% 0 0); /* Pure white card (differentiated from background) */
-    --card-foreground: oklch(20% 0.03 215);
+    /* Light Theme - Clean slate-based design */
+    --background: oklch(97% 0.005 250); /* #F5F7FA */
+    --foreground: oklch(25% 0.02 250); /* Slate 800 #1e293b */
+    --card: oklch(100% 0 0); /* White */
+    --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
-    --popover-foreground: oklch(20% 0.03 215);
-    --primary: oklch(55% 0.13 210); /* Darker and less saturated than dark theme, ~#1b8bc4 */
-    --primary-foreground: oklch(100% 0 0); /* White text */
-    --secondary: oklch(95% 0.01 220); /* Light blue-gray background */
-    --secondary-foreground: oklch(25% 0.03 215);
-    --muted: oklch(94% 0.01 220); /* Light gray */
-    --muted-foreground: oklch(50% 0.04 220); /* Mid-tone gray text */
-    --accent: oklch(94% 0.02 210); /* Light accent background */
-    --accent-foreground: oklch(25% 0.03 215);
-    --destructive: oklch(55% 0.20 25); /* Red - slightly darker than dark theme */
-    --destructive-foreground: oklch(98% 0.01 240);
-    --border: oklch(90% 0.01 220); /* Subtle border */
-    --input: oklch(96% 0.005 220); /* Input field background */
-    --ring: oklch(55% 0.13 210); /* Same as primary */
+    --popover-foreground: oklch(25% 0.02 250);
+    --primary: oklch(75% 0.14 195); /* #00dbdb cyan - slightly darker for light bg */
+    --primary-foreground: oklch(100% 0 0);
+    --secondary: oklch(92% 0.01 250); /* Slate 200 */
+    --secondary-foreground: oklch(45% 0.02 250); /* Slate 600 */
+    --muted: oklch(95% 0.005 250); /* Slate 100 */
+    --muted-foreground: oklch(55% 0.03 250); /* Slate 500 #64748b */
+    --accent: oklch(92% 0.01 250);
+    --accent-foreground: oklch(25% 0.02 250);
+    --destructive: oklch(55% 0.20 25);
+    --destructive-foreground: oklch(100% 0 0);
+    --border: oklch(90% 0.01 250); /* Slate 200 border */
+    --input: oklch(95% 0.005 250); /* Slate 100 */
+    --ring: oklch(75% 0.14 195);
 
     /* Custom light theme colors */
-    --green-status: oklch(55% 0.14 150); /* Darker green than dark theme */
-    --text-muted: oklch(50% 0.04 220); /* Soft gray text */
+    --green-status: oklch(55% 0.16 150); /* Green 600 */
+    --text-muted: oklch(55% 0.03 250); /* Slate 500 */
+    --accent-orange: oklch(60% 0.20 35); /* Orange */
+    --accent-magenta: oklch(50% 0.22 350); /* Magenta */
+    --neon-cyan: oklch(75% 0.14 195);
+
+    /* Glass effects - light mode */
+    --glass-bg: oklch(100% 0 0 / 0.7);
+    --glass-bg-hover: oklch(100% 0 0 / 0.9);
+    --glass-border: oklch(100% 0 0 / 0.5);
+    --glass-border-hover: oklch(75% 0.14 195 / 0.3);
+    --shadow-neon: 0 0 10px oklch(75% 0.14 195 / 0.4), 0 0 20px oklch(75% 0.14 195 / 0.2);
+    --shadow-glass: 0 4px 30px oklch(0% 0 0 / 0.05);
   }
 
   .dark {
-    /* Dark Theme (OKLCH) */
-    --background: oklch(18% 0.04 210); /* #0f1e23 */
-    --foreground: oklch(98% 0.01 240); /* white text */
-    --card: oklch(22% 0.05 215); /* #192433 */
-    --card-foreground: oklch(98% 0.01 240);
-    --popover: oklch(22% 0.05 215);
-    --popover-foreground: oklch(98% 0.01 240);
-    --primary: oklch(75% 0.15 210); /* #47cdff */
-    --primary-foreground: oklch(0% 0 0);
-    --secondary: oklch(28% 0.04 215); /* #233348 */
-    --secondary-foreground: oklch(98% 0.01 240);
-    --muted: oklch(28% 0.04 215);
-    --muted-foreground: oklch(70% 0.05 230); /* #92a9c9 */
-    --accent: oklch(28% 0.04 215);
-    --accent-foreground: oklch(98% 0.01 240);
+    /* Dark Theme - Cyberpunk Neon */
+    --background: oklch(15% 0 0); /* #121212 deep charcoal */
+    --foreground: oklch(98% 0.01 0);
+    --card: oklch(20% 0 0); /* #1E1E1E surface dark */
+    --card-foreground: oklch(98% 0.01 0);
+    --popover: oklch(20% 0 0);
+    --popover-foreground: oklch(98% 0.01 0);
+    --primary: oklch(80% 0.14 195); /* #00dbdb cyan */
+    --primary-foreground: oklch(10% 0 0);
+    --secondary: oklch(25% 0.02 195);
+    --secondary-foreground: oklch(98% 0.01 0);
+    --muted: oklch(25% 0.01 0);
+    --muted-foreground: oklch(65% 0.02 0);
+    --accent: oklch(25% 0.03 195);
+    --accent-foreground: oklch(98% 0.01 0);
     --destructive: oklch(62% 0.22 25);
-    --destructive-foreground: oklch(98% 0.01 240);
-    --border: oklch(26% 0.04 215); /* #233348 */
-    --input: oklch(26% 0.04 215);
-    --ring: oklch(75% 0.15 210); /* #47cdff */
+    --destructive-foreground: oklch(98% 0 0);
+    --border: oklch(100% 0 0 / 0.1); /* white/10 for dark mode */
+    --input: oklch(22% 0.01 0);
+    --ring: oklch(80% 0.14 195);
 
-    /* Custom dark theme colors */
-    --green-status: oklch(78% 0.16 170);
-    --text-muted: oklch(70% 0.05 230);
+    /* Custom dark theme colors - Cyberpunk */
+    --green-status: oklch(75% 0.16 150);
+    --text-muted: oklch(65% 0.02 0);
+    --accent-orange: oklch(65% 0.20 35); /* #FF5733 */
+    --accent-magenta: oklch(55% 0.25 350); /* #E6007A */
+    --neon-cyan: oklch(80% 0.14 195);
+
+    /* Glass effects - dark mode */
+    --glass-bg: oklch(20% 0 0 / 0.4);
+    --glass-bg-hover: oklch(20% 0 0 / 0.6);
+    --glass-border: oklch(100% 0 0 / 0.08);
+    --glass-border-hover: oklch(80% 0.14 195 / 0.3);
+    --shadow-neon: 0 0 10px oklch(80% 0.14 195 / 0.5), 0 0 20px oklch(80% 0.14 195 / 0.3);
+    --shadow-glass: 0 4px 30px oklch(0% 0 0 / 0.1);
   }
 
   * {
@@ -97,6 +129,10 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
+    font-family: var(--font-family-sans);
+  }
+
+  h1, h2, h3, h4, h5, h6 {
     font-family: var(--font-family-display);
   }
 
@@ -115,11 +151,51 @@
 
   /* Hide scrollbar for horizontal scroll */
   .scrollbar-hide {
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 
   .scrollbar-hide::-webkit-scrollbar {
-    display: none;  /* Chrome, Safari and Opera */
+    display: none;
+  }
+}
+
+@layer components {
+  /* Glass card effect */
+  .glass-card {
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-glass);
+    transition: all 0.3s ease;
+  }
+
+  .glass-card:hover {
+    border-color: var(--glass-border-hover);
+    background: var(--glass-bg-hover);
+  }
+
+  /* Neon glow effects */
+  .neon-glow {
+    box-shadow: var(--shadow-neon);
+  }
+
+  .neon-text {
+    text-shadow: 0 0 10px oklch(80% 0.14 195 / 0.7);
+  }
+
+  .dark .neon-text {
+    text-shadow: 0 0 10px oklch(80% 0.14 195 / 0.7);
+  }
+
+  :root .neon-text {
+    text-shadow: 0 0 10px oklch(45% 0.14 195 / 0.5);
+  }
+
+  /* Neon border on focus/hover */
+  .neon-border {
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 5px var(--neon-cyan);
   }
 }
