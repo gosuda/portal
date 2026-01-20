@@ -233,7 +233,7 @@ export function ServerListView({
                 </div>
               )}
             </div>
-            <main className="flex-1">
+            <main className="flex-1 z-0">
               <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6">
                 {filteredServers.length > 0 ? (
                   filteredServers.map((server) => (
