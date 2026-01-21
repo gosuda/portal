@@ -16,6 +16,7 @@
 
         <div class="toolbar">
             <button id="httpPingBtn">HTTP Ping</button>
+            <button id="testCookiesBtn">Test Cookies</button>
             <button id="wsConnectBtn">WS Connect</button>
             <button id="wsSendBtn" disabled>WS Send "hello"</button>
         </div>
@@ -51,6 +52,28 @@
                 log(`HTTP /api/ping -> ${JSON.stringify(json)}`);
             } catch (err) {
                 statusEl.textContent = 'HTTP: Error';
+                log(`HTTP error: ${err}`);
+            }
+        });
+
+        document.getElementById('testCookiesBtn').addEventListener('click', async () => {
+            statusEl.textContent = 'Cookies: Testing...';
+            try {
+                const res = await fetch('/api/test-cookies');
+                const json = await res.json();
+                statusEl.textContent = 'Cookies: OK';
+                log(`HTTP /api/test-cookies -> ${JSON.stringify(json)}`);
+
+                // Log response headers
+                log(`Response headers:`);
+                for (const [key, value] of res.headers.entries()) {
+                    log(`  ${key}: ${value}`);
+                }
+
+                // Log current cookies
+                log(`Current document.cookie: ${document.cookie || '(empty)'}`);
+            } catch (err) {
+                statusEl.textContent = 'Cookies: Error';
                 log(`HTTP error: ${err}`);
             }
         });
