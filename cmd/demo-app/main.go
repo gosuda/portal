@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,15 +24,17 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
+//go:embed static/thumbnail.png
+var thumbnailPNG []byte
+
 var (
-	flagServerURL  string
-	flagPort       int
-	flagName       string
-	flagDesc       string
-	flagTags       string
-	flagOwner      string
-	flagThumbnail  string
-	flagHide       bool
+	flagServerURL string
+	flagPort      int
+	flagName      string
+	flagDesc      string
+	flagTags      string
+	flagOwner     string
+	flagHide      bool
 )
 
 func main() {
@@ -41,7 +44,6 @@ func main() {
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
-	flag.StringVar(&flagThumbnail, "thumbnail", "https://naverpa-phinf.pstatic.net/MjAyNjAxMTRfMjEy/MDAxNzY4MzcxNzc1NTYz.nE942d-5NNcGgRlFBukeLEL9s8fESvMaKL1Uv8eiyNAg.k6gjFLfHcvL6pzWqrQhEPf-JgGCYyEluGv-2fZA2b4Qg.PNG/%EB%84%A4%EC%9D%B4%EB%B2%84_GFA-PC%EB%84%A4%EC%9D%B4%ED%8B%B0%EB%B8%8C-342_228_17683717755352279343803638606717.png", "lease thumbnail URL")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
 
 	flag.Parse()
@@ -90,6 +92,9 @@ func runDemo() error {
 	defer client.Close()
 
 	// 3) Register lease
+	// Create base64 data URI from embedded thumbnail
+	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
+
 	listener, err := client.Listen(
 		cred,
 		flagName,
@@ -97,7 +102,7 @@ func runDemo() error {
 		sdk.WithDescription(flagDesc),
 		sdk.WithTags(strings.Split(flagTags, ",")),
 		sdk.WithOwner(flagOwner),
-		sdk.WithThumbnail(flagThumbnail),
+		sdk.WithThumbnail(thumbnailDataURI),
 		sdk.WithHide(flagHide),
 	)
 	if err != nil {
