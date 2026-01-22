@@ -59,7 +59,11 @@ func (b *Bucket) Take(n int64) {
 }
 
 // internal buffer pool for Copy
-var bufPool = sync.Pool{New: func() any { return make([]byte, 64*1024) }}
+// Using *[]byte to avoid interface boxing allocation in sync.Pool.
+var bufPool = sync.Pool{New: func() any {
+	b := make([]byte, 64*1024)
+	return &b
+}}
 
 // Copy copies from src to dst, enforcing the provided byte-rate bucket if not nil.
 // Returns bytes written and any copy error encountered.
@@ -67,8 +71,8 @@ func Copy(dst io.Writer, src io.Reader, b *Bucket) (int64, error) {
 	if b == nil {
 		return io.Copy(dst, src)
 	}
-	buf := bufPool.Get().([]byte)
-	defer bufPool.Put(buf)
+	buf := *bufPool.Get().(*[]byte)
+	defer bufPool.Put(&buf)
 
 	var total int64
 	for {

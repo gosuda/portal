@@ -19,8 +19,12 @@ import (
 
 // bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
 // per-copy allocations and reduce GC pressure under high concurrency.
+// Using *[]byte to avoid interface boxing allocation in sync.Pool.
 var bufferPool = sync.Pool{
-	New: func() any { return make([]byte, 64*1024) },
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
 }
 
 type Config struct {
@@ -200,15 +204,15 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	}()
 
 	go func() {
-		buf := bufferPool.Get().([]byte)
-		defer bufferPool.Put(buf)
+		buf := *bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(&buf)
 		_, err := io.CopyBuffer(localConn, relayConn, buf)
 		errCh <- err
 	}()
 
 	go func() {
-		buf := bufferPool.Get().([]byte)
-		defer bufferPool.Put(buf)
+		buf := *bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(&buf)
 		_, err := io.CopyBuffer(relayConn, localConn, buf)
 		errCh <- err
 	}()
