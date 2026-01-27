@@ -1,4 +1,4 @@
-.PHONY: help fmt vet lint test vuln tidy build-go all run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint test vuln tidy all run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
@@ -32,16 +32,13 @@ tidy:
 	go mod tidy
 	go mod verify
 
-build-go:
-	go build ./...
-
-all: fmt vet lint test vuln build-go build
+all: fmt vet lint test vuln build
 
 run:
 	./bin/relay-server
 
 # Convenience target
-build: build-go build-wasm build-frontend build-tunnel build-server
+build: build-wasm build-frontend build-tunnel build-server
 
 build-protoc:
 	protoc -I . \
