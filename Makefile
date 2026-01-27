@@ -1,4 +1,4 @@
-.PHONY: help fmt vet lint test vuln tidy all run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint test vuln tidy all run build build-protoc build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
