@@ -7,9 +7,6 @@ on:
     branches: ["*"]
   workflow_dispatch:
 
-env:
-  CGO_ENABLED: "0"
-
 jobs:
   test:
     name: Test
