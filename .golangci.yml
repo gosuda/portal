@@ -10,7 +10,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - gosuda.org
+        - github.com/gosuda
 
 linters:
   default: standard
@@ -108,8 +108,6 @@ linters:
         - bytes.Buffer.Write
         - bytes.Buffer.WriteString
         - io.Copy
-        - context.WithTimeout
-        - context.WithCancel
         - log.Printf
         - log.Println
         - log.Print
@@ -123,7 +121,6 @@ linters:
         - atomic.StoreInt64
         - atomic.LoadInt64
         - rand.Read
-        - crypto/rand.Read
 
     gocritic:
       enabled-tags:
