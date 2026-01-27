@@ -1,6 +1,8 @@
 SHELL := /bin/sh
+CGO_ENABLED := 0
+export CGO_ENABLED
 
-.PHONY: help run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint test vuln tidy build-go all run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
@@ -14,11 +16,36 @@ help:
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
 
+fmt:
+	gofmt -w .
+	goimports -w .
+
+vet:
+	go vet ./...
+
+lint:
+	golangci-lint run
+
+test:
+	go test -v -race -coverprofile=coverage.out ./...
+
+vuln:
+	govulncheck ./...
+
+tidy:
+	go mod tidy
+	go mod verify
+
+build-go:
+	go build ./...
+
+all: fmt vet lint test vuln build-go build
+
 run:
 	./bin/relay-server
 
 # Convenience target
-build: build-wasm build-frontend build-tunnel build-server
+build: build-go build-wasm build-frontend build-tunnel build-server
 
 build-protoc:
 	protoc -I . \
