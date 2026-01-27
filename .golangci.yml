@@ -10,7 +10,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/gosuda
+        - gosuda.org
 
 linters:
   default: standard
