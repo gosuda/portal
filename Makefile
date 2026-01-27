@@ -1,6 +1,4 @@
-SHELL := /bin/sh
-
-.PHONY: help run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint test vuln tidy all run build build-protoc build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
@@ -13,6 +11,28 @@ help:
 	@echo "  make build-server      - Build Go relay server (includes frontend build)"
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
+
+fmt:
+	gofmt -w .
+	goimports -w .
+
+vet:
+	go vet ./...
+
+lint:
+	golangci-lint run
+
+test:
+	go test -v -race -coverprofile=coverage.out ./...
+
+vuln:
+	govulncheck ./...
+
+tidy:
+	go mod tidy
+	go mod verify
+
+all: fmt vet lint test vuln build
 
 run:
 	./bin/relay-server
@@ -34,7 +54,7 @@ build-wasm:
 	@echo "[wasm] building webclient WASM..."
 	@mkdir -p cmd/relay-server/dist/wasm
 	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
-	
+
 	@echo "[wasm] optimizing with wasm-opt..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
 		wasm-opt -Oz --enable-bulk-memory cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
@@ -44,7 +64,7 @@ build-wasm:
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
 		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
 	fi
-	
+
 	@echo "[wasm] calculating SHA256 hash..."
 	@WASM_HASH=$$(shasum -a 256 cmd/relay-server/dist/wasm/portal.wasm | awk '{print $$1}'); \
 	echo "[wasm] SHA256: $$WASM_HASH"; \
@@ -53,7 +73,7 @@ build-wasm:
 	cp cmd/relay-server/dist/wasm/portal.wasm cmd/relay-server/dist/wasm/$$WASM_HASH.wasm; \
 	rm -f cmd/relay-server/dist/wasm/portal.wasm; \
 	echo "[wasm] content-addressed WASM: dist/wasm/$$WASM_HASH.wasm"
-	
+
 	@echo "[wasm] copying additional resources..."
 	@cp cmd/webclient/wasm_exec.js cmd/relay-server/dist/wasm/wasm_exec.js
 	@cp cmd/webclient/service-worker.js cmd/relay-server/dist/wasm/service-worker.js

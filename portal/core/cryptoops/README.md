@@ -140,12 +140,12 @@ Parameters:
    ```go
    payloadBytes := proto.Marshal(clientInitPayload)
    signature := ed25519.Sign(clientPrivateKey, payloadBytes)
-   
+
    signedPayload := &SignedPayload{
      Data:      payloadBytes,
      Signature: signature,
    }
-   
+
    // Send length-prefixed message (4 bytes length + data)
    writeLengthPrefixed(conn, proto.Marshal(signedPayload))
    ```
@@ -159,7 +159,7 @@ Parameters:
    - Verify ALPN matches expected value(s)
    - Validate identity structure (correct key sizes)
    - Verify Ed25519 signature using client's public key
-   
+
    **Security Note**: If validation fails, server closes connection silently (no error response) to prevent information leakage.
 
 2. **Generate Server Ephemeral Keypair**
@@ -259,15 +259,15 @@ This prevents excessive memory allocation while maintaining compatibility with t
 func (sc *SecureConnection) Write(p []byte) (int, error) {
     // 1. Generate random nonce
     nonce := randomBytes(12)
-    
+
     // 2. Encrypt with AEAD
     ciphertext := encryptor.Seal(nil, nonce, plaintext, nil)
     // ciphertext = encrypted_data || tag
-    
+
     // 3. Frame: length + nonce + ciphertext
     length := len(nonce) + len(ciphertext)
     frame := length (4 bytes) || nonce || ciphertext
-    
+
     // 4. Write to connection
     conn.Write(frame)
 }
@@ -280,23 +280,23 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
     // 1. Read 4-byte length prefix
     lengthBytes := readFull(4)
     length := binary.BigEndian.Uint32(lengthBytes)
-    
+
     // 2. Validate size limit
     if length > maxRawPacketSize {
         return error
     }
-    
+
     // 3. Read encrypted message
     msgBytes := readFull(length)
     nonce := msgBytes[0:12]
     ciphertext := msgBytes[12:]
-    
+
     // 4. Decrypt and authenticate
     plaintext, err := decryptor.Open(nil, nonce, ciphertext, nil)
     if err != nil {
         return ErrDecryptionFailed  // Authentication failed
     }
-    
+
     // 5. Copy to output buffer
     copy(p, plaintext)
 }
@@ -481,7 +481,7 @@ const (
     sessionKeySize   = 32               // 256-bit symmetric keys
     maxTimestampSkew = 30 * time.Second // Clock skew tolerance
     maxRawPacketSize = 1 << 26          // 64MB - matches relay server
-    
+
     // Key derivation context strings
     clientKeyInfo = "RDSEC_KEY_CLIENT"
     serverKeyInfo = "RDSEC_KEY_SERVER"
@@ -506,7 +506,7 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
         sc.readBuffer.B = sc.readBuffer.B[:len(sc.readBuffer.B)-n]
         return n, nil
     }
-    
+
     // Otherwise, decrypt new packet...
 }
 ```

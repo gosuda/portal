@@ -2,46 +2,95 @@ version: "2"
 
 run:
   tests: true
-  # Go 1.25+ will handle modules impeccably; ensure the linter knows the version.
   go: "1.25"
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/gosuda
+        - gosuda.org
 
 linters:
   default: standard
 
   enable:
-    # --- The Essentials (Bugs & Correctness) ---
-    - govet # Standard vet
-    - errcheck # Unchecked errors are fatal
-    - staticcheck # Dominant static analysis
-    - gochecknoglobals # Disallows global variables (improves concurrency safety)
-    - gochecknoinits # Disallows init functions (can have concurrency implications)
-    - gocritic # General linter with many checks, including some concurrency-related ones like deferInLoop
-    - containedctx # Ensures context.Context is the first argument (improves context propagation)
+    # --- Tier 1: Bugs & Correctness ---
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosec
+    - errorlint
+    - copyloopvar
+    - nilerr
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - durationcheck
+    - makezero
+    - noctx
 
-    # --- The Dark Arts (Performance & Concurrency) ---
-    - prealloc # Encourages slice pre-allocation (critical for low latency)
-    - bodyclose # Ensures HTTP response bodies are closed
-    - noctx # HTTP requests must have context (prevents goroutine leaks)
-    - copyloopvar # Detects loop variable copying (Modern Go replacement for exportloopref)
-    - intrange # Suggests using newer `for i := range n` syntax (Go 1.22+)
+    # --- Tier 2: Code Quality & Style ---
+    - gocritic
+    - revive
+    - unconvert
+    - unparam
+    - wastedassign
+    - misspell
+    - whitespace
+    - godot
+    - goconst
+    - dupword
+    - usestdlibvars
+    - testifylint
+    - testableexamples
+    - tparallel
+    - usetesting
+
+    # --- Tier 3: Concurrency & Safety ---
+    - gochecknoglobals
+    - gochecknoinits
+    - containedctx
+
+    # --- Tier 4: Performance & Modernization ---
+    - prealloc
+    - intrange
+    - modernize
+    - fatcontext
+    - perfsprint
+    - reassign
+    - spancheck
+    - mirror
+    - recvcheck
 
   exclusions:
     rules:
       - linters:
           - errcheck
         source: "^\\s*defer\\s+"
+      - path: "_test\\.go"
+        linters:
+          - bodyclose
+          - errcheck
+          - gosec
+          - noctx
+          - wrapcheck
+          - goconst
+          - funlen
+          - dupl
+          - gochecknoglobals
+      - text: "should have a package comment"
+        linters: [revive]
+      - text: "exported \\S+ \\S+ should have comment"
+        linters: [revive]
 
   settings:
     errcheck:
-      # FALSE: Allows you to explicitly ignore an error using `_ = func()`
-      # If true, `_ = func()` is still a violation.
       check-blank: false
-
-      # FALSE: Does not force checking type assertion results (v, ok := x.(T))
       check-type-assertions: false
-
-      # List of functions to exclude from checking.
-      # These are the most common sources of "noise" in standard Go development.
       exclude-functions:
         - fmt.Printf
         - fmt.Println
@@ -49,33 +98,93 @@ linters:
         - fmt.Fprintf
         - fmt.Fprint
         - fmt.Fprintln
-        - fmt.Sprintf # Rarely fails unless OOM
-        - os.Unsetenv # Usually safe to ignore
-        - encoding/json.Marshal # Safe ONLY if you trust the struct tags/types
-        - encoding/json.Unmarshal # Safe ONLY if you trust the input data
-        - encoding/json.NewEncoder # Encoder setup
-        - encoding/json.NewDecoder # Decoder setup
-        - strings.Builder.WriteString # Writes to memory; usually safe
-        - strings.Builder.Write # Writes to memory; usually safe
-        - bytes.Buffer.Write # Writes to memory; usually safe
-        - bytes.Buffer.WriteString # Writes to memory; usually safe
-        - io.Copy # Standard I/O operation
-        - context.WithTimeout # Context creation
-        - context.WithCancel # Context creation
-        - log.Printf # Standard logging
-        - log.Println # Standard logging
-        - log.Print # Standard logging
-        - time.Now # Time retrieval
-        - time.Sleep # Time operations
-        - sync.Mutex.Lock # Mutex operations
-        - sync.Mutex.Unlock # Mutex operations
-        - sync.RWMutex.RLock # RWMutex operations
-        - sync.RWMutex.RUnlock # RWMutex operations
-        - atomic.AddInt64 # Atomic operations
-        - atomic.StoreInt64 # Atomic operations
-        - atomic.LoadInt64 # Atomic operations
-        - rand.Read # Cryptographically secure random
-        - crypto/rand.Read # Secure random source
+        - fmt.Sprintf
+        - os.Unsetenv
+        - encoding/json.Marshal
+        - encoding/json.Unmarshal
+        - encoding/json.NewEncoder
+        - encoding/json.NewDecoder
+        - strings.Builder.WriteString
+        - strings.Builder.Write
+        - bytes.Buffer.Write
+        - bytes.Buffer.WriteString
+        - io.Copy
+        - log.Printf
+        - log.Println
+        - log.Print
+        - time.Now
+        - time.Sleep
+        - sync.Mutex.Lock
+        - sync.Mutex.Unlock
+        - sync.RWMutex.RLock
+        - sync.RWMutex.RUnlock
+        - atomic.AddInt64
+        - atomic.StoreInt64
+        - atomic.LoadInt64
+        - rand.Read
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+        - opinionated
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+      settings:
+        shadow:
+          strict: true
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+          disabled: true
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    gosec:
+      excludes:
+        - G104
+        - G304
+
+    perfsprint:
+      strconcat: true
+
+    fatcontext:
+      check-struct-pointers: true
+
+    spancheck:
+      checks:
+        - end
+        - record-error
+        - set-status
 
 issues:
   max-issues-per-linter: 0
