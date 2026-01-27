@@ -20,7 +20,7 @@ You can run the tunnel using command-line flags or a configuration file.
 ## Flags
 
 ```text
-Usage: 
+Usage:
         portal-tunnel [OPTIONS] [ARGUMENTS]
 
 Options:
