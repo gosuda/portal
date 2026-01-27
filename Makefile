@@ -1,7 +1,3 @@
-SHELL := /bin/sh
-CGO_ENABLED := 0
-export CGO_ENABLED
-
 .PHONY: help fmt vet lint test vuln tidy build-go all run build build-wasm compress-wasm build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
