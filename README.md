@@ -1,90 +1,73 @@
-# PORTAL — Public Open Relay To Access Localhost
+# Gosuda Template for Go
 
-<p align="center">
-  <img src="/portal.jpg" alt="Portal logo" width="540" />
-</p>
+Official AI agent coding guidelines and tooling templates for Go projects under [github.com/gosuda](https://github.com/gosuda).
 
-Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [See more.](https://gosuda.org/portal/)
+## What's Included
 
-## Table of Contents
+| File | Purpose |
+|------|---------|
+| [`AGENTS.md`](AGENTS.md) | AI agent coding guidelines (Go 1.25+) |
+| [`CLAUDE.md`](CLAUDE.md) | Symlink → `AGENTS.md` (Claude Code compatibility) |
+| [`.golangci.yml`](.golangci.yml) | golangci-lint v2 config — 41 linters across 4 tiers |
+| [`Makefile`](Makefile) | Build, lint, test, vuln scan targets |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | GitHub Actions: test → lint → security → build |
 
-- [Overview](#overview)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [License](#license)
+## Usage
 
-## Overview
+### New Project Setup
 
-Portal connects local applications to web users through a secure relay layer.
-Each application is assigned a subdomain within Portal, and all traffic between endpoints is end-to-end encrypted.
-This enables developers to publish local services globally without managing servers or cloud infrastructure.
+1. **Copy config files** into your Go project root:
 
-## Features
+   ```bash
+   # From a clone of this repo
+   cp .golangci.yml Makefile /path/to/your/project/
+   cp -r .github /path/to/your/project/
+   ```
 
-- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network.
-- 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication, including browser sessions via a WASM-based Service Worker proxy.
-- 🕊️ **Permissionless Hosting**: Anyone can open or choose their own Portal — no approval, no central authority.
-- 🚀 **High Performance**: Multiplexed connections using yamux
-- ⚙️ **Simple Setup**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
+2. **Copy agent guidelines** (for AI-assisted development):
 
-## Quick Start
-You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
+   ```bash
+   cp AGENTS.md /path/to/your/project/
+   ln -s AGENTS.md /path/to/your/project/CLAUDE.md
+   ```
 
-### Running the Portal Network
-Run Portal with Docker Compose:
+3. **Verify setup:**
 
-```bash
-# 1. Start services
-docker compose up
+   ```bash
+   cd /path/to/your/project
+   make all
+   ```
 
-# 2. Open in browser
-http://localhost:4017
+### As a GitHub Template
 
-# 3. Access admin panel at http://localhost:4017/admin
-# If ADMIN_SECRET_KEY is not set, a random key will be auto-generated and shown in logs
-# To use your own key:
-ADMIN_SECRET_KEY=your-secret-key docker compose up
+This repo is designed as a **template repository**. Click **"Use this template"** on GitHub to create a new project with all configs pre-applied.
+
+## Tooling Requirements
+
+| Tool | Install |
+|------|---------|
+| Go 1.25+ | [go.dev/dl](https://go.dev/dl/) |
+| golangci-lint v2 | `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` |
+| govulncheck | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
+| goimports | `go install golang.org/x/tools/cmd/goimports@latest` |
+
+## CI Pipeline
+
+```
+test (race + coverage) ─┐
+lint (golangci-lint v2) ─┼─→ build
+security (govulncheck) ─┘
 ```
 
-For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
+All three jobs run in parallel; build depends on all passing.
 
-### Running a Portal App using Tunnel
+## Linter Tiers
 
-```bash
-# 1. Start your local service
-
-# 2. Run the tunnel client to expose
-## If you use it in windows
-$env:HOST="localhost:3000"; $env:NAME="myapp"; irm http://localhost:4017/tunnel | iex
-## Else
-curl -fsSL http://localhost:4017/tunnel | HOST=localhost:3000 NAME=myapp sh
-```
-
-### Running a Portal App using the SDK
-See [portal-toys](https://github.com/gosuda/portal-toys)
-
-## Architecture
-
-For a detailed overview of system components and data flow, see the [architecture documentation](docs/architecture.md).
-
-## Glossary
-
-If you need Portal-specific terminology, check the [Portal glossary](docs/glossary.md)
-## Contributing
-
-We welcome contributions from the community!
-Before getting started, please check the [development guide](docs/development.md)
- for setup instructions and best practices.
-
-### Steps to Contribute
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- **Tier 1 — Correctness** (14): govet, errcheck, staticcheck, unused, gosec, errorlint, nilerr, copyloopvar, bodyclose, sqlclosecheck, rowserrcheck, durationcheck, makezero, noctx
+- **Tier 2 — Quality** (16): gocritic (all tags), revive, unconvert, unparam, wastedassign, misspell, whitespace, godot, goconst, dupword, usestdlibvars, testifylint, testableexamples, tparallel, usetesting
+- **Tier 3 — Concurrency** (3): gochecknoglobals, gochecknoinits, containedctx
+- **Tier 4 — Performance** (9): prealloc, intrange, modernize, fatcontext, perfsprint, reassign, spancheck, mirror, recvcheck
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Internal tooling for [gosuda](https://github.com/gosuda) projects.
