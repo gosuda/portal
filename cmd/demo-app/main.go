@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,6 +24,9 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
+//go:embed static/thumbnail.png
+var thumbnailPNG []byte
+
 var (
 	flagServerURL string
 	flagPort      int
@@ -38,7 +42,7 @@ func main() {
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
-	flag.StringVar(&flagTags, "tags", "demo,connectivity", "comma-separated lease tags")
+	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
 
@@ -88,6 +92,9 @@ func runDemo() error {
 	defer client.Close()
 
 	// 3) Register lease
+	// Create base64 data URI from embedded thumbnail
+	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
+
 	listener, err := client.Listen(
 		cred,
 		flagName,
@@ -95,6 +102,7 @@ func runDemo() error {
 		sdk.WithDescription(flagDesc),
 		sdk.WithTags(strings.Split(flagTags, ",")),
 		sdk.WithOwner(flagOwner),
+		sdk.WithThumbnail(thumbnailDataURI),
 		sdk.WithHide(flagHide),
 	)
 	if err != nil {
@@ -127,8 +135,44 @@ func runDemo() error {
 	// WebSocket echo endpoint for bidirectional test
 	mux.HandleFunc("/ws", handleWS)
 
+	// Test endpoint for multiple Set-Cookie headers
+	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "session_id",
+			Value:    "abc123",
+			Path:     "/",
+			HttpOnly: true,
+			MaxAge:   3600,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:   "csrf_token",
+			Value:  "xyz789",
+			Path:   "/",
+			MaxAge: 3600,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:   "user_pref",
+			Value:  "dark_mode",
+			Path:   "/",
+			MaxAge: 86400,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"message": "3 cookies set: session_id, csrf_token, user_pref",
+		})
+	})
+
 	// 5) Serve HTTP over relay listener
 	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+
+	// Also serve on local port for direct testing
+	go func() {
+		localAddr := fmt.Sprintf(":%d", flagPort)
+		log.Info().Msgf("[demo] also serving on local port %s for direct testing", localAddr)
+		if err := http.ListenAndServe(localAddr, mux); err != nil {
+			log.Error().Err(err).Msg("local http serve error")
+		}
+	}()
 
 	srvErr := make(chan error, 1)
 	go func() {

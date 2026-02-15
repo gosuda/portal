@@ -1,18 +1,18 @@
 # Development Principles and Operational Guide
 
-This document defines the core principles and operational scope of the Portal project.  
+This document defines the core principles and operational scope of the Portal project.
 It aims to prevent unnecessary feature expansion or direction drift, and to maintain a consistent user experience.
 
 ---
 
 ## 1. Usability Invariance Principle
-Portal developers must ensure that any new feature does not alter existing usability.  
+Portal developers must ensure that any new feature does not alter existing usability.
 A "change in usability" includes, but is not limited to:
 
-- Modifications to the Portal usage flow  
-- Changes to the deployment or configuration process  
-- Alterations to the SDK development environment  
-- Increases in codebase complexity  
+- Modifications to the Portal usage flow
+- Changes to the deployment or configuration process
+- Alterations to the SDK development environment
+- Increases in codebase complexity
 - Any similar impacts that may affect the user experience
 
 ---
@@ -26,7 +26,7 @@ If a feature impacts usability, the proposer must provide a clear written ration
 
 
 ## 3. Testing and Quality Assurance
-Unfinished or experimental features must not be merged directly into the main branch.  
+Unfinished or experimental features must not be merged directly into the main branch.
 All new features must be fully tested and verified in a personal branch before merging.
 
 ---
@@ -34,7 +34,7 @@ All new features must be fully tested and verified in a personal branch before m
 ## 4. Project Philosophy and Scope
 Portal serves as a relay layer that allows individuals to publicly expose locally running services, with built-in end-to-end encryption.
 
-- When proposing new features, include sufficient justification and follow the agreement process described above.  
+- When proposing new features, include sufficient justification and follow the agreement process described above.
 - Approved features must be documented and tracked in the project roadmap.
 
 ---
