@@ -7,7 +7,6 @@ package rdsec
 import (
 	fmt "fmt"
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
-	proto "google.golang.org/protobuf/proto"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	io "io"
 	unsafe "unsafe"
@@ -38,7 +37,7 @@ func (m *Identity) CloneVT() *Identity {
 	return r
 }
 
-func (m *Identity) CloneMessageVT() proto.Message {
+func (m *Identity) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -68,7 +67,7 @@ func (m *ClientInitPayload) CloneVT() *ClientInitPayload {
 	return r
 }
 
-func (m *ClientInitPayload) CloneMessageVT() proto.Message {
+func (m *ClientInitPayload) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -94,7 +93,7 @@ func (m *SignedPayload) CloneVT() *SignedPayload {
 	return r
 }
 
-func (m *SignedPayload) CloneMessageVT() proto.Message {
+func (m *SignedPayload) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -124,7 +123,7 @@ func (m *ServerInitPayload) CloneVT() *ServerInitPayload {
 	return r
 }
 
-func (m *ServerInitPayload) CloneMessageVT() proto.Message {
+func (m *ServerInitPayload) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -143,7 +142,7 @@ func (this *Identity) EqualVT(that *Identity) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *Identity) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *Identity) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*Identity)
 	if !ok {
 		return false
@@ -177,7 +176,7 @@ func (this *ClientInitPayload) EqualVT(that *ClientInitPayload) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *ClientInitPayload) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *ClientInitPayload) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ClientInitPayload)
 	if !ok {
 		return false
@@ -199,7 +198,7 @@ func (this *SignedPayload) EqualVT(that *SignedPayload) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *SignedPayload) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *SignedPayload) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*SignedPayload)
 	if !ok {
 		return false
@@ -233,7 +232,7 @@ func (this *ServerInitPayload) EqualVT(that *ServerInitPayload) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *ServerInitPayload) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *ServerInitPayload) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ServerInitPayload)
 	if !ok {
 		return false

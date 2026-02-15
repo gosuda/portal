@@ -14,11 +14,15 @@ import (
 // and wraps them as io.ReadWriteCloser.
 func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
 	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		wsConn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		wsConn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
 			return nil, err
 		}
-		return &wsstream.WsStream{Conn: wsConn}, nil
+		// Response body is closed by the Dialer on successful connection
+		return wsstream.New(wsConn), nil
 	}
 }
 
@@ -38,5 +42,5 @@ func UpgradeToWSStream(w http.ResponseWriter, r *http.Request, responseHeader ht
 	if err != nil {
 		return nil, nil, err
 	}
-	return &wsstream.WsStream{Conn: wsConn}, wsConn, nil
+	return wsstream.New(wsConn), wsConn, nil
 }

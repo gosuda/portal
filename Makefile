@@ -50,19 +50,35 @@ build-protoc:
 		portal/core/proto/rdverb/rdverb.proto
 
 # Build WASM artifacts with wasm-opt optimization and generate manifest
+# Production build: strips all debug symbols, prioritizes runtime speed
 build-wasm:
-	@echo "[wasm] building webclient WASM..."
+	@echo "[wasm] building webclient WASM (production, stripped symbols)..."
 	@mkdir -p cmd/relay-server/dist/wasm
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags "-s -w" -o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
+	@# -trimpath: removes file system paths from stack traces
+	@# -gcflags="-l=4": inlining optimization (level 4 = aggressive)
+	@# -ldflags "-s -w": -s strips symbol table, -w strips DWARF debug info
+	@# -buildid=: removes build ID for reproducible builds
+	@# -tags=prod: enables production-only code (no logging, no HTML injection in WASM)
+	GOOS=js GOARCH=wasm go build \
+		-trimpath \
+		-gcflags="-l=4 -trimpath" \
+		-ldflags="-s -w -buildid=" \
+		-tags=prod \
+		-o cmd/relay-server/dist/wasm/portal.wasm ./cmd/webclient
 
-	@echo "[wasm] optimizing with wasm-opt..."
+	@echo "[wasm] optimizing with wasm-opt (dual-pass: O4 then Oz)..."
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		wasm-opt -Oz --enable-bulk-memory cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
-		mv cmd/relay-server/dist/wasm/portal.wasm.tmp cmd/relay-server/dist/wasm/portal.wasm; \
-		echo "[wasm] optimization complete"; \
+		echo "[wasm] pass 1: -O4 for runtime performance..."; \
+		wasm-opt -O4 --enable-bulk-memory --enable-sign-ext --enable-reference-types \
+			cmd/relay-server/dist/wasm/portal.wasm -o cmd/relay-server/dist/wasm/portal.wasm.tmp && \
+		echo "[wasm] pass 2: -Oz for size optimization..."; \
+		wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --enable-reference-types \
+			cmd/relay-server/dist/wasm/portal.wasm.tmp -o cmd/relay-server/dist/wasm/portal.wasm && \
+		rm -f cmd/relay-server/dist/wasm/portal.wasm.tmp; \
+		echo "[wasm] dual-pass optimization complete (O4 -> Oz)"; \
 	else \
 		echo "[wasm] WARNING: wasm-opt not found, skipping optimization"; \
-		echo "[wasm] Install binaryen for smaller WASM files: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
+		echo "[wasm] Install binaryen for WASM optimization: brew install binaryen (macOS) or apt-get install binaryen (Linux)"; \
 	fi
 
 	@echo "[wasm] calculating SHA256 hash..."

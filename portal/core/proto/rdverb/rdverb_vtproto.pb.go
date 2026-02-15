@@ -7,7 +7,6 @@ package rdverb
 import (
 	fmt "fmt"
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
-	proto "google.golang.org/protobuf/proto"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
 	io "io"
@@ -39,7 +38,7 @@ func (m *Packet) CloneVT() *Packet {
 	return r
 }
 
-func (m *Packet) CloneMessageVT() proto.Message {
+func (m *Packet) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -68,7 +67,7 @@ func (m *RelayInfo) CloneVT() *RelayInfo {
 	return r
 }
 
-func (m *RelayInfo) CloneMessageVT() proto.Message {
+func (m *RelayInfo) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -84,7 +83,7 @@ func (m *RelayInfoRequest) CloneVT() *RelayInfoRequest {
 	return r
 }
 
-func (m *RelayInfoRequest) CloneMessageVT() proto.Message {
+func (m *RelayInfoRequest) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -101,7 +100,7 @@ func (m *RelayInfoResponse) CloneVT() *RelayInfoResponse {
 	return r
 }
 
-func (m *RelayInfoResponse) CloneMessageVT() proto.Message {
+func (m *RelayInfoResponse) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -126,7 +125,7 @@ func (m *Lease) CloneVT() *Lease {
 	return r
 }
 
-func (m *Lease) CloneMessageVT() proto.Message {
+func (m *Lease) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -149,7 +148,7 @@ func (m *LeaseUpdateRequest) CloneVT() *LeaseUpdateRequest {
 	return r
 }
 
-func (m *LeaseUpdateRequest) CloneMessageVT() proto.Message {
+func (m *LeaseUpdateRequest) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -166,7 +165,7 @@ func (m *LeaseUpdateResponse) CloneVT() *LeaseUpdateResponse {
 	return r
 }
 
-func (m *LeaseUpdateResponse) CloneMessageVT() proto.Message {
+func (m *LeaseUpdateResponse) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -189,7 +188,7 @@ func (m *LeaseDeleteRequest) CloneVT() *LeaseDeleteRequest {
 	return r
 }
 
-func (m *LeaseDeleteRequest) CloneMessageVT() proto.Message {
+func (m *LeaseDeleteRequest) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -206,7 +205,7 @@ func (m *LeaseDeleteResponse) CloneVT() *LeaseDeleteResponse {
 	return r
 }
 
-func (m *LeaseDeleteResponse) CloneMessageVT() proto.Message {
+func (m *LeaseDeleteResponse) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -224,7 +223,7 @@ func (m *ConnectionRequest) CloneVT() *ConnectionRequest {
 	return r
 }
 
-func (m *ConnectionRequest) CloneMessageVT() proto.Message {
+func (m *ConnectionRequest) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -241,7 +240,7 @@ func (m *ConnectionResponse) CloneVT() *ConnectionResponse {
 	return r
 }
 
-func (m *ConnectionResponse) CloneMessageVT() proto.Message {
+func (m *ConnectionResponse) CloneMessageVT() any {
 	return m.CloneVT()
 }
 
@@ -260,7 +259,7 @@ func (this *Packet) EqualVT(that *Packet) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *Packet) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *Packet) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*Packet)
 	if !ok {
 		return false
@@ -305,7 +304,7 @@ func (this *RelayInfo) EqualVT(that *RelayInfo) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *RelayInfo) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *RelayInfo) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*RelayInfo)
 	if !ok {
 		return false
@@ -321,7 +320,7 @@ func (this *RelayInfoRequest) EqualVT(that *RelayInfoRequest) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *RelayInfoRequest) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *RelayInfoRequest) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*RelayInfoRequest)
 	if !ok {
 		return false
@@ -340,7 +339,7 @@ func (this *RelayInfoResponse) EqualVT(that *RelayInfoResponse) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *RelayInfoResponse) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *RelayInfoResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*RelayInfoResponse)
 	if !ok {
 		return false
@@ -377,7 +376,7 @@ func (this *Lease) EqualVT(that *Lease) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *Lease) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *Lease) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*Lease)
 	if !ok {
 		return false
@@ -402,7 +401,7 @@ func (this *LeaseUpdateRequest) EqualVT(that *LeaseUpdateRequest) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *LeaseUpdateRequest) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *LeaseUpdateRequest) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*LeaseUpdateRequest)
 	if !ok {
 		return false
@@ -421,7 +420,7 @@ func (this *LeaseUpdateResponse) EqualVT(that *LeaseUpdateResponse) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *LeaseUpdateResponse) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *LeaseUpdateResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*LeaseUpdateResponse)
 	if !ok {
 		return false
@@ -446,7 +445,7 @@ func (this *LeaseDeleteRequest) EqualVT(that *LeaseDeleteRequest) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *LeaseDeleteRequest) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *LeaseDeleteRequest) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*LeaseDeleteRequest)
 	if !ok {
 		return false
@@ -465,7 +464,7 @@ func (this *LeaseDeleteResponse) EqualVT(that *LeaseDeleteResponse) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *LeaseDeleteResponse) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *LeaseDeleteResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*LeaseDeleteResponse)
 	if !ok {
 		return false
@@ -487,7 +486,7 @@ func (this *ConnectionRequest) EqualVT(that *ConnectionRequest) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *ConnectionRequest) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *ConnectionRequest) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ConnectionRequest)
 	if !ok {
 		return false
@@ -506,7 +505,7 @@ func (this *ConnectionResponse) EqualVT(that *ConnectionResponse) bool {
 	return string(this.unknownFields) == string(that.unknownFields)
 }
 
-func (this *ConnectionResponse) EqualMessageVT(thatMsg proto.Message) bool {
+func (this *ConnectionResponse) EqualMessageVT(thatMsg any) bool {
 	that, ok := thatMsg.(*ConnectionResponse)
 	if !ok {
 		return false
