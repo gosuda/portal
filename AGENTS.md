@@ -272,7 +272,7 @@ go test -v -race -coverprofile=coverage.out ./...
 ## Module Hygiene
 
 - **Always commit** `go.mod` and `go.sum` · **never commit** `go.work`
-- **Pin toolchain:** `toolchain go1.25.0` in go.mod
+- **Pin toolchain:** `toolchain go1.26.0` in go.mod
 - **Tool directive (Go 1.24+):** `tool golang.org/x/tools/cmd/stringer` in go.mod
 - **Pre-release:** `go mod tidy && go mod verify && govulncheck ./...`
 - **Sandboxed I/O (Go 1.24+):** `os.Root` for directory-scoped file operations
