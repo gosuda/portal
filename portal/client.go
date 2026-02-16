@@ -525,7 +525,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 
 // RequestConnection initiates a connection to a remote peer through the relay.
 // It performs the following steps:
-// 1. Opens a new yamux stream to the relay server
+// 1. Opens a new stream to the relay server
 // 2. Sends a connection request for the specified lease ID
 // 3. Waits for accept/reject response from the remote peer
 // 4. If accepted, performs client-side cryptographic handshake

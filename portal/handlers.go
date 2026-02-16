@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/rs/zerolog/log"
@@ -57,7 +58,7 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 	}
 
 	if !cryptoops.VerifySignedPayload(&signedPayload, req.Lease.Identity) {
-		return err
+		return cryptoops.ErrInvalidSignature
 	}
 
 	var resp rdverb.LeaseUpdateResponse
@@ -114,7 +115,7 @@ func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdver
 	}
 
 	if !cryptoops.VerifySignedPayload(&signedPayload, req.Identity) {
-		return err
+		return cryptoops.ErrInvalidSignature
 	}
 
 	var resp rdverb.LeaseDeleteResponse
@@ -327,7 +328,7 @@ func readPacket(stream io.Reader) (*rdverb.Packet, error) {
 
 	n := int(binary.BigEndian.Uint32(size[:]))
 	if n > _MAX_RAW_PACKET_SIZE {
-		return nil, err
+		return nil, fmt.Errorf("packet size %d exceeds maximum %d", n, _MAX_RAW_PACKET_SIZE)
 	}
 
 	buffer := bytebufferpool.Get()
