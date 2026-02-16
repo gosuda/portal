@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -86,8 +85,8 @@ func main() {
 
 type Result struct {
 	ID         string
-	PrivateKey ed25519.PrivateKey
-	PublicKey  ed25519.PublicKey
+	PrivateKey []byte
+	PublicKey  []byte
 	Attempt    uint64
 }
 
@@ -107,14 +106,14 @@ func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *
 		// Generate random seed using randpool
 		randpool.Rand(seed[:])
 
-		// Generate private key from seed (this is 64 bytes: 32 byte seed + 32 byte public key)
-		privateKey := ed25519.NewKeyFromSeed(seed[:])
+		cred, err := cryptoops.NewCredentialFromPrivateKey(seed[:])
+		if err != nil {
+			continue
+		}
 
-		// Extract public key (last 32 bytes of private key)
-		publicKey := ed25519.PublicKey(privateKey[32:])
-
-		// Derive ID
-		id := cryptoops.DeriveID(publicKey)
+		privateKey := cred.X25519PrivateKey()
+		publicKey := cred.PublicKey()
+		id := cred.ID()
 
 		// Increment attempts counter
 		attemptNum := atomic.AddUint64(attempts, 1)

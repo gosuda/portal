@@ -9,8 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/bytebufferpool"
 
-	"gosuda.org/portal/portal/core/cryptoops"
-	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
@@ -46,26 +44,25 @@ func (g *RelayServer) handleRelayInfoRequest(ctx *StreamContext, packet *rdverb.
 }
 
 func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdverb.Packet) error {
-	var signedPayload rdsec.SignedPayload
-	err := signedPayload.UnmarshalVT(packet.Payload)
-	if err != nil {
-		return err
-	}
-
 	var req rdverb.LeaseUpdateRequest
-	err = req.UnmarshalVT(signedPayload.Data)
+	err := req.UnmarshalVT(packet.Payload)
 	if err != nil {
 		return err
-	}
-
-	if !cryptoops.VerifySignedPayload(&signedPayload, req.Lease.Identity) {
-		return cryptoops.ErrInvalidSignature
 	}
 
 	var resp rdverb.LeaseUpdateResponse
 
-	// Update lease in lease manager
-	if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID) {
+	if req.Lease == nil || req.Lease.Identity == nil {
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+	} else if existingLease, exists := g.leaseManager.GetLease(req.Lease.Identity); exists && existingLease.ConnectionID != ctx.ConnectionID {
+		log.Warn().
+			Str("lease_id", req.Lease.Identity.Id).
+			Int64("owner_connection_id", existingLease.ConnectionID).
+			Int64("request_connection_id", ctx.ConnectionID).
+			Msg("[RelayServer] Lease update rejected due to connection ownership mismatch")
+		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+	} else if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID) {
+		// Update lease in lease manager
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
 		// Log lease update completion
@@ -98,35 +95,40 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 }
 
 func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdverb.Packet) error {
-	var signedPayload rdsec.SignedPayload
-	err := signedPayload.UnmarshalVT(packet.Payload)
-	if err != nil {
-		return err
-	}
-
 	var req rdverb.LeaseDeleteRequest
-	err = req.UnmarshalVT(signedPayload.Data)
+	err := req.UnmarshalVT(packet.Payload)
 	if err != nil {
 		return err
-	}
-
-	if !cryptoops.VerifySignedPayload(&signedPayload, req.Identity) {
-		return cryptoops.ErrInvalidSignature
 	}
 
 	var resp rdverb.LeaseDeleteResponse
-
-	// Delete lease from lease manager
-	if g.leaseManager.DeleteLease(req.Identity) {
-		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
-
-		// Log lease deletion completion
-		leaseID := req.Identity.Id
-		log.Debug().
-			Str("lease_id", leaseID).
-			Msg("[RelayServer] Lease deletion completed successfully")
-	} else {
+	switch req.Identity {
+	case nil:
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+	default:
+		existingLease, exists := g.leaseManager.GetLease(req.Identity)
+		switch {
+		case !exists:
+			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+		case existingLease.ConnectionID != ctx.ConnectionID:
+			log.Warn().
+				Str("lease_id", req.Identity.Id).
+				Int64("owner_connection_id", existingLease.ConnectionID).
+				Int64("request_connection_id", ctx.ConnectionID).
+				Msg("[RelayServer] Lease deletion rejected due to connection ownership mismatch")
+			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+		case g.leaseManager.DeleteLease(req.Identity):
+			// Delete lease from lease manager
+			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
+
+			// Log lease deletion completion
+			leaseID := req.Identity.Id
+			log.Debug().
+				Str("lease_id", leaseID).
+				Msg("[RelayServer] Lease deletion completed successfully")
+		default:
+			resp.Code = rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY
+		}
 	}
 
 	response, err := resp.MarshalVT()

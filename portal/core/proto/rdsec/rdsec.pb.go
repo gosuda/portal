@@ -7,12 +7,11 @@
 package rdsec
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -201,58 +200,6 @@ func (x *ClientInitPayload) GetSessionPublicKey() []byte {
 	return nil
 }
 
-type SignedPayload struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	Signature     []byte                 `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SignedPayload) Reset() {
-	*x = SignedPayload{}
-	mi := &file_rdsec_rdsec_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SignedPayload) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SignedPayload) ProtoMessage() {}
-
-func (x *SignedPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_rdsec_rdsec_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SignedPayload.ProtoReflect.Descriptor instead.
-func (*SignedPayload) Descriptor() ([]byte, []int) {
-	return file_rdsec_rdsec_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *SignedPayload) GetData() []byte {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *SignedPayload) GetSignature() []byte {
-	if x != nil {
-		return x.Signature
-	}
-	return nil
-}
-
 type ServerInitPayload struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Version          ProtocolVersion        `protobuf:"varint,1,opt,name=version,proto3,enum=rdsec.ProtocolVersion" json:"version,omitempty"`
@@ -267,7 +214,7 @@ type ServerInitPayload struct {
 
 func (x *ServerInitPayload) Reset() {
 	*x = ServerInitPayload{}
-	mi := &file_rdsec_rdsec_proto_msgTypes[3]
+	mi := &file_rdsec_rdsec_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -279,7 +226,7 @@ func (x *ServerInitPayload) String() string {
 func (*ServerInitPayload) ProtoMessage() {}
 
 func (x *ServerInitPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_rdsec_rdsec_proto_msgTypes[3]
+	mi := &file_rdsec_rdsec_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -292,7 +239,7 @@ func (x *ServerInitPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerInitPayload.ProtoReflect.Descriptor instead.
 func (*ServerInitPayload) Descriptor() ([]byte, []int) {
-	return file_rdsec_rdsec_proto_rawDescGZIP(), []int{3}
+	return file_rdsec_rdsec_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ServerInitPayload) GetVersion() ProtocolVersion {
@@ -352,10 +299,7 @@ const file_rdsec_rdsec_proto_rawDesc = "" +
 	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12+\n" +
 	"\bidentity\x18\x04 \x01(\v2\x0f.rdsec.IdentityR\bidentity\x12\x12\n" +
 	"\x04alpn\x18\x05 \x01(\tR\x04alpn\x12,\n" +
-	"\x12session_public_key\x18\x06 \x01(\fR\x10sessionPublicKey\"A\n" +
-	"\rSignedPayload\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1c\n" +
-	"\tsignature\x18\x02 \x01(\fR\tsignature\"\xe8\x01\n" +
+	"\x12session_public_key\x18\x06 \x01(\fR\x10sessionPublicKey\"\xe8\x01\n" +
 	"\x11ServerInitPayload\x120\n" +
 	"\aversion\x18\x01 \x01(\x0e2\x16.rdsec.ProtocolVersionR\aversion\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n" +
@@ -381,13 +325,12 @@ func file_rdsec_rdsec_proto_rawDescGZIP() []byte {
 }
 
 var file_rdsec_rdsec_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rdsec_rdsec_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_rdsec_rdsec_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_rdsec_rdsec_proto_goTypes = []any{
 	(ProtocolVersion)(0),      // 0: rdsec.ProtocolVersion
 	(*Identity)(nil),          // 1: rdsec.Identity
 	(*ClientInitPayload)(nil), // 2: rdsec.ClientInitPayload
-	(*SignedPayload)(nil),     // 3: rdsec.SignedPayload
-	(*ServerInitPayload)(nil), // 4: rdsec.ServerInitPayload
+	(*ServerInitPayload)(nil), // 3: rdsec.ServerInitPayload
 }
 var file_rdsec_rdsec_proto_depIdxs = []int32{
 	0, // 0: rdsec.ClientInitPayload.version:type_name -> rdsec.ProtocolVersion
@@ -412,7 +355,7 @@ func file_rdsec_rdsec_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rdsec_rdsec_proto_rawDesc), len(file_rdsec_rdsec_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

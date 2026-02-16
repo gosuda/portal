@@ -2,7 +2,8 @@ package cryptoops
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base32"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -50,8 +51,6 @@ func releaseBuffer(buffer *bytebufferpool.ByteBuffer) {
 
 var (
 	ErrHandshakeFailed  = errors.New("handshake failed")
-	ErrInvalidSignature = errors.New("invalid signature")
-	ErrInvalidIdentity  = errors.New("invalid identity")
 	ErrEncryptionFailed = errors.New("encryption failed")
 	ErrDecryptionFailed = errors.New("decryption failed")
 )
@@ -62,10 +61,6 @@ const (
 
 	// noisePrologue binds the handshake to this specific protocol version.
 	noisePrologue = "portal/noise/1"
-
-	// identityPayloadSize is the size of the identity payload sent during the handshake:
-	// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key].
-	identityPayloadSize = ed25519.PublicKeySize + ed25519.SignatureSize
 )
 
 func newNoiseCipherSuite() noise.CipherSuite {
@@ -78,10 +73,6 @@ func newNoiseCipherSuite() noise.CipherSuite {
 //   - Mutual authentication via X25519 static keys
 //   - Forward secrecy via ephemeral X25519 keys
 //   - Identity hiding (static keys are encrypted)
-//
-// Identity binding: Each party sends their Ed25519 public key along with an Ed25519
-// signature over the Noise X25519 static public key. This cryptographically binds the
-// Portal identity (derived from Ed25519) to the Noise session key (derived from X25519).
 type Handshaker struct {
 	credential *Credential
 }
@@ -296,8 +287,8 @@ func (sc *SecureConnection) Close() error {
 // Message flow:
 //
 //	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
-//	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
-//	Message 3 (client → server): s, se + client identity payload (encrypted)
+//	Message 2 (server → client): e, ee, s, es
+//	Message 3 (client → server): s, se
 func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteCloser, alpn string) (*SecureConnection, error) {
 	x25519Key := noise.DHKey{
 		Private: h.credential.X25519PrivateKey(),
@@ -341,28 +332,18 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 		return nil, fmt.Errorf("%w: send msg1: %w", ErrHandshakeFailed, err)
 	}
 
-	// Message 2: ← e, ee, s, es + server identity payload
+	// Message 2: ← e, ee, s, es
 	msg2Raw, err := readLengthPrefixed(conn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: recv msg2: %w", ErrHandshakeFailed, err)
 	}
-	serverPayload, _, _, err := hs.ReadMessage(nil, msg2Raw)
+	_, _, _, err = hs.ReadMessage(nil, msg2Raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read msg2: %w", ErrHandshakeFailed, err)
 	}
 
-	// Verify server identity BEFORE sending our identity
-	remoteID, err := verifyIdentityPayload(serverPayload, hs.PeerStatic())
-	if err != nil {
-		if closeErr := conn.Close(); closeErr != nil {
-			return nil, errors.Join(err, closeErr)
-		}
-		return nil, err
-	}
-
-	// Message 3: → s, se + client identity payload
-	clientPayload := makeIdentityPayload(h.credential, x25519Key.Public)
-	msg3, cs1, cs2, err := hs.WriteMessage(nil, clientPayload)
+	// Message 3: → s, se
+	msg3, cs1, cs2, err := hs.WriteMessage(nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: write msg3: %w", ErrHandshakeFailed, err)
 	}
@@ -372,7 +353,9 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	}
 
 	// cs1 = initiator→responder (client encrypt), cs2 = responder→initiator (client decrypt)
-	return h.createSecureConnection(conn, cs1, cs2, remoteID), nil
+	localID := deriveConnectionID(x25519Key.Public)
+	remoteID := deriveConnectionID(hs.PeerStatic())
+	return h.createSecureConnection(conn, cs1, cs2, localID, remoteID), nil
 }
 
 // ServerHandshake performs the server-side (responder) Noise XX handshake.
@@ -380,8 +363,8 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 // Message flow:
 //
 //	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
-//	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
-//	Message 3 (client → server): s, se + client identity payload (encrypted)
+//	Message 2 (server → client): e, ee, s, es
+//	Message 3 (client → server): s, se
 func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
 	x25519Key := noise.DHKey{
 		Private: h.credential.X25519PrivateKey(),
@@ -430,9 +413,8 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 		return nil, ErrHandshakeFailed
 	}
 
-	// Message 2: → e, ee, s, es + server identity payload
-	serverPayload := makeIdentityPayload(h.credential, x25519Key.Public)
-	msg2, _, _, err := hs.WriteMessage(nil, serverPayload)
+	// Message 2: → e, ee, s, es
+	msg2, _, _, err := hs.WriteMessage(nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: write msg2: %w", ErrHandshakeFailed, err)
 	}
@@ -441,37 +423,30 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 		return nil, fmt.Errorf("%w: send msg2: %w", ErrHandshakeFailed, err)
 	}
 
-	// Message 3: ← s, se + client identity payload
+	// Message 3: ← s, se
 	msg3Raw, err := readLengthPrefixed(conn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: recv msg3: %w", ErrHandshakeFailed, err)
 	}
-	clientPayload, cs1, cs2, err := hs.ReadMessage(nil, msg3Raw)
+	_, cs1, cs2, err := hs.ReadMessage(nil, msg3Raw)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read msg3: %w", ErrHandshakeFailed, err)
 	}
 
-	// Verify client identity
-	remoteID, err := verifyIdentityPayload(clientPayload, hs.PeerStatic())
-	if err != nil {
-		if closeErr := conn.Close(); closeErr != nil {
-			return nil, errors.Join(err, closeErr)
-		}
-		return nil, err
-	}
-
 	// cs1 = initiator→responder (server decrypt), cs2 = responder→initiator (server encrypt)
-	return h.createSecureConnection(conn, cs2, cs1, remoteID), nil
+	localID := deriveConnectionID(x25519Key.Public)
+	remoteID := deriveConnectionID(hs.PeerStatic())
+	return h.createSecureConnection(conn, cs2, cs1, localID, remoteID), nil
 }
 
 // createSecureConnection builds a SecureConnection from the completed handshake.
-func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, decryptor *noise.CipherState, remoteID string) *SecureConnection {
+func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, decryptor *noise.CipherState, localID, remoteID string) *SecureConnection {
 	readBuffer := acquireBuffer(1 << 12)
 	readBuffer.B = readBuffer.B[:0]
 
 	return &SecureConnection{
 		conn:       conn,
-		localID:    h.credential.id,
+		localID:    localID,
 		remoteID:   remoteID,
 		encryptor:  encryptor,
 		decryptor:  decryptor,
@@ -479,34 +454,9 @@ func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, 
 	}
 }
 
-// makeIdentityPayload constructs the identity binding payload:
-// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key].
-func makeIdentityPayload(cred *Credential, x25519Pub []byte) []byte {
-	payload := make([]byte, identityPayloadSize)
-	copy(payload[:ed25519.PublicKeySize], cred.PublicKey())
-	sig := cred.Sign(x25519Pub)
-	copy(payload[ed25519.PublicKeySize:], sig)
-	return payload
-}
-
-// verifyIdentityPayload verifies the identity binding and returns the Portal identity ID.
-// It checks that the Ed25519 signature over the X25519 static key is valid, which
-// proves the peer controls both the Ed25519 identity and the Noise session key.
-func verifyIdentityPayload(payload, remoteX25519Pub []byte) (string, error) {
-	if len(payload) != identityPayloadSize {
-		return "", ErrInvalidIdentity
-	}
-
-	ed25519Pub := payload[:ed25519.PublicKeySize]
-	sig := payload[ed25519.PublicKeySize:]
-
-	// Verify Ed25519 signature over the X25519 static public key
-	if !ed25519.Verify(ed25519Pub, remoteX25519Pub, sig) {
-		return "", ErrInvalidSignature
-	}
-
-	// Derive Portal identity from Ed25519 public key
-	return DeriveID(ed25519Pub), nil
+func deriveConnectionID(staticKey []byte) string {
+	sum := sha256.Sum256(staticKey)
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:16])
 }
 
 // encodeALPN encodes an ALPN string as [1B length][N bytes string].

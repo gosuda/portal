@@ -9,8 +9,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"gosuda.org/portal/portal/core/proto/rdsec"
 )
 
 // pipeConn creates a bidirectional pipe for testing using TCP loopback.
@@ -134,6 +132,18 @@ func TestHandshakeSuccess(t *testing.T) {
 	}
 	if clientSecure == nil || serverSecure == nil {
 		t.Fatal("Secure connections are nil")
+	}
+	if clientSecure.LocalID() == "" || clientSecure.RemoteID() == "" {
+		t.Fatal("Client connection IDs should not be empty")
+	}
+	if serverSecure.LocalID() == "" || serverSecure.RemoteID() == "" {
+		t.Fatal("Server connection IDs should not be empty")
+	}
+	if clientSecure.LocalID() != serverSecure.RemoteID() {
+		t.Fatal("Client local ID should match server remote ID")
+	}
+	if serverSecure.LocalID() != clientSecure.RemoteID() {
+		t.Fatal("Server local ID should match client remote ID")
 	}
 
 	// Test that connections can communicate
@@ -477,39 +487,7 @@ func TestConcurrentWrites(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestInvalidIdentity tests identity validation.
-func TestInvalidIdentity(t *testing.T) {
-	cred, _ := NewCredential()
-
-	// Valid identity
-	validIdentity := &rdsec.Identity{
-		Id:        cred.ID(),
-		PublicKey: cred.PublicKey(),
-	}
-	if !ValidateIdentity(validIdentity) {
-		t.Error("Valid identity should pass validation")
-	}
-
-	// Wrong ID
-	invalidIdentity := &rdsec.Identity{
-		Id:        "WRONG_ID",
-		PublicKey: cred.PublicKey(),
-	}
-	if ValidateIdentity(invalidIdentity) {
-		t.Error("Identity with wrong ID should fail validation")
-	}
-
-	// Wrong key size
-	invalidIdentity2 := &rdsec.Identity{
-		Id:        cred.ID(),
-		PublicKey: []byte{1, 2, 3},
-	}
-	if ValidateIdentity(invalidIdentity2) {
-		t.Error("Identity with wrong key size should fail validation")
-	}
-}
-
-// TestX25519KeyDerivation tests X25519 key derivation from Ed25519 credentials.
+// TestX25519KeyDerivation tests X25519 key generation behavior.
 func TestX25519KeyDerivation(t *testing.T) {
 	cred1, _ := NewCredential()
 	cred2, _ := NewCredential()

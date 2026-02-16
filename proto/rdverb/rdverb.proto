@@ -59,8 +59,6 @@ message Lease {
 
 message LeaseUpdateRequest {
   Lease lease = 1;
-  bytes nonce = 2;
-  int64 timestamp = 3;
 }
 
 message LeaseUpdateResponse {
@@ -69,8 +67,6 @@ message LeaseUpdateResponse {
 
 message LeaseDeleteRequest {
   rdsec.Identity identity = 1;
-  bytes nonce = 2;
-  int64 timestamp = 3;
 }
 
 message LeaseDeleteResponse {

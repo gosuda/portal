@@ -7,13 +7,12 @@
 package rdverb
 
 import (
-	reflect "reflect"
-	sync "sync"
-	unsafe "unsafe"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
+	reflect "reflect"
+	sync "sync"
+	unsafe "unsafe"
 )
 
 const (
@@ -419,8 +418,6 @@ func (x *Lease) GetMetadata() string {
 type LeaseUpdateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Lease         *Lease                 `protobuf:"bytes,1,opt,name=lease,proto3" json:"lease,omitempty"`
-	Nonce         []byte                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -460,20 +457,6 @@ func (x *LeaseUpdateRequest) GetLease() *Lease {
 		return x.Lease
 	}
 	return nil
-}
-
-func (x *LeaseUpdateRequest) GetNonce() []byte {
-	if x != nil {
-		return x.Nonce
-	}
-	return nil
-}
-
-func (x *LeaseUpdateRequest) GetTimestamp() int64 {
-	if x != nil {
-		return x.Timestamp
-	}
-	return 0
 }
 
 type LeaseUpdateResponse struct {
@@ -523,8 +506,6 @@ func (x *LeaseUpdateResponse) GetCode() ResponseCode {
 type LeaseDeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Identity      *rdsec.Identity        `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
-	Nonce         []byte                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -564,20 +545,6 @@ func (x *LeaseDeleteRequest) GetIdentity() *rdsec.Identity {
 		return x.Identity
 	}
 	return nil
-}
-
-func (x *LeaseDeleteRequest) GetNonce() []byte {
-	if x != nil {
-		return x.Nonce
-	}
-	return nil
-}
-
-func (x *LeaseDeleteRequest) GetTimestamp() int64 {
-	if x != nil {
-		return x.Timestamp
-	}
-	return 0
 }
 
 type LeaseDeleteResponse struct {
@@ -741,17 +708,13 @@ const file_rdverb_rdverb_proto_rawDesc = "" +
 	"\aexpires\x18\x02 \x01(\x03R\aexpires\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x12\n" +
 	"\x04alpn\x18\x04 \x03(\tR\x04alpn\x12\x1a\n" +
-	"\bmetadata\x18\x05 \x01(\tR\bmetadata\"m\n" +
+	"\bmetadata\x18\x05 \x01(\tR\bmetadata\"9\n" +
 	"\x12LeaseUpdateRequest\x12#\n" +
-	"\x05lease\x18\x01 \x01(\v2\r.rdverb.LeaseR\x05lease\x12\x14\n" +
-	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"?\n" +
+	"\x05lease\x18\x01 \x01(\v2\r.rdverb.LeaseR\x05lease\"?\n" +
 	"\x13LeaseUpdateResponse\x12(\n" +
-	"\x04code\x18\x01 \x01(\x0e2\x14.rdverb.ResponseCodeR\x04code\"u\n" +
+	"\x04code\x18\x01 \x01(\x0e2\x14.rdverb.ResponseCodeR\x04code\"A\n" +
 	"\x12LeaseDeleteRequest\x12+\n" +
-	"\bidentity\x18\x01 \x01(\v2\x0f.rdsec.IdentityR\bidentity\x12\x14\n" +
-	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"?\n" +
+	"\bidentity\x18\x01 \x01(\v2\x0f.rdsec.IdentityR\bidentity\"?\n" +
 	"\x13LeaseDeleteResponse\x12(\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x14.rdverb.ResponseCodeR\x04code\"h\n" +
 	"\x11ConnectionRequest\x12\x19\n" +

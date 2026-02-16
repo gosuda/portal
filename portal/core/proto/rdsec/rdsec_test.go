@@ -242,86 +242,6 @@ func TestClientInitPayload_CloneVT(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_MarshalVT_UnmarshalVT tests round-trip serialization.
-func TestSignedPayload_MarshalVT_UnmarshalVT(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   *SignedPayload
-		wantErr bool
-	}{
-		{
-			name:    "empty",
-			input:   &SignedPayload{},
-			wantErr: false,
-		},
-		{
-			name: "full",
-			input: &SignedPayload{
-				Data:      []byte{0x01, 0x02, 0x03, 0x04, 0x05},
-				Signature: []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE},
-			},
-			wantErr: false,
-		},
-		{
-			name: "data only",
-			input: &SignedPayload{
-				Data: []byte("payload data"),
-			},
-			wantErr: false,
-		},
-		{
-			name: "signature only",
-			input: &SignedPayload{
-				Signature: []byte{0xFF, 0xFF, 0xFF},
-			},
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			got := &SignedPayload{}
-			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
-		})
-	}
-}
-
-// TestSignedPayload_CloneVT tests independent copy creation.
-func TestSignedPayload_CloneVT(t *testing.T) {
-	original := &SignedPayload{
-		Data:      []byte{0x01, 0x02, 0x03},
-		Signature: []byte{0xAA, 0xBB, 0xCC},
-	}
-
-	cloned := original.CloneVT()
-
-	// Modify clone
-	cloned.Data[0] = 0xFF
-	cloned.Signature[0] = 0x00
-
-	// Verify original unchanged
-	if original.Data[0] != 0x01 {
-		t.Error("original.Data was modified")
-	}
-	if original.Signature[0] != 0xAA {
-		t.Error("original.Signature was modified")
-	}
-}
-
 // TestServerInitPayload_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestServerInitPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
@@ -515,16 +435,14 @@ func TestConcurrentSerialization(t *testing.T) {
 func TestProtoMessage(_ *testing.T) {
 	// These tests just verify the stub methods exist and don't panic
 	var (
-		ident         = &Identity{}
-		clientInit    = &ClientInitPayload{}
-		signedPayload = &SignedPayload{}
-		serverInit    = &ServerInitPayload{}
+		ident      = &Identity{}
+		clientInit = &ClientInitPayload{}
+		serverInit = &ServerInitPayload{}
 	)
 
 	// Should not panic
 	ident.ProtoMessage()
 	clientInit.ProtoMessage()
-	signedPayload.ProtoMessage()
 	serverInit.ProtoMessage()
 }
 
@@ -596,15 +514,6 @@ func TestNilHandling(t *testing.T) {
 			}
 			if msg.SizeVT() != 0 {
 				t.Error("SizeVT() on nil ClientInitPayload should return 0")
-			}
-		}},
-		{"SignedPayload", func() {
-			var msg *SignedPayload
-			if data, err := msg.MarshalVT(); err != nil || data != nil {
-				t.Errorf("MarshalVT() on nil SignedPayload = (%v, %v), want (nil, nil)", data, err)
-			}
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil SignedPayload should return nil")
 			}
 		}},
 		{"ServerInitPayload", func() {
@@ -819,30 +728,6 @@ func TestClientInitPayload_Getters(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_Getters tests all getter methods.
-func TestSignedPayload_Getters(t *testing.T) {
-	msg := &SignedPayload{
-		Data:      []byte{0x01, 0x02, 0x03},
-		Signature: []byte{0xAA, 0xBB},
-	}
-
-	if got := msg.GetData(); !bytes.Equal(got, []byte{0x01, 0x02, 0x03}) {
-		t.Errorf("GetData() = %v, want [1 2 3]", got)
-	}
-	if got := msg.GetSignature(); !bytes.Equal(got, []byte{0xAA, 0xBB}) {
-		t.Errorf("GetSignature() = %v, want [170 187]", got)
-	}
-
-	// Test nil defaults
-	empty := &SignedPayload{}
-	if got := empty.GetData(); got != nil {
-		t.Errorf("empty GetData() = %v, want nil", got)
-	}
-	if got := empty.GetSignature(); got != nil {
-		t.Errorf("empty GetSignature() = %v, want nil", got)
-	}
-}
-
 // TestServerInitPayload_Getters tests all getter methods.
 func TestServerInitPayload_Getters(t *testing.T) {
 	msg := &ServerInitPayload{
@@ -871,23 +756,6 @@ func TestServerInitPayload_Getters(t *testing.T) {
 	}
 	if got := msg.GetSessionPublicKey(); !bytes.Equal(got, []byte{0xCC, 0xDD}) {
 		t.Errorf("GetSessionPublicKey() = %v, want [204 221]", got)
-	}
-}
-
-// TestSignedPayload_Reset tests Reset method.
-func TestSignedPayload_Reset(t *testing.T) {
-	msg := &SignedPayload{
-		Data:      []byte{0x01, 0x02},
-		Signature: []byte{0xAA, 0xBB},
-	}
-
-	msg.Reset()
-
-	if msg.Data != nil {
-		t.Error("Reset() did not clear Data")
-	}
-	if msg.Signature != nil {
-		t.Error("Reset() did not clear Signature")
 	}
 }
 

@@ -5,9 +5,7 @@ package portal
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"io"
 	"sync"
 	"time"
 
@@ -79,7 +77,7 @@ type RelayClient struct {
 }
 
 // leaseWithCred pairs a lease with its associated credentials.
-// This is used internally to verify and sign messages for lease operations.
+// This is used internally for lease renewal and incoming connection handshakes.
 type leaseWithCred struct {
 	Lease *rdverb.Lease
 	Cred  *cryptoops.Credential
@@ -193,7 +191,7 @@ func (g *RelayClient) leaseUpdateWorker() {
 				lease.Lease.Expires = time.Now().Add(30 * time.Second).Unix()
 				// Check if session is available before updating lease
 				if g.sess != nil {
-					_, err := g.updateLease(lease.Cred, lease.Lease)
+					_, err := g.updateLease(lease.Lease)
 					if err != nil {
 						log.Error().Err(err).Msg("[RelayClient] Failed to update lease")
 					}
@@ -401,45 +399,26 @@ func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
 }
 
 // updateLease sends a lease update request to the relay server.
-// The request is signed with the provided credentials to prove ownership.
-// A nonce and timestamp are included to prevent replay attacks.
-func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
+// The request payload is sent over the authenticated session.
+func (g *RelayClient) updateLease(lease *rdverb.Lease) (rdverb.ResponseCode, error) {
 	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 	defer stream.Close()
 
-	timestamp := time.Now().Unix()
-	nonce := make([]byte, 12) // 12-byte nonce for replay protection
-	if _, readErr := io.ReadFull(rand.Reader, nonce); readErr != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, readErr
-	}
-
 	req := &rdverb.LeaseUpdateRequest{
-		Lease:     lease,
-		Nonce:     nonce,
-		Timestamp: timestamp,
+		Lease: lease,
 	}
 
-	reqPayload, err := req.MarshalVT()
-	if err != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
-	}
-
-	signedPayload := &rdsec.SignedPayload{
-		Data:      reqPayload,
-		Signature: cred.Sign(reqPayload),
-	}
-
-	signedData, err := signedPayload.MarshalVT()
+	payload, err := req.MarshalVT()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_LEASE_UPDATE_REQUEST,
-		Payload: signedData,
+		Payload: payload,
 	})
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
@@ -467,37 +446,19 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 }
 
 // deleteLease sends a lease deletion request to the relay server.
-// The request is signed with the provided credentials to prove ownership.
-func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
+// The request payload is sent over the authenticated session.
+func (g *RelayClient) deleteLease(identity *rdsec.Identity) (rdverb.ResponseCode, error) {
 	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 	defer stream.Close()
 
-	timestamp := time.Now().Unix()
-	nonce := make([]byte, 12)
-	if _, readErr := io.ReadFull(rand.Reader, nonce); readErr != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, readErr
-	}
-
 	req := &rdverb.LeaseDeleteRequest{
-		Identity:  identity,
-		Nonce:     nonce,
-		Timestamp: timestamp,
+		Identity: identity,
 	}
 
-	reqPayload, err := req.MarshalVT()
-	if err != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
-	}
-
-	signedPayload := &rdsec.SignedPayload{
-		Data:      reqPayload,
-		Signature: cred.Sign(reqPayload),
-	}
-
-	signedData, err := signedPayload.MarshalVT()
+	payload, err := req.MarshalVT()
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -505,7 +466,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 	// Send deletion request
 	err = writePacket(stream, &rdverb.Packet{
 		Type:    rdverb.PacketType_PACKET_TYPE_LEASE_DELETE_REQUEST,
-		Payload: signedData,
+		Payload: payload,
 	})
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
@@ -685,7 +646,7 @@ func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Le
 	}
 	g.leasesMu.Unlock()
 
-	resp, err := g.updateLease(cred, lease)
+	resp, err := g.updateLease(lease)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		log.Error().
 			Err(err).
@@ -717,7 +678,7 @@ func (g *RelayClient) DeregisterLease(cred *cryptoops.Credential) error {
 	delete(g.leases, identity.Id)
 	g.leasesMu.Unlock()
 
-	resp, err := g.deleteLease(cred, identity)
+	resp, err := g.deleteLease(identity)
 	if err != nil || resp != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		log.Error().Err(err).Str("lease_id", identity.Id).Msg("[RelayClient] Failed to deregister lease")
 		return err

@@ -289,9 +289,7 @@ func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 		{
 			name: "full",
 			input: &LeaseUpdateRequest{
-				Lease:     lease,
-				Nonce:     []byte{0x01, 0x02, 0x03, 0x04},
-				Timestamp: 9876543210,
+				Lease: lease,
 			},
 			wantErr: false,
 		},
@@ -367,9 +365,7 @@ func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 		{
 			name: "full",
 			input: &LeaseDeleteRequest{
-				Identity:  &rdsec.Identity{Id: "delete-id", PublicKey: []byte{0x01}},
-				Nonce:     []byte{0x01, 0x02, 0x03},
-				Timestamp: 1234567890,
+				Identity: &rdsec.Identity{Id: "delete-id", PublicKey: []byte{0x01}},
 			},
 			wantErr: false,
 		},
@@ -1214,49 +1210,29 @@ func TestRelayInfoResponse_Reset(t *testing.T) {
 func TestLeaseUpdateRequest_Getters(t *testing.T) {
 	lease := &Lease{Name: "update-lease"}
 	msg := &LeaseUpdateRequest{
-		Lease:     lease,
-		Nonce:     []byte{0x01, 0x02},
-		Timestamp: 1234567890,
+		Lease: lease,
 	}
 
 	if got := msg.GetLease(); got == nil || got.Name != "update-lease" {
 		t.Errorf("GetLease() = %v, want Name='update-lease'", got)
 	}
-	if got := msg.GetNonce(); !bytes.Equal(got, []byte{0x01, 0x02}) {
-		t.Errorf("GetNonce() = %v, want [1 2]", got)
-	}
-	if got := msg.GetTimestamp(); got != 1234567890 {
-		t.Errorf("GetTimestamp() = %v, want 1234567890", got)
-	}
-
 	// Test nil defaults
 	empty := &LeaseUpdateRequest{}
 	if got := empty.GetLease(); got != nil {
 		t.Errorf("empty GetLease() = %v, want nil", got)
-	}
-	if got := empty.GetNonce(); got != nil {
-		t.Errorf("empty GetNonce() = %v, want nil", got)
 	}
 }
 
 // TestLeaseUpdateRequest_Reset tests Reset method.
 func TestLeaseUpdateRequest_Reset(t *testing.T) {
 	msg := &LeaseUpdateRequest{
-		Lease:     &Lease{Name: "test"},
-		Nonce:     []byte{0x01},
-		Timestamp: 123,
+		Lease: &Lease{Name: "test"},
 	}
 
 	msg.Reset()
 
 	if msg.Lease != nil {
 		t.Error("Reset() did not clear Lease")
-	}
-	if msg.Nonce != nil {
-		t.Error("Reset() did not clear Nonce")
-	}
-	if msg.Timestamp != 0 {
-		t.Error("Reset() did not clear Timestamp")
 	}
 }
 
