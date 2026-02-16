@@ -2,14 +2,12 @@ package cryptoops
 
 import (
 	"bytes"
-	"crypto/rand"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 )
 
@@ -146,42 +144,35 @@ func TestHandshakeSuccess(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestHandshakeInvalidSignature tests handshake validation
-func TestHandshakeInvalidSignature(t *testing.T) {
-	// This is tested implicitly through validateClientInit/validateServerInit
-	// Detailed unit tests would require mocking which is complex
-	t.Skip("Covered by integration tests")
-}
+// TestHandshakeALPNMismatch tests that mismatched ALPN causes handshake failure
+func TestHandshakeALPNMismatch(t *testing.T) {
+	clientCred, _ := NewCredential()
+	serverCred, _ := NewCredential()
 
-// TestHandshakeInvalidTimestamp tests timestamp validation
-func TestHandshakeInvalidTimestamp(t *testing.T) {
-	// Test the validateTimestamp function directly
-	now := time.Now().Unix()
+	clientConn, serverConn := pipeConn()
 
-	// Valid timestamp
-	if err := validateTimestamp(now); err != nil {
-		t.Errorf("Current timestamp should be valid: %v", err)
+	clientHandshaker := NewHandshaker(clientCred)
+	serverHandshaker := NewHandshaker(serverCred)
+
+	var serverErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, _ = clientHandshaker.ClientHandshake(clientConn, "alpn-a")
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, serverErr = serverHandshaker.ServerHandshake(serverConn, []string{"alpn-b"})
+	}()
+
+	wg.Wait()
+
+	if serverErr == nil {
+		t.Fatal("Expected server handshake to fail with ALPN mismatch")
 	}
-
-	// Old timestamp (> 30s)
-	if err := validateTimestamp(now - 100); err == nil {
-		t.Error("Old timestamp should be invalid")
-	}
-
-	// Future timestamp (> 30s)
-	if err := validateTimestamp(now + 100); err == nil {
-		t.Error("Future timestamp should be invalid")
-	}
-}
-
-// TestHandshakeInvalidProtocolVersion tests protocol version
-func TestHandshakeInvalidProtocolVersion(t *testing.T) {
-	t.Skip("Covered by integration tests")
-}
-
-// TestHandshakeInvalidALPN tests ALPN validation
-func TestHandshakeInvalidALPN(t *testing.T) {
-	t.Skip("Covered by integration tests")
 }
 
 // TestEncryptionRoundTrip tests encryption and decryption
@@ -416,109 +407,38 @@ func TestInvalidIdentity(t *testing.T) {
 	}
 }
 
-// TestGenerateX25519KeyPair tests X25519 key pair generation
-func TestGenerateX25519KeyPair(t *testing.T) {
-	priv1, pub1, err := generateX25519KeyPair()
-	if err != nil {
-		t.Fatalf("Failed to generate key pair: %v", err)
+// TestX25519KeyDerivation tests X25519 key derivation from Ed25519 credentials
+func TestX25519KeyDerivation(t *testing.T) {
+	cred1, _ := NewCredential()
+	cred2, _ := NewCredential()
+
+	priv1 := cred1.X25519PrivateKey()
+	pub1 := cred1.X25519PublicKey()
+	priv2 := cred2.X25519PrivateKey()
+	pub2 := cred2.X25519PublicKey()
+
+	// Key sizes
+	if len(priv1) != 32 {
+		t.Errorf("Expected X25519 private key size 32, got %d", len(priv1))
+	}
+	if len(pub1) != 32 {
+		t.Errorf("Expected X25519 public key size 32, got %d", len(pub1))
 	}
 
-	if len(priv1) != curve25519.ScalarSize {
-		t.Errorf("Expected private key size %d, got %d", curve25519.ScalarSize, len(priv1))
-	}
-	if len(pub1) != curve25519.PointSize {
-		t.Errorf("Expected public key size %d, got %d", curve25519.PointSize, len(pub1))
-	}
-
-	// Generate another pair and ensure they're different
-	priv2, pub2, err := generateX25519KeyPair()
-	if err != nil {
-		t.Fatalf("Failed to generate second key pair: %v", err)
-	}
-
+	// Different credentials produce different keys
 	if bytes.Equal(priv1, priv2) {
-		t.Error("Generated same private key twice")
+		t.Error("Different credentials produced same X25519 private key")
 	}
 	if bytes.Equal(pub1, pub2) {
-		t.Error("Generated same public key twice")
+		t.Error("Different credentials produced same X25519 public key")
 	}
 
-	// Verify public key derivation
-	derivedPub, err := curve25519.X25519(priv1, curve25519.Basepoint)
-	if err != nil {
-		t.Fatalf("Failed to derive public key: %v", err)
+	// Deterministic: same credential always produces same key
+	if !bytes.Equal(priv1, cred1.X25519PrivateKey()) {
+		t.Error("X25519PrivateKey not deterministic")
 	}
-	if !bytes.Equal(pub1, derivedPub) {
-		t.Error("Public key doesn't match derived key")
-	}
-}
-
-// TestDeriveKey tests HKDF key derivation
-func TestDeriveKey(t *testing.T) {
-	sharedSecret := make([]byte, 32)
-	rand.Read(sharedSecret)
-
-	salt1 := []byte("salt1")
-	salt2 := []byte("salt2")
-	info1 := []byte(clientKeyInfo)
-	info2 := []byte(serverKeyInfo)
-
-	key1 := deriveKey(sharedSecret, salt1, info1)
-	key2 := deriveKey(sharedSecret, salt2, info1)
-	key3 := deriveKey(sharedSecret, salt1, info2)
-	key4 := deriveKey(sharedSecret, salt1, info1) // Same as key1
-
-	// Check key size
-	if len(key1) != sessionKeySize {
-		t.Errorf("Expected key size %d, got %d", sessionKeySize, len(key1))
-	}
-
-	// Keys with different salts should be different
-	if bytes.Equal(key1, key2) {
-		t.Error("Keys with different salts are the same")
-	}
-
-	// Keys with different info should be different
-	if bytes.Equal(key1, key3) {
-		t.Error("Keys with different info are the same")
-	}
-
-	// Same inputs should produce same key
-	if !bytes.Equal(key1, key4) {
-		t.Error("Same inputs produced different keys")
-	}
-}
-
-// TestValidateTimestamp tests timestamp validation
-func TestValidateTimestamp(t *testing.T) {
-	now := time.Now().Unix()
-
-	testCases := []struct {
-		name      string
-		timestamp int64
-		expectErr bool
-	}{
-		{"Current", now, false},
-		{"5 seconds ago", now - 5, false},
-		{"5 seconds future", now + 5, false},
-		{"30 seconds ago", now - 30, false},
-		{"30 seconds future", now + 30, false},
-		{"31 seconds ago", now - 31, true},
-		{"31 seconds future", now + 31, true},
-		{"100 seconds ago", now - 100, true},
-		{"100 seconds future", now + 100, true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateTimestamp(tc.timestamp)
-			if tc.expectErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tc.expectErr && err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-		})
+	if !bytes.Equal(pub1, cred1.X25519PublicKey()) {
+		t.Error("X25519PublicKey not deterministic")
 	}
 }
 

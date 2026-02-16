@@ -1,10 +1,7 @@
 package cryptoops
 
 import (
-	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,13 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/curve25519"
-	"golang.org/x/crypto/hkdf"
-
+	"github.com/flynn/noise"
 	"github.com/valyala/bytebufferpool"
-	"gosuda.org/portal/portal/core/proto/rdsec"
-	"gosuda.org/portal/portal/utils/randpool"
 )
 
 var _lengthBufferPool = sync.Pool{
@@ -66,48 +58,64 @@ func releaseBuffer(buffer *bytebufferpool.ByteBuffer) {
 var (
 	ErrHandshakeFailed  = errors.New("handshake failed")
 	ErrInvalidSignature = errors.New("invalid signature")
-	ErrInvalidTimestamp = errors.New("invalid timestamp")
-	ErrInvalidProtocol  = errors.New("invalid protocol version")
 	ErrInvalidIdentity  = errors.New("invalid identity")
-	ErrSessionKeyDerive = errors.New("failed to derive session key")
 	ErrEncryptionFailed = errors.New("encryption failed")
 	ErrDecryptionFailed = errors.New("decryption failed")
-	ErrInvalidNonce     = errors.New("invalid nonce")
 )
 
 const (
-	nonceSize        = 12 // ChaCha20Poly1305 nonce size
-	sessionKeySize   = 32 // X25519 shared secret size
-	maxTimestampSkew = 30 * time.Second
-	maxRawPacketSize = 1 << 26 // 64MB - same as relay server
+	noiseTagSize     = 16      // ChaCha20-Poly1305 authentication tag
+	maxRawPacketSize = 1 << 26 // 64MB — same as relay server
 
-	// HKDF info strings for key derivation
-	clientKeyInfo = "RDSEC_KEY_CLIENT"
-	serverKeyInfo = "RDSEC_KEY_SERVER"
+	// noisePrologue binds the handshake to this specific protocol version.
+	noisePrologue = "portal/noise/1"
+
+	// identityPayloadSize is the size of the identity payload sent during the handshake:
+	// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key]
+	identityPayloadSize = ed25519.PublicKeySize + ed25519.SignatureSize
 )
 
-// Handshaker handles the X25519-ChaCha20Poly1305 based handshake protocol
+// noiseCipherSuite is the Noise cipher suite used for all handshakes:
+// Noise_XX_25519_ChaChaPoly_BLAKE2s
+var noiseCipherSuite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s)
+
+// Handshaker handles the Noise Protocol Framework based handshake.
+//
+// Uses the XX pattern (Noise_XX_25519_ChaChaPoly_BLAKE2s) which provides:
+//   - Mutual authentication via X25519 static keys
+//   - Forward secrecy via ephemeral X25519 keys
+//   - Identity hiding (static keys are encrypted)
+//
+// Identity binding: Each party sends their Ed25519 public key along with an Ed25519
+// signature over the Noise X25519 static public key. This cryptographically binds the
+// Portal identity (derived from Ed25519) to the Noise session key (derived from X25519).
 type Handshaker struct {
 	credential *Credential
 }
 
-// NewHandshaker creates a new Handshaker with the given credential
+// NewHandshaker creates a new Handshaker with the given credential.
 func NewHandshaker(credential *Credential) *Handshaker {
 	return &Handshaker{
 		credential: credential,
 	}
 }
 
-// SecureConnection represents a secured connection with encryption capabilities
+// SecureConnection represents a secured connection with authenticated encryption.
+// Frames are length-prefixed: [4B big-endian length][ciphertext + 16B tag].
+// Nonces are managed internally by the Noise CipherState (counter-based).
+//
+// Writes are serialized via writeMu because the CipherState uses sequential nonces.
+// Reads are naturally serialized by the io.ReadFull blocking pattern.
 type SecureConnection struct {
 	conn io.ReadWriteCloser
 
 	localID  string
 	remoteID string
 
-	encryptor cipher.AEAD
-	decryptor cipher.AEAD
+	encryptor *noise.CipherState
+	decryptor *noise.CipherState
 
+	writeMu    sync.Mutex // serializes writes (counter nonces require ordering)
 	readBuffer *bytebufferpool.ByteBuffer
 
 	// Ensure Close is safe and idempotent
@@ -117,22 +125,22 @@ type SecureConnection struct {
 	closeErr  error
 }
 
-func (r *SecureConnection) SetDeadline(t time.Time) error {
-	if conn, ok := r.conn.(interface{ SetDeadline(time.Time) error }); ok {
+func (sc *SecureConnection) SetDeadline(t time.Time) error {
+	if conn, ok := sc.conn.(interface{ SetDeadline(time.Time) error }); ok {
 		return conn.SetDeadline(t)
 	}
 	return nil
 }
 
-func (r *SecureConnection) SetReadDeadline(t time.Time) error {
-	if conn, ok := r.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+func (sc *SecureConnection) SetReadDeadline(t time.Time) error {
+	if conn, ok := sc.conn.(interface{ SetReadDeadline(time.Time) error }); ok {
 		return conn.SetReadDeadline(t)
 	}
 	return nil
 }
 
-func (r *SecureConnection) SetWriteDeadline(t time.Time) error {
-	if conn, ok := r.conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
+func (sc *SecureConnection) SetWriteDeadline(t time.Time) error {
+	if conn, ok := sc.conn.(interface{ SetWriteDeadline(time.Time) error }); ok {
 		return conn.SetWriteDeadline(t)
 	}
 	return nil
@@ -146,7 +154,8 @@ func (sc *SecureConnection) RemoteID() string {
 	return sc.remoteID
 }
 
-// Write encrypts and writes data to the underlying connection
+// Write encrypts and writes data to the underlying connection.
+// Large messages are fragmented to stay within the maximum packet size.
 func (sc *SecureConnection) Write(p []byte) (int, error) {
 	sc.mu.RLock()
 	if sc.closed {
@@ -157,40 +166,41 @@ func (sc *SecureConnection) Write(p []byte) (int, error) {
 
 	const fragSize = maxRawPacketSize / 2
 	if len(p) > fragSize {
-		numFrags := (len(p) + fragSize - 1) / fragSize // ceiling division
+		numFrags := (len(p) + fragSize - 1) / fragSize
 		for i := range numFrags {
 			start := i * fragSize
 			end := min(start+fragSize, len(p))
-			_, err := sc.writeFragmentation(p[start:end])
+			_, err := sc.writeFragment(p[start:end])
 			if err != nil {
 				return 0, err
 			}
 		}
 		return len(p), nil
 	}
-	return sc.writeFragmentation(p)
+	return sc.writeFragment(p)
 }
 
-// writeFragmentation
-func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
-	cipherSize := sc.encryptor.NonceSize() + len(p) + sc.encryptor.Overhead()
+// writeFragment encrypts and writes a single fragment.
+// Must hold writeMu to ensure sequential nonces.
+func (sc *SecureConnection) writeFragment(p []byte) (int, error) {
+	sc.writeMu.Lock()
+	defer sc.writeMu.Unlock()
+
+	cipherSize := len(p) + noiseTagSize
 	bufferSize := 4 + cipherSize
 	buffer := acquireBuffer(bufferSize)
-	buffer.B = buffer.B[:bufferSize]
+	buffer.B = buffer.B[:4]
 	defer releaseBuffer(buffer)
 
 	binary.BigEndian.PutUint32(buffer.B[:4], uint32(cipherSize))
 
-	randpool.Rand(buffer.B[4 : 4+sc.encryptor.NonceSize()])
+	var err error
+	buffer.B, err = sc.encryptor.Encrypt(buffer.B, nil, p)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrEncryptionFailed, err)
+	}
 
-	sc.encryptor.Seal(
-		buffer.B[4+sc.encryptor.NonceSize():][:0], // len(0), cap(len(p)+Overhead)
-		buffer.B[4:4+sc.encryptor.NonceSize()],
-		p,
-		nil,
-	)
-
-	_, err := sc.conn.Write(buffer.B)
+	_, err = sc.conn.Write(buffer.B)
 	if err != nil {
 		return 0, err
 	}
@@ -198,7 +208,7 @@ func (sc *SecureConnection) writeFragmentation(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Read reads and decrypts data from the underlying connection
+// Read reads and decrypts data from the underlying connection.
 func (sc *SecureConnection) Read(p []byte) (int, error) {
 	sc.mu.RLock()
 	if sc.closed {
@@ -215,10 +225,11 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 	}
 	sc.mu.RUnlock()
 
-	// Read length prefix first (4 bytes)
+	// Read length prefix (4 bytes)
 	lengthBuf := _lengthBufferPool.Get().(*[4]byte)
 	_, err := io.ReadFull(sc.conn, lengthBuf[:])
 	if err != nil {
+		_lengthBufferPool.Put(lengthBuf)
 		return 0, err
 	}
 	length := binary.BigEndian.Uint32(lengthBuf[:])
@@ -229,7 +240,7 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 		return 0, ErrDecryptionFailed
 	}
 
-	// Read the message
+	// Read the ciphertext
 	msgBuf := acquireBuffer(int(length))
 	msgBuf.B = msgBuf.B[:length]
 	defer releaseBuffer(msgBuf)
@@ -238,17 +249,13 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
-	// length check
-	if len(msgBuf.B) < sc.decryptor.NonceSize()+sc.decryptor.Overhead() {
+	// Minimum size: authentication tag
+	if len(msgBuf.B) < noiseTagSize {
 		return 0, ErrDecryptionFailed
 	}
 
-	// Extract nonce and ciphertext
-	nonce := msgBuf.B[0:sc.decryptor.NonceSize()]
-	ciphertext := msgBuf.B[sc.decryptor.NonceSize():]
-
-	// Decrypt the data in-place
-	decrypted, err := sc.decryptor.Open(ciphertext[:0], nonce, ciphertext, nil)
+	// Decrypt in-place
+	decrypted, err := sc.decryptor.Decrypt(msgBuf.B[:0], nil, msgBuf.B)
 	if err != nil {
 		return 0, ErrDecryptionFailed
 	}
@@ -272,7 +279,7 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// Close closes the underlying connection and releases resources
+// Close closes the underlying connection and releases resources.
 func (sc *SecureConnection) Close() error {
 	sc.closeOnce.Do(func() {
 		sc.mu.Lock()
@@ -287,356 +294,208 @@ func (sc *SecureConnection) Close() error {
 	return sc.closeErr
 }
 
-// ClientHandshake performs the client-side of the handshake
+// ClientHandshake performs the client-side (initiator) Noise XX handshake.
+//
+// Message flow:
+//
+//	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
+//	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
+//	Message 3 (client → server): s, se + client identity payload (encrypted)
 func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*SecureConnection, error) {
-	// Generate ephemeral key pair for this session
-	ephemeralPriv, ephemeralPub, err := generateX25519KeyPair()
+	x25519Key := noise.DHKey{
+		Private: h.credential.X25519PrivateKey(),
+		Public:  h.credential.X25519PublicKey(),
+	}
+
+	hs, err := noise.NewHandshakeState(noise.Config{
+		CipherSuite:   noiseCipherSuite,
+		Pattern:       noise.HandshakeXX,
+		Initiator:     true,
+		StaticKeypair: x25519Key,
+		Prologue:      []byte(noisePrologue),
+	})
 	if err != nil {
-		return nil, ErrHandshakeFailed
+		return nil, fmt.Errorf("%w: init: %v", ErrHandshakeFailed, err)
 	}
 
-	// Create client init message
-	timestamp := time.Now().Unix()
-	nonce := make([]byte, nonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	clientInitPayload := &rdsec.ClientInitPayload{
-		Version:   rdsec.ProtocolVersion_PROTOCOL_VERSION_1,
-		Nonce:     nonce,
-		Timestamp: timestamp,
-		Identity: &rdsec.Identity{
-			Id:        h.credential.ID(),
-			PublicKey: h.credential.PublicKey(),
-		},
-		Alpn:             alpn,
-		SessionPublicKey: ephemeralPub,
-	}
-
-	// Serialize and sign the payload
-	payloadBytes, err := clientInitPayload.MarshalVT()
+	// Message 1: → e + ALPN payload (integrity-protected via handshake hash)
+	msg1, _, _, err := hs.WriteMessage(nil, encodeALPN(alpn))
 	if err != nil {
-		return nil, ErrHandshakeFailed
+		return nil, fmt.Errorf("%w: write msg1: %v", ErrHandshakeFailed, err)
+	}
+	if err := writeLengthPrefixed(conn, msg1); err != nil {
+		return nil, fmt.Errorf("%w: send msg1: %v", ErrHandshakeFailed, err)
 	}
 
-	signature := h.credential.Sign(payloadBytes)
-
-	clientInit := &rdsec.SignedPayload{
-		Data:      payloadBytes,
-		Signature: signature,
-	}
-
-	// Send client init message
-	clientInitBytes, err := clientInit.MarshalVT()
+	// Message 2: ← e, ee, s, es + server identity payload
+	msg2Raw, err := readLengthPrefixed(conn)
 	if err != nil {
-		return nil, ErrHandshakeFailed
+		return nil, fmt.Errorf("%w: recv msg2: %v", ErrHandshakeFailed, err)
 	}
-
-	// Write length-prefixed message
-	if err := writeLengthPrefixed(conn, clientInitBytes); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Read server init response
-	serverInitBytes, err := readLengthPrefixed(conn)
+	serverPayload, _, _, err := hs.ReadMessage(nil, msg2Raw)
 	if err != nil {
-		return nil, ErrHandshakeFailed
+		return nil, fmt.Errorf("%w: read msg2: %v", ErrHandshakeFailed, err)
 	}
 
-	serverInitSigned := &rdsec.SignedPayload{}
-	if err := serverInitSigned.UnmarshalVT(serverInitBytes); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Unmarshal the server init payload
-	serverInitPayload := &rdsec.ServerInitPayload{}
-	if err := serverInitPayload.UnmarshalVT(serverInitSigned.GetData()); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Validate server init
-	if err := h.validateServerInit(serverInitSigned, serverInitPayload); err != nil {
-		return nil, err
-	}
-
-	// Derive session keys
-	clientEncryptKey, clientDecryptKey, err := h.deriveClientSessionKeys(
-		ephemeralPriv, serverInitPayload.GetSessionPublicKey(),
-		clientInitPayload.GetNonce(), serverInitPayload.GetNonce(),
-	)
+	// Message 3: → s, se + client identity payload
+	clientPayload := makeIdentityPayload(h.credential, x25519Key.Public)
+	msg3, cs1, cs2, err := hs.WriteMessage(nil, clientPayload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: write msg3: %v", ErrHandshakeFailed, err)
+	}
+	if err := writeLengthPrefixed(conn, msg3); err != nil {
+		return nil, fmt.Errorf("%w: send msg3: %v", ErrHandshakeFailed, err)
 	}
 
-	wipeMemory(ephemeralPriv)
-
-	// Create secure connection
-	return h.createSecureConnection(conn, clientEncryptKey, clientDecryptKey, serverInitPayload.GetIdentity().GetId())
-}
-
-// ServerHandshake performs the server-side of the handshake
-func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
-	// Read client init message
-	clientInitBytes, err := readLengthPrefixed(conn)
+	// Verify server identity
+	remoteID, err := verifyIdentityPayload(serverPayload, hs.PeerStatic())
 	if err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	clientInitSigned := &rdsec.SignedPayload{}
-	if err := clientInitSigned.UnmarshalVT(clientInitBytes); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Unmarshal the client init payload
-	clientInitPayload := &rdsec.ClientInitPayload{}
-	if err := clientInitPayload.UnmarshalVT(clientInitSigned.GetData()); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Validate client init
-	if err := h.validateClientInit(clientInitSigned, clientInitPayload, alpns); err != nil {
-		// Silent failure: close connection and return error without sending response
 		conn.Close()
 		return nil, err
 	}
 
-	// Generate ephemeral key pair for this session
-	ephemeralPriv, ephemeralPub, err := generateX25519KeyPair()
+	// cs1 = initiator→responder (client encrypt), cs2 = responder→initiator (client decrypt)
+	return h.createSecureConnection(conn, cs1, cs2, remoteID)
+}
+
+// ServerHandshake performs the server-side (responder) Noise XX handshake.
+//
+// Message flow:
+//
+//	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
+//	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
+//	Message 3 (client → server): s, se + client identity payload (encrypted)
+func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
+	x25519Key := noise.DHKey{
+		Private: h.credential.X25519PrivateKey(),
+		Public:  h.credential.X25519PublicKey(),
+	}
+
+	hs, err := noise.NewHandshakeState(noise.Config{
+		CipherSuite:   noiseCipherSuite,
+		Pattern:       noise.HandshakeXX,
+		Initiator:     false,
+		StaticKeypair: x25519Key,
+		Prologue:      []byte(noisePrologue),
+	})
 	if err != nil {
+		return nil, fmt.Errorf("%w: init: %v", ErrHandshakeFailed, err)
+	}
+
+	// Message 1: ← e + ALPN payload
+	msg1Raw, err := readLengthPrefixed(conn)
+	if err != nil {
+		return nil, fmt.Errorf("%w: recv msg1: %v", ErrHandshakeFailed, err)
+	}
+	alpnPayload, _, _, err := hs.ReadMessage(nil, msg1Raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read msg1: %v", ErrHandshakeFailed, err)
+	}
+
+	// Validate ALPN before proceeding
+	alpn, err := decodeALPN(alpnPayload)
+	if err != nil || !slices.Contains(alpns, alpn) {
+		conn.Close()
 		return nil, ErrHandshakeFailed
 	}
 
-	// Create server init message
-	timestamp := time.Now().Unix()
-	nonce := make([]byte, nonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	serverInitPayload := &rdsec.ServerInitPayload{
-		Version:   rdsec.ProtocolVersion_PROTOCOL_VERSION_1,
-		Nonce:     nonce,
-		Timestamp: timestamp,
-		Identity: &rdsec.Identity{
-			Id:        h.credential.ID(),
-			PublicKey: h.credential.PublicKey(),
-		},
-		Alpn:             clientInitPayload.Alpn,
-		SessionPublicKey: ephemeralPub,
-	}
-
-	// Serialize and sign the payload
-	payloadBytes, err := serverInitPayload.MarshalVT()
+	// Message 2: → e, ee, s, es + server identity payload
+	serverPayload := makeIdentityPayload(h.credential, x25519Key.Public)
+	msg2, _, _, err := hs.WriteMessage(nil, serverPayload)
 	if err != nil {
-		return nil, ErrHandshakeFailed
+		return nil, fmt.Errorf("%w: write msg2: %v", ErrHandshakeFailed, err)
+	}
+	if err := writeLengthPrefixed(conn, msg2); err != nil {
+		return nil, fmt.Errorf("%w: send msg2: %v", ErrHandshakeFailed, err)
 	}
 
-	signature := h.credential.Sign(payloadBytes)
-
-	serverInit := &rdsec.SignedPayload{
-		Data:      payloadBytes,
-		Signature: signature,
-	}
-
-	// Derive session keys
-	serverEncryptKey, serverDecryptKey, err := h.deriveServerSessionKeys(
-		ephemeralPriv, clientInitPayload.GetSessionPublicKey(),
-		clientInitPayload.GetNonce(), nonce,
-	)
+	// Message 3: ← s, se + client identity payload
+	msg3Raw, err := readLengthPrefixed(conn)
 	if err != nil {
+		return nil, fmt.Errorf("%w: recv msg3: %v", ErrHandshakeFailed, err)
+	}
+	clientPayload, cs1, cs2, err := hs.ReadMessage(nil, msg3Raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read msg3: %v", ErrHandshakeFailed, err)
+	}
+
+	// Verify client identity
+	remoteID, err := verifyIdentityPayload(clientPayload, hs.PeerStatic())
+	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 
-	wipeMemory(ephemeralPriv)
-
-	// Send server init message
-	serverInitBytes, err := serverInit.MarshalVT()
-	if err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Write length-prefixed message
-	if err := writeLengthPrefixed(conn, serverInitBytes); err != nil {
-		return nil, ErrHandshakeFailed
-	}
-
-	// Create secure connection
-	return h.createSecureConnection(conn, serverEncryptKey, serverDecryptKey, clientInitPayload.GetIdentity().GetId())
+	// cs1 = initiator→responder (server decrypt), cs2 = responder→initiator (server encrypt)
+	return h.createSecureConnection(conn, cs2, cs1, remoteID)
 }
 
-// validateClientInit validates the client init message
-func (h *Handshaker) validateClientInit(clientInitSigned *rdsec.SignedPayload, clientInitPayload *rdsec.ClientInitPayload, expectedAlpns []string) error {
-	if clientInitSigned == nil || clientInitPayload == nil {
-		return ErrInvalidProtocol
-	}
-
-	// Check protocol version
-	if clientInitPayload.GetVersion() != rdsec.ProtocolVersion_PROTOCOL_VERSION_1 {
-		return ErrInvalidProtocol
-	}
-
-	// Check timestamp
-	if err := validateTimestamp(clientInitPayload.GetTimestamp()); err != nil {
-		return err
-	}
-
-	// Check ALPN
-	if !slices.Contains(expectedAlpns, clientInitPayload.GetAlpn()) {
-		return ErrHandshakeFailed
-	}
-
-	// Validate identity
-	if !ValidateIdentity(clientInitPayload.GetIdentity()) {
-		return ErrInvalidIdentity
-	}
-
-	// Verify signature
-	if !ed25519.Verify(clientInitPayload.GetIdentity().GetPublicKey(), clientInitSigned.GetData(), clientInitSigned.GetSignature()) {
-		return ErrInvalidSignature
-	}
-
-	return nil
-}
-
-// validateServerInit validates the server init message
-func (h *Handshaker) validateServerInit(serverInitSigned *rdsec.SignedPayload, serverInitPayload *rdsec.ServerInitPayload) error {
-	if serverInitSigned == nil || serverInitPayload == nil {
-		return ErrInvalidProtocol
-	}
-
-	// Check protocol version
-	if serverInitPayload.GetVersion() != rdsec.ProtocolVersion_PROTOCOL_VERSION_1 {
-		return ErrInvalidProtocol
-	}
-
-	// Check timestamp
-	if err := validateTimestamp(serverInitPayload.GetTimestamp()); err != nil {
-		return err
-	}
-
-	// Validate identity
-	if !ValidateIdentity(serverInitPayload.GetIdentity()) {
-		return ErrInvalidIdentity
-	}
-
-	// Verify signature
-	if !ed25519.Verify(serverInitPayload.GetIdentity().GetPublicKey(), serverInitSigned.GetData(), serverInitSigned.GetSignature()) {
-		return ErrInvalidSignature
-	}
-
-	return nil
-}
-
-// deriveClientSessionKeys derives encryption and decryption keys for the client
-func (h *Handshaker) deriveClientSessionKeys(clientPriv, serverPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
-	// Compute shared secret
-	sharedSecret, err := curve25519.X25519(clientPriv, serverPub)
-	if err != nil {
-		return nil, nil, ErrSessionKeyDerive
-	}
-
-	// Derive keys using HKDF-like construction
-	// Both client and server use the same derivation for the same direction
-	// Client encrypts, server decrypts
-	salt := append(clientNonce, serverNonce...)
-	encryptKey := deriveKey(sharedSecret, salt, []byte(clientKeyInfo))
-	// Server encrypts, client decrypts
-	salt = append(serverNonce, clientNonce...)
-	decryptKey := deriveKey(sharedSecret, salt, []byte(serverKeyInfo))
-
-	return encryptKey, decryptKey, nil
-}
-
-// deriveServerSessionKeys derives encryption and decryption keys for the server
-func (h *Handshaker) deriveServerSessionKeys(serverPriv, clientPub, clientNonce, serverNonce []byte) ([]byte, []byte, error) {
-	// Compute shared secret (should be same as client's)
-	sharedSecret, err := curve25519.X25519(serverPriv, clientPub)
-	if err != nil {
-		return nil, nil, ErrSessionKeyDerive
-	}
-
-	// Derive keys using HKDF-like construction
-	// Both client and server use the same derivation for the same direction
-	// Server encrypts, client decrypts
-	salt := append(serverNonce, clientNonce...)
-	encryptKey := deriveKey(sharedSecret, salt, []byte(serverKeyInfo))
-	// Client encrypts, server decrypts
-	salt = append(clientNonce, serverNonce...)
-	decryptKey := deriveKey(sharedSecret, salt, []byte(clientKeyInfo))
-
-	return encryptKey, decryptKey, nil
-}
-
-// createSecureConnection creates a new SecureConnection with the given keys and nonces
-func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptKey, decryptKey []byte, remoteID string) (*SecureConnection, error) {
-	// Create AEAD instances
-	encryptor, err := chacha20poly1305.New(encryptKey)
-	if err != nil {
-		return nil, ErrEncryptionFailed
-	}
-
-	decryptor, err := chacha20poly1305.New(decryptKey)
-	if err != nil {
-		return nil, ErrEncryptionFailed
-	}
-
+// createSecureConnection builds a SecureConnection from the completed handshake.
+func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, decryptor *noise.CipherState, remoteID string) (*SecureConnection, error) {
 	readBuffer := acquireBuffer(1 << 12)
 	readBuffer.B = readBuffer.B[:0]
 
-	secureConn := &SecureConnection{
+	return &SecureConnection{
 		conn:       conn,
 		localID:    h.credential.id,
 		remoteID:   remoteID,
 		encryptor:  encryptor,
 		decryptor:  decryptor,
 		readBuffer: readBuffer,
-	}
-
-	return secureConn, nil
+	}, nil
 }
 
-// Helper functions
-
-// generateX25519KeyPair generates a new X25519 key pair
-func generateX25519KeyPair() ([]byte, []byte, error) {
-	priv := make([]byte, curve25519.ScalarSize)
-	if _, err := rand.Read(priv); err != nil {
-		return nil, nil, err
-	}
-
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return priv, pub, nil
+// makeIdentityPayload constructs the identity binding payload:
+// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key]
+func makeIdentityPayload(cred *Credential, x25519Pub []byte) []byte {
+	payload := make([]byte, identityPayloadSize)
+	copy(payload[:ed25519.PublicKeySize], cred.PublicKey())
+	sig := cred.Sign(x25519Pub)
+	copy(payload[ed25519.PublicKeySize:], sig)
+	return payload
 }
 
-// deriveKey derives a key from the shared secret using HKDF-SHA256
-func deriveKey(sharedSecret, salt, info []byte) []byte {
-	hkdf := hkdf.New(sha256.New, sharedSecret, salt, info)
-	key := make([]byte, sessionKeySize)
-	if _, err := hkdf.Read(key); err != nil {
-		// HKDF should never fail with valid inputs, treat as critical error
-		panic(fmt.Sprintf("HKDF key derivation failed: %v", err))
-	}
-	return key
-}
-
-// validateTimestamp validates that the timestamp is within acceptable range
-func validateTimestamp(timestamp int64) error {
-	now := time.Now().Unix()
-	diff := now - timestamp
-
-	if diff < -int64(maxTimestampSkew.Seconds()) || diff > int64(maxTimestampSkew.Seconds()) {
-		return ErrInvalidTimestamp
+// verifyIdentityPayload verifies the identity binding and returns the Portal identity ID.
+// It checks that the Ed25519 signature over the X25519 static key is valid, which
+// proves the peer controls both the Ed25519 identity and the Noise session key.
+func verifyIdentityPayload(payload []byte, remoteX25519Pub []byte) (string, error) {
+	if len(payload) != identityPayloadSize {
+		return "", ErrInvalidIdentity
 	}
 
-	return nil
+	ed25519Pub := payload[:ed25519.PublicKeySize]
+	sig := payload[ed25519.PublicKeySize:]
+
+	// Verify Ed25519 signature over the X25519 static public key
+	if !ed25519.Verify(ed25519Pub, remoteX25519Pub, sig) {
+		return "", ErrInvalidSignature
+	}
+
+	// Derive Portal identity from Ed25519 public key
+	return DeriveID(ed25519Pub), nil
 }
 
-// writeLengthPrefixed writes a length-prefixed message to the connection
+// encodeALPN encodes an ALPN string as [1B length][N bytes string].
+func encodeALPN(alpn string) []byte {
+	b := make([]byte, 1+len(alpn))
+	b[0] = byte(len(alpn))
+	copy(b[1:], alpn)
+	return b
+}
+
+// decodeALPN decodes an ALPN string from the [1B length][N bytes string] format.
+func decodeALPN(payload []byte) (string, error) {
+	if len(payload) < 1 {
+		return "", ErrHandshakeFailed
+	}
+	alpnLen := int(payload[0])
+	if len(payload) != 1+alpnLen {
+		return "", ErrHandshakeFailed
+	}
+	return string(payload[1:]), nil
+}
+
+// writeLengthPrefixed writes a 4-byte big-endian length prefix followed by the data.
 func writeLengthPrefixed(conn io.Writer, data []byte) error {
 	length := len(data)
 	lengthBytes := []byte{
@@ -654,7 +513,7 @@ func writeLengthPrefixed(conn io.Writer, data []byte) error {
 	return err
 }
 
-// readLengthPrefixed reads a length-prefixed message from the connection
+// readLengthPrefixed reads a 4-byte big-endian length prefix followed by the data.
 func readLengthPrefixed(conn io.Reader) ([]byte, error) {
 	lengthBytes := make([]byte, 4)
 	if _, err := io.ReadFull(conn, lengthBytes); err != nil {

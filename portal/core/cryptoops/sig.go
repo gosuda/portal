@@ -5,8 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base32"
 	"errors"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 var _id_magic = []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID")
@@ -68,4 +71,27 @@ func (c *Credential) PublicKey() ed25519.PublicKey {
 
 func (c *Credential) PrivateKey() ed25519.PrivateKey {
 	return c.privateKey
+}
+
+// X25519PrivateKey derives an X25519 private key from the Ed25519 seed.
+// This follows the standard Ed25519→X25519 conversion: SHA-512(seed)[:32] with clamping.
+func (c *Credential) X25519PrivateKey() []byte {
+	h := sha512.Sum512(c.privateKey.Seed())
+	// Clamp per RFC 7748
+	h[0] &= 248
+	h[31] &= 127
+	h[31] |= 64
+	key := make([]byte, curve25519.ScalarSize)
+	copy(key, h[:curve25519.ScalarSize])
+	return key
+}
+
+// X25519PublicKey derives the X25519 public key corresponding to X25519PrivateKey.
+func (c *Credential) X25519PublicKey() []byte {
+	priv := c.X25519PrivateKey()
+	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	if err != nil {
+		panic("x25519 scalar base mult: " + err.Error())
+	}
+	return pub
 }
