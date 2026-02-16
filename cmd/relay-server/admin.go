@@ -296,7 +296,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Key string `json:"key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeRequestJSON(r, &req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -418,7 +418,7 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 		var req struct {
 			Mode string `json:"mode"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequestJSON(r, &req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -515,7 +515,7 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 		var req struct {
 			BPS int64 `json:"bps"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequestJSON(r, &req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -714,4 +714,9 @@ func decodeLeaseID(encoded string) (string, bool) {
 		}
 	}
 	return string(idBytes), true
+}
+
+func decodeRequestJSON(r *http.Request, dst any) error {
+	decoder := json.NewDecoder(r.Body)
+	return decoder.Decode(dst)
 }

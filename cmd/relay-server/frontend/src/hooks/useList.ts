@@ -27,6 +27,8 @@ export interface UseListReturn<T extends BaseServer> {
   handleToggleFavorite: (serverId: number) => void;
 }
 
+const MISSING_FIRST_SEEN_SORT_VALUE = Number.MAX_SAFE_INTEGER;
+
 export function useList<T extends BaseServer>({
   servers,
   storageKey,
@@ -106,8 +108,12 @@ export function useList<T extends BaseServer>({
           // Duration = Now - FirstSeen.
           // Longer duration = Older FirstSeen.
           // Sort Descending (Longest/Oldest first) -> Ascending FirstSeen timestamp.
-          const aTime = a.firstSeen ? Date.parse(a.firstSeen) : Date.now();
-          const bTime = b.firstSeen ? Date.parse(b.firstSeen) : Date.now();
+          const aTime = a.firstSeen
+            ? Date.parse(a.firstSeen)
+            : MISSING_FIRST_SEEN_SORT_VALUE;
+          const bTime = b.firstSeen
+            ? Date.parse(b.firstSeen)
+            : MISSING_FIRST_SEEN_SORT_VALUE;
           return aTime - bTime;
         });
         break;

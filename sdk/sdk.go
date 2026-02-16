@@ -90,7 +90,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 				Err(err).
 				Str("server", server).
 				Msg("[SDK] Invalid bootstrap server")
-			connectionErrors = append(connectionErrors, err)
+			connectionErrors = append(connectionErrors, fmt.Errorf("invalid bootstrap server %q: %w", server, err))
 			continue
 		}
 
@@ -100,7 +100,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 				Err(err).
 				Str("server", normalized).
 				Msg("[SDK] Failed to connect to bootstrap server")
-			connectionErrors = append(connectionErrors, err)
+			connectionErrors = append(connectionErrors, fmt.Errorf("connect bootstrap server %q: %w", normalized, err))
 			continue
 		}
 		log.Debug().
@@ -112,7 +112,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	// If no relays were successfully connected, return an error
 	if len(client.relays) == 0 && len(config.BootstrapServers) > 0 {
 		log.Error().Int("attempted", len(config.BootstrapServers)).Msg("[SDK] Failed to connect to any bootstrap servers")
-		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %v", connectionErrors)
+		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %w", errors.Join(connectionErrors...))
 	}
 
 	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] Client created successfully")

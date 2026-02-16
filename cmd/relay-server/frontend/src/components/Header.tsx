@@ -17,32 +17,24 @@ interface HeaderProps {
 }
 
 export function Header({ title = "PORTAL", isAdmin, onLogout }: HeaderProps) {
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window === "undefined") {
+      return "dark";
+    }
+    const savedTheme = localStorage.getItem("theme");
+    return savedTheme === "light" || savedTheme === "dark" ? savedTheme : "dark";
+  });
 
   useEffect(() => {
-    // Check localStorage for saved theme
-    const savedTheme = localStorage.getItem("theme") as "light" | "dark" | null;
-    if (savedTheme) {
-      setTheme(savedTheme);
-      document.documentElement.classList.remove("light", "dark");
-      document.documentElement.classList.add(savedTheme);
-      document.body.classList.remove("light", "dark");
-      document.body.classList.add(savedTheme);
-    } else {
-      // Default to dark mode
-      document.documentElement.classList.add("dark");
-      document.body.classList.add("dark");
-    }
-  }, []);
+    document.documentElement.classList.remove("light", "dark");
+    document.documentElement.classList.add(theme);
+    document.body.classList.remove("light", "dark");
+    document.body.classList.add(theme);
+    localStorage.setItem("theme", theme);
+  }, [theme]);
 
   const toggleTheme = () => {
-    const newTheme = theme === "dark" ? "light" : "dark";
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
-    document.documentElement.classList.remove("light", "dark");
-    document.documentElement.classList.add(newTheme);
-    document.body.classList.remove("light", "dark");
-    document.body.classList.add(newTheme);
+    setTheme((currentTheme) => (currentTheme === "dark" ? "light" : "dark"));
   };
 
   return (

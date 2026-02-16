@@ -128,8 +128,14 @@ export function useAuth() {
   }, []);
 
   useEffect(() => {
-    checkAuth();
-    checkClientLock();
+    const timeoutId = window.setTimeout(() => {
+      void checkAuth();
+      checkClientLock();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
   }, [checkAuth, checkClientLock]);
 
   // Login function

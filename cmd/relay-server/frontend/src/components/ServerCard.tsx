@@ -1,9 +1,17 @@
 import { Link } from "react-router-dom";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import clsx from "clsx";
-import { type ReactNode, useState, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { ServerNavigationState } from "@/types/server";
-import { BPSSettingsModal, formatBPS } from "@/components/BPSSettingsModal";
+import { BPSSettingsModal } from "@/components/BPSSettingsModal";
+
+function formatBPS(value: number): string {
+  if (value === 0) return "Unlimited";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB/s`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB/s`;
+  return `${value} B/s`;
+}
 
 interface ServerCardProps {
   serverId: number;
@@ -39,6 +47,34 @@ interface ServerCardProps {
   onToggleSelect?: (leaseId: string) => void;
 }
 
+interface CardWrapperProps {
+  showAdminControls: boolean;
+  navigationPath: string;
+  navigationState: ServerNavigationState;
+  children: ReactNode;
+}
+
+function CardWrapper({
+  showAdminControls,
+  navigationPath,
+  navigationState,
+  children,
+}: CardWrapperProps) {
+  if (showAdminControls) {
+    return <div className="relative">{children}</div>;
+  }
+
+  return (
+    <Link
+      to={navigationPath}
+      state={navigationState}
+      className="relative cursor-pointer block"
+    >
+      {children}
+    </Link>
+  );
+}
+
 export function ServerCard({
   serverId,
   name,
@@ -71,6 +107,17 @@ export function ServerCard({
   onToggleSelect,
 }: ServerCardProps) {
   const [showBPSModal, setShowBPSModal] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+
+  useEffect(() => {
+    const intervalID = window.setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 60_000);
+
+    return () => {
+      window.clearInterval(intervalID);
+    };
+  }, []);
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -127,8 +174,7 @@ export function ServerCard({
   const formattedDuration = useMemo(() => {
     if (!firstSeen) return "";
     const start = new Date(firstSeen).getTime();
-    const now = Date.now();
-    const diff = Math.max(0, now - start);
+    const diff = Math.max(0, currentTime - start);
 
     const seconds = Math.floor(diff / 1000);
     const minutes = Math.floor(seconds / 60);
@@ -139,23 +185,14 @@ export function ServerCard({
     if (hours > 0) return `${hours}h ${minutes % 60}m`;
     if (minutes > 0) return `${minutes}m`;
     return `${seconds}s`;
-  }, [firstSeen]);
-
-  const Wrapper = ({ children }: { children: ReactNode }) =>
-    showAdminControls ? (
-      <div className="relative">{children}</div>
-    ) : (
-      <Link
-        to={navigationPath}
-        state={navigationState}
-        className="relative cursor-pointer block"
-      >
-        {children}
-      </Link>
-    );
+  }, [currentTime, firstSeen]);
 
   return (
-    <Wrapper>
+    <CardWrapper
+      showAdminControls={showAdminControls}
+      navigationPath={navigationPath}
+      navigationState={navigationState}
+    >
       <article
         data-hero-key={`server-bg-${serverId}`}
         className={clsx(
@@ -391,6 +428,6 @@ export function ServerCard({
           onBPSChange={onBPSChange}
         />
       )}
-    </Wrapper>
+    </CardWrapper>
   );
 }

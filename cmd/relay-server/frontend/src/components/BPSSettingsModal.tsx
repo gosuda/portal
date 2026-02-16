@@ -33,15 +33,6 @@ function formatStepLabel(value: number): string {
   return value.toString();
 }
 
-export function formatBPS(value: number): string {
-  if (value === 0) return "Unlimited";
-  if (value >= 1_000_000_000)
-    return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} MB/s`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB/s`;
-  return `${value} B/s`;
-}
-
 interface BPSSettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
