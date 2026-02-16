@@ -95,6 +95,16 @@ func TestNormalizePortalURL(t *testing.T) {
 			want:  "https://localhost:4017/relay",
 		},
 		{
+			name:  "uppercase WSS converted",
+			input: "WSS://example.com/relay",
+			want:  "https://example.com/relay",
+		},
+		{
+			name:  "mixed case Ws converted",
+			input: "Ws://localhost:4017/relay",
+			want:  "http://localhost:4017/relay",
+		},
+		{
 			name:  "localhost with port",
 			input: "localhost:4017",
 			want:  "https://localhost:4017/relay",
@@ -112,6 +122,16 @@ func TestNormalizePortalURL(t *testing.T) {
 		{
 			name:  "https scheme without path",
 			input: "https://example.com",
+			want:  "https://example.com/relay",
+		},
+		{
+			name:  "uppercase HTTP scheme without path",
+			input: "HTTP://example.com",
+			want:  "http://example.com/relay",
+		},
+		{
+			name:  "mixed case HTTPS scheme without path",
+			input: "hTtPs://example.com",
 			want:  "https://example.com/relay",
 		},
 		{

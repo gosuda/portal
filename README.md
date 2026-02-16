@@ -20,15 +20,39 @@ The `sdk/` package provides the public API for service publishers:
 - `Listen()` registers a lease and returns incoming connections
 - `Dial()` connects to a lease on a relay and performs the E2EE handshake
 
+## Prerequisites
+
+- **Go 1.26+** — [install](https://go.dev/dl/)
+- **npm** — required only for the admin frontend (`cmd/relay-server/frontend/`)
+
 ## Quick Start
 
 ```bash
-# Run the relay server
+# Run the relay server (auto-generates self-signed TLS cert for WebTransport)
 go run ./cmd/relay-server/ --port 4017 --tls-auto
 
 # In another terminal, expose a local service
 go run ./cmd/portal-tunnel/ --relay https://localhost:4017/relay --local localhost:8080
 ```
+
+> **Note:** `--tls-auto` generates a self-signed ECDSA P-256 certificate valid for <14 days.
+> The cert hash is available at `/cert-hash` for browser `serverCertificateHashes` pinning.
+> For production, use `--tls-cert` and `--tls-key` with CA-signed certificates.
+
+## Build Binaries
+
+```bash
+make build
+# or
+just build
+```
+
+Built binaries are written to `./bin`:
+
+- `./bin/relay-server`
+- `./bin/portal-tunnel`
+- `./bin/demo-app`
+- `./bin/vanity-id`
 
 ## Development
 

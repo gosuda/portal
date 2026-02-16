@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -38,8 +39,10 @@ type RelayServer struct {
 
 	leaseManager *LeaseManager
 
-	stopch    chan struct{}
-	waitgroup sync.WaitGroup
+	stopch         chan struct{}
+	waitgroup      sync.WaitGroup
+	registrationMu sync.Mutex
+	stopping       atomic.Bool
 
 	// Traffic control limits and counters
 	maxRelayedPerLease   int
@@ -66,6 +69,26 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 		stopch:               make(chan struct{}),
 		relayedPerLeaseCount: make(map[string]int),
 	}
+}
+
+func (g *RelayServer) registerWorker() bool {
+	g.registrationMu.Lock()
+	defer g.registrationMu.Unlock()
+
+	if g.stopping.Load() {
+		return false
+	}
+
+	g.waitgroup.Add(1)
+	return true
+}
+
+func (g *RelayServer) waitForRegistrationBarrier() {
+	g.registrationMu.Lock()
+	// Observe state while holding the registration mutex; this acts as a synchronization barrier
+	// for any in-flight registerWorker critical sections.
+	_ = g.stopping.Load()
+	g.registrationMu.Unlock()
 }
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
@@ -118,11 +141,25 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 
 	var streamSeq int64
 	for {
+		if g.stopping.Load() {
+			log.Debug().Int64("conn_id", id).Msg("[RelayServer] Server stopping, no longer accepting streams")
+			return
+		}
+
 		stream, err := connection.sess.AcceptStream(context.Background())
 		if err != nil {
 			log.Debug().Err(err).Int64("conn_id", id).Msg("[RelayServer] Error accepting stream, connection closing")
 			return
 		}
+
+		if g.stopping.Load() {
+			closeWithLog(stream, "[RelayServer] Failed to close stream while stopping")
+			log.Debug().
+				Int64("conn_id", id).
+				Msg("[RelayServer] Server stopping after stream accept, closing stream")
+			return
+		}
+
 		streamSeq++
 		streamID := streamSeq
 
@@ -134,7 +171,23 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 		connection.streamsLock.Lock()
 		connection.streams[streamID] = stream
 		connection.streamsLock.Unlock()
-		go g.handleStream(stream, streamID, id, connection)
+
+		if !g.registerWorker() {
+			connection.streamsLock.Lock()
+			delete(connection.streams, streamID)
+			connection.streamsLock.Unlock()
+			closeWithLog(stream, "[RelayServer] Failed to close stream while stopping")
+			log.Debug().
+				Int64("conn_id", id).
+				Int64("stream_id", streamID).
+				Msg("[RelayServer] Server stopping before stream handler launch, closing stream")
+			return
+		}
+
+		go func(stream Stream, streamID int64) {
+			defer g.waitgroup.Done()
+			g.handleStream(stream, streamID, id, connection)
+		}(stream, streamID)
 	}
 }
 
@@ -232,6 +285,13 @@ func (g *RelayServer) HandleSession(sess Session) {
 	log.Debug().Msg("[RelayServer] New session received")
 
 	g.connectionsLock.Lock()
+	if g.stopping.Load() {
+		g.connectionsLock.Unlock()
+		closeWithLog(sess, "[RelayServer] Failed to close incoming session while stopping")
+		log.Debug().Msg("[RelayServer] Rejected incoming session while stopping")
+		return
+	}
+
 	g.connidCounter++
 	connID := g.connidCounter
 	connection := &Connection{
@@ -239,10 +299,18 @@ func (g *RelayServer) HandleSession(sess Session) {
 		streams: make(map[int64]Stream),
 	}
 	g.connections[connID] = connection
+
+	if !g.registerWorker() {
+		delete(g.connections, connID)
+		g.connectionsLock.Unlock()
+		closeWithLog(sess, "[RelayServer] Failed to close incoming session while stopping")
+		log.Debug().Msg("[RelayServer] Rejected incoming session while stopping")
+		return
+	}
+
 	g.connectionsLock.Unlock()
 
 	log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Connection registered, starting handler")
-	g.waitgroup.Add(1)
 	go g.handleConn(connID, connection)
 }
 
@@ -313,6 +381,10 @@ func (g *RelayServer) Start() {
 }
 
 func (g *RelayServer) Stop() {
+	if !g.stopping.CompareAndSwap(false, true) {
+		return
+	}
+
 	close(g.stopch)
 	g.leaseManager.Stop()
 
@@ -324,6 +396,9 @@ func (g *RelayServer) Stop() {
 		closeWithLog(conn.sess, "[RelayServer] Failed to close active session during server stop")
 	}
 	g.connectionsLock.RUnlock()
+
+	// Ensure in-flight waitgroup registrations complete before waiting.
+	g.waitForRegistrationBarrier()
 
 	g.waitgroup.Wait()
 }

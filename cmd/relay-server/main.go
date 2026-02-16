@@ -110,8 +110,8 @@ func runServer(cfg serverConfig) error {
 		}
 		adminSecretKey = hex.EncodeToString(randomBytes)
 		log.Warn().
-			Str("key", adminSecretKey).
 			Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+		_, _ = fmt.Fprintf(os.Stderr, "AUTO_GENERATED_ADMIN_SECRET_KEY=%s\n", adminSecretKey)
 	} else {
 		log.Info().Msg("[server] admin authentication enabled")
 	}

@@ -64,7 +64,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
-		Dialer:              newWebTransportDialer(nil),
+		// Dialer intentionally nil — created after options are applied
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -72,6 +72,11 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 
 	for _, o := range opt {
 		o(config)
+	}
+
+	// Create default dialer if none was provided
+	if config.Dialer == nil {
+		config.Dialer = newWebTransportDialer(config.TLSConfig)
 	}
 
 	client := &Client{

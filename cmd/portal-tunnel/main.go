@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,6 +43,10 @@ type Config struct {
 	RelayURLs string `flag:"relay" env:"RELAYS" default:"https://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
 	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
+
+	// TLS options
+	Insecure bool   `flag:"insecure" env:"INSECURE" about:"Skip TLS certificate verification"`
+	CertHash string `flag:"cert-hash" env:"CERT_HASH" about:"Pin relay server certificate by SHA-256 hex hash (use 'auto' to fetch from /cert-hash endpoint)"`
 
 	// Metadata
 	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
@@ -99,6 +109,89 @@ func main() {
 	log.Info().Msg("Tunnel stopped")
 }
 
+// fetchCertHash fetches the certificate hash from relay server's /cert-hash endpoint.
+func fetchCertHash(ctx context.Context, relayURL string) ([]byte, error) {
+	// Parse the relay URL to get the base URL
+	u, err := url.Parse(relayURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid relay URL: %w", err)
+	}
+
+	// Construct the cert-hash endpoint URL
+	certHashURL := fmt.Sprintf("%s://%s/cert-hash", u.Scheme, u.Host)
+
+	// Create HTTP client with InsecureSkipVerify since we don't have the cert yet
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // bootstrapping cert fetch before cert is known
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certHashURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("create cert hash request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch cert hash from %s: %w", certHashURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("cert-hash endpoint returned status %d", resp.StatusCode)
+	}
+
+	var certHashResp struct {
+		Algorithm string `json:"algorithm"`
+		Hash      string `json:"hash"`
+	}
+
+	if err = json.NewDecoder(resp.Body).Decode(&certHashResp); err != nil {
+		return nil, fmt.Errorf("failed to decode cert hash response: %w", err)
+	}
+
+	if certHashResp.Algorithm != "sha-256" {
+		return nil, fmt.Errorf("unexpected hash algorithm: %s (expected sha-256)", certHashResp.Algorithm)
+	}
+
+	hash, err := hex.DecodeString(certHashResp.Hash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cert hash hex: %w", err)
+	}
+
+	return hash, nil
+}
+
+func fetchConsistentCertHash(ctx context.Context, relayURLs []string) ([]byte, error) {
+	if len(relayURLs) == 0 {
+		return nil, errors.New("no relay URLs provided")
+	}
+
+	firstRelay := relayURLs[0]
+	firstHash, err := fetchCertHash(ctx, firstRelay)
+	if err != nil {
+		return nil, fmt.Errorf("fetch cert hash for relay %q: %w", firstRelay, err)
+	}
+
+	for _, relayURL := range relayURLs[1:] {
+		hash, fetchErr := fetchCertHash(ctx, relayURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("fetch cert hash for relay %q: %w", relayURL, fetchErr)
+		}
+		if !bytes.Equal(firstHash, hash) {
+			return nil, fmt.Errorf(
+				"relay certificate hash mismatch: %q has %x, but %q has %x",
+				firstRelay,
+				firstHash,
+				relayURL,
+				hash,
+			)
+		}
+	}
+
+	return firstHash, nil
+}
+
 func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string, bufferPool *sync.Pool) error {
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
@@ -120,9 +213,36 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 	log.Info().Str("service", cfg.Name).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
 	log.Info().Str("service", cfg.Name).Msgf("  Lease ID: %s", leaseID)
 
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
+	// Build SDK client options
+	var opts []sdk.ClientOption
+	opts = append(opts, func(c *sdk.ClientConfig) {
 		c.BootstrapServers = relayURLs
 	})
+
+	// Add TLS options
+	if cfg.Insecure {
+		log.Warn().Msg("TLS certificate verification is disabled (--insecure)")
+		opts = append(opts, sdk.WithInsecureSkipVerify())
+	} else if cfg.CertHash != "" {
+		if cfg.CertHash == "auto" {
+			log.Info().Msg("Fetching certificate hash from relay server(s)...")
+			hash, hashErr := fetchConsistentCertHash(ctx, relayURLs)
+			if hashErr != nil {
+				return fmt.Errorf("failed to auto-fetch cert hash: %w", hashErr)
+			}
+			log.Info().Msgf("Certificate hash: %x", hash)
+			opts = append(opts, sdk.WithCertHash(hash))
+		} else {
+			hash, hashErr := hex.DecodeString(cfg.CertHash)
+			if hashErr != nil {
+				return fmt.Errorf("invalid cert hash: %w", hashErr)
+			}
+			log.Info().Msgf("Using pinned certificate hash: %x", hash)
+			opts = append(opts, sdk.WithCertHash(hash))
+		}
+	}
+
+	client, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to connect to relay: %w", cfg.Name, err)
 	}

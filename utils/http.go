@@ -1,7 +1,6 @@
 package portalnet
 
 import (
-	"context"
 	"mime"
 	"net"
 	"net/http"
@@ -73,7 +72,7 @@ func IsLocalhost(r *http.Request) bool {
 	}
 
 	// Try resolving hostnames to IPs (best-effort).
-	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	addrs, err := net.DefaultResolver.LookupIPAddr(r.Context(), host)
 	if err != nil {
 		return false
 	}

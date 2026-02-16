@@ -43,7 +43,7 @@ func main() {
 	flag.IntVar(&cfg.Port, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&cfg.Name, "name", "demo-app", "backend display name")
 	flag.StringVar(&cfg.Description, "description", "Portal demo connectivity app", "lease description")
-	flag.StringVar(&cfg.Tags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
+	flag.StringVar(&cfg.Tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
 	flag.StringVar(&cfg.Owner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&cfg.Hide, "hide", false, "hide this lease from listings")
 

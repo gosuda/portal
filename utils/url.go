@@ -41,11 +41,16 @@ func NormalizePortalURL(raw string) (string, error) {
 	}
 
 	// Convert legacy WebSocket schemes to HTTP equivalents
-	server = strings.Replace(server, "wss://", "https://", 1)
-	server = strings.Replace(server, "ws://", "http://", 1)
+	lower := strings.ToLower(server)
+	if strings.HasPrefix(lower, "wss://") {
+		server = "https://" + server[len("wss://"):]
+	} else if strings.HasPrefix(lower, "ws://") {
+		server = "http://" + server[len("ws://"):]
+	}
 
 	// Already an HTTP(S) URL
-	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
+	lower = strings.ToLower(server)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 		u, err := url.Parse(server)
 		if err != nil {
 			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)

@@ -1,6 +1,7 @@
-.PHONY: fmt vet lint test vuln tidy build proto lint-frontend build-frontend frontend all
+.PHONY: fmt vet lint lint-fix test vuln tidy build build-cmd proto lint-frontend build-frontend frontend all
 
 FRONTEND_DIR := cmd/relay-server/frontend
+BIN_DIR := bin
 
 fmt:
 	gofmt -w .
@@ -26,7 +27,14 @@ tidy:
 	go mod verify
 
 build:
-	go build ./...
+	$(MAKE) build-cmd
+
+build-cmd:
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/relay-server ./cmd/relay-server
+	go build -o $(BIN_DIR)/portal-tunnel ./cmd/portal-tunnel
+	go build -o $(BIN_DIR)/demo-app ./cmd/demo-app
+	go build -o $(BIN_DIR)/vanity-id ./cmd/vanity-id
 
 proto:
 	buf generate

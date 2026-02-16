@@ -57,6 +57,7 @@ App opens WebTransport session (HTTP/3) → streams multiplexed natively by QUIC
 **Docker:** `docker compose up` — builds and runs on port 4017.
 
 **Pre-commit:** `make all`
+**Mandatory lint gate before every commit:** `golangci-lint run --fix` (required even if other checks pass)
 
 ### Frontend
 
@@ -151,7 +152,7 @@ CD (on push to main/tags): builds multi-platform Docker image → pushes to `ghc
 
 ## Formatting & Style
 
-**Mandatory** before every commit: `gofmt -w . && goimports -w .`
+**Mandatory** before every commit: `gofmt -w . && goimports -w . && golangci-lint run --fix`
 
 Import ordering: **stdlib → external → internal** (blank-line separated). Local prefix: `gosuda.org/portal`.
 

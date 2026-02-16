@@ -30,6 +30,9 @@ go.work.sum
 # Frontend build output
 cmd/relay-server/dist/
 
+# Local Go command build output
+bin/
+
 # Editor/IDE
 # .idea/
 # .vscode/

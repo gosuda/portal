@@ -36,20 +36,13 @@ function readSSRData(): ServerData[] {
 
   // Try to read SSR data from the script tag
   const ssrScript = document.getElementById("__SSR_DATA__");
-  console.log("[SSR] Script tag found:", !!ssrScript);
 
   if (!ssrScript || !ssrScript.textContent) {
-    console.log("[SSR] No script tag or content found");
     return [];
   }
 
-  console.log("[SSR] Script content:", ssrScript.textContent.substring(0, 200));
-
   try {
     const parsed = JSON.parse(ssrScript.textContent);
-    console.log("[SSR] Parsed data:", parsed);
-    console.log("[SSR] Is array:", Array.isArray(parsed));
-    console.log("[SSR] Length:", Array.isArray(parsed) ? parsed.length : 0);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
     console.error("[SSR] Failed to parse SSR data:", err);

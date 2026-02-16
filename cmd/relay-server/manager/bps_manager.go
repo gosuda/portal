@@ -118,6 +118,7 @@ func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, 
 
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
 // Connection tracking is handled by RelayServer's event loop (cmdCheckAndIncLimit/cmdDecLimit).
+// TODO: add ctx context.Context parameter when Bucket.Take() supports context cancellation.
 func EstablishRelayWithBPS(clientStream, leaseStream io.ReadWriteCloser, leaseID string, bpsManager *BPSManager) {
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().

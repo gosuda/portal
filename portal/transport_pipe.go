@@ -33,7 +33,8 @@ type bufferedPipeStream struct {
 	writeCh       chan<- []byte
 	closeOnce     sync.Once
 	closeCh       chan struct{}
-	readBuf       []byte // Partial read buffer
+	peerCloseCh   <-chan struct{} // Closed when peer stream closes
+	readBuf       []byte          // Partial read buffer
 	mu            sync.Mutex
 	closed        bool
 	readDeadline  time.Time
@@ -89,15 +90,17 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	closeCh2 := make(chan struct{})
 
 	local := &bufferedPipeStream{
-		readCh:  ch1,
-		writeCh: ch2,
-		closeCh: closeCh1,
+		readCh:      ch1,
+		writeCh:     ch2,
+		closeCh:     closeCh1,
+		peerCloseCh: closeCh2,
 	}
 
 	remote := &bufferedPipeStream{
-		readCh:  ch2,
-		writeCh: ch1,
-		closeCh: closeCh2,
+		readCh:      ch2,
+		writeCh:     ch1,
+		closeCh:     closeCh2,
+		peerCloseCh: closeCh1,
 	}
 
 	// Track the local stream so we can close it when session closes
@@ -151,9 +154,53 @@ func (s *bufferedPipeStream) Read(p []byte) (n int, err error) {
 		timeoutCh = timer.C
 	}
 
-	// Wait for new data, close, or timeout
+	// Honour local Close() — stop reading new data from the channel.
+	// Note: readBuf (partial data from a prior Read) is delivered above since
+	// it was already consumed from the source.
 	select {
 	case <-s.closeCh:
+		return 0, io.EOF
+	default:
+	}
+
+	// Phase 1: Non-blocking read to prioritize buffered data over close signals.
+	// This prevents select non-determinism from dropping data when both readCh
+	// and peerCloseCh are ready simultaneously (e.g., write-then-close).
+	select {
+	case data, ok := <-s.readCh:
+		if !ok {
+			return 0, io.EOF
+		}
+		n = copy(p, data)
+		if n < len(data) {
+			s.mu.Lock()
+			s.readBuf = data[n:]
+			s.mu.Unlock()
+		}
+		return n, nil
+	default:
+		// No data immediately available, fall through to blocking wait.
+	}
+
+	// Phase 2: Block on all signals.
+	select {
+	case <-s.closeCh:
+		return 0, io.EOF
+	case <-s.peerCloseCh:
+		// Peer closed — drain any remaining buffered data before returning EOF.
+		select {
+		case data, ok := <-s.readCh:
+			if ok {
+				n = copy(p, data)
+				if n < len(data) {
+					s.mu.Lock()
+					s.readBuf = data[n:]
+					s.mu.Unlock()
+				}
+				return n, nil
+			}
+		default:
+		}
 		return 0, io.EOF
 	case data, ok := <-s.readCh:
 		if !ok {
@@ -161,7 +208,6 @@ func (s *bufferedPipeStream) Read(p []byte) (n int, err error) {
 		}
 		n = copy(p, data)
 		if n < len(data) {
-			// Store the rest for next read
 			s.mu.Lock()
 			s.readBuf = data[n:]
 			s.mu.Unlock()
@@ -204,6 +250,8 @@ func (s *bufferedPipeStream) Write(p []byte) (n int, err error) {
 
 	select {
 	case <-s.closeCh:
+		return 0, ErrPipeStreamClosed
+	case <-s.peerCloseCh:
 		return 0, ErrPipeStreamClosed
 	case s.writeCh <- data:
 		return len(p), nil

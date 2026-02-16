@@ -333,7 +333,9 @@ func (g *RelayClient) handleConnectionRequestStream(stream Stream) {
 
 	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayClient] Starting server handshake")
 	handshaker := cryptoops.NewHandshaker(lease.Cred)
-	secConn, err := handshaker.ServerHandshake(context.Background(), stream, lease.Lease.Alpn)
+	hsCtx, hsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer hsCancel()
+	secConn, err := handshaker.ServerHandshake(hsCtx, stream, lease.Lease.Alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayClient] Server handshake failed")
 		err = stream.Close()
@@ -628,7 +630,9 @@ func (g *RelayClient) RequestConnection(leaseID, alpn string, clientCred *crypto
 
 	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Starting client handshake")
 	handshaker := cryptoops.NewHandshaker(clientCred)
-	secConn, err := handshaker.ClientHandshake(context.Background(), stream, alpn)
+	hsCtx, hsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer hsCancel()
+	secConn, err := handshaker.ClientHandshake(hsCtx, stream, alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", leaseID).Msg("[RelayClient] Client handshake failed")
 		closeWithLog(stream, "[RelayClient] Failed to close stream after client handshake failure")

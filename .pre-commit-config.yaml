@@ -18,31 +18,22 @@ repos:
       # Fix UTF-8 byte order marker
       - id: fix-byte-order-marker
 
-  - repo: https://github.com/golangci/golangci-lint
-    rev: v2.6.2
+  - repo: local
     hooks:
-      # - id: golangci-lint
-      #   name: golangci-lint
-      #   description: Fast linters runner for Go. Note that only modified files are linted, so linters like 'unused' that need to scan all files won't work as expected.
-      #   entry: golangci-lint run --new-from-rev HEAD --fix
-      #   types: [go]
-      #   language: golang
-      #   require_serial: true
-      #   pass_filenames: false
-      # - id: golangci-lint-full
-      #   name: golangci-lint-full
-      #   description: Fast linters runner for Go. Runs on all files in the module. Use this hook if you use pre-commit in CI.
-      #   entry: golangci-lint run --fix > /dev/null || true
-      #   types: [go]
-      #   language: golang
-      #   require_serial: true
-      #   pass_filenames: false
       - id: golangci-lint-config-verify
         name: golangci-lint-config-verify
-        description: Verifies the configuration file
+        description: Verifies the golangci-lint configuration file
         entry: golangci-lint config verify
-        files: '\.golangci\.(?:yml|yaml|toml|json)'
+        language: system
+        pass_filenames: false
+
+      - id: golangci-lint
+        name: golangci-lint
+        description: Fast linters runner for Go.
+        entry: golangci-lint run --fix
+        types: [go]
         language: golang
+        pass_filenames: false
 
   - repo: local
     hooks:
