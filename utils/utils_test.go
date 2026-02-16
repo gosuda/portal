@@ -184,7 +184,6 @@ func TestGetContentType(t *testing.T) {
 		".html": "text/html; charset=utf-8",
 		".js":   "application/javascript",
 		".json": "application/json",
-		".wasm": "application/wasm",
 		".css":  "text/css",
 		".mp4":  "video/mp4",
 		".svg":  "image/svg+xml",

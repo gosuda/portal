@@ -26,11 +26,6 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		addr = ":0"
 	}
 
-	// Initialize WASM cache used by content handlers
-	if err := frontend.InitWasmCache(); err != nil {
-		log.Error().Err(err).Msg("failed to initialize WASM cache")
-	}
-
 	// Create app UI mux
 	appMux := http.NewServeMux()
 
@@ -53,14 +48,9 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		frontend.ServeAppStatic(w, r, p, serv)
 	}))
 
-	// Portal frontend files (for unified caching)
+	// Portal frontend files (for unified caching).
 	appMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
-
 		frontend.ServePortalStaticFile(w, r, p)
 	}))
 
@@ -108,22 +98,13 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	// Create portal frontend mux (routes only)
 	portalMux := http.NewServeMux()
 
-	// Static file handler for /frontend/ (for unified caching)
+	// Static file handler for /frontend/ (for unified caching).
 	portalMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
 		frontend.ServePortalStaticFile(w, r, p)
 	}))
 
-	// Service worker for portal subdomains (serve from dist/wasm)
-	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
-		frontend.ServeDynamicServiceWorker(w, r)
-	})
-
-	// Root and SPA fallback for portal subdomains
+	// Root and SPA fallback for portal subdomains.
 	portalMux.HandleFunc("/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			// Serve portal HTML with SSR for OG metadata

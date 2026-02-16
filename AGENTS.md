@@ -8,13 +8,11 @@ Portal is a self-hosted relay/tunnel that enables peer-to-peer, end-to-end encry
 
 **Relay Server** (`cmd/relay-server/`) — Single binary serving two protocols on the same port: HTTP/1.1 (TCP) for the React SPA at `/app/`, admin REST API at `/admin/`, and subdomain routing; HTTP/3 (UDP) for WebTransport relay sessions at `/relay`. Supports TLS certificate auto-generation for development (`--tls-auto`) with SHA-256 hash exposed at `/cert-hash` for browser `serverCertificateHashes` pinning. Manages approval, BPS rate limiting, and IP tracking through `cmd/relay-server/manager/`.
 
-**Portal library** (`portal/`) — Core protocol implementation. Transport-agnostic via `Session`/`Stream` interfaces (`transport.go`) with three implementations: `WTSession` (production WebTransport, `transport_wt.go`), `PipeSession` (in-memory tests, `transport_pipe.go`), and `wtjs.Session` (browser WASM, `cmd/webclient/wtjs/`). `RelayServer` accepts sessions and dispatches streams by packet type. `RelayClient` manages the app-side session. `LeaseManager` handles lease registration, renewal, expiry, bans, and name policies. Crypto operations live in `portal/core/cryptoops/`: `Credential` (Ed25519 keygen + identity derivation + X25519 key conversion), `Handshaker` (Noise XX via `flynn/noise`), and `SecureConnection` (ChaCha20-Poly1305 stream wrapper). Protocol messages are defined as protobuf in `portal/core/proto/rdverb/` (protocol verbs) and `portal/core/proto/rdsec/` (security payloads).
+**Portal library** (`portal/`) — Core protocol implementation. Transport-agnostic via `Session`/`Stream` interfaces (`transport.go`) with two implementations: `WTSession` (production WebTransport, `transport_wt.go`) and `PipeSession` (in-memory tests, `transport_pipe.go`). `RelayServer` accepts sessions and dispatches streams by packet type. `RelayClient` manages the app-side session. `LeaseManager` handles lease registration, renewal, expiry, bans, and name policies. Crypto operations live in `portal/core/cryptoops/`: `Credential` (Ed25519 keygen + identity derivation + X25519 key conversion), `Handshaker` (Noise XX via `flynn/noise`), and `SecureConnection` (ChaCha20-Poly1305 stream wrapper). Protocol messages are defined as protobuf in `portal/core/proto/rdverb/` (protocol verbs) and `portal/core/proto/rdsec/` (security payloads).
 
 **SDK** (`sdk/`) — Public API for service publishers. `Client` manages relay connections with automatic reconnect and health checking. `Listen()` registers a lease and returns incoming connections. `Dial()` connects to a lease on a relay and performs the E2EE handshake.
 
 **portal-tunnel** (`cmd/portal-tunnel/`) — CLI tunnel client. Uses `sdk.Listen()` to register a lease, then proxies incoming relay connections to a local TCP service.
-
-**webclient** (`cmd/webclient/`) — Go compiled to WASM (`GOOS=js GOARCH=wasm`) for browser-native relay connections. Includes a service worker that intercepts HTTP fetches and proxies them through the E2EE relay. Browser WebTransport adapter in `cmd/webclient/wtjs/`, HTTP interception in `cmd/webclient/httpjs/`.
 
 **vanity-id** (`cmd/vanity-id/`) — Brute-force tool for generating credential IDs matching a desired prefix.
 
@@ -22,7 +20,7 @@ Portal is a self-hosted relay/tunnel that enables peer-to-peer, end-to-end encry
 
 - **Credential** — Ed25519 keypair with derived X25519 keys for Noise DH. Identity ID = `HMAC-SHA256(pubkey, magic)[0:16]` encoded as base32 (26 chars). Every participant has one.
 - **Lease** — Advertising slot: identity + TTL (30s, renewed every 5s) + name + ALPN list + JSON metadata. One lease = one public endpoint.
-- **Session/Stream** — Transport-agnostic multiplexing. `Session` opens/accepts bidirectional `Stream`s. Each protocol operation (lease update, connection request) opens a new stream. Implementations: `WTSession` (WebTransport), `PipeSession` (in-memory tests), `wtjs.Session` (browser WASM).
+- **Session/Stream** — Transport-agnostic multiplexing. `Session` opens/accepts bidirectional `Stream`s. Each protocol operation (lease update, connection request) opens a new stream. Implementations: `WTSession` (WebTransport), `PipeSession` (in-memory tests).
 - **SecureConnection** — Wraps `io.ReadWriteCloser` with Noise CipherState authenticated encryption. Length-prefixed frames: `[4B len][ciphertext+tag]`. Nonces managed internally by the Noise CipherState.
 
 ### Data Flow
@@ -44,6 +42,7 @@ App opens WebTransport session (HTTP/3) → streams multiplexed natively by QUIC
 | `make vuln` | `govulncheck ./...` |
 | `make tidy` | `go mod tidy && go mod verify` |
 | `make build` | `go build ./...` |
+| `make proto` | `buf generate && buf lint` |
 | `make all` | `fmt vet lint test vuln build` |
 
 **justfile** provides alternative targets: `just fmt` runs golangci-lint auto-fix before gofmt, `just lint` skips errcheck, `just lint-fix` runs golangci-lint with `--fix`.
@@ -68,16 +67,19 @@ npm run build    # Production build (tsc + vite build)
 
 ### Proto Generation
 
-Protobuf schemas live in `proto/` (not committed generated code path — generated into `portal/core/proto/`). Uses buf v2 with `protoc-gen-go` and `protoc-gen-go-vtproto` (fast marshaling).
+Proto sources live in `proto/`, generated Go code in `portal/core/proto/`. Uses buf v2 with `protoc-gen-go` (standard reflection) and `protoc-gen-go-vtproto` (fast marshal/unmarshal/clone/equal/size).
 
 ```bash
+make proto      # buf generate + buf lint
 buf generate    # regenerate from proto/ into portal/core/proto/
-buf lint        # lint proto files (STANDARD rules)
+buf lint        # lint proto files (STANDARD rules, except PACKAGE_VERSION_SUFFIX and ENUM_ZERO_VALUE_SUFFIX)
 ```
 
 Two proto packages:
 - `rdsec` — security: `Identity`, `SignedPayload` (active); `ClientInitPayload`, `ServerInitPayload` (legacy — Noise handles its own message framing)
 - `rdverb` — protocol: `Packet`, `Lease`, `RelayInfoRequest/Response`, `LeaseUpdateRequest/Response`, `ConnectionRequest/Response`
+
+vtprotobuf generates `MarshalVT`/`UnmarshalVT`/`UnmarshalVTUnsafe`/`SizeVT`/`CloneVT`/`EqualVT` for all messages. Only vtproto methods are used in the codebase (never standard `proto.Marshal`).
 
 ---
 
@@ -109,7 +111,7 @@ Admin settings (ban list, BPS limits, approval mode, IP bans) persist to `admin_
 | `github.com/flynn/noise` | Noise Protocol Framework (E2EE handshake) |
 | `github.com/quic-go/quic-go` | QUIC transport layer |
 | `github.com/quic-go/webtransport-go` | WebTransport server and client |
-| `github.com/gorilla/websocket` | WebSocket (demo-app echo, webclient polyfill — not relay transport) |
+| `github.com/gorilla/websocket` | WebSocket (demo-app echo server) |
 | `github.com/planetscale/vtprotobuf` | Fast protobuf marshaling (generated vtproto code) |
 | `github.com/rs/zerolog` | Structured JSON logging |
 | `github.com/valyala/bytebufferpool` | Pooled byte buffers (reduces GC pressure in SecureConnection) |

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package rdverb;
 
-import "portal/core/proto/rdsec/rdsec.proto";
+import "rdsec/rdsec.proto";
 
 option go_package = "gosuda.org/portal/portal/core/proto/rdverb;rdverb";
 

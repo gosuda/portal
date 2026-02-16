@@ -832,16 +832,16 @@ func TestNilHandling(t *testing.T) {
 	}
 }
 
-// TestMarshalVTStrict tests strict marshaling
-func TestMarshalVTStrict(t *testing.T) {
+// TestMarshalVT_Roundtrip tests marshal/unmarshal roundtrip.
+func TestMarshalVT_Roundtrip(t *testing.T) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
 		Payload: []byte{0x01, 0x02, 0x03},
 	}
 
-	data, err := msg.MarshalVTStrict()
+	data, err := msg.MarshalVT()
 	if err != nil {
-		t.Fatalf("MarshalVTStrict() error = %v", err)
+		t.Fatalf("MarshalVT() error = %v", err)
 	}
 
 	got := &Packet{}
@@ -851,7 +851,7 @@ func TestMarshalVTStrict(t *testing.T) {
 	}
 
 	if !msg.EqualVT(got) {
-		t.Error("MarshalVTStrict roundtrip mismatch")
+		t.Error("MarshalVT roundtrip mismatch")
 	}
 }
 

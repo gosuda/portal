@@ -29,8 +29,6 @@ func GetContentType(ext string) string {
 		return "application/javascript"
 	case ".json":
 		return "application/json"
-	case ".wasm":
-		return "application/wasm"
 	case ".css":
 		return "text/css"
 	case ".mp4":

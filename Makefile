@@ -1,4 +1,4 @@
-.PHONY: fmt vet lint test vuln tidy build all
+.PHONY: fmt vet lint test vuln tidy build proto all
 
 fmt:
 	gofmt -w .
@@ -21,6 +21,10 @@ tidy:
 	go mod verify
 
 build:
-	go build $$(go list ./... | grep -v cmd/webclient)
+	go build ./...
+
+proto:
+	buf generate
+	buf lint
 
 all: fmt vet lint test vuln build

@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,15 +30,11 @@ type Frontend struct {
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
-
-	wasmCache   map[string]*wasmCacheEntry
-	wasmCacheMu sync.RWMutex
 }
 
 func NewFrontend() *Frontend {
 	return &Frontend{
-		distFS:    distFS,
-		wasmCache: make(map[string]*wasmCacheEntry),
+		distFS: distFS,
 	}
 }
 
@@ -74,7 +69,7 @@ func (f *Frontend) ServeAsset(mux *http.ServeMux, route, assetPath, contentType 
 func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	utils.SetCORSHeaders(w)
 
-	// Initialize cache on first use
+	// Initialize cache on first use.
 	f.cachedPortalHTMLOnce.Do(func() {
 		if err := f.initPortalHTMLCache(); err != nil {
 			log.Error().Err(err).Msg("Failed to cache portal.html")
@@ -86,19 +81,16 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Inject SSR data into cached template
+	// Inject SSR data into cached template.
 	injectedHTML := f.injectServerData(string(f.cachedPortalHTML), serv)
 
-	// Inject OG metadata (defaults for main app)
+	// Inject OG metadata (defaults for main app).
 	injectedHTML = f.injectOGMetadata(injectedHTML, "", "", "")
 
-	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-
-	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(injectedHTML))
+	_, _ = w.Write([]byte(injectedHTML))
 
 	log.Debug().Msg("Served portal.html with SSR data")
 }
@@ -107,10 +99,9 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 func (f *Frontend) ServePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	utils.SetCORSHeaders(w)
 
-	// Read portal.html from dist/wasm
-	data, err := f.distFS.ReadFile("dist/wasm/portal.html")
+	data, err := f.distFS.ReadFile("dist/app/portal.html")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to read dist/wasm/portal.html")
+		log.Error().Err(err).Msg("Failed to read dist/app/portal.html")
 		http.NotFound(w, r)
 		return
 	}
@@ -120,7 +111,7 @@ func (f *Frontend) ServePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	description := ""
 	imageURL := ""
 
-	// Extract lease name from host
+	// Extract lease name from host.
 	leaseName := ""
 	h := strings.ToLower(utils.StripPort(utils.StripScheme(r.Host)))
 	p := strings.ToLower(utils.StripPort(utils.StripScheme(flagPortalAppURL)))
@@ -141,16 +132,12 @@ func (f *Frontend) ServePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	// Inject OG metadata
 	htmlContent = f.injectOGMetadata(htmlContent, title, description, imageURL)
 
-	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-
-	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(htmlContent))
+	_, _ = w.Write([]byte(htmlContent))
 
 	log.Debug().Str("lease", leaseName).Msg("Served portal.html with subdomain SSR OG metadata")
 }
@@ -164,7 +151,6 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 	if imageURL == "" {
-		// Use absolute URL if possible
 		base := strings.TrimSuffix(flagPortalURL, "/")
 		if !strings.HasPrefix(base, "http") {
 			base = "https://" + base
@@ -181,25 +167,20 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 	return replacer.Replace(htmlContent)
 }
 
-// injectServerData injects server data into HTML for SSR
+// injectServerData injects server data into HTML for SSR.
 func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer) string {
-	// Get server data from lease manager
 	rows := []leaseRow{}
 	if f.admin != nil {
 		rows = convertLeaseEntriesToRows(serv, f.admin)
 	}
 
-	// Marshal to JSON
 	jsonData, err := json.Marshal(rows)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to marshal server data for SSR")
 		jsonData = []byte("[]")
 	}
 
-	// Create SSR script tag
 	ssrScript := `<script id="__SSR_DATA__" type="application/json">` + string(jsonData) + `</script>`
-
-	// Inject before </head> tag
 	injected := strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
 
 	log.Debug().
@@ -345,24 +326,13 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 
 // ServePortalStaticFile serves static files for portal frontend with caching.
 func (f *Frontend) ServePortalStaticFile(w http.ResponseWriter, r *http.Request, filePath string) {
-	// Check if this is a content-addressed WASM file
-	if strings.HasSuffix(filePath, ".wasm") {
-		hash := strings.TrimSuffix(filePath, ".wasm")
-		if utils.IsHexString(hash) {
-			f.serveCompressedWasm(w, r, filePath)
-			return
-		}
-	}
-
-	// Regular static file serving
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	f.ServeStaticFile(w, r, filePath, "")
+	f.serveStaticFile(w, r, filePath, "")
 }
 
 // ServeAppStatic serves static files for app UI (React app) from embedded FS.
 // Falls back to portal.html with SSR when path is root or file not found.
 func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer) {
-	// Prevent directory traversal
 	if strings.Contains(appPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
@@ -370,23 +340,19 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 	utils.SetCORSHeaders(w)
 
-	// If path is empty or "/", serve portal.html with SSR
 	if appPath == "" || appPath == "/" {
 		f.servePortalHTMLWithSSR(w, r, serv)
 		return
 	}
 
-	// Try to read from embedded FS
 	fullPath := path.Join("dist", "app", appPath)
 	data, err := f.distFS.ReadFile(fullPath)
 	if err != nil {
-		// File not found - fallback to portal.html with SSR for SPA routing
 		log.Debug().Err(err).Str("path", appPath).Msg("app static file not found, falling back to SSR")
 		f.servePortalHTMLWithSSR(w, r, serv)
 		return
 	}
 
-	// Set content type based on extension
 	ext := path.Ext(appPath)
 	contentType := utils.GetContentType(ext)
 	if contentType != "" {
@@ -395,7 +361,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 
 	log.Debug().
 		Str("path", appPath).
@@ -403,190 +369,39 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 		Msg("served app static file")
 }
 
-type wasmCacheEntry struct {
-	brotli []byte
-	hash   string
-}
-
-// initWasmCache loads pre-built WASM artifacts (precompressed) into memory on startup.
-func (f *Frontend) InitWasmCache() error {
-	// Read all files in embedded dist/wasm directory
-	entries, err := f.distFS.ReadDir("dist/wasm")
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		// Look for content-addressed WASM files: <hex>.wasm.br
-		if strings.HasSuffix(name, ".wasm.br") {
-			hash := strings.TrimSuffix(name, ".wasm.br")
-			if utils.IsHexString(hash) {
-				fullPath := path.Join("dist", "wasm", name)
-				// Cache under the URL path (<hash>.wasm) while reading the
-				// brotli-compressed artifact (<hash>.wasm.br) from embed.FS.
-				cacheKey := hash + ".wasm"
-				if err := f.cacheWasmFile(cacheKey, fullPath); err != nil {
-					log.Warn().Err(err).Str("file", name).Msg("failed to cache WASM file")
-				} else {
-					log.Info().Str("file", cacheKey).Msg("cached WASM file")
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// cacheWasmFile reads and caches a WASM file and its pre-compressed variant (brotli).
-func (f *Frontend) cacheWasmFile(name, fullPath string) error {
-	// Verify name looks like a hex hash (name is <hash>.wasm).
-	hashHex := strings.TrimSuffix(name, ".wasm")
-	if !utils.IsHexString(hashHex) {
-		log.Warn().Str("file", name).Msg("WASM file name is not a valid SHA256 hex string")
-	}
-
-	// Load precompressed variant (brotli) from embed.FS (<hash>.wasm.br)
-	var brData []byte
-	data, err := f.distFS.ReadFile(fullPath)
-	if err != nil {
-		log.Warn().Err(err).Str("file", fullPath).Msg("failed to read brotli-compressed WASM")
-	} else {
-		brData = data
-	}
-
-	entry := &wasmCacheEntry{
-		brotli: brData,
-		hash:   hashHex,
-	}
-
-	f.wasmCacheMu.Lock()
-	f.wasmCache[name] = entry
-	f.wasmCacheMu.Unlock()
-
-	log.Debug().
-		Str("file", name).
-		Int("brotli", len(entry.brotli)).
-		Msg("WASM file cached")
-
-	return nil
-}
-
-// serveCompressedWasm serves pre-compressed WASM files from memory cache
-func (f *Frontend) serveCompressedWasm(w http.ResponseWriter, r *http.Request, filePath string) {
-	f.wasmCacheMu.RLock()
-	entry, ok := f.wasmCache[filePath]
-	f.wasmCacheMu.RUnlock()
-
-	if !ok {
-		log.Debug().Str("path", filePath).Msg("WASM file not in cache")
-		// Fallback: try to serve uncompressed WASM from embedded FS
-		fullPath := path.Join("dist", "wasm", filePath)
-		data, err := f.distFS.ReadFile(fullPath)
-		if err != nil {
-			log.Debug().Err(err).Str("path", fullPath).Msg("WASM file not found in embedded FS")
-			http.NotFound(w, r)
-			return
-		}
-
-		// Serve uncompressed WASM
-		utils.SetCORSHeaders(w)
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		w.Header().Set("Content-Type", "application/wasm")
-		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-		log.Debug().
-			Str("path", filePath).
-			Int("size", len(data)).
-			Msg("served uncompressed WASM from embedded FS")
-		return
-	}
-
-	// Set immutable cache headers for content-addressed files
-	utils.SetCORSHeaders(w)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("Content-Type", "application/wasm")
-
-	// Check Accept-Encoding header for brotli support
-	acceptEncoding := r.Header.Get("Accept-Encoding")
-
-	// Require brotli-compressed WASM
-	if !strings.Contains(acceptEncoding, "br") || len(entry.brotli) == 0 {
-		log.Warn().
-			Str("path", filePath).
-			Str("acceptEncoding", acceptEncoding).
-			Msg("client does not support brotli or brotli variant missing for WASM")
-		http.Error(w, "brotli-compressed WASM required", http.StatusNotAcceptable)
-		return
-	}
-
-	w.Header().Set("Content-Encoding", "br")
-	w.Header().Set("Content-Length", strconv.Itoa(len(entry.brotli)))
-	w.WriteHeader(http.StatusOK)
-	w.Write(entry.brotli)
-	log.Debug().
-		Str("path", filePath).
-		Int("size", len(entry.brotli)).
-		Str("encoding", "brotli").
-		Msg("served compressed WASM")
-}
-
 // ServePortalStatic serves static files for portal frontend with appropriate cache headers.
 // Falls back to portal.html for SPA routing (404 -> portal.html).
 func (f *Frontend) ServePortalStatic(w http.ResponseWriter, r *http.Request) {
 	staticPath := strings.TrimPrefix(r.URL.Path, "/")
 
-	// Prevent directory traversal
 	if strings.Contains(staticPath, "..") {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
-	// Special handling for specific files
 	switch staticPath {
-	case "manifest.json":
-		// Serve dynamic manifest regardless of static presence
-		f.ServeDynamicManifest(w, r)
-		return
-
-	case "service-worker.js":
-		f.ServeDynamicServiceWorker(w, r)
-		return
-
-	case "wasm_exec.js":
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Header().Set("Content-Type", "application/javascript")
-		f.serveStaticFileWithFallback(w, r, staticPath, "application/javascript")
-		return
-
 	case "portal.mp4":
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 		w.Header().Set("Content-Type", "video/mp4")
-		f.serveStaticFileWithFallback(w, r, staticPath, "video/mp4")
+		f.serveStaticFile(w, r, staticPath, "video/mp4")
 		return
 
 	case "portal.jpg":
 		w.Header().Set("Cache-Control", "public, max-age=604800")
 		w.Header().Set("Content-Type", "image/jpeg")
-		f.serveStaticFileWithFallback(w, r, staticPath, "image/jpeg")
+		f.serveStaticFile(w, r, staticPath, "image/jpeg")
 		return
 	}
 
-	// Default caching for other files
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	f.serveStaticFileWithFallback(w, r, staticPath, "")
 }
 
-// ServeStaticFile reads and serves a file from the static directory.
-func (f *Frontend) ServeStaticFile(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
+// serveStaticFile reads and serves a file from the app static directory.
+func (f *Frontend) serveStaticFile(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
 	utils.SetCORSHeaders(w)
 
-	fullPath := path.Join("dist", "wasm", filePath)
+	fullPath := path.Join("dist", "app", filePath)
 	data, err := f.distFS.ReadFile(fullPath)
 	if err != nil {
 		log.Debug().Err(err).Str("path", filePath).Msg("static file not found")
@@ -594,7 +409,6 @@ func (f *Frontend) ServeStaticFile(w http.ResponseWriter, r *http.Request, fileP
 		return
 	}
 
-	// Set content type
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
@@ -611,25 +425,23 @@ func (f *Frontend) ServeStaticFile(w http.ResponseWriter, r *http.Request, fileP
 		Msg("served static file")
 
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
-// serveStaticFileWithFallback reads and serves a file from the static directory
-// If the file is not found, it falls back to portal.html for SPA routing
+// serveStaticFileWithFallback reads and serves a file from the app static directory.
+// If the file is not found, it falls back to portal.html for SPA routing.
 func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
 	utils.SetCORSHeaders(w)
 
-	fullPath := path.Join("dist", "wasm", filePath)
+	fullPath := path.Join("dist", "app", filePath)
 	data, err := f.distFS.ReadFile(fullPath)
 	if err != nil {
-		// File not found - fallback to portal.html for SPA routing
 		log.Debug().Err(err).Str("path", filePath).Msg("static file not found, serving portal.html")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		f.ServeStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
+		f.serveStaticFile(w, r, "portal.html", "text/html; charset=utf-8")
 		return
 	}
 
-	// Set content type
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	} else {
@@ -646,99 +458,5 @@ func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Re
 		Msg("served static file")
 
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
-}
-
-// serveDynamicManifest generates and serves manifest.json dynamically
-func (f *Frontend) ServeDynamicManifest(w http.ResponseWriter, _ *http.Request) {
-	utils.SetCORSHeaders(w)
-
-	// Find the content-addressed WASM file
-	f.wasmCacheMu.RLock()
-	var wasmHash string
-	var wasmFile string
-	for filename, entry := range f.wasmCache {
-		wasmHash = entry.hash
-		wasmFile = filename
-		break // Use the first (and should be only) WASM file
-	}
-	f.wasmCacheMu.RUnlock()
-
-	// Fallback: scan embedded WASM directory if cache is empty
-	if wasmHash == "" {
-		entries, err := f.distFS.ReadDir("dist/wasm")
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					continue
-				}
-				name := entry.Name()
-				// Look for content-addressed WASM files: <hex>.wasm.br
-				if strings.HasSuffix(name, ".wasm.br") {
-					hash := strings.TrimSuffix(name, ".wasm.br")
-					if utils.IsHexString(hash) {
-						wasmHash = hash
-						wasmFile = hash + ".wasm"
-						break
-					}
-				}
-			}
-		}
-	}
-
-	// Generate WASM URL
-	wasmURL := flagPortalURL + "/frontend/" + wasmFile
-
-	// Create manifest structure
-	manifest := map[string]string{
-		"wasmFile":   wasmFile,
-		"wasmUrl":    wasmURL,
-		"hash":       wasmHash,
-		"bootstraps": strings.Join(flagBootstraps, ","),
-	}
-
-	// Set headers for no caching
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
-	w.Header().Set("Content-Type", "application/json")
-
-	// Encode and send
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(manifest); err != nil {
-		log.Error().Err(err).Msg("Failed to encode manifest")
-	}
-
-	log.Debug().
-		Str("wasmFile", wasmFile).
-		Str("wasmUrl", wasmURL).
-		Str("hash", wasmHash).
-		Str("bootstraps", strings.Join(flagBootstraps, ",")).
-		Msg("Served dynamic manifest")
-}
-
-// ServeDynamicServiceWorker serves service-worker.js with injected manifest and config.
-func (f *Frontend) ServeDynamicServiceWorker(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
-
-	// Read the service-worker.js template
-	fullPath := path.Join("dist", "wasm", "service-worker.js")
-	content, err := f.distFS.ReadFile(fullPath)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to read service-worker.js")
-		http.NotFound(w, r)
-		return
-	}
-
-	// Set headers for no caching
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
-	w.Header().Set("Content-Type", "application/javascript")
-
-	// Send response
-	w.WriteHeader(http.StatusOK)
-	w.Write(content)
-
-	log.Debug().Msg("Served service-worker.js")
+	_, _ = w.Write(data)
 }
