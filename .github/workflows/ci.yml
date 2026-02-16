@@ -13,7 +13,7 @@ jobs:
     outputs:
       is-go-project: ${{ steps.check.outputs.exists }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - id: check
         run: |
           if [ -f "go.mod" ]; then
@@ -30,7 +30,7 @@ jobs:
     needs: check-go
     if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "stable"
@@ -45,12 +45,12 @@ jobs:
     needs: check-go
     if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       - run: golangci-lint run
 
   security:
@@ -59,12 +59,12 @@ jobs:
     needs: check-go
     if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - run: govulncheck ./...
 
   build:
@@ -73,7 +73,7 @@ jobs:
     needs: check-go
     if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version: "stable"
