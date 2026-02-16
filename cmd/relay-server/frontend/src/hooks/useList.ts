@@ -1,20 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
-
-// Base server interface that both ClientServer and AdminServer extend
-export interface BaseServer {
-  id: number;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  dns: string;
-  link: string;
-  lastUpdated?: string;
-  firstSeen?: string;
-}
+import type { BaseServer } from "@/types/server";
 
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];

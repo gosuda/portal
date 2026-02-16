@@ -5,7 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SortOption } from "@/types/filters";
+import type { SortOption } from "@/types/filters";
 import clsx from "clsx";
 
 interface SortbySelectProps {

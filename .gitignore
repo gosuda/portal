@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Frontend build output
+cmd/relay-server/dist/
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -1,12 +1,11 @@
 import { useMemo } from "react";
 import { useSSRData } from "@/hooks/useSSRData";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
-import { useList, type BaseServer } from "@/hooks/useList";
+import { useList } from "@/hooks/useList";
+import type { ClientServer } from "@/types/server";
 import { generateRandomServers } from "@/lib/testUtils";
 
 const useDebug = false;
-
-export type ClientServer = BaseServer;
 
 function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
   return ssrData.map((row, index) => {

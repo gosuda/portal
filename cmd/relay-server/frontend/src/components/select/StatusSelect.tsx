@@ -5,7 +5,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { StatusFilter } from "@/types/filters";
+import type { StatusFilter } from "@/types/filters";
 import clsx from "clsx";
 
 interface StatusSelectProps {

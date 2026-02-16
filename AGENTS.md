@@ -43,7 +43,10 @@ App opens WebTransport session (HTTP/3) → streams multiplexed natively by QUIC
 | `make tidy` | `go mod tidy && go mod verify` |
 | `make build` | `go build ./...` |
 | `make proto` | `buf generate && buf lint` |
-| `make all` | `fmt vet lint test vuln build` |
+| `make lint-frontend` | `cd cmd/relay-server/frontend && npm run lint` |
+| `make build-frontend` | `cd cmd/relay-server/frontend && npm run build` |
+| `make frontend` | `lint-frontend build-frontend` |
+| `make all` | `fmt vet lint test vuln build frontend` |
 
 **justfile** provides alternative targets: `just fmt` runs golangci-lint auto-fix before gofmt, `just lint` skips errcheck, `just lint-fix` runs golangci-lint with `--fix`.
 
@@ -57,13 +60,25 @@ App opens WebTransport session (HTTP/3) → streams multiplexed natively by QUIC
 
 ### Frontend
 
-React 19 + Vite 7 + Tailwind v4 + shadcn/ui (Radix primitives). Source: `cmd/relay-server/frontend/`.
+React 19 + Vite 7 + TypeScript 5.9 (strict) + Tailwind CSS v4 + shadcn/ui (Radix) + React Compiler 1.0 + @ssgoi/react (view transitions). Source: `cmd/relay-server/frontend/`.
 
 ```bash
 cd cmd/relay-server/frontend && npm install
 npm run dev      # Vite dev server
 npm run build    # Production build (tsc + vite build)
+npm run lint     # ESLint 9 (warnings are React Compiler pre-existing patterns)
+make lint-frontend   # from repo root
+make build-frontend  # from repo root
+make frontend        # lint + build
 ```
+
+**Types** — centralized in `src/types/`. All components and hooks import from `@/types/` — never define types locally.
+- `src/types/server.ts` — `BaseServer`, `ClientServer`, `AdminServer`, `ApprovalMode`, `BanFilter`, `ServerNavigationState`, `isAdminServer` type guard
+- `src/types/filters.ts` — `StatusFilter`, `SortOption`, `TagMode`
+
+**ESLint** — `eslint.config.js` (ESLint 9 flat config): typescript-eslint strict preset, `consistent-type-imports` (enforced), `no-explicit-any` (enforced), react-hooks recommended, React Compiler rules (`set-state-in-effect`, `purity`) at warn level.
+
+**Build output** — `../dist/app` (embedded by Go relay-server via `go:embed`). Path alias: `@/*` → `./src/*` (tsconfig + vite).
 
 ### Proto Generation
 

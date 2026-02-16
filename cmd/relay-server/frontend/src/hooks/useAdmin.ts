@@ -1,21 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
-import { useList, type BaseServer } from "@/hooks/useList";
-import type { BanFilter } from "@/components/ServerListView";
-
-// Approval mode type
-export type ApprovalMode = "auto" | "manual";
-
-// Extended BaseServer with admin-specific fields
-export interface AdminServer extends BaseServer {
-  peerId: string;
-  isBanned: boolean;
-  bps: number; // bytes-per-second limit (0 = unlimited)
-  isApproved: boolean; // whether lease is approved (for manual mode)
-  isDenied: boolean; // whether lease is denied (for manual mode)
-  ip: string; // client IP address (for IP-based ban)
-  isIPBanned: boolean; // whether the IP is banned
-}
+import { useList } from "@/hooks/useList";
+import type { AdminServer, ApprovalMode, BanFilter } from "@/types/server";
 
 // Convert ServerData (from API) to AdminServer format
 function convertServerDataToAdminServer(

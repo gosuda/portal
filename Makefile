@@ -1,4 +1,6 @@
-.PHONY: fmt vet lint test vuln tidy build proto all
+.PHONY: fmt vet lint test vuln tidy build proto lint-frontend build-frontend frontend all
+
+FRONTEND_DIR := cmd/relay-server/frontend
 
 fmt:
 	gofmt -w .
@@ -27,4 +29,12 @@ proto:
 	buf generate
 	buf lint
 
-all: fmt vet lint test vuln build
+lint-frontend:
+	cd $(FRONTEND_DIR) && npm run lint
+
+build-frontend:
+	cd $(FRONTEND_DIR) && npm run build
+
+frontend: lint-frontend build-frontend
+
+all: fmt vet lint test vuln build frontend

@@ -2,24 +2,13 @@ import { useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
-import { TagCombobox } from "@/components/TagCombobox";
-import type { ClientServer } from "@/hooks/useServerList";
-import type { AdminServer, ApprovalMode } from "@/hooks/useAdmin";
-import type { SortOption, StatusFilter } from "@/types/filters";
-import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
-import { SortbySelect } from "@/components/select/SortbySelect";
 import { ApprovalModeToggle } from "@/components/button/ApprovalModeToggle";
 import { FloatingActionBar } from "@/components/FloatingActionBar";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-
-// Admin-specific filter for ban status
-export type BanFilter = "all" | "banned" | "active";
+import { MobileFilterModal } from "@/components/MobileFilterModal";
+import type { ClientServer, AdminServer, ApprovalMode, BanFilter } from "@/types/server";
+import { isAdminServer } from "@/types/server";
+import type { SortOption, StatusFilter } from "@/types/filters";
 
 interface ServerListViewProps {
   // Header customization
@@ -56,12 +45,6 @@ interface ServerListViewProps {
   onBulkBan?: (leaseIds: string[]) => void;
   // Logout handler (admin only)
   onLogout?: () => void;
-}
-
-function isAdminServer(
-  server: ClientServer | AdminServer
-): server is AdminServer {
-  return "peerId" in server;
 }
 
 export function ServerListView({
@@ -160,35 +143,6 @@ export function ServerListView({
     }
   };
 
-  // Admin filter content (Ban Status + Approval) - for desktop only
-  const AdminFilterContent = () => (
-    <>
-      {/* Ban Status Filter Buttons */}
-      {onBanFilterChange && (
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-text-muted">
-            Ban Status
-          </span>
-          <BanStatusButtons
-            banFilter={banFilter}
-            onBanFilterChange={onBanFilterChange}
-          />
-        </div>
-      )}
-
-      {/* Approval Mode Toggle */}
-      {onApprovalModeChange && (
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-text-muted">Approval</span>
-          <ApprovalModeToggle
-            approvalMode={approvalMode}
-            onApprovalModeChange={onApprovalModeChange}
-          />
-        </div>
-      )}
-    </>
-  );
-
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
       <div className="flex h-full grow flex-col">
@@ -214,10 +168,29 @@ export function ServerListView({
                   />
                 </div>
               </div>
-              {/* Desktop filters - hidden on mobile */}
+              {/* Desktop admin filters - hidden on mobile */}
               {isAdmin && (
                 <div className="hidden sm:flex flex-wrap items-center gap-6 mt-4 px-4 sm:px-6">
-                  <AdminFilterContent />
+                  {onBanFilterChange && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-text-muted">
+                        Ban Status
+                      </span>
+                      <BanStatusButtons
+                        banFilter={banFilter}
+                        onBanFilterChange={onBanFilterChange}
+                      />
+                    </div>
+                  )}
+                  {onApprovalModeChange && (
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-text-muted">Approval</span>
+                      <ApprovalModeToggle
+                        approvalMode={approvalMode}
+                        onApprovalModeChange={onApprovalModeChange}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
               {/* Mobile-only Approval filter - always visible outside modal */}
@@ -308,64 +281,21 @@ export function ServerListView({
         </div>
       </div>
 
-      {/* Filter Modal for mobile - contains SearchBar filters (Status, Sort, Tag) */}
-      <Dialog open={showFilterModal} onOpenChange={setShowFilterModal}>
-        <DialogContent className="sm:hidden max-w-sm rounded-sm">
-          <DialogHeader>
-            <DialogTitle>Filters</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-4">
-            {/* Online/Offline Status Filter - Select style */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-text-muted">
-                Status
-              </span>
-              <StatusSelect
-                status={status}
-                onStatusChange={onStatusChange}
-                className="w-full!"
-              />
-            </div>
-
-            {/* Admin Ban Status Filter - All/Active/Banned (button group style) */}
-            {isAdmin && onBanFilterChange && (
-              <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium text-text-muted">
-                  Ban Status
-                </span>
-                <BanStatusButtons
-                  className="[&>button]:w-full"
-                  banFilter={banFilter}
-                  onBanFilterChange={onBanFilterChange}
-                />
-              </div>
-            )}
-
-            {/* Sort By */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-text-muted">
-                Sort By
-              </span>
-              <SortbySelect
-                className="w-full!"
-                sortBy={sortBy}
-                onSortByChange={onSortByChange}
-              />
-            </div>
-
-            {/* Tag Filter */}
-            <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-text-muted">Tags</span>
-              <TagCombobox
-                availableTags={availableTags}
-                selectedTags={selectedTags}
-                onAdd={onTagToggle}
-                onRemove={onTagToggle}
-              />
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Filter Modal for mobile */}
+      <MobileFilterModal
+        open={showFilterModal}
+        onOpenChange={setShowFilterModal}
+        status={status}
+        onStatusChange={onStatusChange}
+        sortBy={sortBy}
+        onSortByChange={onSortByChange}
+        availableTags={availableTags}
+        selectedTags={selectedTags}
+        onTagToggle={onTagToggle}
+        isAdmin={isAdmin}
+        banFilter={banFilter}
+        onBanFilterChange={onBanFilterChange}
+      />
 
       {/* Floating Action Bar - shows when items are selected in admin mode */}
       {isAdmin && (
