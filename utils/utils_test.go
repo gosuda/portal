@@ -1,13 +1,11 @@
 package utils
 
 import (
-	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIsURLSafeName(t *testing.T) {
@@ -85,49 +83,49 @@ func TestNormalizePortalURL(t *testing.T) {
 		shouldFail bool
 	}{
 		{
-			name:  "already ws",
+			name:  "legacy ws converted",
 			input: "ws://localhost:4017/relay",
-			want:  "ws://localhost:4017/relay",
+			want:  "http://localhost:4017/relay",
 		},
 		{
-			name:  "already wss",
+			name:  "legacy wss converted",
 			input: "wss://localhost:4017/relay",
-			want:  "wss://localhost:4017/relay",
+			want:  "https://localhost:4017/relay",
 		},
 		{
 			name:  "localhost with port",
 			input: "localhost:4017",
-			want:  "wss://localhost:4017/relay",
+			want:  "https://localhost:4017/relay",
 		},
 		{
 			name:  "domain without port",
 			input: "example.com",
-			want:  "wss://example.com/relay",
+			want:  "https://example.com/relay",
 		},
 		{
 			name:  "http scheme without path",
 			input: "http://example.com",
-			want:  "ws://example.com/relay",
+			want:  "http://example.com/relay",
 		},
 		{
 			name:  "https scheme without path",
 			input: "https://example.com",
-			want:  "wss://example.com/relay",
+			want:  "https://example.com/relay",
 		},
 		{
 			name:  "http scheme with path",
 			input: "http://example.com/custom",
-			want:  "ws://example.com/custom",
+			want:  "http://example.com/custom",
 		},
 		{
 			name:  "https scheme with path",
 			input: "https://example.com/custom",
-			want:  "wss://example.com/custom",
+			want:  "https://example.com/custom",
 		},
 		{
 			name:  "bare host with path",
 			input: "example.com/custom",
-			want:  "wss://example.com/custom",
+			want:  "https://example.com/custom",
 		},
 		{
 			name:       "empty",
@@ -449,157 +447,25 @@ func TestDefaultBootstrapFrom(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"empty string", "", "ws://localhost:4017/relay"},
-		{"whitespace", "   ", "ws://localhost:4017/relay"},
-		{"localhost with port", "localhost:4017", "wss://localhost:4017/relay"},
-		{"https with domain", "https://portal.example.com", "wss://portal.example.com/relay"},
-		{"http with domain", "http://portal.example.com", "ws://portal.example.com/relay"},
-		{"ws scheme", "ws://example.com", "ws://example.com"},
-		{"wss scheme", "wss://example.com", "wss://example.com"},
-		{"ws with path", "ws://example.com/relay", "ws://example.com/relay"},
-		{"wss with path", "wss://example.com/relay", "wss://example.com/relay"},
-		{"domain only", "example.com", "wss://example.com/relay"},
-		{"with trailing slash", "example.com/", "wss://example.com/relay"},
-		{"with path", "example.com/custom", "wss://example.com/custom"},
-		{"edge case invalid url", "://invalid", "wss://://invalid"},
+		{"empty string", "", "http://localhost:4017/relay"},
+		{"whitespace", "   ", "http://localhost:4017/relay"},
+		{"localhost with port", "localhost:4017", "https://localhost:4017/relay"},
+		{"https with domain", "https://portal.example.com", "https://portal.example.com/relay"},
+		{"http with domain", "http://portal.example.com", "http://portal.example.com/relay"},
+		{"legacy ws scheme", "ws://example.com", "http://example.com/relay"},
+		{"legacy wss scheme", "wss://example.com", "https://example.com/relay"},
+		{"legacy ws with path", "ws://example.com/relay", "http://example.com/relay"},
+		{"legacy wss with path", "wss://example.com/relay", "https://example.com/relay"},
+		{"domain only", "example.com", "https://example.com/relay"},
+		{"with trailing slash", "example.com/", "https://example.com/relay"},
+		{"with path", "example.com/custom", "https://example.com/custom"},
+		{"edge case invalid url", "://invalid", "https://://invalid"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := DefaultBootstrapFrom(tt.input)
 			assert.Equal(t, tt.expected, result, "DefaultBootstrapFrom(%q)", tt.input)
-		})
-	}
-}
-
-// Tests for ws.go functions
-
-func TestNewWebSocketDialer(t *testing.T) {
-	ctx := context.Background()
-	dialer := NewWebSocketDialer()
-
-	// Test with invalid URL - should error
-	_, err := dialer(ctx, "not-a-url")
-	assert.Error(t, err)
-
-	// Test with unreachable server - should error
-	_, err = dialer(ctx, "ws://localhost:9999/unreachable")
-	assert.Error(t, err)
-}
-
-func TestUpgradeWebSocket(t *testing.T) {
-	tests := []struct {
-		name           string
-		requestHeaders map[string]string
-		expectError    bool
-	}{
-		{
-			name: "valid websocket upgrade request",
-			requestHeaders: map[string]string{
-				"Connection":            "Upgrade",
-				"Upgrade":               "websocket",
-				"Sec-WebSocket-Version": "13",
-				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
-			},
-			expectError: false,
-		},
-		{
-			name: "missing upgrade header",
-			requestHeaders: map[string]string{
-				"Connection": "Upgrade",
-			},
-			expectError: true,
-		},
-		{
-			name:           "no headers",
-			requestHeaders: map[string]string{},
-			expectError:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			for k, v := range tt.requestHeaders {
-				req.Header.Set(k, v)
-			}
-
-			w := httptest.NewRecorder()
-
-			conn, err := UpgradeWebSocket(w, req, nil)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Nil(t, conn)
-			} else {
-				// If no error, we should get a connection
-				// Note: The response might have been written already
-				if err == nil {
-					assert.NotNil(t, conn)
-					conn.Close()
-				} else {
-					// Some error cases are acceptable in test environment
-					assert.NotNil(t, err)
-				}
-			}
-		})
-	}
-}
-
-func TestUpgradeToWSStream(t *testing.T) {
-	tests := []struct {
-		name           string
-		requestHeaders map[string]string
-	}{
-		{
-			name: "valid websocket upgrade request",
-			requestHeaders: map[string]string{
-				"Connection":            "Upgrade",
-				"Upgrade":               "websocket",
-				"Sec-WebSocket-Version": "13",
-				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
-			},
-		},
-		{
-			name: "missing connection header",
-			requestHeaders: map[string]string{
-				"Upgrade": "websocket",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			for k, v := range tt.requestHeaders {
-				req.Header.Set(k, v)
-			}
-
-			w := httptest.NewRecorder()
-
-			stream, conn, err := UpgradeToWSStream(w, req, nil)
-
-			// Check return values
-			if tt.requestHeaders["Connection"] == "Upgrade" && tt.requestHeaders["Upgrade"] == "websocket" {
-				// Valid upgrade request
-				if err == nil {
-					require.NotNil(t, stream, "stream should not be nil on success")
-					require.NotNil(t, conn, "conn should not be nil on success")
-					conn.Close()
-				}
-				// Note: In test environment, upgrade might fail for various reasons
-				// The important thing is the function doesn't panic
-			} else {
-				// Invalid request should error
-				if err == nil {
-					require.NotNil(t, stream)
-					require.NotNil(t, conn)
-					conn.Close()
-				} else {
-					assert.Nil(t, stream)
-					assert.Nil(t, conn)
-				}
-			}
 		})
 	}
 }

@@ -54,7 +54,7 @@ func (i *IncomingConn) RemoteID() string {
 // - Incoming connection requests
 // - Secure connection establishment
 //
-// The client uses yamux for connection multiplexing, allowing multiple
+// The client uses session multiplexing, allowing multiple
 // concurrent streams over a single underlying connection.
 //
 // Thread-safety: All public methods are safe for concurrent use.
@@ -107,10 +107,10 @@ func NewRelayClient(sess Session) *RelayClient {
 }
 
 // Ping measures round-trip latency to the relay server.
-// If the session supports a native Ping (e.g. yamux), it is used.
+// If the session exposes a native Ping, it is used.
 // Otherwise, a stream open/close round-trip is used as a health check.
 func (g *RelayClient) Ping() (time.Duration, error) {
-	// Use native Ping if available (yamux adapter)
+	// Use native Ping if available
 	type pinger interface {
 		Ping() (time.Duration, error)
 	}

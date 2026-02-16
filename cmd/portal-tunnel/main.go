@@ -30,7 +30,7 @@ var bufferPool = sync.Pool{
 type Config struct {
 	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
-	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
+	RelayURLs string `flag:"relay" env:"RELAYS" default:"https://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
 	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
 

@@ -25,7 +25,7 @@ func TestIntegration_FullFlow(t *testing.T) {
 	server.Start()
 	defer server.Stop()
 
-	// Create connected session pair (replaces TCP + yamux)
+	// Create connected in-memory session pair
 	clientSess, serverSess := NewPipeSessionPair()
 	server.HandleSession(serverSess)
 

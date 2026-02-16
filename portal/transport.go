@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Session abstracts a multiplexed transport connection (WebTransport, yamux, etc.).
+// Session abstracts a multiplexed transport connection (e.g. WebTransport).
 // A Session manages multiple independent bidirectional streams over a single underlying
 // connection, providing concurrent communication channels.
 type Session interface {

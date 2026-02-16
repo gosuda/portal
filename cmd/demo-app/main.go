@@ -18,7 +18,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
 //go:embed static
@@ -38,7 +37,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017/relay", "relay server URL")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
@@ -53,9 +52,14 @@ func main() {
 	}
 }
 
+// wsUpgrader provides a permissive WebSocket upgrader for the demo echo endpoint.
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
 // handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
 func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := utils.UpgradeWebSocket(w, r, nil)
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("upgrade websocket")
 		return

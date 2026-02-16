@@ -5,7 +5,6 @@ go 1.25.3
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/hashicorp/yamux v0.1.2
 	github.com/planetscale/vtprotobuf v0.6.0
 	github.com/quic-go/quic-go v0.59.0
 	github.com/quic-go/webtransport-go v0.10.0

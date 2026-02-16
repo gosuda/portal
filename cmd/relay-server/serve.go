@@ -13,7 +13,6 @@ import (
 	"github.com/quic-go/webtransport-go"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/utils"
 )
@@ -73,40 +72,11 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		serveTunnelBinary(w, r)
 	})
 
+	// The /relay endpoint is served via HTTP/3 WebTransport (see serveWebTransport).
+	// Return 426 Upgrade Required for HTTP/1.1 clients hitting this path.
 	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Check if IP is banned
-		clientIP := manager.ExtractClientIP(r)
-		ipManager := admin.GetIPManager()
-		if ipManager != nil && ipManager.IsIPBanned(clientIP) {
-			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
-		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] websocket upgrade failed")
-			return
-		}
-
-		// Store pending IP for lease association (will be linked when lease is registered)
-		if ipManager != nil && clientIP != "" {
-			ipManager.StorePendingIP(clientIP)
-		}
-
-		sess, err := portal.NewYamuxServerSession(stream)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] failed to create yamux session")
-			wsConn.Close()
-			return
-		}
-		serv.HandleSession(sess)
+		w.Header().Set("Content-Type", "text/plain")
+		http.Error(w, "WebTransport (HTTP/3) required", http.StatusUpgradeRequired)
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
