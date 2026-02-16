@@ -7,13 +7,14 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/wsstream"
 )
 
 // NewWebSocketDialer returns a dialer that establishes WebSocket connections
-// and wraps them as io.ReadWriteCloser.
-func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, error) {
-	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
+// and wraps them in a yamux Session.
+func NewWebSocketDialer() func(context.Context, string) (portal.Session, error) {
+	return func(ctx context.Context, url string) (portal.Session, error) {
 		wsConn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			if resp != nil {
@@ -22,7 +23,13 @@ func NewWebSocketDialer() func(context.Context, string) (io.ReadWriteCloser, err
 			return nil, err
 		}
 		// Response body is closed by the Dialer on successful connection
-		return wsstream.New(wsConn), nil
+		stream := wsstream.New(wsConn)
+		sess, err := portal.NewYamuxClientSession(stream)
+		if err != nil {
+			stream.Close()
+			return nil, err
+		}
+		return sess, nil
 	}
 }
 

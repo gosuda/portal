@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
@@ -509,7 +508,7 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 }
 
 // AddRelay adds a new relay server to the client
-func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
+func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (portal.Session, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -519,17 +518,11 @@ func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.
 	}
 
 	// Connect to relay
-	conn, err := dialer(context.Background(), addr)
+	sess, err := dialer(context.Background(), addr)
 	if err != nil {
 		return err
 	}
 
-	// Wrap connection in yamux session and create relay client
-	sess, err := portal.NewYamuxClientSession(conn)
-	if err != nil {
-		conn.Close()
-		return err
-	}
 	relayClient := portal.NewRelayClient(sess)
 
 	// Add relay
@@ -706,7 +699,7 @@ func (l *listener) Addr() net.Addr {
 type connRelay struct {
 	addr     string
 	client   *portal.RelayClient
-	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
+	dialer   func(context.Context, string) (portal.Session, error)
 	stop     chan struct{}
 	stopOnce sync.Once // Ensure stop channel is closed only once
 	mu       sync.Mutex

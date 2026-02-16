@@ -3,8 +3,9 @@ package sdk
 import (
 	"context"
 	"errors"
-	"io"
 	"time"
+
+	"gosuda.org/portal/portal"
 )
 
 var (
@@ -20,7 +21,7 @@ var (
 
 type ClientConfig struct {
 	BootstrapServers    []string
-	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
+	Dialer              func(context.Context, string) (portal.Session, error)
 	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
 	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
@@ -34,7 +35,7 @@ func WithBootstrapServers(servers []string) ClientOption {
 	}
 }
 
-func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) ClientOption {
+func WithDialer(dialer func(context.Context, string) (portal.Session, error)) ClientOption {
 	return func(c *ClientConfig) {
 		c.Dialer = dialer
 	}
