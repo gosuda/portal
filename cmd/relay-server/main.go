@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -113,7 +112,7 @@ func runServer() error {
 	admin.LoadSettings(serv)
 
 	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
+	serv.SetEstablishRelayCallback(func(clientStream, leaseStream portal.Stream, leaseID string) {
 		// Associate pending IP with this lease
 		ipManager := admin.GetIPManager()
 		if ipManager != nil {

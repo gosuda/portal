@@ -4,13 +4,13 @@
 package portal
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
@@ -59,10 +59,8 @@ func (i *IncomingConn) RemoteID() string {
 //
 // Thread-safety: All public methods are safe for concurrent use.
 type RelayClient struct {
-	conn io.ReadWriteCloser
-
-	// sess is the yamux session for multiplexing streams
-	sess *yamux.Session
+	// sess is the multiplexed session for stream management
+	sess Session
 
 	// leases maps lease IDs to their credentials for handling incoming connections
 	leases   map[string]*leaseWithCred
@@ -84,39 +82,16 @@ type leaseWithCred struct {
 	Cred  *cryptoops.Credential
 }
 
-// NewRelayClient creates a new relay client from an established connection.
-// It initializes the yamux session for stream multiplexing and starts background
-// workers for lease renewal and incoming connection handling.
+// NewRelayClient creates a new relay client from an established multiplexed session.
+// It starts background workers for lease renewal and incoming connection handling.
 //
 // The client starts two goroutines:
 // - leaseUpdateWorker: Periodically renews leases before they expire
 // - leaseListenWorker: Accepts and handles incoming connection requests
-//
-// Returns nil if yamux session creation fails.
-func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
+func NewRelayClient(sess Session) *RelayClient {
 	log.Debug().Msg("[RelayClient] Creating new relay client")
 
-	// Create yamux session as client
-	config := yamux.DefaultConfig()
-	config.Logger = nil                           // Disable logging for cleaner output
-	config.MaxStreamWindowSize = 16 * 1024 * 1024 // 16MB for high-BDP scenarios
-	config.StreamOpenTimeout = 75 * time.Second
-	config.StreamCloseTimeout = 5 * time.Minute
-	sess, err := yamux.Client(conn, config)
-	if err != nil {
-		log.Error().Err(err).Msg("[RelayClient] Failed to create yamux session")
-		// If session creation fails, close the connection and return nil
-		err = conn.Close()
-		if err != nil {
-			log.Error().Err(err).Msg("[RelayClient] Failed to close connection")
-		}
-		return nil
-	}
-
-	log.Debug().Msg("[RelayClient] Yamux session created successfully")
-
 	g := &RelayClient{
-		conn:           conn,
 		sess:           sess,
 		leases:         make(map[string]*leaseWithCred),
 		stopClientCh:   make(chan struct{}),
@@ -131,15 +106,31 @@ func NewRelayClient(conn io.ReadWriteCloser) *RelayClient {
 	return g
 }
 
-// Ping sends a ping to the relay server and measures the round-trip latency.
-// It uses yamux's built-in ping mechanism.
+// Ping measures round-trip latency to the relay server.
+// If the session supports a native Ping (e.g. yamux), it is used.
+// Otherwise, a stream open/close round-trip is used as a health check.
 func (g *RelayClient) Ping() (time.Duration, error) {
-	return g.sess.Ping()
+	// Use native Ping if available (yamux adapter)
+	type pinger interface {
+		Ping() (time.Duration, error)
+	}
+	if p, ok := g.sess.(pinger); ok {
+		return p.Ping()
+	}
+
+	// Fallback: open and immediately close a stream as a health check
+	start := time.Now()
+	stream, err := g.sess.OpenStream(context.Background())
+	if err != nil {
+		return 0, err
+	}
+	stream.Close()
+	return time.Since(start), nil
 }
 
 // Close gracefully shuts down the relay client.
 // It signals all background workers to stop, waits for them to finish,
-// then closes the yamux session and underlying connection.
+// then closes the session (and its underlying transport).
 // This method is safe to call multiple times.
 func (g *RelayClient) Close() error {
 	log.Debug().Msg("[RelayClient] Closing relay client")
@@ -149,32 +140,20 @@ func (g *RelayClient) Close() error {
 		close(g.stopClientCh)
 	})
 
-	var errs []error
-
-	// Close the session first to unblock AcceptStream() calls
+	// Close the session to unblock AcceptStream() calls
+	var closeErr error
 	if g.sess != nil {
 		if err := g.sess.Close(); err != nil {
-			log.Error().Err(err).Msg("[RelayClient] Error closing yamux session")
-			errs = append(errs, err)
+			log.Error().Err(err).Msg("[RelayClient] Error closing session")
+			closeErr = err
 		}
 	}
 
 	// Wait for workers to finish after unblocking them
 	g.waitGroup.Wait()
 
-	// Then close the underlying connection
-	if g.conn != nil {
-		if err := g.conn.Close(); err != nil {
-			log.Error().Err(err).Msg("[RelayClient] Error closing connection")
-			errs = append(errs, err)
-		}
-	}
-
 	log.Debug().Msg("[RelayClient] Relay client closed")
-	if len(errs) > 0 {
-		return errs[0]
-	}
-	return nil
+	return closeErr
 }
 
 // leaseUpdateWorker is a background goroutine that periodically renews leases
@@ -226,33 +205,39 @@ func (g *RelayClient) leaseListenWorker() {
 	defer close(g.incomingConnCh)
 	log.Debug().Msg("[RelayClient] Lease listen worker started")
 
+	// Create a context that cancels when the client stops
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-g.stopClientCh
+		cancel()
+	}()
+	defer cancel()
+
 	for {
-		select {
-		case <-g.stopClientCh:
-			log.Debug().Msg("[RelayClient] Lease listen worker stopped")
-			return
-		default:
-			if g.sess == nil {
-				// Session not initialized, wait a bit and retry
+		if g.sess == nil {
+			select {
+			case <-g.stopClientCh:
+				log.Debug().Msg("[RelayClient] Lease listen worker stopped")
+				return
+			case <-time.After(500 * time.Millisecond):
+				continue
+			}
+		}
+
+		stream, err := g.sess.AcceptStream(ctx)
+		if err != nil {
+			select {
+			case <-g.stopClientCh:
+				log.Debug().Msg("[RelayClient] Lease listen worker stopped")
+				return
+			default:
+				log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
 				time.Sleep(500 * time.Millisecond)
 				continue
 			}
-
-			stream, err := g.sess.AcceptStream()
-			if err != nil {
-				// Check if we're supposed to stop
-				select {
-				case <-g.stopClientCh:
-					return
-				default:
-					log.Debug().Err(err).Msg("[RelayClient] Error accepting stream, retrying")
-					time.Sleep(500 * time.Millisecond) // waiting for reconnection
-					continue
-				}
-			}
-			log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Accepted incoming stream")
-			go g.handleConnectionRequestStream(stream)
 		}
+		log.Debug().Msg("[RelayClient] Accepted incoming stream")
+		go g.handleConnectionRequestStream(stream)
 	}
 }
 
@@ -263,12 +248,12 @@ func (g *RelayClient) leaseListenWorker() {
 // 3. Sends an accept/reject response
 // 4. If accepted, performs server-side cryptographic handshake
 // 5. Sends the established secure connection to the incoming channel
-func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
-	log.Debug().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Handling connection request stream")
+func (g *RelayClient) handleConnectionRequestStream(stream Stream) {
+	log.Debug().Msg("[RelayClient] Handling connection request stream")
 
 	pkt, err := readPacket(stream)
 	if err != nil {
-		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
+		log.Error().Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		err = stream.Close()
 		if err != nil {
 			log.Error().Err(err).Msg("[RelayClient] Failed to close stream")
@@ -369,7 +354,7 @@ func (g *RelayClient) handleConnectionRequestStream(stream *yamux.Stream) {
 // GetRelayInfo requests relay server information including supported protocols,
 // server version, and other metadata.
 func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
-	stream, err := g.sess.OpenStream()
+	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +396,7 @@ func (g *RelayClient) GetRelayInfo() (*rdverb.RelayInfo, error) {
 // The request is signed with the provided credentials to prove ownership.
 // A nonce and timestamp are included to prevent replay attacks.
 func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Lease) (rdverb.ResponseCode, error) {
-	stream, err := g.sess.OpenStream()
+	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -454,19 +439,19 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 
 	respPacket, err := readPacket(stream)
 	if err != nil {
-		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
+		log.Error().Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_LEASE_UPDATE_RESPONSE {
-		log.Error().Uint32("stream_id", stream.StreamID()).Msg("[RelayClient] Unexpected response packet type")
+		log.Error().Msg("[RelayClient] Unexpected response packet type")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, ErrInvalidResponse
 	}
 
 	var resp rdverb.LeaseUpdateResponse
 	err = resp.UnmarshalVT(respPacket.Payload)
 	if err != nil {
-		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to unmarshal lease update response")
+		log.Error().Err(err).Msg("[RelayClient] Failed to unmarshal lease update response")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
@@ -476,7 +461,7 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 // deleteLease sends a lease deletion request to the relay server.
 // The request is signed with the provided credentials to prove ownership.
 func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Identity) (rdverb.ResponseCode, error) {
-	stream, err := g.sess.OpenStream()
+	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
@@ -521,7 +506,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 	// Receive deletion response
 	respPacket, err := readPacket(stream)
 	if err != nil {
-		log.Error().Uint32("stream_id", stream.StreamID()).Err(err).Msg("[RelayClient] Failed to read packet from stream")
+		log.Error().Err(err).Msg("[RelayClient] Failed to read packet from stream")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
 	}
 
@@ -555,7 +540,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
 	log.Debug().Str("lease_id", leaseID).Str("alpn", alpn).Msg("[RelayClient] Requesting connection")
 
-	stream, err := g.sess.OpenStream()
+	stream, err := g.sess.OpenStream(context.Background())
 	if err != nil {
 		log.Error().Err(err).Msg("[RelayClient] Failed to open stream for connection request")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err

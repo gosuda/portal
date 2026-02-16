@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 )
 
@@ -119,7 +118,7 @@ func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, 
 
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
 // Connection tracking is handled by RelayServer's event loop (cmdCheckAndIncLimit/cmdDecLimit).
-func EstablishRelayWithBPS(clientStream, leaseStream *yamux.Stream, leaseID string, bpsManager *BPSManager) {
+func EstablishRelayWithBPS(clientStream, leaseStream io.ReadWriteCloser, leaseID string, bpsManager *BPSManager) {
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().
 		Str("lease_id", leaseID).

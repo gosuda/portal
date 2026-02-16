@@ -54,9 +54,12 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 			log.Error().Err(err).Msg("[TEST] Failed to upgrade WebSocket")
 			return
 		}
-		if err := relayServer.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[TEST] Relay server error handling connection")
+		sess, err := portal.NewYamuxServerSession(stream)
+		if err != nil {
+			log.Error().Err(err).Msg("[TEST] Failed to create yamux session")
+			return
 		}
+		relayServer.HandleSession(sess)
 	})
 
 	relayHTTPServer := &http.Server{
@@ -216,7 +219,11 @@ func TestE2E_MultipleConnections(t *testing.T) {
 		if err != nil {
 			return
 		}
-		relayServer.HandleConnection(stream)
+		sess, err := portal.NewYamuxServerSession(stream)
+		if err != nil {
+			return
+		}
+		relayServer.HandleSession(sess)
 	})
 
 	relayHTTPServer := &http.Server{
@@ -356,7 +363,11 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 		if err != nil {
 			return
 		}
-		relayServer.HandleConnection(stream)
+		sess, err := portal.NewYamuxServerSession(stream)
+		if err != nil {
+			return
+		}
+		relayServer.HandleSession(sess)
 	})
 
 	relayHTTPServer := &http.Server{

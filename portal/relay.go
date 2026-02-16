@@ -1,11 +1,11 @@
 package portal
 
 import (
+	"context"
 	"io"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
@@ -13,10 +13,9 @@ import (
 )
 
 type Connection struct {
-	conn io.ReadWriteCloser
-	sess *yamux.Session
+	sess Session
 
-	streams     map[uint32]*yamux.Stream
+	streams     map[int64]Stream
 	streamsLock sync.Mutex
 }
 
@@ -32,7 +31,7 @@ type RelayServer struct {
 	leaseConnections     map[string]*Connection // Key: lease ID, Value: Connection
 	leaseConnectionsLock sync.RWMutex
 
-	relayedConnections     map[string][]*yamux.Stream // Key: lease ID, Value: slice of relayed streams
+	relayedConnections     map[string][]Stream // Key: lease ID, Value: slice of relayed streams
 	relayedConnectionsLock sync.RWMutex
 
 	leaseManager *LeaseManager
@@ -46,7 +45,7 @@ type RelayServer struct {
 	limitsLock           sync.Mutex
 
 	// Callback for relay connection establishment (set by relay-server for BPS handling)
-	onEstablishRelay func(clientStream, leaseStream *yamux.Stream, leaseID string)
+	onEstablishRelay func(clientStream, leaseStream Stream, leaseID string)
 }
 
 func NewRelayServer(credential *cryptoops.Credential, address []string) *RelayServer {
@@ -60,20 +59,12 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 		connidCounter:        0,
 		connections:          make(map[int64]*Connection),
 		leaseConnections:     make(map[string]*Connection),
-		relayedConnections:   make(map[string][]*yamux.Stream),
+		relayedConnections:   make(map[string][]Stream),
 		leaseManager:         NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
 		stopch:               make(chan struct{}),
 		relayedPerLeaseCount: make(map[string]int),
 	}
 }
-
-var _yamux_config = func() *yamux.Config {
-	cfg := yamux.DefaultConfig()
-	cfg.MaxStreamWindowSize = 16 * 1024 * 1024 // 16MB for high-BDP scenarios
-	cfg.StreamOpenTimeout = 75 * time.Second
-	cfg.StreamCloseTimeout = 5 * time.Minute
-	return cfg
-}()
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
 	log.Debug().Int64("conn_id", id).Msg("[RelayServer] Handling new connection")
@@ -116,54 +107,57 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 		delete(g.connections, id)
 		g.connectionsLock.Unlock()
 
-		// Close the underlying connection
-		connection.conn.Close()
+		// Close the session (and underlying transport)
+		connection.sess.Close()
 
 		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection cleanup complete")
 	}()
 
+	var streamSeq int64
 	for {
-		stream, err := connection.sess.AcceptStream()
+		stream, err := connection.sess.AcceptStream(context.Background())
 		if err != nil {
 			log.Debug().Err(err).Int64("conn_id", id).Msg("[RelayServer] Error accepting stream, connection closing")
 			return
 		}
+		streamSeq++
+		streamID := streamSeq
+
 		log.Debug().
 			Int64("conn_id", id).
-			Uint32("stream_id", stream.StreamID()).
+			Int64("stream_id", streamID).
 			Msg("[RelayServer] Accepted new stream")
 
 		connection.streamsLock.Lock()
-		connection.streams[stream.StreamID()] = stream
+		connection.streams[streamID] = stream
 		connection.streamsLock.Unlock()
-		go g.handleStream(stream, id, connection)
+		go g.handleStream(stream, streamID, id, connection)
 	}
 }
 
 const _MAX_RAW_PACKET_SIZE = 1 << 26 // 64MB
 
-func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *Connection) {
+func (g *RelayServer) handleStream(stream Stream, streamID int64, connID int64, connection *Connection) {
 	log.Debug().
-		Int64("conn_id", id).
-		Uint32("stream_id", stream.StreamID()).
+		Int64("conn_id", connID).
+		Int64("stream_id", streamID).
 		Msg("[RelayServer] Handling stream")
 
 	var hijacked bool
 	defer func() {
-		stream_id := stream.StreamID()
 		if !hijacked {
 			log.Debug().
-				Int64("conn_id", id).
-				Uint32("stream_id", stream_id).
+				Int64("conn_id", connID).
+				Int64("stream_id", streamID).
 				Msg("[RelayServer] Closing stream")
 			connection.streamsLock.Lock()
 			stream.Close()
-			delete(connection.streams, stream_id)
+			delete(connection.streams, streamID)
 			connection.streamsLock.Unlock()
 		} else {
 			log.Debug().
-				Int64("conn_id", id).
-				Uint32("stream_id", stream_id).
+				Int64("conn_id", connID).
+				Int64("stream_id", streamID).
 				Msg("[RelayServer] Stream was hijacked, not closing")
 		}
 	}()
@@ -172,7 +166,7 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 		Server:       g,
 		Stream:       stream,
 		Connection:   connection,
-		ConnectionID: id,
+		ConnectionID: connID,
 		Hijacked:     &hijacked,
 	}
 
@@ -182,16 +176,16 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 			if err != io.EOF {
 				log.Debug().
 					Err(err).
-					Int64("conn_id", id).
-					Uint32("stream_id", stream.StreamID()).
+					Int64("conn_id", connID).
+					Int64("stream_id", streamID).
 					Msg("[RelayServer] Error reading packet")
 			}
 			return
 		}
 
 		log.Debug().
-			Int64("conn_id", id).
-			Uint32("stream_id", stream.StreamID()).
+			Int64("conn_id", connID).
+			Int64("stream_id", streamID).
 			Str("packet_type", packet.Type.String()).
 			Msg("[RelayServer] Received packet")
 
@@ -206,7 +200,7 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 			err = g.handleConnectionRequest(ctx, packet)
 		default:
 			log.Warn().
-				Int64("conn_id", id).
+				Int64("conn_id", connID).
 				Str("packet_type", packet.Type.String()).
 				Msg("[RelayServer] Unknown packet type")
 			// Unknown packet type, return to close the stream
@@ -216,7 +210,7 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 		if err != nil {
 			log.Error().
 				Err(err).
-				Int64("conn_id", id).
+				Int64("conn_id", connID).
 				Str("packet_type", packet.Type.String()).
 				Msg("[RelayServer] Error handling packet")
 			return
@@ -224,36 +218,28 @@ func (g *RelayServer) handleStream(stream *yamux.Stream, id int64, connection *C
 
 		// If the stream was hijacked, exit the loop
 		if hijacked {
-			log.Debug().Int64("conn_id", id).Msg("[RelayServer] Stream hijacked, exiting handler")
+			log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Stream hijacked, exiting handler")
 			return
 		}
 	}
 }
 
-func (g *RelayServer) HandleConnection(conn io.ReadWriteCloser) error {
-	log.Debug().Msg("[RelayServer] New connection received")
-
-	sess, err := yamux.Server(conn, _yamux_config)
-	if err != nil {
-		log.Error().Err(err).Msg("[RelayServer] Failed to create yamux server session")
-		return err
-	}
+// HandleSession registers a multiplexed session and starts handling its streams.
+func (g *RelayServer) HandleSession(sess Session) {
+	log.Debug().Msg("[RelayServer] New session received")
 
 	g.connectionsLock.Lock()
 	g.connidCounter++
 	connID := g.connidCounter
 	connection := &Connection{
-		conn:    conn,
 		sess:    sess,
-		streams: make(map[uint32]*yamux.Stream),
+		streams: make(map[int64]Stream),
 	}
 	g.connections[connID] = connection
 	g.connectionsLock.Unlock()
 
 	log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Connection registered, starting handler")
 	go g.handleConn(connID, connection)
-
-	return nil
 }
 
 func (g *RelayServer) relayInfo() *rdverb.RelayInfo {
@@ -338,7 +324,7 @@ func (g *RelayServer) SetMaxRelayedPerLease(n int) {
 // SetEstablishRelayCallback sets the callback for relay connection establishment
 // This allows external code (e.g., relay-server) to handle BPS limiting
 func (g *RelayServer) SetEstablishRelayCallback(
-	callback func(clientStream, leaseStream *yamux.Stream, leaseID string),
+	callback func(clientStream, leaseStream Stream, leaseID string),
 ) {
 	g.onEstablishRelay = callback
 }

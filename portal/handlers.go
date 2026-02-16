@@ -1,10 +1,10 @@
 package portal
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/bytebufferpool"
 	"gosuda.org/portal/portal/core/cryptoops"
@@ -14,7 +14,7 @@ import (
 
 type StreamContext struct {
 	Server       *RelayServer
-	Stream       *yamux.Stream
+	Stream       Stream
 	Connection   *Connection
 	ConnectionID int64
 	Hijacked     *bool
@@ -219,8 +219,8 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 }
 
 // forwardConnectionRequest opens a stream to the lease holder and forwards the request
-func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdverb.ConnectionRequest) (*yamux.Stream, rdverb.ResponseCode, error) {
-	leaseStream, err := leaseConn.sess.OpenStream()
+func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdverb.ConnectionRequest) (Stream, rdverb.ResponseCode, error) {
+	leaseStream, err := leaseConn.sess.OpenStream(context.Background())
 	if err != nil {
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, err
 	}
@@ -260,7 +260,7 @@ func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdver
 	return leaseStream, resp.Code, nil
 }
 
-func (g *RelayServer) sendConnectionResponse(stream *yamux.Stream, code rdverb.ResponseCode) error {
+func (g *RelayServer) sendConnectionResponse(stream Stream, code rdverb.ResponseCode) error {
 	resp := rdverb.ConnectionResponse{Code: code}
 	payload, err := resp.MarshalVT()
 	if err != nil {
@@ -272,7 +272,7 @@ func (g *RelayServer) sendConnectionResponse(stream *yamux.Stream, code rdverb.R
 	})
 }
 
-func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream *yamux.Stream, leaseID string) {
+func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream Stream, leaseID string) {
 	// Register connection for tracking
 	g.limitsLock.Lock()
 	g.relayedPerLeaseCount[leaseID]++

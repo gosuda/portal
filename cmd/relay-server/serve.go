@@ -95,11 +95,13 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 			ipManager.StorePendingIP(clientIP)
 		}
 
-		if err := serv.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[server] websocket relay connection error")
+		sess, err := portal.NewYamuxServerSession(stream)
+		if err != nil {
+			log.Error().Err(err).Msg("[server] failed to create yamux session")
 			wsConn.Close()
 			return
 		}
+		serv.HandleSession(sess)
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)

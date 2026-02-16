@@ -524,12 +524,13 @@ func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.
 		return err
 	}
 
-	// Create relay client
-	relayClient := portal.NewRelayClient(conn)
-	if relayClient == nil {
+	// Wrap connection in yamux session and create relay client
+	sess, err := portal.NewYamuxClientSession(conn)
+	if err != nil {
 		conn.Close()
-		return ErrRelayNotFound
+		return err
 	}
+	relayClient := portal.NewRelayClient(sess)
 
 	// Add relay
 	relay := &connRelay{

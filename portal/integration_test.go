@@ -2,7 +2,6 @@ package portal
 
 import (
 	"io"
-	"net"
 	"testing"
 	"time"
 
@@ -26,29 +25,14 @@ func TestIntegration_FullFlow(t *testing.T) {
 	server.Start()
 	defer server.Stop()
 
-	// Create a listener for the server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go server.HandleConnection(conn)
-		}
-	}()
-
-	serverAddr := listener.Addr().String()
+	// Create connected session pair (replaces TCP + yamux)
+	clientSess, serverSess := NewPipeSessionPair()
+	server.HandleSession(serverSess)
 
 	// 2. Setup Host Client (Service Provider)
 	hostCred := generateTestCredential(t)
-	hostConn, err := net.Dial("tcp", serverAddr)
-	require.NoError(t, err)
 
-	hostClient := NewRelayClient(hostConn)
+	hostClient := NewRelayClient(clientSess)
 	require.NotNil(t, hostClient)
 	defer hostClient.Close()
 
@@ -57,7 +41,7 @@ func TestIntegration_FullFlow(t *testing.T) {
 		Name: "test-service",
 		Alpn: []string{"test-proto"},
 	}
-	err = hostClient.RegisterLease(hostCred, lease)
+	err := hostClient.RegisterLease(hostCred, lease)
 	require.NoError(t, err)
 
 	// Handle incoming connections on Host
@@ -73,10 +57,11 @@ func TestIntegration_FullFlow(t *testing.T) {
 
 	// 3. Setup Peer Client (Consumer)
 	peerCred := generateTestCredential(t)
-	peerConn, err := net.Dial("tcp", serverAddr)
-	require.NoError(t, err)
 
-	peerClient := NewRelayClient(peerConn)
+	peerClientSess, peerServerSess := NewPipeSessionPair()
+	server.HandleSession(peerServerSess)
+
+	peerClient := NewRelayClient(peerClientSess)
 	require.NotNil(t, peerClient)
 	defer peerClient.Close()
 
