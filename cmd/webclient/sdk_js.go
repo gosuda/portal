@@ -2,21 +2,15 @@ package main
 
 import (
 	"context"
-	"io"
 
-	"gosuda.org/portal/cmd/webclient/wsjs"
+	"gosuda.org/portal/cmd/webclient/wtjs"
+	"gosuda.org/portal/portal"
 )
 
-// WebSocketDialerJS creates a WebSocket dialer function for JavaScript/WebAssembly environment
-func WebSocketDialerJS() func(context.Context, string) (io.ReadWriteCloser, error) {
-	return func(ctx context.Context, url string) (io.ReadWriteCloser, error) {
-		// Use the wsjs package to create a WebSocket connection
-		conn, err := wsjs.Dial(url)
-		if err != nil {
-			return nil, err
-		}
-
-		// Wrap the WebSocket connection with WsStream for io.ReadWriteCloser interface
-		return wsjs.NewWsStream(conn), nil
+// WebTransportDialerJS creates a WebTransport dialer for the browser WASM environment.
+// certHashes provides SHA-256 certificate hashes for self-signed dev certs.
+func WebTransportDialerJS(certHashes [][]byte) func(context.Context, string) (portal.Session, error) {
+	return func(ctx context.Context, url string) (portal.Session, error) {
+		return wtjs.Dial(url, certHashes)
 	}
 }

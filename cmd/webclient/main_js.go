@@ -57,14 +57,14 @@ func getBootstrapServers() []string {
 
 	if bootstrapsValue.IsUndefined() || bootstrapsValue.IsNull() {
 		log.Warn().Msg("__BOOTSTRAP_SERVERS__ not found in global scope, using default")
-		return []string{"ws://localhost:4017/relay"}
+		return []string{"https://localhost:4017/relay"}
 	}
 
 	// Handle string (comma-separated)
 	if bootstrapsValue.Type() == js.TypeString {
 		bootstrapsStr := bootstrapsValue.String()
 		if bootstrapsStr == "" {
-			return []string{"ws://localhost:4017/relay"}
+			return []string{"https://localhost:4017/relay"}
 		}
 		servers := strings.Split(bootstrapsStr, ",")
 		for i := range servers {
@@ -83,7 +83,7 @@ func getBootstrapServers() []string {
 	}
 
 	log.Warn().Msg("Invalid __BOOTSTRAP_SERVERS__ format, using default")
-	return []string{"ws://localhost:4017/relay"}
+	return []string{"https://localhost:4017/relay"}
 }
 
 // lookupDNSCache checks the DNS cache for a cached lease ID
@@ -929,6 +929,31 @@ func handleSDKClose(data js.Value) {
 	})
 }
 
+// getCertHashes reads certificate hashes from the global __CERT_HASHES__ JS variable.
+// Returns nil if not set (e.g. in production with real certs).
+func getCertHashes() [][]byte {
+	hashesValue := js.Global().Get("__CERT_HASHES__")
+	if hashesValue.IsUndefined() || hashesValue.IsNull() {
+		return nil
+	}
+
+	if hashesValue.Type() != js.TypeObject || hashesValue.Length() == 0 {
+		return nil
+	}
+
+	var hashes [][]byte
+	for i := 0; i < hashesValue.Length(); i++ {
+		hexStr := hashesValue.Index(i).String()
+		hash, err := hex.DecodeString(hexStr)
+		if err != nil {
+			log.Warn().Str("hash", hexStr).Err(err).Msg("Invalid cert hash, skipping")
+			continue
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	var err error
@@ -936,11 +961,14 @@ func main() {
 	// Get bootstrap servers from global JavaScript variable
 	bootstrapServerList := getBootstrapServers()
 
-	log.Info().Strs("servers", bootstrapServerList).Msg("Initializing RDClient with bootstrap servers from global variable")
+	// Get certificate hashes for self-signed dev certs
+	certHashes := getCertHashes()
+
+	log.Info().Strs("servers", bootstrapServerList).Int("cert_hashes", len(certHashes)).Msg("Initializing RDClient with bootstrap servers from global variable")
 
 	client, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstrapServerList),
-		sdk.WithDialer(WebSocketDialerJS()),
+		sdk.WithDialer(WebTransportDialerJS(certHashes)),
 	)
 	if err != nil {
 		panic(err)

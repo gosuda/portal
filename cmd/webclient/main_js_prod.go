@@ -54,13 +54,13 @@ func getBootstrapServers() []string {
 	bootstrapsValue := js.Global().Get("__BOOTSTRAP_SERVERS__")
 
 	if bootstrapsValue.IsUndefined() || bootstrapsValue.IsNull() {
-		return []string{"ws://localhost:4017/relay"}
+		return []string{"https://localhost:4017/relay"}
 	}
 
 	if bootstrapsValue.Type() == js.TypeString {
 		bootstrapsStr := bootstrapsValue.String()
 		if bootstrapsStr == "" {
-			return []string{"ws://localhost:4017/relay"}
+			return []string{"https://localhost:4017/relay"}
 		}
 		servers := strings.Split(bootstrapsStr, ",")
 		for i := range servers {
@@ -77,7 +77,7 @@ func getBootstrapServers() []string {
 		return servers
 	}
 
-	return []string{"ws://localhost:4017/relay"}
+	return []string{"https://localhost:4017/relay"}
 }
 
 func lookupDNSCache(name string) (string, bool) {
@@ -808,13 +808,33 @@ func handleSDKClose(data js.Value) {
 	})
 }
 
+func getCertHashes() [][]byte {
+	hashesValue := js.Global().Get("__CERT_HASHES__")
+	if hashesValue.IsUndefined() || hashesValue.IsNull() {
+		return nil
+	}
+	if hashesValue.Type() != js.TypeObject || hashesValue.Length() == 0 {
+		return nil
+	}
+	var hashes [][]byte
+	for i := 0; i < hashesValue.Length(); i++ {
+		hash, err := hex.DecodeString(hashesValue.Index(i).String())
+		if err != nil {
+			continue
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes
+}
+
 func main() {
 	bootstrapServerList := getBootstrapServers()
+	certHashes := getCertHashes()
 
 	var err error
 	client, err = sdk.NewClient(
 		sdk.WithBootstrapServers(bootstrapServerList),
-		sdk.WithDialer(WebSocketDialerJS()),
+		sdk.WithDialer(WebTransportDialerJS(certHashes)),
 	)
 	if err != nil {
 		panic(err)
