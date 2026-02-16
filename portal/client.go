@@ -125,7 +125,10 @@ func (g *RelayClient) Ping() (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
-	stream.Close()
+	err = stream.Close()
+	if err != nil {
+		return 0, err
+	}
 	return time.Since(start), nil
 }
 
@@ -178,7 +181,7 @@ func (g *RelayClient) leaseUpdateWorker() {
 			g.leasesMu.Lock()
 			for _, lease := range g.leases {
 				// Check if lease expires within 30 seconds
-				if lease.Lease.Expires < int64(time.Now().Add(30*time.Second).Unix()) {
+				if lease.Lease.Expires < time.Now().Add(30*time.Second).Unix() {
 					updateRequired[lease] = struct{}{}
 				}
 			}
@@ -405,8 +408,8 @@ func (g *RelayClient) updateLease(cred *cryptoops.Credential, lease *rdverb.Leas
 
 	timestamp := time.Now().Unix()
 	nonce := make([]byte, 12) // 12-byte nonce for replay protection
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
+	if _, readErr := io.ReadFull(rand.Reader, nonce); readErr != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, readErr
 	}
 
 	req := &rdverb.LeaseUpdateRequest{
@@ -470,8 +473,8 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 
 	timestamp := time.Now().Unix()
 	nonce := make([]byte, 12)
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, err
+	if _, readErr := io.ReadFull(rand.Reader, nonce); readErr != nil {
+		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, readErr
 	}
 
 	req := &rdverb.LeaseDeleteRequest{
@@ -538,7 +541,7 @@ func (g *RelayClient) deleteLease(cred *cryptoops.Credential, identity *rdsec.Id
 //   - clientCred: Client's cryptographic credentials for the handshake
 //
 // Returns the response code, established secure connection (if successful), and any error.
-func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
+func (g *RelayClient) RequestConnection(leaseID, alpn string, clientCred *cryptoops.Credential) (rdverb.ResponseCode, *cryptoops.SecureConnection, error) {
 	log.Debug().Str("lease_id", leaseID).Str("alpn", alpn).Msg("[RelayClient] Requesting connection")
 
 	stream, err := g.sess.OpenStream(context.Background())
@@ -619,7 +622,7 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 
 	if resp.Code != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		log.Warn().Str("lease_id", leaseID).Str("code", resp.Code.String()).Msg("[RelayClient] Connection rejected")
-		stream.Close()
+		closeWithLog(stream, "[RelayClient] Failed to close rejected connection stream")
 		return resp.Code, nil, ErrConnectionRejected
 	}
 
@@ -628,14 +631,14 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 	secConn, err := handshaker.ClientHandshake(context.Background(), stream, alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", leaseID).Msg("[RelayClient] Client handshake failed")
-		stream.Close()
+		closeWithLog(stream, "[RelayClient] Failed to close stream after client handshake failure")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, err
 	}
 
 	// Verify the remote peer's ID matches the expected lease ID
 	if secConn.RemoteID() != leaseID {
 		log.Warn().Str("lease_id", leaseID).Msg("[RelayClient] Remote ID mismatch")
-		stream.Close()
+		closeWithLog(stream, "[RelayClient] Failed to close stream after remote ID mismatch")
 		return rdverb.ResponseCode_RESPONSE_CODE_UNKNOWN, nil, ErrRemoteIDMismatch
 	}
 

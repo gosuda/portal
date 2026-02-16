@@ -14,7 +14,7 @@ import (
 )
 
 // pipeConn creates a bidirectional pipe for testing using TCP loopback.
-func pipeConn() (net.Conn, net.Conn) {
+func pipeConn() (clientConn, serverConn net.Conn) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
@@ -22,20 +22,20 @@ func pipeConn() (net.Conn, net.Conn) {
 
 	connCh := make(chan net.Conn, 1)
 	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			panic(err)
+		acceptedConn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			panic(acceptErr)
 		}
-		connCh <- conn
+		connCh <- acceptedConn
 		listener.Close()
 	}()
 
-	clientConn, err := net.Dial("tcp", listener.Addr().String())
+	clientConn, err = net.Dial("tcp", listener.Addr().String())
 	if err != nil {
 		panic(err)
 	}
 
-	serverConn := <-connCh
+	serverConn = <-connCh
 	return clientConn, serverConn
 }
 
@@ -580,9 +580,9 @@ func TestSecureConnectionPartialRead(t *testing.T) {
 	smallBuf := make([]byte, 10) // Smaller than message
 
 	for len(received) < len(message) {
-		n, err := serverSecure.Read(smallBuf)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
+		n, readErr := serverSecure.Read(smallBuf)
+		if readErr != nil {
+			t.Fatalf("Read failed: %v", readErr)
 		}
 		received = append(received, smallBuf[:n]...)
 	}
@@ -619,9 +619,9 @@ func TestRealNetworkConnection(t *testing.T) {
 
 	go func() {
 		defer close(serverDone)
-		conn, err := listener.Accept()
-		if err != nil {
-			serverErr = err
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr = acceptErr
 			return
 		}
 

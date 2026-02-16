@@ -16,17 +16,19 @@ import (
 	"gopkg.eu.org/broccoli"
 
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
+	utils "gosuda.org/portal/utils"
 )
 
 // bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
 // per-copy allocations and reduce GC pressure under high concurrency.
 // Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
+func newBufferPool() *sync.Pool {
+	return &sync.Pool{
+		New: func() any {
+			b := make([]byte, 64*1024)
+			return &b
+		},
+	}
 }
 
 type Config struct {
@@ -75,11 +77,9 @@ func main() {
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
 
 	go func() {
 		<-sigCh
@@ -87,15 +87,19 @@ func main() {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, cfg, "flags"); err != nil {
-		log.Error().Err(err).Msg("Exited with error")
+	bufferPool := newBufferPool()
+	runErr := runServiceTunnel(ctx, relayURLs, cfg, "flags", bufferPool)
+	signal.Stop(sigCh)
+	cancel()
+	if runErr != nil {
+		log.Error().Err(runErr).Msg("Exited with error")
 		os.Exit(1)
 	}
 
 	log.Info().Msg("Tunnel stopped")
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string) error {
+func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string, bufferPool *sync.Pool) error {
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
@@ -159,13 +163,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		default:
 		}
 
-		relayConn, err := listener.Accept()
-		if err != nil {
+		relayConn, acceptErr := listener.Accept()
+		if acceptErr != nil {
 			select {
 			case <-ctx.Done():
 				return nil
 			default:
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Failed to accept connection")
+				log.Error().Str("service", cfg.Name).Err(acceptErr).Msg("Failed to accept connection")
 				continue
 			}
 		}
@@ -176,15 +180,16 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Proxy error")
+			proxyErr := proxyConnection(ctx, cfg.Host, relayConn, bufferPool)
+			if proxyErr != nil {
+				log.Error().Str("service", cfg.Name).Err(proxyErr).Msg("Proxy error")
 			}
 			log.Info().Str("service", cfg.Name).Msg("Connection closed")
 		}(relayConn)
 	}
 }
 
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
+func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, bufferPool *sync.Pool) error {
 	defer relayConn.Close()
 
 	dialer := new(net.Dialer)
@@ -199,8 +204,14 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	go func() {
 		select {
 		case <-ctx.Done():
-			relayConn.Close()
-			localConn.Close()
+			relayCloseErr := relayConn.Close()
+			if relayCloseErr != nil && !errors.Is(relayCloseErr, net.ErrClosed) {
+				log.Debug().Err(relayCloseErr).Msg("failed to close relay connection")
+			}
+			localCloseErr := localConn.Close()
+			if localCloseErr != nil && !errors.Is(localCloseErr, net.ErrClosed) {
+				log.Debug().Err(localCloseErr).Msg("failed to close local connection")
+			}
 		case <-stopCh:
 		}
 	}()
@@ -208,20 +219,23 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	go func() {
 		buf := *bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
-		errCh <- err
+		_, copyErr := io.CopyBuffer(localConn, relayConn, buf)
+		errCh <- copyErr
 	}()
 
 	go func() {
 		buf := *bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
-		errCh <- err
+		_, copyErr := io.CopyBuffer(relayConn, localConn, buf)
+		errCh <- copyErr
 	}()
 
 	err = <-errCh
 	close(stopCh)
-	relayConn.Close()
+	relayCloseErr := relayConn.Close()
+	if relayCloseErr != nil && !errors.Is(relayCloseErr, net.ErrClosed) {
+		log.Debug().Err(relayCloseErr).Msg("failed to close relay connection")
+	}
 	<-errCh
 
 	return err

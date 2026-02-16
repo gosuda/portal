@@ -91,6 +91,6 @@ func TestIntegration_FullFlow(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Connection should fail now
-	code, _, err = peerClient.RequestConnection(hostCred.ID(), "test-proto", peerCred)
+	code, _, _ = peerClient.RequestConnection(hostCred.ID(), "test-proto", peerCred)
 	assert.Equal(t, rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY, code)
 }

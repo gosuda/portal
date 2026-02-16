@@ -496,8 +496,8 @@ func TestConcurrentSerialization(t *testing.T) {
 	for range 10 {
 		go func() {
 			got := &ClientInitPayload{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Errorf("concurrent UnmarshalVT() error = %v", err)
+			if unmarshalErr := got.UnmarshalVT(data); unmarshalErr != nil {
+				t.Errorf("concurrent UnmarshalVT() error = %v", unmarshalErr)
 			}
 			if !msg.EqualVT(got) {
 				t.Error("concurrent roundtrip mismatch")
@@ -512,7 +512,7 @@ func TestConcurrentSerialization(t *testing.T) {
 }
 
 // TestProtoMessage tests ProtoMessage stub exists.
-func TestProtoMessage(t *testing.T) {
+func TestProtoMessage(_ *testing.T) {
 	// These tests just verify the stub methods exist and don't panic
 	var (
 		ident         = &Identity{}
@@ -619,7 +619,7 @@ func TestNilHandling(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(_ *testing.T) {
 			tc.test()
 		})
 	}

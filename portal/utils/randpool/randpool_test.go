@@ -34,7 +34,7 @@ func TestRandOverwrite(t *testing.T) {
 	}
 }
 
-func TestRandConcurrency(t *testing.T) {
+func TestRandConcurrency(_ *testing.T) {
 	// Just run a bunch of goroutines to trigger the pool and potential race conditions
 	// (though the fallback race is hard to trigger without fault injection)
 	done := make(chan bool)

@@ -15,23 +15,25 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
 )
 
-func init() {
-	// Set zerolog to Debug level for testing
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+var configureTestLoggerOnce sync.Once
+
+func configureTestLogger() {
+	configureTestLoggerOnce.Do(func() {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	})
 }
 
 // pipeDialer returns a dialer that creates PipeSession pairs connected to the relay server.
 // Each call to the dialer establishes a new in-memory session without any network I/O.
 func pipeDialer(relayServer *portal.RelayServer) func(context.Context, string) (portal.Session, error) {
-	return func(ctx context.Context, addr string) (portal.Session, error) {
+	return func(_ context.Context, _ string) (portal.Session, error) {
 		client, server := portal.NewPipeSessionPair()
 		go relayServer.HandleSession(server)
 		return client, nil
@@ -41,6 +43,8 @@ func pipeDialer(relayServer *portal.RelayServer) func(context.Context, string) (
 // TestE2E_ClientToAppThroughRelay tests the full end-to-end flow:
 // SDK Client -> Relay Server -> Demo App.
 func TestE2E_ClientToAppThroughRelay(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting E2E Test ===")
 
 	// 1. Create relay server credential
@@ -138,9 +142,8 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	require.NoError(t, err, "Failed to create HTTP request")
 
 	// Write HTTP request to connection
-	if err := req.Write(conn); err != nil {
-		require.NoError(t, err, "Failed to write HTTP request")
-	}
+	err = req.Write(conn)
+	require.NoError(t, err, "Failed to write HTTP request")
 	log.Debug().Msg("[TEST] HTTP request sent")
 
 	// Read HTTP response
@@ -176,6 +179,8 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 // TestE2E_MultipleConnections tests multiple concurrent connections.
 func TestE2E_MultipleConnections(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting Multiple Connections Test ===")
 
 	// Setup relay server
@@ -203,14 +208,14 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Serve echo server
 	go func() {
 		for {
-			conn, err := appListener.Accept()
-			if err != nil {
+			acceptedConn, acceptErr := appListener.Accept()
+			if acceptErr != nil {
 				return
 			}
 			go func(c net.Conn) {
 				defer c.Close()
 				io.Copy(c, c) // Echo back
-			}(conn)
+			}(acceptedConn)
 		}
 	}()
 
@@ -233,45 +238,56 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	log.Info().Int("count", numConnections).Msg("[TEST] Testing multiple concurrent connections")
 
 	var wg sync.WaitGroup
+	resultCh := make(chan error, numConnections)
 	for i := range numConnections {
+		connNum := i
 		wg.Go(func() {
-			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
+			log.Debug().Int("conn_num", connNum).Msg("[TEST] Starting connection")
 
-			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
-			if !assert.NoError(t, err, "Connection %d failed to dial", i) {
+			conn, dialErr := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
+			if dialErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to dial: %w", connNum, dialErr)
 				return
 			}
 			defer conn.Close()
 
-			testData := fmt.Sprintf("test-message-%d", i)
+			testData := fmt.Sprintf("test-message-%d", connNum)
 
 			// Write test data
-			_, err = conn.Write([]byte(testData))
-			if !assert.NoError(t, err, "Connection %d failed to write", i) {
+			if _, writeErr := conn.Write([]byte(testData)); writeErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to write: %w", connNum, writeErr)
 				return
 			}
 
 			// Read echoed data
 			buf := make([]byte, len(testData))
-			_, err = io.ReadFull(conn, buf)
-			if !assert.NoError(t, err, "Connection %d failed to read", i) {
+			if _, readErr := io.ReadFull(conn, buf); readErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to read: %w", connNum, readErr)
 				return
 			}
 
-			if !assert.Equal(t, testData, string(buf), "Connection %d: unexpected echo data", i) {
+			if echoed := string(buf); echoed != testData {
+				resultCh <- fmt.Errorf("connection %d unexpected echo data: got %q want %q", connNum, echoed, testData)
 				return
 			}
 
-			log.Debug().Int("conn_num", i).Msg("[TEST] Connection successful")
+			log.Debug().Int("conn_num", connNum).Msg("[TEST] Connection successful")
+			resultCh <- nil
 		})
 	}
 
 	wg.Wait()
+	close(resultCh)
+	for result := range resultCh {
+		require.NoError(t, result)
+	}
 	log.Info().Msg("=== Multiple Connections Test Completed ===")
 }
 
 // TestE2E_ConnectionTimeout tests timeout scenarios.
 func TestE2E_ConnectionTimeout(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting Connection Timeout Test ===")
 
 	// Create client with a dialer that always fails
@@ -285,7 +301,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	go func() {
 		_, err := NewClient(func(c *ClientConfig) {
 			c.BootstrapServers = []string{"pipe://nonexistent"}
-			c.Dialer = func(ctx context.Context, addr string) (portal.Session, error) {
+			c.Dialer = func(_ context.Context, _ string) (portal.Session, error) {
 				return nil, errors.New("connection refused")
 			}
 		})

@@ -16,14 +16,6 @@ import (
 	"github.com/valyala/bytebufferpool"
 )
 
-var _lengthBufferPool = sync.Pool{
-	New: func() any {
-		return new([4]byte)
-	},
-}
-
-var _secureMemoryPool bytebufferpool.Pool
-
 func wipeMemory(b []byte) {
 	b = b[:cap(b)]
 	for i := range b {
@@ -43,7 +35,7 @@ func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {
 }
 
 func acquireBuffer(n int) *bytebufferpool.ByteBuffer {
-	buffer := _secureMemoryPool.Get()
+	buffer := bytebufferpool.Get()
 	if buffer.B == nil {
 		buffer.B = make([]byte, 0)
 	}
@@ -53,7 +45,7 @@ func acquireBuffer(n int) *bytebufferpool.ByteBuffer {
 
 func releaseBuffer(buffer *bytebufferpool.ByteBuffer) {
 	wipeMemory(buffer.B)
-	_secureMemoryPool.Put(buffer)
+	bytebufferpool.Put(buffer)
 }
 
 var (
@@ -76,9 +68,9 @@ const (
 	identityPayloadSize = ed25519.PublicKeySize + ed25519.SignatureSize
 )
 
-// noiseCipherSuite is the Noise cipher suite used for all handshakes:
-// Noise_XX_25519_ChaChaPoly_BLAKE2s.
-var noiseCipherSuite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s)
+func newNoiseCipherSuite() noise.CipherSuite {
+	return noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s)
+}
 
 // Handshaker handles the Noise Protocol Framework based handshake.
 //
@@ -188,12 +180,18 @@ func (sc *SecureConnection) writeFragment(p []byte) (int, error) {
 	defer sc.writeMu.Unlock()
 
 	cipherSize := len(p) + noiseTagSize
+	if cipherSize > maxRawPacketSize {
+		return 0, fmt.Errorf("%w: ciphertext too large: %d", ErrEncryptionFailed, cipherSize)
+	}
 	bufferSize := 4 + cipherSize
 	buffer := acquireBuffer(bufferSize)
 	buffer.B = buffer.B[:4]
 	defer releaseBuffer(buffer)
 
-	binary.BigEndian.PutUint32(buffer.B[:4], uint32(cipherSize))
+	buffer.B[0] = byte(cipherSize >> 24)
+	buffer.B[1] = byte(cipherSize >> 16)
+	buffer.B[2] = byte(cipherSize >> 8)
+	buffer.B[3] = byte(cipherSize)
 
 	var err error
 	buffer.B, err = sc.encryptor.Encrypt(buffer.B, nil, p)
@@ -227,14 +225,12 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 	sc.mu.RUnlock()
 
 	// Read length prefix (4 bytes)
-	lengthBuf := _lengthBufferPool.Get().(*[4]byte)
+	var lengthBuf [4]byte
 	_, err := io.ReadFull(sc.conn, lengthBuf[:])
 	if err != nil {
-		_lengthBufferPool.Put(lengthBuf)
 		return 0, err
 	}
 	length := binary.BigEndian.Uint32(lengthBuf[:])
-	_lengthBufferPool.Put(lengthBuf)
 
 	// Check packet size limit
 	if length > maxRawPacketSize {
@@ -309,7 +305,7 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	}
 
 	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:   noiseCipherSuite,
+		CipherSuite:   newNoiseCipherSuite(),
 		Pattern:       noise.HandshakeXX,
 		Initiator:     true,
 		StaticKeypair: x25519Key,
@@ -320,12 +316,14 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	}
 
 	// Set deadline from context if the connection supports it
-	if deadline, ok := ctx.Deadline(); ok {
-		if nc, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
-			if err := nc.SetDeadline(deadline); err != nil {
-				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, err)
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		deadlineConn, supportsDeadline := conn.(interface{ SetDeadline(time.Time) error })
+		if supportsDeadline {
+			setErr := deadlineConn.SetDeadline(deadline)
+			if setErr != nil {
+				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, setErr)
 			}
-			defer nc.SetDeadline(time.Time{}) // Clear deadline after handshake
+			defer deadlineConn.SetDeadline(time.Time{}) // Clear deadline after handshake
 		}
 	}
 
@@ -338,7 +336,8 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	if err != nil {
 		return nil, fmt.Errorf("%w: write msg1: %w", ErrHandshakeFailed, err)
 	}
-	if err := writeLengthPrefixed(conn, msg1); err != nil {
+	err = writeLengthPrefixed(conn, msg1)
+	if err != nil {
 		return nil, fmt.Errorf("%w: send msg1: %w", ErrHandshakeFailed, err)
 	}
 
@@ -355,7 +354,9 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	// Verify server identity BEFORE sending our identity
 	remoteID, err := verifyIdentityPayload(serverPayload, hs.PeerStatic())
 	if err != nil {
-		conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
 	}
 
@@ -365,12 +366,13 @@ func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteClose
 	if err != nil {
 		return nil, fmt.Errorf("%w: write msg3: %w", ErrHandshakeFailed, err)
 	}
-	if err := writeLengthPrefixed(conn, msg3); err != nil {
+	err = writeLengthPrefixed(conn, msg3)
+	if err != nil {
 		return nil, fmt.Errorf("%w: send msg3: %w", ErrHandshakeFailed, err)
 	}
 
 	// cs1 = initiator→responder (client encrypt), cs2 = responder→initiator (client decrypt)
-	return h.createSecureConnection(conn, cs1, cs2, remoteID)
+	return h.createSecureConnection(conn, cs1, cs2, remoteID), nil
 }
 
 // ServerHandshake performs the server-side (responder) Noise XX handshake.
@@ -387,7 +389,7 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 	}
 
 	hs, err := noise.NewHandshakeState(noise.Config{
-		CipherSuite:   noiseCipherSuite,
+		CipherSuite:   newNoiseCipherSuite(),
 		Pattern:       noise.HandshakeXX,
 		Initiator:     false,
 		StaticKeypair: x25519Key,
@@ -398,12 +400,14 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 	}
 
 	// Set deadline from context if the connection supports it
-	if deadline, ok := ctx.Deadline(); ok {
-		if nc, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
-			if err := nc.SetDeadline(deadline); err != nil {
-				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, err)
+	if deadline, hasDeadline := ctx.Deadline(); hasDeadline {
+		deadlineConn, supportsDeadline := conn.(interface{ SetDeadline(time.Time) error })
+		if supportsDeadline {
+			setErr := deadlineConn.SetDeadline(deadline)
+			if setErr != nil {
+				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, setErr)
 			}
-			defer nc.SetDeadline(time.Time{}) // Clear deadline after handshake
+			defer deadlineConn.SetDeadline(time.Time{}) // Clear deadline after handshake
 		}
 	}
 
@@ -420,7 +424,9 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 	// Validate ALPN before proceeding
 	alpn, err := decodeALPN(alpnPayload)
 	if err != nil || !slices.Contains(alpns, alpn) {
-		conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			return nil, errors.Join(ErrHandshakeFailed, closeErr)
+		}
 		return nil, ErrHandshakeFailed
 	}
 
@@ -430,7 +436,8 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 	if err != nil {
 		return nil, fmt.Errorf("%w: write msg2: %w", ErrHandshakeFailed, err)
 	}
-	if err := writeLengthPrefixed(conn, msg2); err != nil {
+	err = writeLengthPrefixed(conn, msg2)
+	if err != nil {
 		return nil, fmt.Errorf("%w: send msg2: %w", ErrHandshakeFailed, err)
 	}
 
@@ -447,16 +454,18 @@ func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteClose
 	// Verify client identity
 	remoteID, err := verifyIdentityPayload(clientPayload, hs.PeerStatic())
 	if err != nil {
-		conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
 	}
 
 	// cs1 = initiator→responder (server decrypt), cs2 = responder→initiator (server encrypt)
-	return h.createSecureConnection(conn, cs2, cs1, remoteID)
+	return h.createSecureConnection(conn, cs2, cs1, remoteID), nil
 }
 
 // createSecureConnection builds a SecureConnection from the completed handshake.
-func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, decryptor *noise.CipherState, remoteID string) (*SecureConnection, error) {
+func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, decryptor *noise.CipherState, remoteID string) *SecureConnection {
 	readBuffer := acquireBuffer(1 << 12)
 	readBuffer.B = readBuffer.B[:0]
 
@@ -467,7 +476,7 @@ func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, 
 		encryptor:  encryptor,
 		decryptor:  decryptor,
 		readBuffer: readBuffer,
-	}, nil
+	}
 }
 
 // makeIdentityPayload constructs the identity binding payload:
@@ -483,7 +492,7 @@ func makeIdentityPayload(cred *Credential, x25519Pub []byte) []byte {
 // verifyIdentityPayload verifies the identity binding and returns the Portal identity ID.
 // It checks that the Ed25519 signature over the X25519 static key is valid, which
 // proves the peer controls both the Ed25519 identity and the Noise session key.
-func verifyIdentityPayload(payload []byte, remoteX25519Pub []byte) (string, error) {
+func verifyIdentityPayload(payload, remoteX25519Pub []byte) (string, error) {
 	if len(payload) != identityPayloadSize {
 		return "", ErrInvalidIdentity
 	}

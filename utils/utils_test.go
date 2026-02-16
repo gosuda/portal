@@ -1,4 +1,4 @@
-package utils
+package portalnet
 
 import (
 	"net/http"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsURLSafeName(t *testing.T) {
@@ -152,7 +153,7 @@ func TestNormalizePortalURL(t *testing.T) {
 				assert.Error(t, err, "normalizeBootstrapServer(%q) expected error", tt.input)
 				return
 			}
-			assert.NoError(t, err, "normalizeBootstrapServer(%q) unexpected error", tt.input)
+			require.NoError(t, err, "normalizeBootstrapServer(%q) unexpected error", tt.input)
 			assert.Equal(t, tt.want, got, "normalizeBootstrapServer(%q)", tt.input)
 		})
 	}

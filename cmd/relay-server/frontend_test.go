@@ -6,10 +6,7 @@ import (
 )
 
 func TestInjectOGMetadata(t *testing.T) {
-	f := &Frontend{}
-
-	// Set global flag for testing
-	flagPortalURL = "https://portal.example.com"
+	f := NewFrontend("https://portal.example.com", "https://*.portal.example.com")
 
 	tests := []struct {
 		name        string

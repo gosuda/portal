@@ -98,7 +98,7 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 			if streams, exists := g.relayedConnections[leaseID]; exists {
 				// Close all relayed streams
 				for _, stream := range streams {
-					stream.Close()
+					closeWithLog(stream, "[RelayServer] Failed to close relayed stream during cleanup")
 				}
 				delete(g.relayedConnections, leaseID)
 			}
@@ -111,7 +111,7 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 		g.connectionsLock.Unlock()
 
 		// Close the session (and underlying transport)
-		connection.sess.Close()
+		closeWithLog(connection.sess, "[RelayServer] Failed to close session during cleanup")
 
 		log.Debug().Int64("conn_id", id).Msg("[RelayServer] Connection cleanup complete")
 	}()
@@ -138,9 +138,9 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 	}
 }
 
-const _MAX_RAW_PACKET_SIZE = 1 << 26 // 64MB
+const maxRawPacketSize = 1 << 26 // 64MB
 
-func (g *RelayServer) handleStream(stream Stream, streamID int64, connID int64, connection *Connection) {
+func (g *RelayServer) handleStream(stream Stream, streamID, connID int64, connection *Connection) {
 	log.Debug().
 		Int64("conn_id", connID).
 		Int64("stream_id", streamID).
@@ -154,7 +154,7 @@ func (g *RelayServer) handleStream(stream Stream, streamID int64, connID int64, 
 				Int64("stream_id", streamID).
 				Msg("[RelayServer] Closing stream")
 			connection.streamsLock.Lock()
-			stream.Close()
+			closeWithLog(stream, "[RelayServer] Failed to close stream")
 			delete(connection.streams, streamID)
 			connection.streamsLock.Unlock()
 		} else {
@@ -321,7 +321,7 @@ func (g *RelayServer) Stop() {
 	// avoid deadlock.
 	g.connectionsLock.RLock()
 	for _, conn := range g.connections {
-		conn.sess.Close()
+		closeWithLog(conn.sess, "[RelayServer] Failed to close active session during server stop")
 	}
 	g.connectionsLock.RUnlock()
 

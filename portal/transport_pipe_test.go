@@ -155,12 +155,14 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 	msg2 := []byte("pong")
 
 	// Client -> Server
-	if _, err := clientStream.Write(msg1); err != nil {
+	_, err = clientStream.Write(msg1)
+	if err != nil {
 		t.Fatalf("Write ping: %v", err)
 	}
 
 	buf1 := make([]byte, len(msg1))
-	if _, err := io.ReadFull(serverStream, buf1); err != nil {
+	_, err = io.ReadFull(serverStream, buf1)
+	if err != nil {
 		t.Fatalf("Read ping: %v", err)
 	}
 	if !bytes.Equal(buf1, msg1) {
@@ -168,12 +170,14 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 	}
 
 	// Server -> Client
-	if _, err := serverStream.Write(msg2); err != nil {
+	_, err = serverStream.Write(msg2)
+	if err != nil {
 		t.Fatalf("Write pong: %v", err)
 	}
 
 	buf2 := make([]byte, len(msg2))
-	if _, err := io.ReadFull(clientStream, buf2); err != nil {
+	_, err = io.ReadFull(clientStream, buf2)
+	if err != nil {
 		t.Fatalf("Read pong: %v", err)
 	}
 	if !bytes.Equal(buf2, msg2) {
@@ -268,8 +272,8 @@ func TestPipeSessionMultipleStreams(t *testing.T) {
 			defer stream.Close()
 
 			msg := []byte{byte(i)}
-			if _, err := stream.Write(msg); err != nil {
-				t.Errorf("Write %d: %v", i, err)
+			if _, writeErr := stream.Write(msg); writeErr != nil {
+				t.Errorf("Write %d: %v", i, writeErr)
 			}
 		}()
 
@@ -283,8 +287,8 @@ func TestPipeSessionMultipleStreams(t *testing.T) {
 			defer stream.Close()
 
 			buf := make([]byte, 1)
-			if _, err := io.ReadFull(stream, buf); err != nil {
-				t.Errorf("Read %d: %v", i, err)
+			if _, readErr := io.ReadFull(stream, buf); readErr != nil {
+				t.Errorf("Read %d: %v", i, readErr)
 			}
 		}()
 	}
@@ -326,8 +330,9 @@ func TestPipeStreamDeadlines(t *testing.T) {
 	buf := make([]byte, 1)
 
 	// Test SetDeadline (must run before write loop fills the channel)
-	if err := clientStream.SetDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
-		t.Errorf("SetDeadline: %v", err)
+	setErr := clientStream.SetDeadline(time.Now().Add(10 * time.Millisecond))
+	if setErr != nil {
+		t.Errorf("SetDeadline: %v", setErr)
 	}
 
 	_, err = clientStream.Read(buf)
@@ -339,8 +344,9 @@ func TestPipeStreamDeadlines(t *testing.T) {
 	clientStream.SetDeadline(time.Time{})
 
 	// Test SetReadDeadline
-	if err := serverStream.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
-		t.Errorf("SetReadDeadline: %v", err)
+	setErr = serverStream.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	if setErr != nil {
+		t.Errorf("SetReadDeadline: %v", setErr)
 	}
 
 	_, err = serverStream.Read(buf)
@@ -353,7 +359,7 @@ func TestPipeStreamDeadlines(t *testing.T) {
 	serverStream.SetWriteDeadline(time.Now().Add(10 * time.Millisecond))
 	data := make([]byte, 1024*1024) // 1MB should fill pipe buffer
 	for {
-		_, err := serverStream.Write(data)
+		_, err = serverStream.Write(data)
 		if err != nil {
 			break // Expected timeout or pipe full
 		}
@@ -378,22 +384,24 @@ func TestPipeSessionCloseWithPendingStreams(t *testing.T) {
 
 	// Write data
 	msg := []byte("test")
-	if _, err := stream1.Write(msg); err != nil {
+	_, err = stream1.Write(msg)
+	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
 	// Close session (should close pending streams)
-	if err := client.Close(); err != nil {
+	err = client.Close()
+	if err != nil {
 		t.Errorf("Close: %v", err)
 	}
 
 	// Reads/writes on closed streams should fail
 	buf := make([]byte, len(msg))
-	_, err = stream2.Read(buf)
+	_, _ = stream2.Read(buf)
 	// Read may succeed if data was buffered, or fail if pipe closed
 	// Either is acceptable behavior
 
-	if _, err := stream1.Write(msg); err == nil {
+	if _, writeErr := stream1.Write(msg); writeErr == nil {
 		t.Error("Write on stream after session close should fail")
 	}
 

@@ -69,7 +69,7 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
 		// Register lease connection
-		leaseID := string(req.Lease.Identity.Id)
+		leaseID := req.Lease.Identity.Id
 		g.leaseConnectionsLock.Lock()
 		g.leaseConnections[leaseID] = ctx.Connection
 		g.leaseConnectionsLock.Unlock()
@@ -83,7 +83,7 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 			Msg("[RelayServer] Lease update completed successfully")
 	} else {
 		// Lease update failed (could be expired or name conflict)
-		leaseID := string(req.Lease.Identity.Id)
+		leaseID := req.Lease.Identity.Id
 		log.Warn().
 			Str("lease_id", leaseID).
 			Str("lease_name", req.Lease.Name).
@@ -126,7 +126,7 @@ func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdver
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
 		// Remove lease connection
-		leaseID := string(req.Identity.Id)
+		leaseID := req.Identity.Id
 		g.leaseConnectionsLock.Lock()
 		delete(g.leaseConnections, leaseID)
 		g.leaseConnectionsLock.Unlock()
@@ -184,14 +184,14 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	if err != nil {
 		// If forwarding failed, we might need to close the stream if it was opened
 		if leaseStream != nil {
-			leaseStream.Close()
+			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after forwarding failure")
 		}
 		return g.sendConnectionResponse(ctx.Stream, respCode)
 	}
 
 	// Enforce relayed connection limits
 	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
-		leaseID := string(leaseEntry.Lease.Identity.Id)
+		leaseID := leaseEntry.Lease.Identity.Id
 		g.limitsLock.Lock()
 		overPerLease := g.maxRelayedPerLease > 0 && g.relayedPerLeaseCount[leaseID] >= g.maxRelayedPerLease
 		g.limitsLock.Unlock()
@@ -199,22 +199,23 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		if overPerLease {
 			log.Warn().Str("lease_id", leaseID).Msg("[RelayServer] Relayed connection per-lease limit reached")
 			respCode = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
-			leaseStream.Close()
+			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after over-limit rejection")
 		}
 	}
 
 	// Send response to client
-	if err := g.sendConnectionResponse(ctx.Stream, respCode); err != nil {
-		leaseStream.Close()
+	err = g.sendConnectionResponse(ctx.Stream, respCode)
+	if err != nil {
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after response send failure")
 		return err
 	}
 
 	// If accepted, set up bidirectional forwarding
 	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		ctx.Hijack()
-		go g.establishRelayedConnection(ctx.Stream, leaseStream, string(leaseEntry.Lease.Identity.Id))
+		go g.establishRelayedConnection(ctx.Stream, leaseStream, leaseEntry.Lease.Identity.Id)
 	} else {
-		leaseStream.Close()
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after rejection")
 	}
 
 	return nil
@@ -229,7 +230,7 @@ func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdver
 
 	reqPayload, err := req.MarshalVT()
 	if err != nil {
-		leaseStream.Close()
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after marshal failure")
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, err
 	}
 
@@ -238,24 +239,25 @@ func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdver
 		Payload: reqPayload,
 	})
 	if err != nil {
-		leaseStream.Close()
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after request write failure")
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, err
 	}
 
 	respPacket, err := readPacket(leaseStream)
 	if err != nil {
-		leaseStream.Close()
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after response read failure")
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, err
 	}
 
 	if respPacket.Type != rdverb.PacketType_PACKET_TYPE_CONNECTION_RESPONSE {
-		leaseStream.Close()
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after invalid response packet type")
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, nil
 	}
 
 	var resp rdverb.ConnectionResponse
-	if err := resp.UnmarshalVT(respPacket.Payload); err != nil {
-		leaseStream.Close()
+	err = resp.UnmarshalVT(respPacket.Payload)
+	if err != nil {
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after response unmarshal failure")
 		return nil, rdverb.ResponseCode_RESPONSE_CODE_REJECTED, err
 	}
 
@@ -311,10 +313,10 @@ func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream Strea
 		// Fallback: simple copy without rate limiting
 		go func() {
 			io.Copy(leaseStream, clientStream)
-			leaseStream.Close()
+			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after fallback relay copy")
 		}()
 		io.Copy(clientStream, leaseStream)
-		clientStream.Close()
+		closeWithLog(clientStream, "[RelayServer] Failed to close client stream after fallback relay copy")
 	}
 }
 
@@ -328,8 +330,8 @@ func readPacket(stream io.Reader) (*rdverb.Packet, error) {
 	}
 
 	n := int(binary.BigEndian.Uint32(size[:]))
-	if n > _MAX_RAW_PACKET_SIZE {
-		return nil, fmt.Errorf("packet size %d exceeds maximum %d", n, _MAX_RAW_PACKET_SIZE)
+	if n > maxRawPacketSize {
+		return nil, fmt.Errorf("packet size %d exceeds maximum %d", n, maxRawPacketSize)
 	}
 
 	buffer := bytebufferpool.Get()

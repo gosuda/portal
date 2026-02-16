@@ -102,9 +102,9 @@ func TestNewBucketHighRate(t *testing.T) {
 }
 
 // TestTakeNilBucket tests that Take handles nil bucket gracefully.
-func TestTakeNilBucket(t *testing.T) {
+func TestTakeNilBucket(_ *testing.T) {
 	// Should not panic
-	var b *Bucket = nil
+	var b *Bucket
 	b.Take(100) // Should just return without panicking
 }
 
@@ -392,7 +392,7 @@ type errReader struct {
 	err error
 }
 
-func (r *errReader) Read(p []byte) (n int, err error) {
+func (r *errReader) Read(_ []byte) (n int, err error) {
 	return 0, r.err
 }
 

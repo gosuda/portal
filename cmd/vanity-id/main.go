@@ -46,7 +46,7 @@ func main() {
 	// Start worker goroutines
 	for range *workers {
 		wg.Add(1)
-		go worker(*prefix, &attempts, &found, results, &wg, *maxResults, ctx)
+		go worker(*prefix, &attempts, &found, results, &wg, ctx)
 	}
 
 	// Start stats reporter
@@ -91,7 +91,7 @@ type Result struct {
 	Attempt    uint64
 }
 
-func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *sync.WaitGroup, maxResults int, ctx <-chan struct{}) {
+func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *sync.WaitGroup, ctx <-chan struct{}) {
 	defer wg.Done()
 
 	var seed [32]byte
@@ -139,7 +139,7 @@ func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *
 	}
 }
 
-func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan bool, prefixLen int, maxResults int) {
+func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan bool, prefixLen, maxResults int) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -157,16 +157,18 @@ func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan boo
 			// Calculate estimated time to completion
 			var etaStr string
 			if rate > 0 && maxResults > 0 {
-				remainingResults := maxResults - int(f)
-				if remainingResults > 0 {
+				maxResultsUint64 := uint64(maxResults)
+				if f < maxResultsUint64 {
+					remainingResults := maxResultsUint64 - f
 					expectedRemainingAttempts := float64(remainingResults) * expectedAttemptsPerResult
 					etaSeconds := expectedRemainingAttempts / rate
 
-					if etaSeconds < 60 {
+					switch {
+					case etaSeconds < 60:
 						etaStr = fmt.Sprintf(" | ETA: %.0fs", etaSeconds)
-					} else if etaSeconds < 3600 {
+					case etaSeconds < 3600:
 						etaStr = fmt.Sprintf(" | ETA: %.1fm", etaSeconds/60)
-					} else {
+					default:
 						etaStr = fmt.Sprintf(" | ETA: %.1fh", etaSeconds/3600)
 					}
 				}

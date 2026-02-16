@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/utils"
+	utils "gosuda.org/portal/utils"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
@@ -111,7 +111,7 @@ try {
 }
 `
 
-func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
+func serveTunnelScript(w http.ResponseWriter, r *http.Request, portalURL string) {
 	utils.SetCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
@@ -120,10 +120,8 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetOS := r.URL.Query().Get("os")
-	isWindows := false
-	if targetOS != "" {
-		isWindows = strings.EqualFold(targetOS, "windows")
-	} else {
+	isWindows := strings.EqualFold(targetOS, "windows")
+	if targetOS == "" {
 		// Fallback: check User-Agent
 		ua := strings.ToLower(r.UserAgent())
 		isWindows = strings.Contains(ua, "windows")
@@ -134,21 +132,23 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	var filename string
 
 	if isWindows {
-		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, flagPortalURL)
+		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, portalURL)
 		contentType = "text/plain" // or application/x-powershell
 		filename = "tunnel.ps1"
 	} else {
-		script = fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
+		script = fmt.Sprintf(tunnelScriptTemplate, portalURL)
 		contentType = "text/x-shellscript"
 		filename = "tunnel.sh"
 	}
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		w.Write([]byte(script))
+		if _, err := w.Write([]byte(script)); err != nil {
+			log.Error().Err(err).Str("filename", filename).Msg("failed to write tunnel script")
+		}
 	}
 }
 
@@ -187,6 +187,8 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		w.Write(data)
+		if _, writeErr := w.Write(data); writeErr != nil {
+			log.Error().Err(writeErr).Str("slug", slug).Msg("failed to write tunnel binary")
+		}
 	}
 }

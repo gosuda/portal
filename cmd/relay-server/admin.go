@@ -15,7 +15,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
+	utils "gosuda.org/portal/utils"
 )
 
 const adminCookieName = "portal_admin"
@@ -24,6 +24,8 @@ const adminCookieName = "portal_admin"
 type Admin struct {
 	settingsPath string
 	settingsMu   sync.Mutex
+	portalURL    string
+	portalAppURL string
 
 	approveManager *manager.ApproveManager
 	bpsManager     *manager.BPSManager
@@ -33,13 +35,15 @@ type Admin struct {
 	frontend *Frontend
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
+func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager, portalURL, portalAppURL string) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
 	}
 	return &Admin{
 		settingsPath:   "admin_settings.json",
+		portalURL:      portalURL,
+		portalAppURL:   portalAppURL,
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
 		ipManager:      manager.NewIPManager(),
@@ -118,14 +122,16 @@ func (a *Admin) SaveSettings(serv *portal.RelayServer) {
 
 	dir := filepath.Dir(a.settingsPath)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Error().Err(err).Msg("[Admin] Failed to create settings directory")
+		mkdirErr := os.MkdirAll(dir, 0o750)
+		if mkdirErr != nil {
+			log.Error().Err(mkdirErr).Msg("[Admin] Failed to create settings directory")
 			return
 		}
 	}
 
-	if err := os.WriteFile(a.settingsPath, data, 0644); err != nil {
-		log.Error().Err(err).Msg("[Admin] Failed to save admin settings")
+	writeErr := os.WriteFile(a.settingsPath, data, 0o600)
+	if writeErr != nil {
+		log.Error().Err(writeErr).Msg("[Admin] Failed to save admin settings")
 		return
 	}
 
@@ -147,8 +153,9 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 	}
 
 	var settings adminSettings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		log.Error().Err(err).Msg("[Admin] Failed to parse admin settings")
+	unmarshalErr := json.Unmarshal(data, &settings)
+	if unmarshalErr != nil {
+		log.Error().Err(unmarshalErr).Msg("[Admin] Failed to parse admin settings")
 		return
 	}
 
@@ -590,16 +597,17 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		}
 
 		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
+		identityID := lease.Identity.Id
 
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
 		if ttl > 0 {
-			if ttl > time.Hour {
+			switch {
+			case ttl > time.Hour:
 				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
-			} else if ttl > time.Minute {
+			case ttl > time.Minute:
 				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
-			} else {
+			default:
 				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
 			}
 		}
@@ -644,9 +652,9 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
+		base := a.portalAppURL
 		if base == "" {
-			base = flagPortalURL
+			base = a.portalURL
 		}
 		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 

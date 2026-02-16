@@ -50,7 +50,7 @@ func TestLeaseManager_NameConflict(t *testing.T) {
 	}
 
 	// Verify only first lease exists
-	entry, exists := lm.GetLeaseByID(string(identity1.Id))
+	entry, exists := lm.GetLeaseByID(identity1.Id)
 	if !exists {
 		t.Fatal("First lease should exist")
 	}
@@ -59,7 +59,7 @@ func TestLeaseManager_NameConflict(t *testing.T) {
 	}
 
 	// Verify second lease was not added
-	_, exists = lm.GetLeaseByID(string(identity2.Id))
+	_, exists = lm.GetLeaseByID(identity2.Id)
 	if exists {
 		t.Fatal("Second lease should not exist due to name conflict")
 	}
@@ -101,7 +101,7 @@ func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
 	}
 
 	// Verify lease was updated
-	entry, exists := lm.GetLeaseByID(string(identity.Id))
+	entry, exists := lm.GetLeaseByID(identity.Id)
 	if !exists {
 		t.Fatal("Lease should exist")
 	}

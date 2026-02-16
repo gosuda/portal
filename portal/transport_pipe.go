@@ -45,7 +45,7 @@ var _ Stream = (*bufferedPipeStream)(nil)
 
 // NewPipeSessionPair creates a connected pair of PipeSessions.
 // Streams opened on client will be accepted on server, and vice versa.
-func NewPipeSessionPair() (client *PipeSession, server *PipeSession) {
+func NewPipeSessionPair() (client, server *PipeSession) {
 	client = &PipeSession{
 		incoming: make(chan Stream, 8),
 		closeCh:  make(chan struct{}),
@@ -104,8 +104,8 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		local.Close()
-		remote.Close()
+		closeWithLog(local, "[PipeSession] Failed to close local stream after session close")
+		closeWithLog(remote, "[PipeSession] Failed to close remote stream after session close")
 		return nil, ErrPipeSessionClosed
 	}
 	s.streams = append(s.streams, local)
@@ -116,12 +116,12 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	case peer.incoming <- remote:
 		return local, nil
 	case <-peer.closeCh:
-		local.Close()
-		remote.Close()
+		closeWithLog(local, "[PipeSession] Failed to close local stream after peer close")
+		closeWithLog(remote, "[PipeSession] Failed to close remote stream after peer close")
 		return nil, ErrPipeSessionClosed
 	case <-ctx.Done():
-		local.Close()
-		remote.Close()
+		closeWithLog(local, "[PipeSession] Failed to close local stream after context cancellation")
+		closeWithLog(remote, "[PipeSession] Failed to close remote stream after context cancellation")
 		return nil, ctx.Err()
 	}
 }
@@ -265,7 +265,7 @@ func (s *PipeSession) AcceptStream(ctx context.Context) (Stream, error) {
 			return nil, ErrPipeSessionClosed
 		}
 		// Track the accepted stream
-		if bps, ok := stream.(*bufferedPipeStream); ok {
+		if bps, isBuffered := stream.(*bufferedPipeStream); isBuffered {
 			s.mu.Lock()
 			s.streams = append(s.streams, bps)
 			s.mu.Unlock()
@@ -290,7 +290,7 @@ func (s *PipeSession) Close() error {
 	// Close all tracked streams
 	for _, stream := range s.streams {
 		if stream != nil {
-			stream.Close()
+			closeWithLog(stream, "[PipeSession] Failed to close tracked stream")
 		}
 	}
 	s.streams = nil
@@ -302,7 +302,7 @@ func (s *PipeSession) Close() error {
 	// Drain and close any pending streams in the incoming channel
 	for stream := range s.incoming {
 		if stream != nil {
-			stream.Close()
+			closeWithLog(stream, "[PipeSession] Failed to close pending stream")
 		}
 	}
 

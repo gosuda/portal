@@ -1,4 +1,4 @@
-package utils
+package portalnet
 
 import (
 	"errors"
@@ -15,10 +15,7 @@ var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
 // Disallows: spaces, special characters like /, ?, &, =, %, etc.
 // Note: Browsers will automatically URL-encode non-ASCII characters.
 func IsURLSafeName(name string) bool {
-	if name == "" {
-		return true // Empty name is allowed (will be treated as unnamed)
-	}
-	return urlSafeNameRegex.MatchString(name)
+	return name == "" || urlSafeNameRegex.MatchString(name) // Empty name is allowed (will be treated as unnamed)
 }
 
 // NormalizePortalURL takes various user-friendly server inputs and
@@ -37,6 +34,12 @@ func NormalizePortalURL(raw string) (string, error) {
 		return "", errors.New("bootstrap server is empty")
 	}
 
+	setRelayPathIfEmpty := func(u *url.URL) {
+		if u.Path == "" || u.Path == "/" {
+			u.Path = "/relay"
+		}
+	}
+
 	// Convert legacy WebSocket schemes to HTTP equivalents
 	server = strings.Replace(server, "wss://", "https://", 1)
 	server = strings.Replace(server, "ws://", "http://", 1)
@@ -47,9 +50,7 @@ func NormalizePortalURL(raw string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
 		}
-		if u.Path == "" || u.Path == "/" {
-			u.Path = "/relay"
-		}
+		setRelayPathIfEmpty(u)
 		return u.String(), nil
 	}
 
@@ -61,9 +62,7 @@ func NormalizePortalURL(raw string) (string, error) {
 	if u.Host == "" {
 		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
 	}
-	if u.Path == "" || u.Path == "/" {
-		u.Path = "/relay"
-	}
+	setRelayPathIfEmpty(u)
 	return u.String(), nil
 }
 

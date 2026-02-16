@@ -1,6 +1,7 @@
 package cryptoops
 
 import (
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
@@ -8,18 +9,15 @@ import (
 	"crypto/sha512"
 	"encoding/base32"
 	"errors"
-
-	"golang.org/x/crypto/curve25519"
 )
 
-var _id_magic = []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID")
-var _base32_encoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
+const idMagic = "RDVERB_PROTOCOL_VER_01_SHA256_ID"
 
 func DeriveID(publickey ed25519.PublicKey) string {
-	h := hmac.New(sha256.New, _id_magic)
+	h := hmac.New(sha256.New, []byte(idMagic))
 	h.Write(publickey)
 	hash := h.Sum(nil)
-	return _base32_encoding.EncodeToString(hash[:16])
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash[:16])
 }
 
 type Credential struct {
@@ -81,17 +79,17 @@ func (c *Credential) X25519PrivateKey() []byte {
 	h[0] &= 248
 	h[31] &= 127
 	h[31] |= 64
-	key := make([]byte, curve25519.ScalarSize)
-	copy(key, h[:curve25519.ScalarSize])
+	key := make([]byte, 32)
+	copy(key, h[:32])
 	return key
 }
 
 // X25519PublicKey derives the X25519 public key corresponding to X25519PrivateKey.
 func (c *Credential) X25519PublicKey() []byte {
-	priv := c.X25519PrivateKey()
-	pub, err := curve25519.X25519(priv, curve25519.Basepoint)
+	curve := ecdh.X25519()
+	priv, err := curve.NewPrivateKey(c.X25519PrivateKey())
 	if err != nil {
-		panic("x25519 scalar base mult: " + err.Error())
+		panic("x25519 private key: " + err.Error())
 	}
-	return pub
+	return priv.PublicKey().Bytes()
 }

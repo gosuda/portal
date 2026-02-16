@@ -16,7 +16,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
+	utils "gosuda.org/portal/utils"
 )
 
 type readDirFileFS interface {
@@ -26,16 +26,20 @@ type readDirFileFS interface {
 
 // Frontend handles serving embedded frontend assets and SSR.
 type Frontend struct {
-	distFS readDirFileFS
-	admin  *Admin
+	distFS       readDirFileFS
+	admin        *Admin
+	portalURL    string
+	portalAppURL string
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 }
 
-func NewFrontend() *Frontend {
+func NewFrontend(portalURL, portalAppURL string) *Frontend {
 	return &Frontend{
-		distFS: distFS,
+		distFS:       distFS,
+		portalURL:    portalURL,
+		portalAppURL: portalAppURL,
 	}
 }
 
@@ -115,7 +119,7 @@ func (f *Frontend) ServePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	// Extract lease name from host.
 	leaseName := ""
 	h := strings.ToLower(utils.StripPort(utils.StripScheme(r.Host)))
-	p := strings.ToLower(utils.StripPort(utils.StripScheme(flagPortalAppURL)))
+	p := strings.ToLower(utils.StripPort(utils.StripScheme(f.portalAppURL)))
 	if strings.HasPrefix(p, "*.") {
 		suffix := p[1:] // .example.com
 		if strings.HasSuffix(h, suffix) {
@@ -152,7 +156,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 	if imageURL == "" {
-		base := strings.TrimSuffix(flagPortalURL, "/")
+		base := strings.TrimSuffix(f.portalURL, "/")
 		if !strings.HasPrefix(base, "http") {
 			base = "https://" + base
 		}
@@ -172,7 +176,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer) string {
 	rows := []leaseRow{}
 	if f.admin != nil {
-		rows = convertLeaseEntriesToRows(serv, f.admin)
+		rows = convertLeaseEntriesToRows(serv, f.admin, f.portalURL, f.portalAppURL)
 	}
 
 	jsonData, err := json.Marshal(rows)
@@ -193,7 +197,7 @@ func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer
 }
 
 // convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page.
-func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRow {
+func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, portalURL, portalAppURL string) []leaseRow {
 	leaseEntries := serv.GetAllLeaseEntries()
 	rows := []leaseRow{}
 	now := time.Now()
@@ -210,7 +214,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 		}
 
 		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
+		identityID := lease.Identity.Id
 
 		var metadata sdk.Metadata
 		_ = json.Unmarshal([]byte(lease.Metadata), &metadata)
@@ -233,11 +237,12 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
 		if ttl > 0 {
-			if ttl > time.Hour {
+			switch {
+			case ttl > time.Hour:
 				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
-			} else if ttl > time.Minute {
+			case ttl > time.Minute:
 				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
-			} else {
+			default:
 				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
 			}
 		}
@@ -286,9 +291,9 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
+		base := portalAppURL
 		if base == "" {
-			base = flagPortalURL
+			base = portalURL
 		}
 		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
@@ -396,7 +401,7 @@ func (f *Frontend) ServePortalStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveStaticFile reads and serves a file from the app static directory.
-func (f *Frontend) serveStaticFile(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
+func (f *Frontend) serveStaticFile(w http.ResponseWriter, r *http.Request, filePath, contentType string) {
 	utils.SetCORSHeaders(w)
 
 	fullPath := path.Join("dist", "app", filePath)
@@ -428,7 +433,7 @@ func (f *Frontend) serveStaticFile(w http.ResponseWriter, r *http.Request, fileP
 
 // serveStaticFileWithFallback reads and serves a file from the app static directory.
 // If the file is not found, it falls back to portal.html for SPA routing.
-func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, filePath string, contentType string) {
+func (f *Frontend) serveStaticFileWithFallback(w http.ResponseWriter, r *http.Request, filePath, contentType string) {
 	utils.SetCORSHeaders(w)
 
 	fullPath := path.Join("dist", "app", filePath)

@@ -9,20 +9,21 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
+	utils "gosuda.org/portal/utils"
 )
 
 //go:embed dist/*
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, certHash []byte, shutdown context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, certHash []byte, portalAppURL, portalURL string, shutdown context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -36,10 +37,12 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 	frontend.ServeAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
 
 	if noIndex {
-		appMux.HandleFunc("/robots.txt", func(w http.ResponseWriter, r *http.Request) {
+		appMux.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("User-agent: *\nDisallow: /\n"))
+			if _, err := w.Write([]byte("User-agent: *\nDisallow: /\n")); err != nil {
+				log.Error().Err(err).Msg("[server] write robots.txt response")
+			}
 		})
 	}
 
@@ -57,7 +60,7 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 
 	// Tunnel installer script and binaries
 	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelScript(w, r)
+		serveTunnelScript(w, r, portalURL)
 	})
 	appMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelBinary(w, r)
@@ -65,7 +68,7 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 
 	// The /relay endpoint is served via HTTP/3 WebTransport (see serveWebTransport).
 	// Return 426 Upgrade Required for HTTP/1.1 clients hitting this path.
-	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/relay", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		http.Error(w, "WebTransport (HTTP/3) required", http.StatusUpgradeRequired)
 	})
@@ -77,14 +80,16 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
-	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{\"status\":\"ok\"}"))
+		if _, err := w.Write([]byte("{\"status\":\"ok\"}")); err != nil {
+			log.Error().Err(err).Msg("[server] write healthz response")
+		}
 	})
 
 	if len(certHash) > 0 {
 		hashHex := hex.EncodeToString(certHash)
-		appMux.HandleFunc("/cert-hash", func(w http.ResponseWriter, r *http.Request) {
+		appMux.HandleFunc("/cert-hash", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			fmt.Fprintf(w, `{"algorithm":"sha-256","hash":"%s"}`, hashHex)
@@ -119,7 +124,7 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Route subdomain requests (e.g., *.example.com) to portalMux
 		// and everything else to the app UI mux.
-		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
+		if utils.IsSubdomain(portalAppURL, r.Host) {
 			portalMux.ServeHTTP(w, r)
 		} else {
 			appMux.ServeHTTP(w, r)
@@ -127,8 +132,9 @@ func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin
 	})
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
@@ -154,7 +160,7 @@ func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
 }
 
 // serveWebTransport starts the HTTP/3 WebTransport server.
-func serveWebTransport(ctx context.Context, addr string, serv *portal.RelayServer, admin *Admin, tlsCert *tls.Certificate, shutdown context.CancelFunc) func() {
+func serveWebTransport(addr string, serv *portal.RelayServer, admin *Admin, tlsCert *tls.Certificate, shutdown context.CancelFunc) func() {
 	mux := http.NewServeMux()
 
 	wtServer := &webtransport.Server{
@@ -199,7 +205,9 @@ func serveWebTransport(ctx context.Context, addr string, serv *portal.RelayServe
 	}()
 
 	return func() {
-		wtServer.Close()
+		if err := wtServer.Close(); err != nil {
+			log.Error().Err(err).Msg("[server] webtransport shutdown error")
+		}
 	}
 }
 

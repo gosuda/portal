@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"errors"
 	"io"
 	"maps"
 	"sync"
@@ -136,15 +137,23 @@ func EstablishRelayWithBPS(clientStream, leaseStream io.ReadWriteCloser, leaseID
 	// Client -> Lease
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(leaseStream, clientStream, leaseID)
-		leaseStream.Close()
+		if _, err := bpsManager.Copy(leaseStream, clientStream, leaseID); err != nil && !errors.Is(err, io.EOF) {
+			log.Warn().Err(err).Str("lease_id", leaseID).Msg("[Relay] Client->Lease copy failed")
+		}
+		if err := leaseStream.Close(); err != nil {
+			log.Warn().Err(err).Str("lease_id", leaseID).Msg("[Relay] Failed to close lease stream")
+		}
 	}()
 
 	// Lease -> Client
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(clientStream, leaseStream, leaseID)
-		clientStream.Close()
+		if _, err := bpsManager.Copy(clientStream, leaseStream, leaseID); err != nil && !errors.Is(err, io.EOF) {
+			log.Warn().Err(err).Str("lease_id", leaseID).Msg("[Relay] Lease->Client copy failed")
+		}
+		if err := clientStream.Close(); err != nil {
+			log.Warn().Err(err).Str("lease_id", leaseID).Msg("[Relay] Failed to close client stream")
+		}
 	}()
 
 	wg.Wait()
@@ -169,7 +178,7 @@ type Bucket struct {
 
 // NewBucket creates a limiter for rateBps with burst bytes.
 // Multiple connections can share this bucket for fair bandwidth distribution.
-func NewBucket(rateBps int64, burst int64) *Bucket {
+func NewBucket(rateBps, burst int64) *Bucket {
 	if rateBps <= 0 {
 		return nil
 	}
@@ -328,13 +337,6 @@ func (b *Bucket) Stats() (totalBytes, throttleHits int64, totalWaited time.Durat
 		time.Duration(atomic.LoadInt64(&b.totalWaited))
 }
 
-// internal buffer pool for Copy - 64KB reduces Take() call frequency and lock contention
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufPool = sync.Pool{New: func() any {
-	b := make([]byte, 64*1024)
-	return &b
-}}
-
 // Copy copies from src to dst, enforcing the provided byte-rate bucket if not nil.
 // Multiple Copy calls sharing the same bucket will fairly share the bandwidth.
 // Returns bytes written and any copy error encountered.
@@ -342,8 +344,7 @@ func Copy(dst io.Writer, src io.Reader, b *Bucket) (int64, error) {
 	if b == nil {
 		return io.Copy(dst, src)
 	}
-	buf := *bufPool.Get().(*[]byte)
-	defer bufPool.Put(&buf)
+	buf := make([]byte, 64*1024)
 
 	var total int64
 	startTime := time.Now()

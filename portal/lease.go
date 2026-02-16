@@ -89,7 +89,7 @@ func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) boo
 	lm.leasesLock.Lock()
 	defer lm.leasesLock.Unlock()
 
-	identityID := string(lease.Identity.Id)
+	identityID := lease.Identity.Id
 	expires := time.Unix(lease.Expires, 0)
 
 	// Check if lease is already expired
@@ -175,7 +175,7 @@ func (lm *LeaseManager) DeleteLease(identity *rdsec.Identity) bool {
 	lm.leasesLock.Lock()
 	defer lm.leasesLock.Unlock()
 
-	identityID := string(identity.Id)
+	identityID := identity.Id
 	if _, exists := lm.leases[identityID]; exists {
 		delete(lm.leases, identityID)
 		return true
@@ -187,7 +187,7 @@ func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
-	identityID := string(identity.Id)
+	identityID := identity.Id
 
 	lease, exists := lm.leases[identityID]
 	if !exists {
@@ -236,7 +236,7 @@ func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
 	for _, lease := range lm.leases {
 		if lease.Lease.Name == name {
 			// Check if banned
-			if _, banned := lm.bannedLeases[string(lease.Lease.Identity.Id)]; banned {
+			if _, banned := lm.bannedLeases[lease.Lease.Identity.Id]; banned {
 				continue
 			}
 			// Check if expired
@@ -305,10 +305,10 @@ func (lm *LeaseManager) SetNamePattern(pattern string) error {
 
 // SetReservedPrefixes removed: reserved prefix policy no longer supported
 
-func (lm *LeaseManager) SetTTLBounds(min, max time.Duration) {
+func (lm *LeaseManager) SetTTLBounds(minTTL, maxTTL time.Duration) {
 	lm.leasesLock.Lock()
-	lm.minTTL = min
-	lm.maxTTL = max
+	lm.minTTL = minTTL
+	lm.maxTTL = maxTTL
 	lm.leasesLock.Unlock()
 }
 

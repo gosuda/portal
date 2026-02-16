@@ -91,8 +91,8 @@ func TestPacket_AllPacketTypes(t *testing.T) {
 			}
 
 			got := &Packet{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
+			if unmarshalErr := got.UnmarshalVT(data); unmarshalErr != nil {
+				t.Fatalf("UnmarshalVT() error = %v", unmarshalErr)
 			}
 
 			if !msg.EqualVT(got) {
@@ -200,8 +200,8 @@ func TestRelayInfo_WithMultipleLeases(t *testing.T) {
 	}
 
 	got := &RelayInfo{}
-	if err := got.UnmarshalVT(data); err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
+	if unmarshalErr := got.UnmarshalVT(data); unmarshalErr != nil {
+		t.Fatalf("UnmarshalVT() error = %v", unmarshalErr)
 	}
 
 	if len(got.Leases) != len(leases) {
@@ -346,8 +346,8 @@ func TestResponseCode_AllValues(t *testing.T) {
 			}
 
 			got := &LeaseUpdateResponse{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
+			if unmarshalErr := got.UnmarshalVT(data); unmarshalErr != nil {
+				t.Fatalf("UnmarshalVT() error = %v", unmarshalErr)
 			}
 
 			if got.Code != code {
@@ -899,8 +899,8 @@ func TestEmptyResponseMessages(t *testing.T) {
 			}
 
 			got := &LeaseUpdateResponse{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
+			if unmarshalErr := got.UnmarshalVT(data); unmarshalErr != nil {
+				t.Fatalf("UnmarshalVT() error = %v", unmarshalErr)
 			}
 
 			if got.Code != code {
@@ -1174,7 +1174,7 @@ func TestRelayInfo_Reset(t *testing.T) {
 }
 
 // TestRelayInfoRequest_Reset tests Reset method.
-func TestRelayInfoRequest_Reset(t *testing.T) {
+func TestRelayInfoRequest_Reset(_ *testing.T) {
 	msg := &RelayInfoRequest{}
 	msg.Reset() // Should not panic
 }
