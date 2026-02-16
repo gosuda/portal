@@ -24,6 +24,7 @@ repos:
         name: golangci-lint-config-verify
         description: Verifies the golangci-lint configuration file
         entry: golangci-lint config verify
+        files: '\.golangci\.(?:yml|yaml|toml|json)'
         language: system
         pass_filenames: false
 
