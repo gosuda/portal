@@ -7,12 +7,13 @@
 package rdverb
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
 )
 
 const (

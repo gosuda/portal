@@ -2,11 +2,13 @@ package portal
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
@@ -67,6 +69,7 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 }
 
 func (g *RelayServer) handleConn(id int64, connection *Connection) {
+	defer g.waitgroup.Done()
 	log.Debug().Int64("conn_id", id).Msg("[RelayServer] Handling new connection")
 
 	defer func() {
@@ -173,7 +176,7 @@ func (g *RelayServer) handleStream(stream Stream, streamID int64, connID int64, 
 	for {
 		packet, err := readPacket(stream)
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				log.Debug().
 					Err(err).
 					Int64("conn_id", connID).
@@ -239,6 +242,7 @@ func (g *RelayServer) HandleSession(sess Session) {
 	g.connectionsLock.Unlock()
 
 	log.Debug().Int64("conn_id", connID).Msg("[RelayServer] Connection registered, starting handler")
+	g.waitgroup.Add(1)
 	go g.handleConn(connID, connection)
 }
 
@@ -250,17 +254,17 @@ func (g *RelayServer) relayInfo() *rdverb.RelayInfo {
 	}
 }
 
-// GetLeaseManager returns the lease manager instance
+// GetLeaseManager returns the lease manager instance.
 func (g *RelayServer) GetLeaseManager() *LeaseManager {
 	return g.leaseManager
 }
 
-// GetLeaseByName returns a lease entry by its name
+// GetLeaseByName returns a lease entry by its name.
 func (g *RelayServer) GetLeaseByName(name string) (*LeaseEntry, bool) {
 	return g.leaseManager.GetLeaseByName(name)
 }
 
-// IsConnectionActive checks if a connection with the given ID is still active
+// IsConnectionActive checks if a connection with the given ID is still active.
 func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
 	g.connectionsLock.RLock()
 	defer g.connectionsLock.RUnlock()
@@ -269,7 +273,7 @@ func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
 	return exists
 }
 
-// GetAllLeaseEntries returns all lease entries from the lease manager
+// GetAllLeaseEntries returns all lease entries from the lease manager.
 func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
 	g.leaseManager.leasesLock.RLock()
 	defer g.leaseManager.leasesLock.RUnlock()
@@ -286,7 +290,7 @@ func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
 	return entries
 }
 
-// GetLeaseALPNs returns the ALPN identifiers for a given lease ID
+// GetLeaseALPNs returns the ALPN identifiers for a given lease ID.
 func (g *RelayServer) GetLeaseALPNs(leaseID string) []string {
 	g.leaseManager.leasesLock.RLock()
 	defer g.leaseManager.leasesLock.RUnlock()
@@ -311,10 +315,20 @@ func (g *RelayServer) Start() {
 func (g *RelayServer) Stop() {
 	close(g.stopch)
 	g.leaseManager.Stop()
+
+	// Close all active sessions to unblock handleConn goroutines
+	// waiting in AcceptStream. This must happen before Wait() to
+	// avoid deadlock.
+	g.connectionsLock.RLock()
+	for _, conn := range g.connections {
+		conn.sess.Close()
+	}
+	g.connectionsLock.RUnlock()
+
 	g.waitgroup.Wait()
 }
 
-// Traffic control setters
+// Traffic control setters.
 func (g *RelayServer) SetMaxRelayedPerLease(n int) {
 	g.limitsLock.Lock()
 	g.maxRelayedPerLease = n
@@ -322,7 +336,7 @@ func (g *RelayServer) SetMaxRelayedPerLease(n int) {
 }
 
 // SetEstablishRelayCallback sets the callback for relay connection establishment
-// This allows external code (e.g., relay-server) to handle BPS limiting
+// This allows external code (e.g., relay-server) to handle BPS limiting.
 func (g *RelayServer) SetEstablishRelayCallback(
 	callback func(clientStream, leaseStream Stream, leaseID string),
 ) {

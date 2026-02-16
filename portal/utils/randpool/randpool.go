@@ -31,7 +31,7 @@ type chacha20rng struct {
 }
 
 var _chacha20rngPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		var initdata [12 + 32]byte // 12 byte nonce, 32 byte key
 		_, err := rand.Read(initdata[:])
 		if err != nil {

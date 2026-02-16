@@ -1,7 +1,9 @@
 package portal
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -66,7 +68,7 @@ func TestPipeSessionBidirectionalStreams(t *testing.T) {
 			t.Fatalf("serverStream.Read: %v", err)
 		}
 
-		if string(buf) != string(msg) {
+		if !bytes.Equal(buf, msg) {
 			t.Errorf("got %q, want %q", buf, msg)
 		}
 
@@ -112,7 +114,7 @@ func TestPipeSessionBidirectionalStreams(t *testing.T) {
 			t.Fatalf("clientStream.Read: %v", err)
 		}
 
-		if string(buf) != string(msg) {
+		if !bytes.Equal(buf, msg) {
 			t.Errorf("got %q, want %q", buf, msg)
 		}
 
@@ -161,7 +163,7 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 	if _, err := io.ReadFull(serverStream, buf1); err != nil {
 		t.Fatalf("Read ping: %v", err)
 	}
-	if string(buf1) != string(msg1) {
+	if !bytes.Equal(buf1, msg1) {
 		t.Errorf("got %q, want %q", buf1, msg1)
 	}
 
@@ -174,7 +176,7 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 	if _, err := io.ReadFull(clientStream, buf2); err != nil {
 		t.Fatalf("Read pong: %v", err)
 	}
-	if string(buf2) != string(msg2) {
+	if !bytes.Equal(buf2, msg2) {
 		t.Errorf("got %q, want %q", buf2, msg2)
 	}
 }
@@ -220,7 +222,7 @@ func TestPipeSessionAcceptContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("AcceptStream should fail on context timeout")
 	}
-	if err != context.DeadlineExceeded {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("expected context.DeadlineExceeded, got %v", err)
 	}
 }
@@ -238,7 +240,7 @@ func TestPipeSessionOpenContextCancel(t *testing.T) {
 	if err == nil {
 		t.Fatal("OpenStream should fail on canceled context")
 	}
-	if err != context.Canceled {
+	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
 	}
 }
@@ -255,8 +257,7 @@ func TestPipeSessionMultipleStreams(t *testing.T) {
 	wg.Add(numStreams * 2)
 
 	// Open multiple streams concurrently
-	for i := 0; i < numStreams; i++ {
-		i := i
+	for i := range numStreams {
 		go func() {
 			defer wg.Done()
 			stream, err := client.OpenStream(ctx)
@@ -301,7 +302,12 @@ func TestPipeStreamDeadlines(t *testing.T) {
 	// Open stream
 	streamC := make(chan Stream, 1)
 	go func() {
-		s, _ := client.OpenStream(ctx)
+		s, err := client.OpenStream(ctx)
+		if err != nil {
+			t.Errorf("OpenStream: %v", err)
+			streamC <- nil
+			return
+		}
 		streamC <- s
 	}()
 
@@ -310,6 +316,9 @@ func TestPipeStreamDeadlines(t *testing.T) {
 		t.Fatalf("AcceptStream: %v", err)
 	}
 	clientStream := <-streamC
+	if clientStream == nil {
+		t.Fatal("clientStream is nil")
+	}
 
 	defer clientStream.Close()
 	defer serverStream.Close()

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -228,7 +229,7 @@ func TestIsSubdomain(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := IsSubdomain(tc.pattern, tc.host)
-			assert.Equal(t, got, tc.want, tc.name)
+			assert.Equal(t, tc.want, got, tc.name)
 		})
 	}
 }
@@ -319,7 +320,7 @@ func TestIsLocalhost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
 
 			result := IsLocalhost(req)

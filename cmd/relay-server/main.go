@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -148,7 +149,7 @@ func runServer() error {
 		tlsCert = &cert
 		certHash = hash
 		log.Info().
-			Str("hash", fmt.Sprintf("%x", certHash)).
+			Str("hash", hex.EncodeToString(certHash)).
 			Msg("[server] auto-generated TLS certificate (valid <14 days)")
 	} else if flagTLSCert != "" && flagTLSKey != "" {
 		cert, err := tls.LoadX509KeyPair(flagTLSCert, flagTLSKey)
@@ -159,11 +160,15 @@ func runServer() error {
 		log.Info().Msg("[server] loaded TLS certificate from files")
 	}
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, certHash, stop)
+	if (flagTLSCert != "") != (flagTLSKey != "") {
+		return errors.New("both --tls-cert and --tls-key must be provided together")
+	}
+
+	httpSrv := serveHTTP(ctx, fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, certHash, stop)
 
 	var wtCleanup func()
 	if tlsCert != nil {
-		wtCleanup = serveWebTransport(fmt.Sprintf(":%d", flagPort), serv, tlsCert, stop)
+		wtCleanup = serveWebTransport(ctx, fmt.Sprintf(":%d", flagPort), serv, admin, tlsCert, stop)
 	}
 
 	<-ctx.Done()

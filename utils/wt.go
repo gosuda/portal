@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 
 	"github.com/quic-go/webtransport-go"
 
@@ -15,9 +16,12 @@ func NewWebTransportDialer(tlsConfig *tls.Config) func(context.Context, string) 
 	return func(ctx context.Context, url string) (portal.Session, error) {
 		var d webtransport.Dialer
 		d.TLSClientConfig = tlsConfig
-		_, sess, err := d.Dial(ctx, url, nil)
+		resp, sess, err := d.Dial(ctx, url, nil)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("webtransport dial %s: %w", url, err)
 		}
 		return portal.NewWTSession(sess), nil
 	}

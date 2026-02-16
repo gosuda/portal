@@ -8,7 +8,7 @@ import (
 )
 
 // IsHTMLContentType checks if the Content-Type header indicates HTML content
-// It properly handles media type parsing with parameters like charset
+// It properly handles media type parsing with parameters like charset.
 func IsHTMLContentType(contentType string) bool {
 	if contentType == "" {
 		return false
@@ -20,7 +20,7 @@ func IsHTMLContentType(contentType string) bool {
 	return mediaType == "text/html"
 }
 
-// GetContentType returns the MIME type for a file extension
+// GetContentType returns the MIME type for a file extension.
 func GetContentType(ext string) string {
 	switch ext {
 	case ".html":
@@ -44,7 +44,7 @@ func GetContentType(ext string) string {
 	}
 }
 
-// SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers
+// SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers.
 func SetCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")

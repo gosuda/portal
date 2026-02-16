@@ -71,7 +71,7 @@ export function BPSSettingsModal({
   };
 
   const handleSave = () => {
-    const newBps = parseInt(bpsInput, 10) || 0;
+    const newBps = Math.max(0, parseInt(bpsInput, 10) || 0);
     onBPSChange(leaseId, newBps);
     onOpenChange(false);
   };

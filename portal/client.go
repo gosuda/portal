@@ -12,17 +12,18 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
 var (
-	// ErrInvalidResponse is returned when the relay server sends an unexpected or malformed response
+	// ErrInvalidResponse is returned when the relay server sends an unexpected or malformed response.
 	ErrInvalidResponse = errors.New("invalid response")
-	// ErrConnectionRejected is returned when the relay server rejects a connection request
+	// ErrConnectionRejected is returned when the relay server rejects a connection request.
 	ErrConnectionRejected = errors.New("connection rejected")
-	// ErrRemoteIDMismatch is returned when the remote peer's ID doesn't match the expected lease ID
+	// ErrRemoteIDMismatch is returned when the remote peer's ID doesn't match the expected lease ID.
 	ErrRemoteIDMismatch = errors.New("remote ID mismatch")
 )
 
@@ -34,17 +35,17 @@ type IncomingConn struct {
 	leaseID string
 }
 
-// LeaseID returns the lease ID associated with this incoming connection
+// LeaseID returns the lease ID associated with this incoming connection.
 func (i *IncomingConn) LeaseID() string {
 	return i.leaseID
 }
 
-// LocalID returns the local identity ID from the secure connection
+// LocalID returns the local identity ID from the secure connection.
 func (i *IncomingConn) LocalID() string {
 	return i.SecureConnection.LocalID()
 }
 
-// RemoteID returns the remote peer's identity ID from the secure connection
+// RemoteID returns the remote peer's identity ID from the secure connection.
 func (i *IncomingConn) RemoteID() string {
 	return i.SecureConnection.RemoteID()
 }
@@ -87,7 +88,7 @@ type leaseWithCred struct {
 //
 // The client starts two goroutines:
 // - leaseUpdateWorker: Periodically renews leases before they expire
-// - leaseListenWorker: Accepts and handles incoming connection requests
+// - leaseListenWorker: Accepts and handles incoming connection requests.
 func NewRelayClient(sess Session) *RelayClient {
 	log.Debug().Msg("[RelayClient] Creating new relay client")
 
@@ -247,7 +248,7 @@ func (g *RelayClient) leaseListenWorker() {
 // 2. Looks up the requested lease ID
 // 3. Sends an accept/reject response
 // 4. If accepted, performs server-side cryptographic handshake
-// 5. Sends the established secure connection to the incoming channel
+// 5. Sends the established secure connection to the incoming channel.
 func (g *RelayClient) handleConnectionRequestStream(stream Stream) {
 	log.Debug().Msg("[RelayClient] Handling connection request stream")
 
@@ -329,7 +330,7 @@ func (g *RelayClient) handleConnectionRequestStream(stream Stream) {
 
 	log.Debug().Str("lease_id", req.LeaseId).Msg("[RelayClient] Starting server handshake")
 	handshaker := cryptoops.NewHandshaker(lease.Cred)
-	secConn, err := handshaker.ServerHandshake(stream, lease.Lease.Alpn)
+	secConn, err := handshaker.ServerHandshake(context.Background(), stream, lease.Lease.Alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", req.LeaseId).Msg("[RelayClient] Server handshake failed")
 		err = stream.Close()
@@ -624,7 +625,7 @@ func (g *RelayClient) RequestConnection(leaseID string, alpn string, clientCred 
 
 	log.Debug().Str("lease_id", leaseID).Msg("[RelayClient] Starting client handshake")
 	handshaker := cryptoops.NewHandshaker(clientCred)
-	secConn, err := handshaker.ClientHandshake(stream, alpn)
+	secConn, err := handshaker.ClientHandshake(context.Background(), stream, alpn)
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", leaseID).Msg("[RelayClient] Client handshake failed")
 		stream.Close()

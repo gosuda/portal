@@ -37,7 +37,7 @@ func TestSimpleRateAndBurst(t *testing.T) {
 	}
 }
 
-// TestNewBucketInvalidRate tests that NewBucket returns nil for non-positive rates
+// TestNewBucketInvalidRate tests that NewBucket returns nil for non-positive rates.
 func TestNewBucketInvalidRate(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -59,7 +59,7 @@ func TestNewBucketInvalidRate(t *testing.T) {
 	}
 }
 
-// TestNewBucketDefaultBurst tests that burst defaults to rate when burst <= 0
+// TestNewBucketDefaultBurst tests that burst defaults to rate when burst <= 0.
 func TestNewBucketDefaultBurst(t *testing.T) {
 	rate := int64(1000)
 	b := NewBucket(rate, 0) // zero burst
@@ -86,7 +86,7 @@ func TestNewBucketDefaultBurst(t *testing.T) {
 	}
 }
 
-// TestNewBucketHighRate tests edge case where perByte could be 0 for very high rates
+// TestNewBucketHighRate tests edge case where perByte could be 0 for very high rates.
 func TestNewBucketHighRate(t *testing.T) {
 	// Use a very high rate that could cause perByte to be 0
 	rate := int64(1e18) // Extremely high rate
@@ -101,14 +101,14 @@ func TestNewBucketHighRate(t *testing.T) {
 	}
 }
 
-// TestTakeNilBucket tests that Take handles nil bucket gracefully
+// TestTakeNilBucket tests that Take handles nil bucket gracefully.
 func TestTakeNilBucket(t *testing.T) {
 	// Should not panic
 	var b *Bucket = nil
 	b.Take(100) // Should just return without panicking
 }
 
-// TestTakeNonPositiveBytes tests that Take handles non-positive byte counts
+// TestTakeNonPositiveBytes tests that Take handles non-positive byte counts.
 func TestTakeNonPositiveBytes(t *testing.T) {
 	rate := int64(1000)
 	b := NewBucket(rate, rate)
@@ -122,7 +122,7 @@ func TestTakeNonPositiveBytes(t *testing.T) {
 	b.Take(-100)
 }
 
-// TestTakeSlackRefill tests the slack refill logic over time
+// TestTakeSlackRefill tests the slack refill logic over time.
 func TestTakeSlackRefill(t *testing.T) {
 	rate := int64(1000) // 1000 bytes/sec
 	burst := int64(500) // 0.5 sec burst
@@ -152,7 +152,7 @@ func TestTakeSlackRefill(t *testing.T) {
 	}
 }
 
-// TestTakeConcurrent tests concurrent Take calls
+// TestTakeConcurrent tests concurrent Take calls.
 func TestTakeConcurrent(t *testing.T) {
 	rate := int64(100 * 1024) // 100 KiB/s
 	burst := rate / 10
@@ -185,7 +185,7 @@ func TestTakeConcurrent(t *testing.T) {
 	}
 }
 
-// TestTakeSequentialBurst tests sequential Takes within burst capacity
+// TestTakeSequentialBurst tests sequential Takes within burst capacity.
 func TestTakeSequentialBurst(t *testing.T) {
 	rate := int64(10 * 1024) // 10 KiB/s
 	burst := rate            // 1 second burst
@@ -206,7 +206,7 @@ func TestTakeSequentialBurst(t *testing.T) {
 	}
 }
 
-// TestCopyNilBucket tests that Copy with nil bucket just calls io.Copy
+// TestCopyNilBucket tests that Copy with nil bucket just calls io.Copy.
 func TestCopyNilBucket(t *testing.T) {
 	src := strings.NewReader("hello, world")
 	var dst bytes.Buffer
@@ -223,7 +223,7 @@ func TestCopyNilBucket(t *testing.T) {
 	}
 }
 
-// TestCopyWithRateLimit tests that Copy properly rate limits
+// TestCopyWithRateLimit tests that Copy properly rate limits.
 func TestCopyWithRateLimit(t *testing.T) {
 	rate := int64(512 * 1024) // 512 KiB/s
 	burst := rate
@@ -252,7 +252,7 @@ func TestCopyWithRateLimit(t *testing.T) {
 	}
 }
 
-// TestCopyErrorHandling tests Copy error handling paths
+// TestCopyErrorHandling tests Copy error handling paths.
 func TestCopyErrorHandling(t *testing.T) {
 	// Test reader error
 	errReader := &errReader{err: errors.New("read error")}
@@ -263,12 +263,12 @@ func TestCopyErrorHandling(t *testing.T) {
 	if err == nil {
 		t.Error("expected error from reader, got nil")
 	}
-	if err != errReader.err {
+	if !errors.Is(err, errReader.err) {
 		t.Errorf("got error %v, want %v", err, errReader.err)
 	}
 }
 
-// TestCopyShortWrite tests short write detection
+// TestCopyShortWrite tests short write detection.
 func TestCopyShortWrite(t *testing.T) {
 	data := []byte("hello world")
 	shortWriter := &shortWriter{maxWrite: 3} // Only writes 3 bytes at a time
@@ -276,7 +276,7 @@ func TestCopyShortWrite(t *testing.T) {
 	b := NewBucket(1000, 1000)
 
 	n, err := Copy(shortWriter, src, b)
-	if err != io.ErrShortWrite {
+	if !errors.Is(err, io.ErrShortWrite) {
 		t.Errorf("got error %v, want %v", err, io.ErrShortWrite)
 	}
 	// Should have written some bytes but not all
@@ -285,7 +285,7 @@ func TestCopyShortWrite(t *testing.T) {
 	}
 }
 
-// TestCopyConcurrent tests concurrent Copy operations
+// TestCopyConcurrent tests concurrent Copy operations.
 func TestCopyConcurrent(t *testing.T) {
 	rate := int64(100 * 1024) // 100 KiB/s
 	burst := rate / 10
@@ -318,7 +318,7 @@ func TestCopyConcurrent(t *testing.T) {
 	}
 }
 
-// TestCopyWriteError tests write error handling in Copy
+// TestCopyWriteError tests write error handling in Copy.
 func TestCopyWriteError(t *testing.T) {
 	data := []byte("test data")
 	src := bytes.NewReader(data)
@@ -329,7 +329,7 @@ func TestCopyWriteError(t *testing.T) {
 	if err == nil {
 		t.Error("expected write error, got nil")
 	}
-	if err != errWriter.err {
+	if !errors.Is(err, errWriter.err) {
 		t.Errorf("got error %v, want %v", err, errWriter.err)
 	}
 	if n == 0 {
@@ -337,7 +337,7 @@ func TestCopyWriteError(t *testing.T) {
 	}
 }
 
-// TestTakeLargeBytes tests Take with very large byte counts
+// TestTakeLargeBytes tests Take with very large byte counts.
 func TestTakeLargeBytes(t *testing.T) {
 	rate := int64(1024) // 1 KiB/s
 	burst := rate       // 1 second burst
@@ -357,7 +357,7 @@ func TestTakeLargeBytes(t *testing.T) {
 	}
 }
 
-// TestBufferPool tests that the buffer pool works correctly
+// TestBufferPool tests that the buffer pool works correctly.
 func TestBufferPool(t *testing.T) {
 	data := make([]byte, 64*1024) // Exactly buffer size
 	src := bytes.NewReader(data)

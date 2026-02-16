@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
@@ -21,7 +22,7 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, certHash []byte, cancel context.CancelFunc) *http.Server {
+func serveHTTP(ctx context.Context, addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, certHash []byte, shutdown context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -134,7 +135,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		log.Info().Msgf("[server] http: %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[server] http error")
-			cancel()
+			shutdown()
 		}
 	}()
 
@@ -153,7 +154,7 @@ func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
 }
 
 // serveWebTransport starts the HTTP/3 WebTransport server.
-func serveWebTransport(addr string, serv *portal.RelayServer, tlsCert *tls.Certificate, cancel context.CancelFunc) func() {
+func serveWebTransport(ctx context.Context, addr string, serv *portal.RelayServer, admin *Admin, tlsCert *tls.Certificate, shutdown context.CancelFunc) func() {
 	mux := http.NewServeMux()
 
 	wtServer := &webtransport.Server{
@@ -161,12 +162,26 @@ func serveWebTransport(addr string, serv *portal.RelayServer, tlsCert *tls.Certi
 			Addr: addr,
 			TLSConfig: &tls.Config{
 				Certificates: []tls.Certificate{*tlsCert},
+				MinVersion:   tls.VersionTLS13,
 			},
 			Handler: mux,
 		},
 	}
 
 	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		// Check IP ban
+		clientIP := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(clientIP); err == nil {
+			clientIP = host
+		}
+		if ipManager := admin.GetIPManager(); ipManager != nil {
+			if ipManager.IsIPBanned(clientIP) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			ipManager.StorePendingIP(clientIP)
+		}
+
 		sess, err := wtServer.Upgrade(w, r)
 		if err != nil {
 			log.Error().Err(err).Msg("[server] webtransport upgrade failed")
@@ -179,7 +194,7 @@ func serveWebTransport(addr string, serv *portal.RelayServer, tlsCert *tls.Certi
 		log.Info().Msgf("[server] http/3 (webtransport): %s", addr)
 		if err := wtServer.ListenAndServe(); err != nil {
 			log.Error().Err(err).Msg("[server] http/3 error")
-			cancel()
+			shutdown()
 		}
 	}()
 

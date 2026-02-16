@@ -1,73 +1,46 @@
-# Gosuda Template for Go
+# Portal
 
-Official AI agent coding guidelines and tooling templates for Go projects under [github.com/gosuda](https://github.com/gosuda).
+Self-hosted relay that enables peer-to-peer, end-to-end encrypted connections through a central hub. Participants authenticate with Ed25519 credentials, perform a Noise XX handshake, and communicate over ChaCha20-Poly1305 encrypted channels. The relay cannot decrypt application traffic — it only forwards ciphertext.
 
-## What's Included
+All relay connections use **WebTransport** (HTTP/3 over QUIC) for NAT/firewall traversal.
 
-| File | Purpose |
-|------|---------|
-| [`AGENTS.md`](AGENTS.md) | AI agent coding guidelines (Go 1.25+) |
-| [`CLAUDE.md`](CLAUDE.md) | Symlink → `AGENTS.md` (Claude Code compatibility) |
-| [`.golangci.yml`](.golangci.yml) | golangci-lint v2 config — 41 linters across 4 tiers |
-| [`Makefile`](Makefile) | Build, lint, test, vuln scan targets |
-| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | GitHub Actions: test → lint → security → build |
+## Binaries
 
-## Usage
+| Binary | Description |
+|--------|-------------|
+| `cmd/relay-server` | Relay server with React admin UI, WebTransport endpoint, and subdomain routing |
+| `cmd/portal-tunnel` | CLI tunnel client — registers a lease and proxies connections to a local TCP service |
+| `cmd/vanity-id` | Brute-force tool for generating credential IDs matching a desired prefix |
 
-### New Project Setup
+## SDK
 
-1. **Copy config files** into your Go project root:
+The `sdk/` package provides the public API for service publishers:
 
-   ```bash
-   # From a clone of this repo
-   cp .golangci.yml Makefile /path/to/your/project/
-   cp -r .github /path/to/your/project/
-   ```
+- `Client` manages relay connections with automatic reconnect and health checking
+- `Listen()` registers a lease and returns incoming connections
+- `Dial()` connects to a lease on a relay and performs the E2EE handshake
 
-2. **Copy agent guidelines** (for AI-assisted development):
+## Quick Start
 
-   ```bash
-   cp AGENTS.md /path/to/your/project/
-   ln -s AGENTS.md /path/to/your/project/CLAUDE.md
-   ```
+```bash
+# Run the relay server
+go run ./cmd/relay-server/ --port 4017 --tls-auto
 
-3. **Verify setup:**
-
-   ```bash
-   cd /path/to/your/project
-   make all
-   ```
-
-### As a GitHub Template
-
-This repo is designed as a **template repository**. Click **"Use this template"** on GitHub to create a new project with all configs pre-applied.
-
-## Tooling Requirements
-
-| Tool | Install |
-|------|---------|
-| Go 1.25+ | [go.dev/dl](https://go.dev/dl/) |
-| golangci-lint v2 | `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` |
-| govulncheck | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
-| goimports | `go install golang.org/x/tools/cmd/goimports@latest` |
-
-## CI Pipeline
-
-```
-test (race + coverage) ─┐
-lint (golangci-lint v2) ─┼─→ build
-security (govulncheck) ─┘
+# In another terminal, expose a local service
+go run ./cmd/portal-tunnel/ --relay https://localhost:4017/relay --local localhost:8080
 ```
 
-All three jobs run in parallel; build depends on all passing.
+## Development
 
-## Linter Tiers
+```bash
+make all        # fmt, vet, lint, test, vuln, build, frontend
+make test       # go test -v -race -coverprofile=coverage.out ./...
+make lint       # golangci-lint run
+make proto      # buf generate + buf lint
+```
 
-- **Tier 1 — Correctness** (14): govet, errcheck, staticcheck, unused, gosec, errorlint, nilerr, copyloopvar, bodyclose, sqlclosecheck, rowserrcheck, durationcheck, makezero, noctx
-- **Tier 2 — Quality** (16): gocritic (all tags), revive, unconvert, unparam, wastedassign, misspell, whitespace, godot, goconst, dupword, usestdlibvars, testifylint, testableexamples, tparallel, usetesting
-- **Tier 3 — Concurrency** (3): gochecknoglobals, gochecknoinits, containedctx
-- **Tier 4 — Performance** (9): prealloc, intrange, modernize, fatcontext, perfsprint, reassign, spancheck, mirror, recvcheck
+See [AGENTS.md](AGENTS.md) for architecture details and coding guidelines.
 
 ## License
 
-Internal tooling for [gosuda](https://github.com/gosuda) projects.
+See [LICENSE](LICENSE).

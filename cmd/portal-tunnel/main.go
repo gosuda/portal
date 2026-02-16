@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gopkg.eu.org/broccoli"
+
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
@@ -52,7 +54,7 @@ func main() {
 	}
 
 	if _, _, err = app.Bind(&cfg, os.Args[1:]); err != nil {
-		if err == broccoli.ErrHelp {
+		if errors.Is(err, broccoli.ErrHelp) {
 			fmt.Println(app.Help())
 			os.Exit(0)
 		}
@@ -95,7 +97,7 @@ func main() {
 
 func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string) error {
 	if len(relayURLs) == 0 {
-		return fmt.Errorf("no relay URLs provided")
+		return errors.New("no relay URLs provided")
 	}
 	protocols := strings.Split(cfg.Protocols, ",")
 	if len(protocols) == 0 {
@@ -105,7 +107,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 	cred := sdk.NewCredential()
 	leaseID := cred.ID()
 	if cfg.Name == "" {
-		cfg.Name = fmt.Sprintf("tunnel-%s", leaseID[:8])
+		cfg.Name = "tunnel-" + leaseID[:8]
 		log.Info().Str("service", cfg.Name).Msg("No service name provided; generated automatically")
 	}
 	log.Info().Str("service", cfg.Name).Msgf("Local service is reachable at %s", cfg.Host)

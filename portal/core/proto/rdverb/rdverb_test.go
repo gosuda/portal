@@ -7,7 +7,7 @@ import (
 	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
 )
 
-// TestPacket_MarshalVT_UnmarshalVT tests round-trip serialization for Packet
+// TestPacket_MarshalVT_UnmarshalVT tests round-trip serialization for Packet.
 func TestPacket_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -65,7 +65,7 @@ func TestPacket_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestPacket_AllPacketTypes tests serialization of all packet types
+// TestPacket_AllPacketTypes tests serialization of all packet types.
 func TestPacket_AllPacketTypes(t *testing.T) {
 	packetTypes := []PacketType{
 		PacketType_PACKET_TYPE_RELAY_INFO_REQUEST,
@@ -102,7 +102,7 @@ func TestPacket_AllPacketTypes(t *testing.T) {
 	}
 }
 
-// TestRelayInfo_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestRelayInfo_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestRelayInfo_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -179,7 +179,7 @@ func TestRelayInfo_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestRelayInfo_WithMultipleLeases tests array handling for leases
+// TestRelayInfo_WithMultipleLeases tests array handling for leases.
 func TestRelayInfo_WithMultipleLeases(t *testing.T) {
 	leases := []*Lease{
 		{Identity: &rdsec.Identity{Id: "l1"}, Expires: 100, Name: "lease1"},
@@ -215,7 +215,7 @@ func TestRelayInfo_WithMultipleLeases(t *testing.T) {
 	}
 }
 
-// TestLease_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLease_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLease_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -273,7 +273,7 @@ func TestLease_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestLeaseUpdateRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLeaseUpdateRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	lease := &Lease{
 		Identity: &rdsec.Identity{Id: "update-lease"},
@@ -324,7 +324,7 @@ func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestResponseCode_AllValues tests all response code values
+// TestResponseCode_AllValues tests all response code values.
 func TestResponseCode_AllValues(t *testing.T) {
 	codes := []ResponseCode{
 		ResponseCode_RESPONSE_CODE_UNKNOWN,
@@ -357,7 +357,7 @@ func TestResponseCode_AllValues(t *testing.T) {
 	}
 }
 
-// TestLeaseDeleteRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLeaseDeleteRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -402,7 +402,7 @@ func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestConnectionRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestConnectionRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestConnectionRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -453,7 +453,7 @@ func TestConnectionRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestRelayInfoRequest_MarshalVT_UnmarshalVT tests empty message
+// TestRelayInfoRequest_MarshalVT_UnmarshalVT tests empty message.
 func TestRelayInfoRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	msg := &RelayInfoRequest{}
 
@@ -473,7 +473,7 @@ func TestRelayInfoRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestRelayInfoResponse_MarshalVT_UnmarshalVT tests with RelayInfo
+// TestRelayInfoResponse_MarshalVT_UnmarshalVT tests with RelayInfo.
 func TestRelayInfoResponse_MarshalVT_UnmarshalVT(t *testing.T) {
 	relayInfo := &RelayInfo{
 		Identity: &rdsec.Identity{Id: "response-relay"},
@@ -501,7 +501,7 @@ func TestRelayInfoResponse_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestCloneVT tests cloning creates independent copies
+// TestCloneVT tests cloning creates independent copies.
 func TestCloneVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		original := &Packet{
@@ -575,7 +575,7 @@ func TestCloneVT(t *testing.T) {
 	})
 }
 
-// TestEqualVT tests equality comparison
+// TestEqualVT tests equality comparison.
 func TestEqualVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		a := &Packet{Type: PacketType_PACKET_TYPE_CONNECTION_REQUEST, Payload: []byte{0x01}}
@@ -611,7 +611,7 @@ func TestEqualVT(t *testing.T) {
 	})
 }
 
-// TestSizeVT tests size calculation accuracy
+// TestSizeVT tests size calculation accuracy.
 func TestSizeVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		msg := &Packet{
@@ -671,7 +671,7 @@ func TestSizeVT(t *testing.T) {
 	})
 }
 
-// TestReset tests Reset clears all fields
+// TestReset tests Reset clears all fields.
 func TestReset(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		p := &Packet{Type: PacketType_PACKET_TYPE_CONNECTION_REQUEST, Payload: []byte{0x01}}
@@ -696,7 +696,7 @@ func TestReset(t *testing.T) {
 	})
 }
 
-// TestGetters tests getter methods
+// TestGetters tests getter methods.
 func TestGetters(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		p := &Packet{
@@ -759,7 +759,7 @@ func TestGetters(t *testing.T) {
 	})
 }
 
-// TestNilHandling tests nil message handling
+// TestNilHandling tests nil message handling.
 func TestNilHandling(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -855,7 +855,7 @@ func TestMarshalVT_Roundtrip(t *testing.T) {
 	}
 }
 
-// TestUnmarshalVTUnsafe tests unsafe unmarshaling
+// TestUnmarshalVTUnsafe tests unsafe unmarshaling.
 func TestUnmarshalVTUnsafe(t *testing.T) {
 	msg := &ConnectionRequest{
 		LeaseId:        "unsafe-test",
@@ -878,7 +878,7 @@ func TestUnmarshalVTUnsafe(t *testing.T) {
 	}
 }
 
-// TestEmptyResponseMessages tests response messages
+// TestEmptyResponseMessages tests response messages.
 func TestEmptyResponseMessages(t *testing.T) {
 	responses := []ResponseCode{
 		ResponseCode_RESPONSE_CODE_UNKNOWN,
@@ -910,7 +910,7 @@ func TestEmptyResponseMessages(t *testing.T) {
 	}
 }
 
-// TestComplexRelayInfo tests complex RelayInfo with multiple nested elements
+// TestComplexRelayInfo tests complex RelayInfo with multiple nested elements.
 func TestComplexRelayInfo(t *testing.T) {
 	// Create a complex RelayInfo with multiple addresses and leases
 	msg := &RelayInfo{
@@ -971,7 +971,7 @@ func TestComplexRelayInfo(t *testing.T) {
 	}
 }
 
-// BenchmarkPacket_MarshalVT benchmarks packet marshaling
+// BenchmarkPacket_MarshalVT benchmarks packet marshaling.
 func BenchmarkPacket_MarshalVT(b *testing.B) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
@@ -984,7 +984,7 @@ func BenchmarkPacket_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkPacket_UnmarshalVT benchmarks packet unmarshaling
+// BenchmarkPacket_UnmarshalVT benchmarks packet unmarshaling.
 func BenchmarkPacket_UnmarshalVT(b *testing.B) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
@@ -1000,7 +1000,7 @@ func BenchmarkPacket_UnmarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkRelayInfo_MarshalVT benchmarks complex relay info marshaling
+// BenchmarkRelayInfo_MarshalVT benchmarks complex relay info marshaling.
 func BenchmarkRelayInfo_MarshalVT(b *testing.B) {
 	msg := &RelayInfo{
 		Identity: &rdsec.Identity{
@@ -1030,7 +1030,7 @@ func BenchmarkRelayInfo_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkLease_MarshalVT benchmarks lease marshaling
+// BenchmarkLease_MarshalVT benchmarks lease marshaling.
 func BenchmarkLease_MarshalVT(b *testing.B) {
 	msg := &Lease{
 		Identity: &rdsec.Identity{
@@ -1049,7 +1049,7 @@ func BenchmarkLease_MarshalVT(b *testing.B) {
 	}
 }
 
-// TestPacketType_String tests enum String method
+// TestPacketType_String tests enum String method.
 func TestPacketType_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1075,7 +1075,7 @@ func TestPacketType_String(t *testing.T) {
 	}
 }
 
-// TestPacketType_Enum tests Enum method
+// TestPacketType_Enum tests Enum method.
 func TestPacketType_Enum(t *testing.T) {
 	if PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum() != nil && *PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum() != 6 {
 		t.Error("PacketType.Enum() returned wrong value")
@@ -1085,7 +1085,7 @@ func TestPacketType_Enum(t *testing.T) {
 	}
 }
 
-// TestResponseCode_String tests enum String method
+// TestResponseCode_String tests enum String method.
 func TestResponseCode_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1110,7 +1110,7 @@ func TestResponseCode_String(t *testing.T) {
 	}
 }
 
-// TestResponseCode_Enum tests Enum method
+// TestResponseCode_Enum tests Enum method.
 func TestResponseCode_Enum(t *testing.T) {
 	if ResponseCode_RESPONSE_CODE_ACCEPTED.Enum() != nil && *ResponseCode_RESPONSE_CODE_ACCEPTED.Enum() != 1 {
 		t.Error("ResponseCode.Enum() returned wrong value")
@@ -1120,7 +1120,7 @@ func TestResponseCode_Enum(t *testing.T) {
 	}
 }
 
-// TestRelayInfo_Getters tests all getter methods
+// TestRelayInfo_Getters tests all getter methods.
 func TestRelayInfo_Getters(t *testing.T) {
 	identity := &rdsec.Identity{Id: "relay-test", PublicKey: []byte{0xAA}}
 	msg := &RelayInfo{
@@ -1152,7 +1152,7 @@ func TestRelayInfo_Getters(t *testing.T) {
 	}
 }
 
-// TestRelayInfo_Reset tests Reset method
+// TestRelayInfo_Reset tests Reset method.
 func TestRelayInfo_Reset(t *testing.T) {
 	msg := &RelayInfo{
 		Identity: &rdsec.Identity{Id: "test"},
@@ -1173,13 +1173,13 @@ func TestRelayInfo_Reset(t *testing.T) {
 	}
 }
 
-// TestRelayInfoRequest_Reset tests Reset method
+// TestRelayInfoRequest_Reset tests Reset method.
 func TestRelayInfoRequest_Reset(t *testing.T) {
 	msg := &RelayInfoRequest{}
 	msg.Reset() // Should not panic
 }
 
-// TestRelayInfoResponse_Getters tests all getter methods
+// TestRelayInfoResponse_Getters tests all getter methods.
 func TestRelayInfoResponse_Getters(t *testing.T) {
 	relay := &RelayInfo{Identity: &rdsec.Identity{Id: "response-test"}}
 	msg := &RelayInfoResponse{
@@ -1197,7 +1197,7 @@ func TestRelayInfoResponse_Getters(t *testing.T) {
 	}
 }
 
-// TestRelayInfoResponse_Reset tests Reset method
+// TestRelayInfoResponse_Reset tests Reset method.
 func TestRelayInfoResponse_Reset(t *testing.T) {
 	msg := &RelayInfoResponse{
 		RelayInfo: &RelayInfo{Identity: &rdsec.Identity{Id: "test"}},
@@ -1210,7 +1210,7 @@ func TestRelayInfoResponse_Reset(t *testing.T) {
 	}
 }
 
-// TestLeaseUpdateRequest_Getters tests all getter methods
+// TestLeaseUpdateRequest_Getters tests all getter methods.
 func TestLeaseUpdateRequest_Getters(t *testing.T) {
 	lease := &Lease{Name: "update-lease"}
 	msg := &LeaseUpdateRequest{
@@ -1239,7 +1239,7 @@ func TestLeaseUpdateRequest_Getters(t *testing.T) {
 	}
 }
 
-// TestLeaseUpdateRequest_Reset tests Reset method
+// TestLeaseUpdateRequest_Reset tests Reset method.
 func TestLeaseUpdateRequest_Reset(t *testing.T) {
 	msg := &LeaseUpdateRequest{
 		Lease:     &Lease{Name: "test"},
@@ -1260,7 +1260,7 @@ func TestLeaseUpdateRequest_Reset(t *testing.T) {
 	}
 }
 
-// TestLeaseUpdateResponse_Reset tests Reset method
+// TestLeaseUpdateResponse_Reset tests Reset method.
 func TestLeaseUpdateResponse_Reset(t *testing.T) {
 	msg := &LeaseUpdateResponse{
 		Code: ResponseCode_RESPONSE_CODE_ACCEPTED,
@@ -1273,7 +1273,7 @@ func TestLeaseUpdateResponse_Reset(t *testing.T) {
 	}
 }
 
-// TestLeaseDeleteRequest_Reset tests Reset method
+// TestLeaseDeleteRequest_Reset tests Reset method.
 func TestLeaseDeleteRequest_Reset(t *testing.T) {
 	msg := &LeaseDeleteRequest{
 		Identity: &rdsec.Identity{Id: "delete-test"},
@@ -1286,7 +1286,7 @@ func TestLeaseDeleteRequest_Reset(t *testing.T) {
 	}
 }
 
-// TestLeaseDeleteResponse_Reset tests Reset method
+// TestLeaseDeleteResponse_Reset tests Reset method.
 func TestLeaseDeleteResponse_Reset(t *testing.T) {
 	msg := &LeaseDeleteResponse{
 		Code: ResponseCode_RESPONSE_CODE_ACCEPTED,

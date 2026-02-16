@@ -7,11 +7,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
-// generateTestCredential creates a new credential for testing
+// generateTestCredential creates a new credential for testing.
 func generateTestCredential(t *testing.T) *cryptoops.Credential {
 	cred, err := cryptoops.NewCredential()
 	require.NoError(t, err)

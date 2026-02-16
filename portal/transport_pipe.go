@@ -23,6 +23,7 @@ type PipeSession struct {
 	incoming chan Stream
 	streams  []*bufferedPipeStream // Track created streams
 	closed   bool
+	closeCh  chan struct{} // Closed when session closes
 }
 
 // bufferedPipeStream implements Stream using buffered channels.
@@ -45,8 +46,14 @@ var _ Stream = (*bufferedPipeStream)(nil)
 // NewPipeSessionPair creates a connected pair of PipeSessions.
 // Streams opened on client will be accepted on server, and vice versa.
 func NewPipeSessionPair() (client *PipeSession, server *PipeSession) {
-	client = &PipeSession{incoming: make(chan Stream, 8)}
-	server = &PipeSession{incoming: make(chan Stream, 8)}
+	client = &PipeSession{
+		incoming: make(chan Stream, 8),
+		closeCh:  make(chan struct{}),
+	}
+	server = &PipeSession{
+		incoming: make(chan Stream, 8),
+		closeCh:  make(chan struct{}),
+	}
 	client.peer = server
 	server.peer = client
 	return client, server
@@ -75,7 +82,7 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	}
 
 	// Create bidirectional buffered pipes
-	// Each direction has a 16KB buffer (about 16 messages of 1KB each)
+	// Each direction has a buffered channel with capacity for 16 messages
 	ch1 := make(chan []byte, 16)
 	ch2 := make(chan []byte, 16)
 	closeCh1 := make(chan struct{})
@@ -95,6 +102,12 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 
 	// Track the local stream so we can close it when session closes
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		local.Close()
+		remote.Close()
+		return nil, ErrPipeSessionClosed
+	}
 	s.streams = append(s.streams, local)
 	s.mu.Unlock()
 
@@ -102,6 +115,10 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	select {
 	case peer.incoming <- remote:
 		return local, nil
+	case <-peer.closeCh:
+		local.Close()
+		remote.Close()
+		return nil, ErrPipeSessionClosed
 	case <-ctx.Done():
 		local.Close()
 		remote.Close()
@@ -278,6 +295,8 @@ func (s *PipeSession) Close() error {
 	}
 	s.streams = nil
 
+	// Signal closure BEFORE closing incoming to prevent send-on-closed-channel
+	close(s.closeCh)
 	close(s.incoming)
 
 	// Drain and close any pending streams in the incoming channel

@@ -1,13 +1,14 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 )
 
-// URL-safe name validation regex
+// URL-safe name validation regex.
 var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
 
 // IsURLSafeName checks if a name contains only URL-safe characters.
@@ -33,7 +34,7 @@ func IsURLSafeName(name string) bool {
 func NormalizePortalURL(raw string) (string, error) {
 	server := strings.TrimSpace(raw)
 	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
+		return "", errors.New("bootstrap server is empty")
 	}
 
 	// Convert legacy WebSocket schemes to HTTP equivalents
@@ -83,7 +84,7 @@ func ParseURLs(raw string) []string {
 	return out
 }
 
-// IsHexString reports whether s contains only hexadecimal characters
+// IsHexString reports whether s contains only hexadecimal characters.
 func IsHexString(s string) bool {
 	for _, c := range s {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {

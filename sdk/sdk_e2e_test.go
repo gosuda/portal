@@ -3,6 +3,7 @@ package sdk
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,7 +39,7 @@ func pipeDialer(relayServer *portal.RelayServer) func(context.Context, string) (
 }
 
 // TestE2E_ClientToAppThroughRelay tests the full end-to-end flow:
-// SDK Client -> Relay Server -> Demo App
+// SDK Client -> Relay Server -> Demo App.
 func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	log.Info().Msg("=== Starting E2E Test ===")
 
@@ -133,7 +134,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	log.Info().Msg("[TEST] Step 11: Sending HTTP request through connection")
 
 	// Create HTTP request
-	req, err := http.NewRequest("GET", "http://test-app/", nil)
+	req, err := http.NewRequest(http.MethodGet, "http://test-app/", http.NoBody)
 	require.NoError(t, err, "Failed to create HTTP request")
 
 	// Write HTTP request to connection
@@ -173,7 +174,7 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	log.Info().Msg("=== E2E Test Completed Successfully ===")
 }
 
-// TestE2E_MultipleConnections tests multiple concurrent connections
+// TestE2E_MultipleConnections tests multiple concurrent connections.
 func TestE2E_MultipleConnections(t *testing.T) {
 	log.Info().Msg("=== Starting Multiple Connections Test ===")
 
@@ -233,9 +234,7 @@ func TestE2E_MultipleConnections(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range numConnections {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
 
 			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
@@ -264,14 +263,14 @@ func TestE2E_MultipleConnections(t *testing.T) {
 			}
 
 			log.Debug().Int("conn_num", i).Msg("[TEST] Connection successful")
-		}()
+		})
 	}
 
 	wg.Wait()
 	log.Info().Msg("=== Multiple Connections Test Completed ===")
 }
 
-// TestE2E_ConnectionTimeout tests timeout scenarios
+// TestE2E_ConnectionTimeout tests timeout scenarios.
 func TestE2E_ConnectionTimeout(t *testing.T) {
 	log.Info().Msg("=== Starting Connection Timeout Test ===")
 
@@ -287,7 +286,7 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 		_, err := NewClient(func(c *ClientConfig) {
 			c.BootstrapServers = []string{"pipe://nonexistent"}
 			c.Dialer = func(ctx context.Context, addr string) (portal.Session, error) {
-				return nil, fmt.Errorf("connection refused")
+				return nil, errors.New("connection refused")
 			}
 		})
 		done <- err

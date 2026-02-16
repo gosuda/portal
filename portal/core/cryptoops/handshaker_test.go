@@ -2,6 +2,8 @@ package cryptoops
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -11,7 +13,7 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdsec"
 )
 
-// pipeConn creates a bidirectional pipe for testing using TCP loopback
+// pipeConn creates a bidirectional pipe for testing using TCP loopback.
 func pipeConn() (net.Conn, net.Conn) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -37,7 +39,7 @@ func pipeConn() (net.Conn, net.Conn) {
 	return clientConn, serverConn
 }
 
-// TestNewHandshaker tests handshaker creation
+// TestNewHandshaker tests handshaker creation.
 func TestNewHandshaker(t *testing.T) {
 	cred, err := NewCredential()
 	if err != nil {
@@ -53,7 +55,7 @@ func TestNewHandshaker(t *testing.T) {
 	}
 }
 
-// TestHandshakeSuccess tests a successful handshake
+// TestHandshakeSuccess tests a successful handshake.
 func TestHandshakeSuccess(t *testing.T) {
 	clientCred, err := NewCredential()
 	if err != nil {
@@ -78,12 +80,12 @@ func TestHandshakeSuccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, clientErr = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, clientErr = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, serverErr = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -144,7 +146,7 @@ func TestHandshakeSuccess(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestHandshakeALPNMismatch tests that mismatched ALPN causes handshake failure
+// TestHandshakeALPNMismatch tests that mismatched ALPN causes handshake failure.
 func TestHandshakeALPNMismatch(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -160,12 +162,12 @@ func TestHandshakeALPNMismatch(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		_, _ = clientHandshaker.ClientHandshake(clientConn, "alpn-a")
+		_, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "alpn-a")
 	}()
 
 	go func() {
 		defer wg.Done()
-		_, serverErr = serverHandshaker.ServerHandshake(serverConn, []string{"alpn-b"})
+		_, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"alpn-b"})
 	}()
 
 	wg.Wait()
@@ -175,7 +177,7 @@ func TestHandshakeALPNMismatch(t *testing.T) {
 	}
 }
 
-// TestEncryptionRoundTrip tests encryption and decryption
+// TestEncryptionRoundTrip tests encryption and decryption.
 func TestEncryptionRoundTrip(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -191,12 +193,12 @@ func TestEncryptionRoundTrip(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -254,7 +256,7 @@ func TestEncryptionRoundTrip(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestFragmentation tests large message fragmentation
+// TestFragmentation tests large message fragmentation.
 func TestFragmentation(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -270,12 +272,12 @@ func TestFragmentation(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -309,7 +311,7 @@ func TestFragmentation(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestConcurrentWrites tests concurrent writes
+// TestConcurrentWrites tests concurrent writes.
 func TestConcurrentWrites(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -325,12 +327,12 @@ func TestConcurrentWrites(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -375,7 +377,7 @@ func TestConcurrentWrites(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestInvalidIdentity tests identity validation
+// TestInvalidIdentity tests identity validation.
 func TestInvalidIdentity(t *testing.T) {
 	cred, _ := NewCredential()
 
@@ -407,7 +409,7 @@ func TestInvalidIdentity(t *testing.T) {
 	}
 }
 
-// TestX25519KeyDerivation tests X25519 key derivation from Ed25519 credentials
+// TestX25519KeyDerivation tests X25519 key derivation from Ed25519 credentials.
 func TestX25519KeyDerivation(t *testing.T) {
 	cred1, _ := NewCredential()
 	cred2, _ := NewCredential()
@@ -442,7 +444,7 @@ func TestX25519KeyDerivation(t *testing.T) {
 	}
 }
 
-// TestLengthPrefixedReadWrite tests length-prefixed message encoding
+// TestLengthPrefixedReadWrite tests length-prefixed message encoding.
 func TestLengthPrefixedReadWrite(t *testing.T) {
 	testMessages := [][]byte{
 		{},
@@ -475,7 +477,7 @@ func TestLengthPrefixedReadWrite(t *testing.T) {
 	}
 }
 
-// TestReadLengthPrefixedTooLarge tests reading message exceeding size limit
+// TestReadLengthPrefixedTooLarge tests reading message exceeding size limit.
 func TestReadLengthPrefixedTooLarge(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -490,12 +492,12 @@ func TestReadLengthPrefixedTooLarge(t *testing.T) {
 	buf.Write(lengthBytes)
 
 	_, err := readLengthPrefixed(&buf)
-	if err != ErrHandshakeFailed {
+	if !errors.Is(err, ErrHandshakeFailed) {
 		t.Errorf("Expected ErrHandshakeFailed for oversized message, got %v", err)
 	}
 }
 
-// TestWipeMemory tests memory wiping functionality
+// TestWipeMemory tests memory wiping functionality.
 func TestWipeMemory(t *testing.T) {
 	data := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
 	originalCap := cap(data)
@@ -511,7 +513,7 @@ func TestWipeMemory(t *testing.T) {
 	}
 }
 
-// TestBufferManagement tests buffer acquisition and release
+// TestBufferManagement tests buffer acquisition and release.
 func TestBufferManagement(t *testing.T) {
 	// Acquire buffer
 	buf := acquireBuffer(1024)
@@ -539,7 +541,7 @@ func TestBufferManagement(t *testing.T) {
 	releaseBuffer(buf2)
 }
 
-// TestSecureConnectionPartialRead tests reading when buffer is smaller than message
+// TestSecureConnectionPartialRead tests reading when buffer is smaller than message.
 func TestSecureConnectionPartialRead(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -555,12 +557,12 @@ func TestSecureConnectionPartialRead(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -593,7 +595,7 @@ func TestSecureConnectionPartialRead(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestRealNetworkConnection tests with actual TCP connection
+// TestRealNetworkConnection tests with actual TCP connection.
 func TestRealNetworkConnection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping network test in short mode")
@@ -624,7 +626,7 @@ func TestRealNetworkConnection(t *testing.T) {
 		}
 
 		serverHandshaker := NewHandshaker(serverCred)
-		serverSecure, serverErr = serverHandshaker.ServerHandshake(conn, []string{"test-alpn"})
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), conn, []string{"test-alpn"})
 	}()
 
 	// Connect client
@@ -634,7 +636,7 @@ func TestRealNetworkConnection(t *testing.T) {
 	}
 
 	clientHandshaker := NewHandshaker(clientCred)
-	clientSecure, clientErr := clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+	clientSecure, clientErr := clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 
 	<-serverDone
 
@@ -667,7 +669,7 @@ func TestRealNetworkConnection(t *testing.T) {
 	serverSecure.Close()
 }
 
-// BenchmarkHandshake benchmarks the handshake process
+// BenchmarkHandshake benchmarks the handshake process.
 func BenchmarkHandshake(b *testing.B) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -684,19 +686,19 @@ func BenchmarkHandshake(b *testing.B) {
 
 		go func() {
 			defer wg.Done()
-			clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+			clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 		}()
 
 		go func() {
 			defer wg.Done()
-			serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+			serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 		}()
 
 		wg.Wait()
 	}
 }
 
-// BenchmarkEncryption benchmarks encryption throughput
+// BenchmarkEncryption benchmarks encryption throughput.
 func BenchmarkEncryption(b *testing.B) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -712,12 +714,12 @@ func BenchmarkEncryption(b *testing.B) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -742,7 +744,7 @@ func BenchmarkEncryption(b *testing.B) {
 	serverSecure.Close()
 }
 
-// TestConcurrentReadClose tests that closing the connection while reading is safe
+// TestConcurrentReadClose tests that closing the connection while reading is safe.
 func TestConcurrentReadClose(t *testing.T) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -758,12 +760,12 @@ func TestConcurrentReadClose(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()

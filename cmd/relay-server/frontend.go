@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
@@ -241,10 +242,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			}
 		}
 
-		since := now.Sub(leaseEntry.LastSeen)
-		if since < 0 {
-			since = 0
-		}
+		since := max(now.Sub(leaseEntry.LastSeen), 0)
 		lastSeenStr := func(d time.Duration) string {
 			if d >= time.Hour {
 				h := int(d / time.Hour)

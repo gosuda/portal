@@ -10,7 +10,7 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
-// ParsedMetadata holds struct-parsed metadata for better access
+// ParsedMetadata holds struct-parsed metadata for better access.
 type ParsedMetadata struct {
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
@@ -265,7 +265,7 @@ func (lm *LeaseManager) GetAllLeases() []*rdverb.Lease {
 	return validLeases
 }
 
-// Lease policy configuration helpers
+// Lease policy configuration helpers.
 func (lm *LeaseManager) BanLease(leaseID string) {
 	lm.leasesLock.Lock()
 	lm.bannedLeases[leaseID] = struct{}{}

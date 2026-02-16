@@ -253,7 +253,7 @@ go test -v -race -coverprofile=coverage.out ./...
 - **Module integrity:** `go mod verify` — validates checksums against go.sum
 - **Supply chain:** always commit `go.sum` · audit with `go mod graph` · pin toolchain
 - **SBOM:** `syft packages . -o cyclonedx-json > sbom.json` on release
-- **Crypto:** FIPS 140-3, post-quantum X25519MLKEM768, `crypto/rand.Text()` for secure tokens
+- **Crypto:** Noise Protocol (`Noise_XX_25519_ChaChaPoly_BLAKE2s` via flynn/noise), Ed25519 identities, X25519 DH, ChaCha20-Poly1305 encryption
 
 ---
 

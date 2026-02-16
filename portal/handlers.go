@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/valyala/bytebufferpool"
+
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
@@ -219,7 +220,7 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 	return nil
 }
 
-// forwardConnectionRequest opens a stream to the lease holder and forwards the request
+// forwardConnectionRequest opens a stream to the lease holder and forwards the request.
 func (g *RelayServer) forwardConnectionRequest(leaseConn *Connection, req *rdverb.ConnectionRequest) (Stream, rdverb.ResponseCode, error) {
 	leaseStream, err := leaseConn.sess.OpenStream(context.Background())
 	if err != nil {
@@ -317,7 +318,7 @@ func (g *RelayServer) establishRelayedConnection(clientStream, leaseStream Strea
 	}
 }
 
-// Helper function to read packet from stream
+// Helper function to read packet from stream.
 func readPacket(stream io.Reader) (*rdverb.Packet, error) {
 	var size [4]byte
 

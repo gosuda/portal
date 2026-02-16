@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestIdentity_MarshalVT_UnmarshalVT tests round-trip serialization for Identity
+// TestIdentity_MarshalVT_UnmarshalVT tests round-trip serialization for Identity.
 func TestIdentity_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -63,7 +63,7 @@ func TestIdentity_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestIdentity_CloneVT tests that CloneVT creates an independent copy
+// TestIdentity_CloneVT tests that CloneVT creates an independent copy.
 func TestIdentity_CloneVT(t *testing.T) {
 	original := &Identity{
 		Id:        "original-id",
@@ -90,7 +90,7 @@ func TestIdentity_CloneVT(t *testing.T) {
 	}
 }
 
-// TestIdentity_EqualVT tests equality comparison
+// TestIdentity_EqualVT tests equality comparison.
 func TestIdentity_EqualVT(t *testing.T) {
 	tests := []struct {
 		name string
@@ -139,7 +139,7 @@ func TestIdentity_EqualVT(t *testing.T) {
 	}
 }
 
-// TestIdentity_SizeVT tests size calculation
+// TestIdentity_SizeVT tests size calculation.
 func TestIdentity_SizeVT(t *testing.T) {
 	msg := &Identity{
 		Id:        "test-id",
@@ -157,7 +157,7 @@ func TestIdentity_SizeVT(t *testing.T) {
 	}
 }
 
-// TestClientInitPayload_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestClientInitPayload_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestClientInitPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -212,7 +212,7 @@ func TestClientInitPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestClientInitPayload_CloneVT tests deep cloning with nested Identity
+// TestClientInitPayload_CloneVT tests deep cloning with nested Identity.
 func TestClientInitPayload_CloneVT(t *testing.T) {
 	original := &ClientInitPayload{
 		Version:   ProtocolVersion_PROTOCOL_VERSION_1,
@@ -242,7 +242,7 @@ func TestClientInitPayload_CloneVT(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestSignedPayload_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestSignedPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -300,7 +300,7 @@ func TestSignedPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_CloneVT tests independent copy creation
+// TestSignedPayload_CloneVT tests independent copy creation.
 func TestSignedPayload_CloneVT(t *testing.T) {
 	original := &SignedPayload{
 		Data:      []byte{0x01, 0x02, 0x03},
@@ -322,7 +322,7 @@ func TestSignedPayload_CloneVT(t *testing.T) {
 	}
 }
 
-// TestServerInitPayload_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestServerInitPayload_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestServerInitPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -377,7 +377,7 @@ func TestServerInitPayload_MarshalVT_UnmarshalVT(t *testing.T) {
 	}
 }
 
-// TestServerInitPayload_CloneVT tests deep cloning with nested Identity
+// TestServerInitPayload_CloneVT tests deep cloning with nested Identity.
 func TestServerInitPayload_CloneVT(t *testing.T) {
 	original := &ServerInitPayload{
 		Version:   ProtocolVersion_PROTOCOL_VERSION_1,
@@ -403,7 +403,7 @@ func TestServerInitPayload_CloneVT(t *testing.T) {
 	}
 }
 
-// TestReset tests that Reset clears all fields
+// TestReset tests that Reset clears all fields.
 func TestReset(t *testing.T) {
 	// Test Identity reset
 	ident := &Identity{
@@ -444,7 +444,7 @@ func TestReset(t *testing.T) {
 	}
 }
 
-// TestMarshalToSizedBufferVT tests buffer marshaling
+// TestMarshalToSizedBufferVT tests buffer marshaling.
 func TestMarshalToSizedBufferVT(t *testing.T) {
 	msg := &Identity{
 		Id:        "buffer-test",
@@ -475,7 +475,7 @@ func TestMarshalToSizedBufferVT(t *testing.T) {
 	}
 }
 
-// TestConcurrentSerialization tests concurrent marshal/unmarshal
+// TestConcurrentSerialization tests concurrent marshal/unmarshal.
 func TestConcurrentSerialization(t *testing.T) {
 	msg := &ClientInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -511,7 +511,7 @@ func TestConcurrentSerialization(t *testing.T) {
 	}
 }
 
-// TestProtoMessage tests ProtoMessage stub exists
+// TestProtoMessage tests ProtoMessage stub exists.
 func TestProtoMessage(t *testing.T) {
 	// These tests just verify the stub methods exist and don't panic
 	var (
@@ -528,7 +528,7 @@ func TestProtoMessage(t *testing.T) {
 	serverInit.ProtoMessage()
 }
 
-// TestGetters tests getter methods
+// TestGetters tests getter methods.
 func TestGetters(t *testing.T) {
 	ident := &Identity{
 		Id:        "test-id",
@@ -552,7 +552,7 @@ func TestGetters(t *testing.T) {
 	}
 }
 
-// TestNilHandling tests nil message handling
+// TestNilHandling tests nil message handling.
 func TestNilHandling(t *testing.T) {
 	var nilIdent *Identity
 
@@ -648,7 +648,7 @@ func TestMarshalVT_Roundtrip(t *testing.T) {
 	}
 }
 
-// TestUnmarshalVTUnsafe tests unsafe unmarshaling
+// TestUnmarshalVTUnsafe tests unsafe unmarshaling.
 func TestUnmarshalVTUnsafe(t *testing.T) {
 	msg := &ClientInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -675,7 +675,7 @@ func TestUnmarshalVTUnsafe(t *testing.T) {
 	}
 }
 
-// BenchmarkIdentity_MarshalVT benchmarks marshaling
+// BenchmarkIdentity_MarshalVT benchmarks marshaling.
 func BenchmarkIdentity_MarshalVT(b *testing.B) {
 	msg := &Identity{
 		Id:        "benchmark-test-id-12345",
@@ -688,7 +688,7 @@ func BenchmarkIdentity_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkIdentity_UnmarshalVT benchmarks unmarshaling
+// BenchmarkIdentity_UnmarshalVT benchmarks unmarshaling.
 func BenchmarkIdentity_UnmarshalVT(b *testing.B) {
 	msg := &Identity{
 		Id:        "benchmark-test-id-12345",
@@ -704,7 +704,7 @@ func BenchmarkIdentity_UnmarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkClientInitPayload_MarshalVT benchmarks complex message marshaling
+// BenchmarkClientInitPayload_MarshalVT benchmarks complex message marshaling.
 func BenchmarkClientInitPayload_MarshalVT(b *testing.B) {
 	msg := &ClientInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -721,7 +721,7 @@ func BenchmarkClientInitPayload_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkClientInitPayload_UnmarshalVT benchmarks complex message unmarshaling
+// BenchmarkClientInitPayload_UnmarshalVT benchmarks complex message unmarshaling.
 func BenchmarkClientInitPayload_UnmarshalVT(b *testing.B) {
 	msg := &ClientInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -741,7 +741,7 @@ func BenchmarkClientInitPayload_UnmarshalVT(b *testing.B) {
 	}
 }
 
-// TestProtocolVersion_String tests enum String method
+// TestProtocolVersion_String tests enum String method.
 func TestProtocolVersion_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -766,14 +766,14 @@ func TestProtocolVersion_String(t *testing.T) {
 	}
 }
 
-// TestProtocolVersion_Enum tests Enum method
+// TestProtocolVersion_Enum tests Enum method.
 func TestProtocolVersion_Enum(t *testing.T) {
 	if ProtocolVersion_PROTOCOL_VERSION_1.Enum() != nil && *ProtocolVersion_PROTOCOL_VERSION_1.Enum() != 0 {
 		t.Error("ProtocolVersion.Enum() should return 0")
 	}
 }
 
-// TestClientInitPayload_Getters tests all getter methods
+// TestClientInitPayload_Getters tests all getter methods.
 func TestClientInitPayload_Getters(t *testing.T) {
 	msg := &ClientInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -819,7 +819,7 @@ func TestClientInitPayload_Getters(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_Getters tests all getter methods
+// TestSignedPayload_Getters tests all getter methods.
 func TestSignedPayload_Getters(t *testing.T) {
 	msg := &SignedPayload{
 		Data:      []byte{0x01, 0x02, 0x03},
@@ -843,7 +843,7 @@ func TestSignedPayload_Getters(t *testing.T) {
 	}
 }
 
-// TestServerInitPayload_Getters tests all getter methods
+// TestServerInitPayload_Getters tests all getter methods.
 func TestServerInitPayload_Getters(t *testing.T) {
 	msg := &ServerInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,
@@ -874,7 +874,7 @@ func TestServerInitPayload_Getters(t *testing.T) {
 	}
 }
 
-// TestSignedPayload_Reset tests Reset method
+// TestSignedPayload_Reset tests Reset method.
 func TestSignedPayload_Reset(t *testing.T) {
 	msg := &SignedPayload{
 		Data:      []byte{0x01, 0x02},
@@ -891,7 +891,7 @@ func TestSignedPayload_Reset(t *testing.T) {
 	}
 }
 
-// TestServerInitPayload_Reset tests Reset method
+// TestServerInitPayload_Reset tests Reset method.
 func TestServerInitPayload_Reset(t *testing.T) {
 	msg := &ServerInitPayload{
 		Version:          ProtocolVersion_PROTOCOL_VERSION_1,

@@ -6,12 +6,13 @@ package rdverb
 
 import (
 	fmt "fmt"
+	io "io"
+	unsafe "unsafe"
+
 	protohelpers "github.com/planetscale/vtprotobuf/protohelpers"
 	proto "google.golang.org/protobuf/proto"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
-	io "io"
-	unsafe "unsafe"
 )
 
 const (

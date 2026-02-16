@@ -14,7 +14,7 @@ const (
 	sessionDuration   = 24 * time.Hour
 )
 
-// AuthManager manages admin authentication with rate limiting
+// AuthManager manages admin authentication with rate limiting.
 type AuthManager struct {
 	secretKey    string
 	mu           sync.RWMutex
@@ -27,7 +27,7 @@ type loginAttempt struct {
 	lockedAt time.Time
 }
 
-// NewAuthManager creates a new AuthManager with the given secret key
+// NewAuthManager creates a new AuthManager with the given secret key.
 func NewAuthManager(secretKey string) *AuthManager {
 	return &AuthManager{
 		secretKey:    secretKey,
@@ -36,7 +36,7 @@ func NewAuthManager(secretKey string) *AuthManager {
 	}
 }
 
-// IsIPLocked checks if an IP is currently locked out
+// IsIPLocked checks if an IP is currently locked out.
 func (m *AuthManager) IsIPLocked(ip string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -56,7 +56,7 @@ func (m *AuthManager) IsIPLocked(ip string) bool {
 	return false
 }
 
-// GetLockRemainingSeconds returns the remaining seconds until the IP is unlocked
+// GetLockRemainingSeconds returns the remaining seconds until the IP is unlocked.
 func (m *AuthManager) GetLockRemainingSeconds(ip string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -76,7 +76,7 @@ func (m *AuthManager) GetLockRemainingSeconds(ip string) int {
 	return 0
 }
 
-// RecordFailedLogin records a failed login attempt and returns true if the IP is now locked
+// RecordFailedLogin records a failed login attempt and returns true if the IP is now locked.
 func (m *AuthManager) RecordFailedLogin(ip string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -102,7 +102,7 @@ func (m *AuthManager) RecordFailedLogin(ip string) bool {
 	return false
 }
 
-// ResetFailedLogin resets the failed login count for an IP
+// ResetFailedLogin resets the failed login count for an IP.
 func (m *AuthManager) ResetFailedLogin(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,7 +110,7 @@ func (m *AuthManager) ResetFailedLogin(ip string) {
 	delete(m.failedLogins, ip)
 }
 
-// ValidateKey checks if the provided key matches the secret key
+// ValidateKey checks if the provided key matches the secret key.
 func (m *AuthManager) ValidateKey(key string) bool {
 	if m.secretKey == "" {
 		return false
@@ -118,12 +118,12 @@ func (m *AuthManager) ValidateKey(key string) bool {
 	return subtle.ConstantTimeCompare([]byte(key), []byte(m.secretKey)) == 1
 }
 
-// HasSecretKey returns true if a secret key is configured
+// HasSecretKey returns true if a secret key is configured.
 func (m *AuthManager) HasSecretKey() bool {
 	return m.secretKey != ""
 }
 
-// CreateSession creates a new session and returns the token
+// CreateSession creates a new session and returns the token.
 func (m *AuthManager) CreateSession() string {
 	token := generateToken()
 
@@ -138,7 +138,7 @@ func (m *AuthManager) CreateSession() string {
 	return token
 }
 
-// ValidateSession checks if a session token is valid
+// ValidateSession checks if a session token is valid.
 func (m *AuthManager) ValidateSession(token string) bool {
 	if token == "" {
 		return false
@@ -155,7 +155,7 @@ func (m *AuthManager) ValidateSession(token string) bool {
 	return time.Now().Before(expiry)
 }
 
-// DeleteSession removes a session
+// DeleteSession removes a session.
 func (m *AuthManager) DeleteSession(token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -163,7 +163,7 @@ func (m *AuthManager) DeleteSession(token string) {
 	delete(m.sessions, token)
 }
 
-// cleanupExpiredSessions removes expired sessions (must be called with lock held)
+// cleanupExpiredSessions removes expired sessions (must be called with lock held).
 func (m *AuthManager) cleanupExpiredSessions() {
 	now := time.Now()
 	for token, expiry := range m.sessions {
@@ -173,7 +173,7 @@ func (m *AuthManager) cleanupExpiredSessions() {
 	}
 }
 
-// generateToken generates a secure random token
+// generateToken generates a secure random token.
 func generateToken() string {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

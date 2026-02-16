@@ -1,6 +1,7 @@
 package cryptoops
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/binary"
 	"errors"
@@ -16,7 +17,7 @@ import (
 )
 
 var _lengthBufferPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new([4]byte)
 	},
 }
@@ -71,12 +72,12 @@ const (
 	noisePrologue = "portal/noise/1"
 
 	// identityPayloadSize is the size of the identity payload sent during the handshake:
-	// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key]
+	// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key].
 	identityPayloadSize = ed25519.PublicKeySize + ed25519.SignatureSize
 )
 
 // noiseCipherSuite is the Noise cipher suite used for all handshakes:
-// Noise_XX_25519_ChaChaPoly_BLAKE2s
+// Noise_XX_25519_ChaChaPoly_BLAKE2s.
 var noiseCipherSuite = noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashBLAKE2s)
 
 // Handshaker handles the Noise Protocol Framework based handshake.
@@ -197,7 +198,7 @@ func (sc *SecureConnection) writeFragment(p []byte) (int, error) {
 	var err error
 	buffer.B, err = sc.encryptor.Encrypt(buffer.B, nil, p)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrEncryptionFailed, err)
+		return 0, fmt.Errorf("%w: %w", ErrEncryptionFailed, err)
 	}
 
 	_, err = sc.conn.Write(buffer.B)
@@ -301,7 +302,7 @@ func (sc *SecureConnection) Close() error {
 //	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
 //	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
 //	Message 3 (client → server): s, se + client identity payload (encrypted)
-func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*SecureConnection, error) {
+func (h *Handshaker) ClientHandshake(ctx context.Context, conn io.ReadWriteCloser, alpn string) (*SecureConnection, error) {
 	x25519Key := noise.DHKey{
 		Private: h.credential.X25519PrivateKey(),
 		Public:  h.credential.X25519PublicKey(),
@@ -315,43 +316,57 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 		Prologue:      []byte(noisePrologue),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: init: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: init: %w", ErrHandshakeFailed, err)
+	}
+
+	// Set deadline from context if the connection supports it
+	if deadline, ok := ctx.Deadline(); ok {
+		if nc, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
+			if err := nc.SetDeadline(deadline); err != nil {
+				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, err)
+			}
+			defer nc.SetDeadline(time.Time{}) // Clear deadline after handshake
+		}
 	}
 
 	// Message 1: → e + ALPN payload (integrity-protected via handshake hash)
-	msg1, _, _, err := hs.WriteMessage(nil, encodeALPN(alpn))
+	alpnPayload, err := encodeALPN(alpn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: write msg1: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrHandshakeFailed, err)
+	}
+	msg1, _, _, err := hs.WriteMessage(nil, alpnPayload)
+	if err != nil {
+		return nil, fmt.Errorf("%w: write msg1: %w", ErrHandshakeFailed, err)
 	}
 	if err := writeLengthPrefixed(conn, msg1); err != nil {
-		return nil, fmt.Errorf("%w: send msg1: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: send msg1: %w", ErrHandshakeFailed, err)
 	}
 
 	// Message 2: ← e, ee, s, es + server identity payload
 	msg2Raw, err := readLengthPrefixed(conn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: recv msg2: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: recv msg2: %w", ErrHandshakeFailed, err)
 	}
 	serverPayload, _, _, err := hs.ReadMessage(nil, msg2Raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read msg2: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: read msg2: %w", ErrHandshakeFailed, err)
+	}
+
+	// Verify server identity BEFORE sending our identity
+	remoteID, err := verifyIdentityPayload(serverPayload, hs.PeerStatic())
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
 
 	// Message 3: → s, se + client identity payload
 	clientPayload := makeIdentityPayload(h.credential, x25519Key.Public)
 	msg3, cs1, cs2, err := hs.WriteMessage(nil, clientPayload)
 	if err != nil {
-		return nil, fmt.Errorf("%w: write msg3: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: write msg3: %w", ErrHandshakeFailed, err)
 	}
 	if err := writeLengthPrefixed(conn, msg3); err != nil {
-		return nil, fmt.Errorf("%w: send msg3: %v", ErrHandshakeFailed, err)
-	}
-
-	// Verify server identity
-	remoteID, err := verifyIdentityPayload(serverPayload, hs.PeerStatic())
-	if err != nil {
-		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("%w: send msg3: %w", ErrHandshakeFailed, err)
 	}
 
 	// cs1 = initiator→responder (client encrypt), cs2 = responder→initiator (client decrypt)
@@ -365,7 +380,7 @@ func (h *Handshaker) ClientHandshake(conn io.ReadWriteCloser, alpn string) (*Sec
 //	Message 1 (client → server): e + ALPN payload (integrity-protected, not encrypted)
 //	Message 2 (server → client): e, ee, s, es + server identity payload (encrypted)
 //	Message 3 (client → server): s, se + client identity payload (encrypted)
-func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
+func (h *Handshaker) ServerHandshake(ctx context.Context, conn io.ReadWriteCloser, alpns []string) (*SecureConnection, error) {
 	x25519Key := noise.DHKey{
 		Private: h.credential.X25519PrivateKey(),
 		Public:  h.credential.X25519PublicKey(),
@@ -379,17 +394,27 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 		Prologue:      []byte(noisePrologue),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w: init: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: init: %w", ErrHandshakeFailed, err)
+	}
+
+	// Set deadline from context if the connection supports it
+	if deadline, ok := ctx.Deadline(); ok {
+		if nc, ok := conn.(interface{ SetDeadline(time.Time) error }); ok {
+			if err := nc.SetDeadline(deadline); err != nil {
+				return nil, fmt.Errorf("%w: set deadline: %w", ErrHandshakeFailed, err)
+			}
+			defer nc.SetDeadline(time.Time{}) // Clear deadline after handshake
+		}
 	}
 
 	// Message 1: ← e + ALPN payload
 	msg1Raw, err := readLengthPrefixed(conn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: recv msg1: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: recv msg1: %w", ErrHandshakeFailed, err)
 	}
 	alpnPayload, _, _, err := hs.ReadMessage(nil, msg1Raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read msg1: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: read msg1: %w", ErrHandshakeFailed, err)
 	}
 
 	// Validate ALPN before proceeding
@@ -403,20 +428,20 @@ func (h *Handshaker) ServerHandshake(conn io.ReadWriteCloser, alpns []string) (*
 	serverPayload := makeIdentityPayload(h.credential, x25519Key.Public)
 	msg2, _, _, err := hs.WriteMessage(nil, serverPayload)
 	if err != nil {
-		return nil, fmt.Errorf("%w: write msg2: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: write msg2: %w", ErrHandshakeFailed, err)
 	}
 	if err := writeLengthPrefixed(conn, msg2); err != nil {
-		return nil, fmt.Errorf("%w: send msg2: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: send msg2: %w", ErrHandshakeFailed, err)
 	}
 
 	// Message 3: ← s, se + client identity payload
 	msg3Raw, err := readLengthPrefixed(conn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: recv msg3: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: recv msg3: %w", ErrHandshakeFailed, err)
 	}
 	clientPayload, cs1, cs2, err := hs.ReadMessage(nil, msg3Raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read msg3: %v", ErrHandshakeFailed, err)
+		return nil, fmt.Errorf("%w: read msg3: %w", ErrHandshakeFailed, err)
 	}
 
 	// Verify client identity
@@ -446,7 +471,7 @@ func (h *Handshaker) createSecureConnection(conn io.ReadWriteCloser, encryptor, 
 }
 
 // makeIdentityPayload constructs the identity binding payload:
-// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key]
+// [32B Ed25519 public key][64B Ed25519 signature over X25519 static public key].
 func makeIdentityPayload(cred *Credential, x25519Pub []byte) []byte {
 	payload := make([]byte, identityPayloadSize)
 	copy(payload[:ed25519.PublicKeySize], cred.PublicKey())
@@ -476,11 +501,14 @@ func verifyIdentityPayload(payload []byte, remoteX25519Pub []byte) (string, erro
 }
 
 // encodeALPN encodes an ALPN string as [1B length][N bytes string].
-func encodeALPN(alpn string) []byte {
+func encodeALPN(alpn string) ([]byte, error) {
+	if len(alpn) > 255 {
+		return nil, fmt.Errorf("ALPN string too long: %d bytes (max 255)", len(alpn))
+	}
 	b := make([]byte, 1+len(alpn))
 	b[0] = byte(len(alpn))
 	copy(b[1:], alpn)
-	return b
+	return b, nil
 }
 
 // decodeALPN decodes an ALPN string from the [1B length][N bytes string] format.
