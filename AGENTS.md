@@ -1,33 +1,33 @@
 # AGENTS.md — Portal (gosuda.org/portal)
 
-Portal is a self-hosted relay/tunnel that enables peer-to-peer, end-to-end encrypted connections between services through a central hub. Participants authenticate with Ed25519 credentials, perform X25519 ECDH key exchange, and communicate over ChaCha20-Poly1305 encrypted channels. The relay server cannot decrypt application traffic — it only forwards ciphertext. All relay connections use WebSocket transport for NAT/firewall traversal, and services advertise themselves via time-limited leases.
+Portal is a self-hosted relay/tunnel that enables peer-to-peer, end-to-end encrypted connections between services through a central hub. Participants authenticate with Ed25519 credentials, perform a Noise XX handshake (`Noise_XX_25519_ChaChaPoly_BLAKE2s`), and communicate over ChaCha20-Poly1305 encrypted channels. The relay server cannot decrypt application traffic — it only forwards ciphertext. All relay connections use WebTransport (HTTP/3 over QUIC) for NAT/firewall traversal, and services advertise themselves via time-limited leases.
 
 ---
 
 ## Architecture
 
-**Relay Server** (`cmd/relay-server/`) — Single binary HTTP server. Accepts WebSocket connections at `/relay`, serves the React SPA at `/app/`, exposes admin REST API at `/admin/`, and routes subdomain traffic to apps via a portal mux. Manages approval, BPS rate limiting, and IP tracking through `cmd/relay-server/manager/`.
+**Relay Server** (`cmd/relay-server/`) — Single binary serving two protocols on the same port: HTTP/1.1 (TCP) for the React SPA at `/app/`, admin REST API at `/admin/`, and subdomain routing; HTTP/3 (UDP) for WebTransport relay sessions at `/relay`. Supports TLS certificate auto-generation for development (`--tls-auto`) with SHA-256 hash exposed at `/cert-hash` for browser `serverCertificateHashes` pinning. Manages approval, BPS rate limiting, and IP tracking through `cmd/relay-server/manager/`.
 
-**Portal library** (`portal/`) — Core protocol implementation. `RelayServer` accepts connections and dispatches yamux streams by packet type. `RelayClient` manages the app-side yamux session. `LeaseManager` handles lease registration, renewal, expiry, bans, and name policies. Crypto operations live in `portal/core/cryptoops/`: `Credential` (Ed25519 keygen + identity derivation), `Handshaker` (X25519 ECDH), and `SecureConnection` (ChaCha20-Poly1305 stream wrapper). Protocol messages are defined as protobuf in `portal/core/proto/rdverb/` (protocol verbs) and `portal/core/proto/rdsec/` (security payloads).
+**Portal library** (`portal/`) — Core protocol implementation. Transport-agnostic via `Session`/`Stream` interfaces (`transport.go`) with three implementations: `WTSession` (production WebTransport, `transport_wt.go`), `PipeSession` (in-memory tests, `transport_pipe.go`), and `wtjs.Session` (browser WASM, `cmd/webclient/wtjs/`). `RelayServer` accepts sessions and dispatches streams by packet type. `RelayClient` manages the app-side session. `LeaseManager` handles lease registration, renewal, expiry, bans, and name policies. Crypto operations live in `portal/core/cryptoops/`: `Credential` (Ed25519 keygen + identity derivation + X25519 key conversion), `Handshaker` (Noise XX via `flynn/noise`), and `SecureConnection` (ChaCha20-Poly1305 stream wrapper). Protocol messages are defined as protobuf in `portal/core/proto/rdverb/` (protocol verbs) and `portal/core/proto/rdsec/` (security payloads).
 
 **SDK** (`sdk/`) — Public API for service publishers. `Client` manages relay connections with automatic reconnect and health checking. `Listen()` registers a lease and returns incoming connections. `Dial()` connects to a lease on a relay and performs the E2EE handshake.
 
 **portal-tunnel** (`cmd/portal-tunnel/`) — CLI tunnel client. Uses `sdk.Listen()` to register a lease, then proxies incoming relay connections to a local TCP service.
 
-**webclient** (`cmd/webclient/`) — Go compiled to WASM for browser-native relay connections. Includes a service worker that intercepts HTTP fetches and proxies them through the E2EE relay. Browser WebSocket adapter in `cmd/webclient/wsjs/`, HTTP interception in `cmd/webclient/httpjs/`.
+**webclient** (`cmd/webclient/`) — Go compiled to WASM (`GOOS=js GOARCH=wasm`) for browser-native relay connections. Includes a service worker that intercepts HTTP fetches and proxies them through the E2EE relay. Browser WebTransport adapter in `cmd/webclient/wtjs/`, HTTP interception in `cmd/webclient/httpjs/`.
 
 **vanity-id** (`cmd/vanity-id/`) — Brute-force tool for generating credential IDs matching a desired prefix.
 
 ### Key Abstractions
 
-- **Credential** — Ed25519 keypair. Identity ID = `HMAC-SHA256(pubkey, magic)[0:16]` encoded as base32 (26 chars). Every participant has one.
+- **Credential** — Ed25519 keypair with derived X25519 keys for Noise DH. Identity ID = `HMAC-SHA256(pubkey, magic)[0:16]` encoded as base32 (26 chars). Every participant has one.
 - **Lease** — Advertising slot: identity + TTL (30s, renewed every 5s) + name + ALPN list + JSON metadata. One lease = one public endpoint.
-- **yamux** — Multiplexes streams over a single WebSocket connection. Each protocol operation (lease update, connection request) opens a new stream.
-- **SecureConnection** — Wraps `io.ReadWriteCloser` with authenticated encryption. Length-prefixed frames: `[4B len][12B nonce][ciphertext+tag]`.
+- **Session/Stream** — Transport-agnostic multiplexing. `Session` opens/accepts bidirectional `Stream`s. Each protocol operation (lease update, connection request) opens a new stream. Implementations: `WTSession` (WebTransport), `PipeSession` (in-memory tests), `wtjs.Session` (browser WASM).
+- **SecureConnection** — Wraps `io.ReadWriteCloser` with Noise CipherState authenticated encryption. Length-prefixed frames: `[4B len][ciphertext+tag]`. Nonces managed internally by the Noise CipherState.
 
 ### Data Flow
 
-App connects via WebSocket → yamux session established → App registers lease (signed with Ed25519) → Client requests connection to a lease ID → Relay bridges two yamux streams → Client and App perform X25519 handshake through the relay → All subsequent data is ChaCha20-Poly1305 encrypted end-to-end (relay forwards opaque ciphertext).
+App opens WebTransport session (HTTP/3) → streams multiplexed natively by QUIC → App registers lease (signed with Ed25519) → Client requests connection to a lease ID → Relay bridges two streams → Client and App perform Noise XX handshake through the relay → All subsequent data is ChaCha20-Poly1305 encrypted end-to-end (relay forwards opaque ciphertext).
 
 ---
 
@@ -76,7 +76,7 @@ buf lint        # lint proto files (STANDARD rules)
 ```
 
 Two proto packages:
-- `rdsec` — security: `Identity`, `SignedPayload`, `ClientInitPayload`, `ServerInitPayload`
+- `rdsec` — security: `Identity`, `SignedPayload` (active); `ClientInitPayload`, `ServerInitPayload` (legacy — Noise handles its own message framing)
 - `rdverb` — protocol: `Packet`, `Lease`, `RelayInfoRequest/Response`, `LeaseUpdateRequest/Response`, `ConnectionRequest/Response`
 
 ---
@@ -88,12 +88,15 @@ Two proto packages:
 | `--port` | — | `4017` | HTTP listen port |
 | `--portal-url` | `PORTAL_URL` | `http://localhost:4017` | Base URL for frontend |
 | `--portal-app-url` | `PORTAL_APP_URL` | derived from portal-url | Wildcard subdomain URL |
-| `--bootstraps` | `BOOTSTRAP_URIS` | derived from portal-url | WebSocket relay endpoints (comma-separated) |
+| `--bootstraps` | `BOOTSTRAP_URIS` | derived from portal-url | Relay bootstrap addresses (comma-separated) |
 | `--admin-secret-key` | `ADMIN_SECRET_KEY` | auto-generated | Admin auth key (logged if auto-generated) |
 | `--max-lease` | — | `0` (unlimited) | Max active relayed connections per lease |
 | `--lease-bps` | — | `0` (unlimited) | Default bytes-per-second limit per lease |
 | `--noindex` | `NOINDEX` | `false` | Block crawlers via robots.txt |
 | `--alpn` | — | `http/1.1` | ALPN identifier |
+| `--tls-cert` | — | — | TLS certificate file path (required for WebTransport) |
+| `--tls-key` | — | — | TLS private key file path |
+| `--tls-auto` | — | `false` | Auto-generate self-signed ECDSA P-256 cert for development |
 
 Admin settings (ban list, BPS limits, approval mode, IP bans) persist to `admin_settings.json`.
 
@@ -103,12 +106,14 @@ Admin settings (ban list, BPS limits, approval mode, IP bans) persist to `admin_
 
 | Package | Role |
 |---------|------|
-| `github.com/gorilla/websocket` | WebSocket client + server |
-| `github.com/hashicorp/yamux` | Stream multiplexing over single connection |
+| `github.com/flynn/noise` | Noise Protocol Framework (E2EE handshake) |
+| `github.com/quic-go/quic-go` | QUIC transport layer |
+| `github.com/quic-go/webtransport-go` | WebTransport server and client |
+| `github.com/gorilla/websocket` | WebSocket (demo-app echo, webclient polyfill — not relay transport) |
 | `github.com/planetscale/vtprotobuf` | Fast protobuf marshaling (generated vtproto code) |
 | `github.com/rs/zerolog` | Structured JSON logging |
 | `github.com/valyala/bytebufferpool` | Pooled byte buffers (reduces GC pressure in SecureConnection) |
-| `golang.org/x/crypto` | ChaCha20-Poly1305, Curve25519, HKDF |
+| `golang.org/x/crypto` | Curve25519 (key conversion), ChaCha20-Poly1305 |
 | `gopkg.eu.org/broccoli` | CLI flag/env binding (portal-tunnel) |
 
 ---
@@ -131,7 +136,7 @@ CD (on push to main/tags): builds multi-platform Docker image → pushes to `ghc
 
 **Mandatory** before every commit: `gofmt -w . && goimports -w .`
 
-Import ordering: **stdlib → external → internal** (blank-line separated). Local prefix: `github.com/gosuda`.
+Import ordering: **stdlib → external → internal** (blank-line separated). Local prefix: `gosuda.org/portal`.
 
 **Naming:** packages lowercase single-word (`httpwrap`) · interfaces as behavior verbs (`Reader`, `Handler`) · errors `Err` prefix sentinels (`ErrNotFound`), `Error` suffix types · context always first param `func Do(ctx context.Context, ...)`
 

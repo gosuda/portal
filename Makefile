@@ -21,6 +21,6 @@ tidy:
 	go mod verify
 
 build:
-	go build ./...
+	go build $$(go list ./... | grep -v cmd/webclient)
 
 all: fmt vet lint test vuln build
