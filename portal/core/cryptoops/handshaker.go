@@ -199,7 +199,7 @@ func (sc *SecureConnection) writeFragment(p []byte) (int, error) {
 		return 0, fmt.Errorf("%w: %w", ErrEncryptionFailed, err)
 	}
 
-	_, err = sc.conn.Write(buffer.B)
+	err = writeFull(sc.conn, buffer.B)
 	if err != nil {
 		return 0, err
 	}
@@ -209,9 +209,9 @@ func (sc *SecureConnection) writeFragment(p []byte) (int, error) {
 
 // Read reads and decrypts data from the underlying connection.
 func (sc *SecureConnection) Read(p []byte) (int, error) {
-	sc.mu.RLock()
+	sc.mu.Lock()
 	if sc.closed {
-		sc.mu.RUnlock()
+		sc.mu.Unlock()
 		return 0, net.ErrClosed
 	}
 
@@ -219,10 +219,10 @@ func (sc *SecureConnection) Read(p []byte) (int, error) {
 		n := copy(p, sc.readBuffer.B)
 		copy(sc.readBuffer.B[:len(sc.readBuffer.B)-n], sc.readBuffer.B[n:])
 		sc.readBuffer.B = sc.readBuffer.B[:len(sc.readBuffer.B)-n]
-		sc.mu.RUnlock()
+		sc.mu.Unlock()
 		return n, nil
 	}
-	sc.mu.RUnlock()
+	sc.mu.Unlock()
 
 	// Read length prefix (4 bytes)
 	var lengthBuf [4]byte
@@ -532,6 +532,22 @@ func decodeALPN(payload []byte) (string, error) {
 	return string(payload[1:]), nil
 }
 
+// writeFull writes all bytes to conn or returns an error.
+func writeFull(conn io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+
+	return nil
+}
+
 // writeLengthPrefixed writes a 4-byte big-endian length prefix followed by the data.
 func writeLengthPrefixed(conn io.Writer, data []byte) error {
 	length := len(data)
@@ -542,12 +558,11 @@ func writeLengthPrefixed(conn io.Writer, data []byte) error {
 		byte(length),
 	}
 
-	if _, err := conn.Write(lengthBytes); err != nil {
+	if err := writeFull(conn, lengthBytes); err != nil {
 		return err
 	}
 
-	_, err := conn.Write(data)
-	return err
+	return writeFull(conn, data)
 }
 
 // readLengthPrefixed reads a 4-byte big-endian length prefix followed by the data.

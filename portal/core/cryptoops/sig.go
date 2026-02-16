@@ -75,6 +75,8 @@ func (c *Credential) PrivateKey() ed25519.PrivateKey {
 // This follows the standard Ed25519→X25519 conversion: SHA-512(seed)[:32] with clamping.
 func (c *Credential) X25519PrivateKey() []byte {
 	h := sha512.Sum512(c.privateKey.Seed())
+	defer wipeMemory(h[:])
+
 	// Clamp per RFC 7748
 	h[0] &= 248
 	h[31] &= 127

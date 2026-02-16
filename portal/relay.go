@@ -31,9 +31,6 @@ type RelayServer struct {
 	connections     map[int64]*Connection
 	connectionsLock sync.RWMutex
 
-	leaseConnections     map[string]*Connection // Key: lease ID, Value: Connection
-	leaseConnectionsLock sync.RWMutex
-
 	relayedConnections     map[string][]Stream // Key: lease ID, Value: slice of relayed streams
 	relayedConnectionsLock sync.RWMutex
 
@@ -63,7 +60,6 @@ func NewRelayServer(credential *cryptoops.Credential, address []string) *RelaySe
 		address:              address,
 		connidCounter:        0,
 		connections:          make(map[int64]*Connection),
-		leaseConnections:     make(map[string]*Connection),
 		relayedConnections:   make(map[string][]Stream),
 		leaseManager:         NewLeaseManager(30 * time.Second), // TTL check every 30 seconds
 		stopch:               make(chan struct{}),
@@ -107,13 +103,6 @@ func (g *RelayServer) handleConn(id int64, connection *Connection) {
 				Strs("lease_ids", cleanedLeaseIDs).
 				Msg("[RelayServer] Cleaned up leases for connection")
 		}
-
-		// Also clean up lease connections mapping
-		g.leaseConnectionsLock.Lock()
-		for _, leaseID := range cleanedLeaseIDs {
-			delete(g.leaseConnections, leaseID)
-		}
-		g.leaseConnectionsLock.Unlock()
 
 		// Clean up relayed connections for these leases
 		g.relayedConnectionsLock.Lock()
@@ -207,9 +196,9 @@ func (g *RelayServer) handleStream(stream Stream, streamID, connID int64, connec
 				Int64("stream_id", streamID).
 				Msg("[RelayServer] Closing stream")
 			connection.streamsLock.Lock()
-			closeWithLog(stream, "[RelayServer] Failed to close stream")
 			delete(connection.streams, streamID)
 			connection.streamsLock.Unlock()
+			closeWithLog(stream, "[RelayServer] Failed to close stream")
 		} else {
 			log.Debug().
 				Int64("conn_id", connID).

@@ -20,22 +20,6 @@ func bufferGrow(buffer *bytebufferpool.ByteBuffer, n int) {
 	}
 }
 
-func decodeProtobuf[T interface {
-	UnmarshalVT(data []byte) error
-}](
-	data []byte,
-) (
-	*T,
-	error,
-) {
-	var t T
-	err := t.UnmarshalVT(data)
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
-}
-
 func writePacket(w io.Writer, packet *rdverb.Packet) error {
 	payload, err := packet.MarshalVT()
 	if err != nil {

@@ -23,6 +23,8 @@ var (
 	ErrInvalidResponse = errors.New("invalid response")
 	// ErrConnectionRejected is returned when the relay server rejects a connection request.
 	ErrConnectionRejected = errors.New("connection rejected")
+	// ErrLeaseRejected is returned when the relay server rejects a lease update request.
+	ErrLeaseRejected = errors.New("lease rejected")
 	// ErrRemoteIDMismatch is returned when the remote peer's ID doesn't match the expected lease ID.
 	ErrRemoteIDMismatch = errors.New("remote ID mismatch")
 )
@@ -693,6 +695,9 @@ func (g *RelayClient) RegisterLease(cred *cryptoops.Credential, lease *rdverb.Le
 		g.leasesMu.Lock()
 		delete(g.leases, identity.Id)
 		g.leasesMu.Unlock()
+		if err == nil {
+			err = ErrLeaseRejected
+		}
 		return err
 	}
 

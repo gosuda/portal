@@ -36,12 +36,10 @@ repos:
         language: golang
         pass_filenames: false
 
-  - repo: local
-    hooks:
-      - id: gofmt
-        name: gofmt
-        description: Formats Go source code.
-        entry: gofmt -w .
+      - id: golangci-lint-fmt
+        name: golangci-lint-fmt
+        description: Formats Go source code using golangci-lint
+        entry: golangci-lint fmt
         types: [go]
-        language: system
+        language: golang
         pass_filenames: false

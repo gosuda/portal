@@ -39,6 +39,42 @@ func pipeConn() (clientConn, serverConn net.Conn) {
 	return clientConn, serverConn
 }
 
+type shortWriter struct {
+	writer   io.Writer
+	maxChunk int
+}
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	n := w.maxChunk
+	if n <= 0 || n > len(p) {
+		n = len(p)
+	}
+
+	return w.writer.Write(p[:n])
+}
+
+type shortWriteReadWriteCloser struct {
+	io.ReadWriteCloser
+	maxChunk int
+}
+
+func (c *shortWriteReadWriteCloser) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	n := c.maxChunk
+	if n <= 0 || n > len(p) {
+		n = len(p)
+	}
+
+	return c.ReadWriteCloser.Write(p[:n])
+}
+
 // TestNewHandshaker tests handshaker creation.
 func TestNewHandshaker(t *testing.T) {
 	cred, err := NewCredential()
@@ -311,6 +347,70 @@ func TestFragmentation(t *testing.T) {
 	serverSecure.Close()
 }
 
+func TestSecureConnectionWriteShortWriteRegression(t *testing.T) {
+	clientCred, _ := NewCredential()
+	serverCred, _ := NewCredential()
+
+	clientConn, serverConn := pipeConn()
+
+	clientHandshaker := NewHandshaker(clientCred)
+	serverHandshaker := NewHandshaker(serverCred)
+
+	var clientSecure, serverSecure *SecureConnection
+	var clientErr, serverErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		clientSecure, clientErr = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
+	}()
+
+	go func() {
+		defer wg.Done()
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
+	}()
+
+	wg.Wait()
+
+	if clientErr != nil {
+		t.Fatalf("Client handshake failed: %v", clientErr)
+	}
+	if serverErr != nil {
+		t.Fatalf("Server handshake failed: %v", serverErr)
+	}
+
+	clientSecure.conn = &shortWriteReadWriteCloser{
+		ReadWriteCloser: clientSecure.conn,
+		maxChunk:        5,
+	}
+
+	message := bytes.Repeat([]byte("Z"), 4096)
+	if _, err := clientSecure.Write(message); err != nil {
+		t.Fatalf("Client write failed: %v", err)
+	}
+
+	if err := serverSecure.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline failed: %v", err)
+	}
+	defer serverSecure.SetReadDeadline(time.Time{})
+
+	received := make([]byte, len(message))
+	n, err := io.ReadFull(serverSecure, received)
+	if err != nil {
+		t.Fatalf("Server read failed: %v", err)
+	}
+	if n != len(message) {
+		t.Fatalf("Expected to read %d bytes, got %d", len(message), n)
+	}
+	if !bytes.Equal(message, received) {
+		t.Fatal("Message mismatch after short writes")
+	}
+
+	_ = clientSecure.Close()
+	_ = serverSecure.Close()
+}
+
 // TestConcurrentWrites tests concurrent writes.
 func TestConcurrentWrites(t *testing.T) {
 	clientCred, _ := NewCredential()
@@ -474,6 +574,29 @@ func TestLengthPrefixedReadWrite(t *testing.T) {
 				t.Errorf("Message mismatch: expected %v, got %v", msg, received)
 			}
 		})
+	}
+}
+
+func TestLengthPrefixedReadWriteShortWriteRegression(t *testing.T) {
+	message := bytes.Repeat([]byte("S"), 2048)
+
+	var buf bytes.Buffer
+	writer := &shortWriter{
+		writer:   &buf,
+		maxChunk: 3,
+	}
+
+	if err := writeLengthPrefixed(writer, message); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	received, err := readLengthPrefixed(&buf)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if !bytes.Equal(message, received) {
+		t.Fatal("Message mismatch after short writes")
 	}
 }
 

@@ -27,8 +27,8 @@ func (ctx *StreamContext) Hijack() {
 }
 
 func (g *RelayServer) handleRelayInfoRequest(ctx *StreamContext, packet *rdverb.Packet) error {
-	_, err := decodeProtobuf[*rdverb.RelayInfoRequest](packet.Payload)
-	if err != nil {
+	var req rdverb.RelayInfoRequest
+	if err := req.UnmarshalVT(packet.Payload); err != nil {
 		return err
 	}
 
@@ -68,13 +68,8 @@ func (g *RelayServer) handleLeaseUpdateRequest(ctx *StreamContext, packet *rdver
 	if g.leaseManager.UpdateLease(req.Lease, ctx.ConnectionID) {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
-		// Register lease connection
-		leaseID := req.Lease.Identity.Id
-		g.leaseConnectionsLock.Lock()
-		g.leaseConnections[leaseID] = ctx.Connection
-		g.leaseConnectionsLock.Unlock()
-
 		// Log lease update completion
+		leaseID := req.Lease.Identity.Id
 		log.Debug().
 			Str("lease_id", leaseID).
 			Str("lease_name", req.Lease.Name).
@@ -125,13 +120,8 @@ func (g *RelayServer) handleLeaseDeleteRequest(ctx *StreamContext, packet *rdver
 	if g.leaseManager.DeleteLease(req.Identity) {
 		resp.Code = rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED
 
-		// Remove lease connection
-		leaseID := req.Identity.Id
-		g.leaseConnectionsLock.Lock()
-		delete(g.leaseConnections, leaseID)
-		g.leaseConnectionsLock.Unlock()
-
 		// Log lease deletion completion
+		leaseID := req.Identity.Id
 		log.Debug().
 			Str("lease_id", leaseID).
 			Msg("[RelayServer] Lease deletion completed successfully")
@@ -189,6 +179,8 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 		return g.sendConnectionResponse(ctx.Stream, respCode)
 	}
 
+	relayWorkerRegistered := false
+
 	// Enforce relayed connection limits
 	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		leaseID := leaseEntry.Lease.Identity.Id
@@ -200,21 +192,40 @@ func (g *RelayServer) handleConnectionRequest(ctx *StreamContext, packet *rdverb
 			log.Warn().Str("lease_id", leaseID).Msg("[RelayServer] Relayed connection per-lease limit reached")
 			respCode = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
 			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after over-limit rejection")
+			leaseStream = nil
+		}
+	}
+
+	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		if !g.registerWorker() {
+			respCode = rdverb.ResponseCode_RESPONSE_CODE_REJECTED
+			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream while stopping")
+			leaseStream = nil
+		} else {
+			relayWorkerRegistered = true
 		}
 	}
 
 	// Send response to client
 	err = g.sendConnectionResponse(ctx.Stream, respCode)
 	if err != nil {
-		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after response send failure")
+		if relayWorkerRegistered {
+			g.waitgroup.Done()
+		}
+		if leaseStream != nil {
+			closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after response send failure")
+		}
 		return err
 	}
 
 	// If accepted, set up bidirectional forwarding
 	if respCode == rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
 		ctx.Hijack()
-		go g.establishRelayedConnection(ctx.Stream, leaseStream, leaseEntry.Lease.Identity.Id)
-	} else {
+		go func(clientStream, targetStream Stream, leaseID string) {
+			defer g.waitgroup.Done()
+			g.establishRelayedConnection(clientStream, targetStream, leaseID)
+		}(ctx.Stream, leaseStream, leaseEntry.Lease.Identity.Id)
+	} else if leaseStream != nil {
 		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream after rejection")
 	}
 

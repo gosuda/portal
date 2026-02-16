@@ -6,7 +6,6 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	utils "gosuda.org/portal/utils"
 )
@@ -175,25 +175,7 @@ func serveWebTransport(addr string, serv *portal.RelayServer, admin *Admin, tlsC
 	}
 
 	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		// Check IP ban
-		clientIP := r.RemoteAddr
-		if host, _, err := net.SplitHostPort(clientIP); err == nil {
-			clientIP = host
-		}
-		if ipManager := admin.GetIPManager(); ipManager != nil {
-			if ipManager.IsIPBanned(clientIP) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-			ipManager.StorePendingIP(clientIP)
-		}
-
-		sess, err := wtServer.Upgrade(w, r)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] webtransport upgrade failed")
-			return
-		}
-		serv.HandleSession(portal.NewWTSession(sess))
+		handleWebTransportRelayRequest(w, r, admin, wtServer.Upgrade, serv.HandleSession)
 	})
 
 	go func() {
@@ -209,6 +191,82 @@ func serveWebTransport(addr string, serv *portal.RelayServer, admin *Admin, tlsC
 			log.Error().Err(err).Msg("[server] webtransport shutdown error")
 		}
 	}
+}
+
+func handleWebTransportRelayRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	admin *Admin,
+	upgrade func(http.ResponseWriter, *http.Request) (*webtransport.Session, error),
+	handleSession func(portal.Session),
+) {
+	clientIP := manager.ExtractClientIP(r)
+	if ipManager := admin.GetIPManager(); ipManager != nil && ipManager.IsIPBanned(clientIP) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	sess, err := upgrade(w, r)
+	if err != nil {
+		log.Error().Err(err).Msg("[server] webtransport upgrade failed")
+		return
+	}
+
+	handleSession(wrapRelaySession(portal.NewWTSession(sess), clientIP))
+}
+
+type relaySession struct {
+	portal.Session
+	clientIP string
+}
+
+func wrapRelaySession(session portal.Session, clientIP string) portal.Session {
+	if clientIP == "" {
+		return session
+	}
+	return &relaySession{
+		Session:  session,
+		clientIP: clientIP,
+	}
+}
+
+func (s *relaySession) OpenStream(ctx context.Context) (portal.Stream, error) {
+	stream, err := s.Session.OpenStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return wrapRelayStream(stream, s.clientIP), nil
+}
+
+func (s *relaySession) AcceptStream(ctx context.Context) (portal.Stream, error) {
+	stream, err := s.Session.AcceptStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return wrapRelayStream(stream, s.clientIP), nil
+}
+
+type relayStream struct {
+	portal.Stream
+	clientIP string
+}
+
+func wrapRelayStream(stream portal.Stream, clientIP string) portal.Stream {
+	if clientIP == "" || stream == nil {
+		return stream
+	}
+	return &relayStream{
+		Stream:   stream,
+		clientIP: clientIP,
+	}
+}
+
+func streamClientIP(stream portal.Stream) string {
+	relayStream, ok := stream.(*relayStream)
+	if !ok {
+		return ""
+	}
+	return relayStream.clientIP
 }
 
 type leaseRow struct {

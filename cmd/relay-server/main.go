@@ -127,11 +127,10 @@ func runServer(cfg serverConfig) error {
 
 	// Register relay callback for BPS handling and IP tracking
 	serv.SetEstablishRelayCallback(func(clientStream, leaseStream portal.Stream, leaseID string) {
-		// Associate pending IP with this lease
 		ipManager := admin.GetIPManager()
 		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
+			if clientIP := streamClientIP(leaseStream); clientIP != "" {
+				ipManager.RegisterLeaseIP(leaseID, clientIP)
 			}
 		}
 		bpsManager := admin.GetBPSManager()

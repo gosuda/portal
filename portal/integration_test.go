@@ -94,3 +94,45 @@ func TestIntegration_FullFlow(t *testing.T) {
 	code, _, _ = peerClient.RequestConnection(hostCred.ID(), "test-proto", peerCred)
 	assert.Equal(t, rdverb.ResponseCode_RESPONSE_CODE_INVALID_IDENTITY, code)
 }
+
+func TestIntegration_RegisterLeaseRejectedReturnsError(t *testing.T) {
+	serverCred := generateTestCredential(t)
+	server := NewRelayServer(serverCred, []string{"localhost:8080"})
+	server.Start()
+	defer server.Stop()
+
+	firstClientSess, firstServerSess := NewPipeSessionPair()
+	server.HandleSession(firstServerSess)
+
+	firstClient := NewRelayClient(firstClientSess)
+	require.NotNil(t, firstClient)
+	defer firstClient.Close()
+
+	firstCred := generateTestCredential(t)
+	leaseName := "duplicate-service"
+	err := firstClient.RegisterLease(firstCred, &rdverb.Lease{
+		Name: leaseName,
+		Alpn: []string{"test-proto"},
+	})
+	require.NoError(t, err)
+
+	secondClientSess, secondServerSess := NewPipeSessionPair()
+	server.HandleSession(secondServerSess)
+
+	secondClient := NewRelayClient(secondClientSess)
+	require.NotNil(t, secondClient)
+	defer secondClient.Close()
+
+	secondCred := generateTestCredential(t)
+	err = secondClient.RegisterLease(secondCred, &rdverb.Lease{
+		Name: leaseName,
+		Alpn: []string{"test-proto"},
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrLeaseRejected)
+
+	secondClient.leasesMu.Lock()
+	_, exists := secondClient.leases[secondCred.ID()]
+	secondClient.leasesMu.Unlock()
+	assert.False(t, exists, "rejected lease should be rolled back from local cache")
+}

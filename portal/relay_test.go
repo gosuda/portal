@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal/core/cryptoops"
+	"gosuda.org/portal/portal/core/proto/rdverb"
 )
 
 func newRelayTestCredential(t *testing.T) *cryptoops.Credential {
@@ -174,4 +175,64 @@ func TestRelayServerStopRejectsLateAcceptedStream(t *testing.T) {
 	if connectionCount != 0 {
 		t.Fatalf("expected all connections cleaned up after stop, got %d", connectionCount)
 	}
+}
+
+func TestRelayServerStopWaitsForRelayedConnectionWorker(t *testing.T) {
+	server := NewRelayServer(newRelayTestCredential(t), []string{"localhost:8080"})
+	server.Start()
+
+	hostClientSession, hostServerSession := NewPipeSessionPair()
+	server.HandleSession(hostServerSession)
+	hostClient := NewRelayClient(hostClientSession)
+	defer hostClient.Close()
+
+	hostCred := newRelayTestCredential(t)
+	err := hostClient.RegisterLease(hostCred, &rdverb.Lease{
+		Name: "stop-waits-for-relay-worker",
+		Alpn: []string{"test-proto"},
+	})
+	if err != nil {
+		t.Fatalf("RegisterLease: %v", err)
+	}
+
+	peerClientSession, peerServerSession := NewPipeSessionPair()
+	server.HandleSession(peerServerSession)
+	peerClient := NewRelayClient(peerClientSession)
+	defer peerClient.Close()
+
+	relayStarted := make(chan struct{})
+	releaseRelay := make(chan struct{})
+	var relayStartedOnce sync.Once
+	server.SetEstablishRelayCallback(func(clientStream, leaseStream Stream, _ string) {
+		relayStartedOnce.Do(func() { close(relayStarted) })
+		<-releaseRelay
+		closeWithLog(clientStream, "[RelayServer] Failed to close client stream in relay worker test callback")
+		closeWithLog(leaseStream, "[RelayServer] Failed to close lease stream in relay worker test callback")
+	})
+
+	peerCred := newRelayTestCredential(t)
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		_, _, _ = peerClient.RequestConnection(hostCred.ID(), "test-proto", peerCred)
+	}()
+
+	waitForSignal(t, relayStarted, "relay worker start")
+
+	stopDone := make(chan struct{})
+	go func() {
+		server.Stop()
+		close(stopDone)
+	}()
+
+	select {
+	case <-stopDone:
+		t.Fatal("expected Stop to wait for relayed connection worker")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseRelay)
+
+	waitForSignal(t, stopDone, "Stop completion with relayed worker")
+	waitForSignal(t, requestDone, "request completion after relayed worker release")
 }

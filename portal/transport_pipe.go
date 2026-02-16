@@ -114,7 +114,16 @@ func (s *PipeSession) OpenStream(ctx context.Context) (Stream, error) {
 	s.streams = append(s.streams, local)
 	s.mu.Unlock()
 
-	// Send remote end to peer's incoming channel
+	// Send remote end to peer's incoming channel.
+	// incoming is intentionally never closed; closeCh is the shutdown signal.
+	select {
+	case <-peer.closeCh:
+		closeWithLog(local, "[PipeSession] Failed to close local stream after peer close")
+		closeWithLog(remote, "[PipeSession] Failed to close remote stream after peer close")
+		return nil, ErrPipeSessionClosed
+	default:
+	}
+
 	select {
 	case peer.incoming <- remote:
 		return local, nil
@@ -300,6 +309,7 @@ func (s *bufferedPipeStream) SetWriteDeadline(t time.Time) error {
 func (s *PipeSession) AcceptStream(ctx context.Context) (Stream, error) {
 	s.mu.Lock()
 	incoming := s.incoming
+	closeCh := s.closeCh
 	closed := s.closed
 	s.mu.Unlock()
 
@@ -308,10 +318,7 @@ func (s *PipeSession) AcceptStream(ctx context.Context) (Stream, error) {
 	}
 
 	select {
-	case stream, ok := <-incoming:
-		if !ok {
-			return nil, ErrPipeSessionClosed
-		}
+	case stream := <-incoming:
 		// Track the accepted stream
 		if bps, isBuffered := stream.(*bufferedPipeStream); isBuffered {
 			s.mu.Lock()
@@ -319,6 +326,8 @@ func (s *PipeSession) AcceptStream(ctx context.Context) (Stream, error) {
 			s.mu.Unlock()
 		}
 		return stream, nil
+	case <-closeCh:
+		return nil, ErrPipeSessionClosed
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -334,6 +343,7 @@ func (s *PipeSession) Close() error {
 	}
 
 	s.closed = true
+	close(s.closeCh)
 
 	// Close all tracked streams
 	for _, stream := range s.streams {
@@ -343,18 +353,17 @@ func (s *PipeSession) Close() error {
 	}
 	s.streams = nil
 
-	// Signal closure BEFORE closing incoming to prevent send-on-closed-channel
-	close(s.closeCh)
-	close(s.incoming)
-
-	// Drain and close any pending streams in the incoming channel
-	for stream := range s.incoming {
-		if stream != nil {
-			closeWithLog(stream, "[PipeSession] Failed to close pending stream")
+	// Drain and close pending streams without closing incoming.
+	for {
+		select {
+		case stream := <-s.incoming:
+			if stream != nil {
+				closeWithLog(stream, "[PipeSession] Failed to close pending stream")
+			}
+		default:
+			return nil
 		}
 	}
-
-	return nil
 }
 
 // Ensure PipeSession implements Session.

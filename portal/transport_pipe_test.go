@@ -231,6 +231,40 @@ func TestPipeSessionAcceptContextCancel(t *testing.T) {
 	}
 }
 
+func TestPipeSessionAcceptUnblocksOnClose(t *testing.T) {
+	client, server := NewPipeSessionPair()
+	defer client.Close()
+
+	errCh := make(chan error, 1)
+	started := make(chan struct{})
+
+	go func() {
+		close(started)
+		_, err := server.AcceptStream(context.Background())
+		errCh <- err
+	}()
+
+	<-started
+	select {
+	case err := <-errCh:
+		t.Fatalf("AcceptStream returned before close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("server.Close: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrPipeSessionClosed) {
+			t.Fatalf("expected ErrPipeSessionClosed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AcceptStream did not unblock after close")
+	}
+}
+
 func TestPipeSessionOpenContextCancel(t *testing.T) {
 	client, server := NewPipeSessionPair()
 	defer client.Close()
@@ -246,6 +280,64 @@ func TestPipeSessionOpenContextCancel(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestPipeSessionConcurrentOpenCloseRace(t *testing.T) {
+	client, server := NewPipeSessionPair()
+	defer client.Close()
+
+	const openers = 64
+
+	type openResult struct {
+		stream     Stream
+		err        error
+		panicValue any
+	}
+
+	results := make(chan openResult, openers)
+	start := make(chan struct{})
+
+	for range openers {
+		go func() {
+			<-start
+			defer func() {
+				if r := recover(); r != nil {
+					results <- openResult{panicValue: r}
+				}
+			}()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			stream, err := client.OpenStream(ctx)
+			results <- openResult{stream: stream, err: err}
+		}()
+	}
+
+	close(start)
+	if err := server.Close(); err != nil {
+		t.Fatalf("server.Close: %v", err)
+	}
+
+	for range openers {
+		select {
+		case res := <-results:
+			if res.panicValue != nil {
+				t.Fatalf("OpenStream panicked during close race: %v", res.panicValue)
+			}
+			if res.stream == nil && res.err == nil {
+				t.Fatal("OpenStream returned nil stream and nil error")
+			}
+			if res.stream != nil {
+				_ = res.stream.Close()
+			}
+			if res.err != nil && !errors.Is(res.err, ErrPipeSessionClosed) {
+				t.Fatalf("unexpected OpenStream error during close race: %v", res.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for OpenStream result")
+		}
 	}
 }
 
