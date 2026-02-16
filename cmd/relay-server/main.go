@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -31,6 +32,9 @@ var (
 	flagLeaseBPS       int
 	flagNoIndex        bool
 	flagAdminSecretKey string
+	flagTLSCert        string
+	flagTLSKey         string
+	flagTLSAuto        bool
 )
 
 func main() {
@@ -64,6 +68,11 @@ func main() {
 
 	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
 	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+
+	flag.StringVar(&flagTLSCert, "tls-cert", "", "TLS certificate file path (required for WebTransport)")
+	flag.StringVar(&flagTLSKey, "tls-key", "", "TLS private key file path (required for WebTransport)")
+	flag.BoolVar(&flagTLSAuto, "tls-auto", false, "auto-generate self-signed TLS certificate for development")
+
 	flag.Parse()
 
 	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
@@ -127,10 +136,42 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+	// Setup TLS for WebTransport (HTTP/3)
+	var tlsCert *tls.Certificate
+	var certHash []byte
+
+	if flagTLSAuto {
+		cert, hash, err := generateSelfSignedCert()
+		if err != nil {
+			return fmt.Errorf("generate self-signed cert: %w", err)
+		}
+		tlsCert = &cert
+		certHash = hash
+		log.Info().
+			Str("hash", fmt.Sprintf("%x", certHash)).
+			Msg("[server] auto-generated TLS certificate (valid <14 days)")
+	} else if flagTLSCert != "" && flagTLSKey != "" {
+		cert, err := tls.LoadX509KeyPair(flagTLSCert, flagTLSKey)
+		if err != nil {
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
+		tlsCert = &cert
+		log.Info().Msg("[server] loaded TLS certificate from files")
+	}
+
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, certHash, stop)
+
+	var wtCleanup func()
+	if tlsCert != nil {
+		wtCleanup = serveWebTransport(fmt.Sprintf(":%d", flagPort), serv, tlsCert, stop)
+	}
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
+
+	if wtCleanup != nil {
+		wtCleanup()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

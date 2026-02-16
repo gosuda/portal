@@ -2,10 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/quic-go/quic-go/http3"
+	"github.com/quic-go/webtransport-go"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/cmd/relay-server/manager"
@@ -17,7 +22,7 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, certHash []byte, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -116,6 +121,15 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		w.Write([]byte("{\"status\":\"ok\"}"))
 	})
 
+	if len(certHash) > 0 {
+		hashHex := hex.EncodeToString(certHash)
+		appMux.HandleFunc("/cert-hash", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"algorithm":"sha-256","hash":"%s"}`, hashHex)
+		})
+	}
+
 	// Admin API
 	appMux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
 		admin.HandleAdminRequest(w, r, serv)
@@ -184,6 +198,42 @@ func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		h(w, r)
+	}
+}
+
+// serveWebTransport starts the HTTP/3 WebTransport server.
+func serveWebTransport(addr string, serv *portal.RelayServer, tlsCert *tls.Certificate, cancel context.CancelFunc) func() {
+	mux := http.NewServeMux()
+
+	wtServer := &webtransport.Server{
+		H3: &http3.Server{
+			Addr: addr,
+			TLSConfig: &tls.Config{
+				Certificates: []tls.Certificate{*tlsCert},
+			},
+			Handler: mux,
+		},
+	}
+
+	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		sess, err := wtServer.Upgrade(w, r)
+		if err != nil {
+			log.Error().Err(err).Msg("[server] webtransport upgrade failed")
+			return
+		}
+		serv.HandleSession(portal.NewWTSession(sess))
+	})
+
+	go func() {
+		log.Info().Msgf("[server] http/3 (webtransport): %s", addr)
+		if err := wtServer.ListenAndServe(); err != nil {
+			log.Error().Err(err).Msg("[server] http/3 error")
+			cancel()
+		}
+	}()
+
+	return func() {
+		wtServer.Close()
 	}
 }
 
