@@ -109,9 +109,11 @@ func runServer(cfg serverConfig) error {
 			return fmt.Errorf("generate random admin secret key: %w", err)
 		}
 		adminSecretKey = hex.EncodeToString(randomBytes)
-		log.Warn().Str("key", adminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+		log.Warn().
+			Str("key", adminSecretKey).
+			Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
 	} else {
-		log.Info().Str("key", adminSecretKey).Msg("[server] admin authentication enabled")
+		log.Info().Msg("[server] admin authentication enabled")
 	}
 	authManager := manager.NewAuthManager(adminSecretKey)
 
