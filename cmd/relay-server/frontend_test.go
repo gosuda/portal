@@ -466,6 +466,76 @@ func TestServePortalStaticFile(t *testing.T) {
 	}
 }
 
+func TestServeStaticFileWithFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("existing file infers content type", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTestFrontendWithDistFS(fstest.MapFS{
+			"dist/app/assets/data.json": {Data: []byte(`{"ok":true}`)},
+		})
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/assets/data.json", http.NoBody)
+		f.serveStaticFileWithFallback(rec, req, "assets/data.json", "")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "application/json")
+		}
+		if rec.Body.String() != `{"ok":true}` {
+			t.Fatalf("body = %q, want %q", rec.Body.String(), `{"ok":true}`)
+		}
+	})
+
+	t.Run("existing file respects explicit content type", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTestFrontendWithDistFS(fstest.MapFS{
+			"dist/app/assets/blob.bin": {Data: []byte("blob")},
+		})
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/assets/blob.bin", http.NoBody)
+		f.serveStaticFileWithFallback(rec, req, "assets/blob.bin", "application/octet-stream")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.Header().Get("Content-Type") != "application/octet-stream" {
+			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "application/octet-stream")
+		}
+		if rec.Body.String() != "blob" {
+			t.Fatalf("body = %q, want %q", rec.Body.String(), "blob")
+		}
+	})
+
+	t.Run("missing file falls back to portal html", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTestFrontendWithDistFS(fstest.MapFS{
+			"dist/app/portal.html": {Data: []byte("<html>fallback</html>")},
+		})
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/missing", http.NoBody)
+		f.serveStaticFileWithFallback(rec, req, "does-not-exist", "application/octet-stream")
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
+		}
+		if rec.Body.String() != "<html>fallback</html>" {
+			t.Fatalf("body = %q, want %q", rec.Body.String(), "<html>fallback</html>")
+		}
+	})
+}
+
 func TestServePortalHTMLWithSSR(t *testing.T) {
 	t.Parallel()
 
