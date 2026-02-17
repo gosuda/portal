@@ -223,3 +223,91 @@ func TestLeaseManager_UnicodeNameConflict(t *testing.T) {
 		t.Fatal("Second lease with same Korean name should fail")
 	}
 }
+
+func TestLeaseManager_GetLeaseByName_SelectsValidOverExpiredAndBanned(t *testing.T) {
+	lm := NewLeaseManager(30 * time.Second)
+	defer lm.Stop()
+
+	now := time.Now()
+	targetName := "svc"
+
+	lm.leases["expired-id"] = &LeaseEntry{
+		Lease: &rdverb.Lease{
+			Identity: &rdsec.Identity{Id: "expired-id"},
+			Name:     targetName,
+		},
+		Expires: now.Add(-1 * time.Second),
+	}
+	lm.leases["banned-id"] = &LeaseEntry{
+		Lease: &rdverb.Lease{
+			Identity: &rdsec.Identity{Id: "banned-id"},
+			Name:     targetName,
+		},
+		Expires: now.Add(1 * time.Minute),
+	}
+	lm.leases["valid-id"] = &LeaseEntry{
+		Lease: &rdverb.Lease{
+			Identity: &rdsec.Identity{Id: "valid-id"},
+			Name:     targetName,
+		},
+		Expires: now.Add(1 * time.Minute),
+	}
+	lm.bannedLeases["banned-id"] = struct{}{}
+
+	entry, ok := lm.GetLeaseByName(targetName)
+	if !ok {
+		t.Fatal("expected a matching valid lease")
+	}
+	if entry.Lease.Identity.Id != "valid-id" {
+		t.Fatalf("expected valid-id, got %q", entry.Lease.Identity.Id)
+	}
+}
+
+func TestLeaseManager_GetLeaseByName_FiltersExpiredAndBanned(t *testing.T) {
+	testCases := []struct {
+		name      string
+		leaseName string
+		setup     func(*LeaseManager)
+	}{
+		{
+			name:      "expired lease",
+			leaseName: "expired-svc",
+			setup: func(lm *LeaseManager) {
+				lm.leases["expired-id"] = &LeaseEntry{
+					Lease: &rdverb.Lease{
+						Identity: &rdsec.Identity{Id: "expired-id"},
+						Name:     "expired-svc",
+					},
+					Expires: time.Now().Add(-1 * time.Second),
+				}
+			},
+		},
+		{
+			name:      "banned lease",
+			leaseName: "banned-svc",
+			setup: func(lm *LeaseManager) {
+				lm.leases["banned-id"] = &LeaseEntry{
+					Lease: &rdverb.Lease{
+						Identity: &rdsec.Identity{Id: "banned-id"},
+						Name:     "banned-svc",
+					},
+					Expires: time.Now().Add(1 * time.Minute),
+				}
+				lm.bannedLeases["banned-id"] = struct{}{}
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			lm := NewLeaseManager(30 * time.Second)
+			defer lm.Stop()
+
+			tc.setup(lm)
+
+			if _, ok := lm.GetLeaseByName(tc.leaseName); ok {
+				t.Fatalf("expected %s to be filtered out", tc.name)
+			}
+		})
+	}
+}

@@ -347,6 +347,64 @@ func TestBucketTakeWithTimeout(t *testing.T) {
 	if ok := b.TakeWithTimeout(2, 0); ok {
 		t.Fatal("TakeWithTimeout should return false when maxWait=0 and tokens are insufficient")
 	}
+
+	t.Run("times out when wait exceeds maxWait", func(t *testing.T) {
+		t.Parallel()
+
+		bucket := NewBucket(1000, 1000)
+		if bucket == nil {
+			t.Fatal("NewBucket() returned nil")
+		}
+
+		bucket.mu.Lock()
+		bucket.tokens = 0
+		bucket.lastRefill = time.Now()
+		bucket.mu.Unlock()
+
+		if ok := bucket.TakeWithTimeout(20, time.Millisecond); ok {
+			t.Fatal("TakeWithTimeout should return false when required wait exceeds maxWait")
+		}
+
+		total, hits, waited := bucket.Stats()
+		if total != 0 || hits != 0 || waited != 0 {
+			t.Fatalf("stats after timeout = (%d, %d, %v), want (0, 0, 0)", total, hits, waited)
+		}
+	})
+
+	t.Run("succeeds when wait fits in maxWait", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			rateBPS        = int64(1000)
+			bytesToAcquire = int64(20)
+			maxWait        = 100 * time.Millisecond
+		)
+
+		bucket := NewBucket(rateBPS, rateBPS)
+		if bucket == nil {
+			t.Fatal("NewBucket() returned nil")
+		}
+
+		bucket.mu.Lock()
+		bucket.tokens = 0
+		bucket.lastRefill = time.Now()
+		bucket.mu.Unlock()
+
+		if ok := bucket.TakeWithTimeout(bytesToAcquire, maxWait); !ok {
+			t.Fatal("TakeWithTimeout should return true when required wait is within maxWait")
+		}
+
+		total, hits, waited := bucket.Stats()
+		if total != bytesToAcquire {
+			t.Fatalf("total bytes = %d, want %d", total, bytesToAcquire)
+		}
+		if hits == 0 {
+			t.Fatal("throttle hits should be incremented when waiting is required")
+		}
+		if waited <= 0 || waited > maxWait {
+			t.Fatalf("total waited = %v, want in (0, %v]", waited, maxWait)
+		}
+	})
 }
 
 func TestBucketConcurrentTake(t *testing.T) {
