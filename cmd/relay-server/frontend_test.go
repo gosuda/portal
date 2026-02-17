@@ -8,11 +8,104 @@ import (
 	"testing/fstest"
 	"time"
 
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
+
+func TestSetAdmin(t *testing.T) {
+	t.Parallel()
+
+	f := NewFrontend("https://portal.example.com", "https://*.portal.example.com")
+	admin := NewAdmin(0, f, manager.NewAuthManager("admin-secret"), f.portalURL, f.portalAppURL)
+
+	f.SetAdmin(admin)
+
+	if f.admin != admin {
+		t.Fatalf("frontend admin pointer not assigned")
+	}
+}
+
+func TestConvertLeaseEntriesToRows(t *testing.T) {
+	t.Parallel()
+
+	f := NewFrontend("https://portal.example.com", "https://*.portal.example.com")
+	admin := NewAdmin(0, f, manager.NewAuthManager("admin-secret"), f.portalURL, f.portalAppURL)
+	f.SetAdmin(admin)
+	admin.GetApproveManager().SetApprovalMode(manager.ApprovalModeManual)
+
+	serv := newTestRelayServer(t)
+	leaseManager := serv.GetLeaseManager()
+
+	updateLease := func(id, name, metadata string, alpn []string, connectionID int64) {
+		t.Helper()
+
+		ok := leaseManager.UpdateLease(&rdverb.Lease{
+			Identity: &rdsec.Identity{Id: id},
+			Expires:  time.Now().Add(time.Hour).Unix(),
+			Name:     name,
+			Alpn:     alpn,
+			Metadata: metadata,
+		}, connectionID)
+		if !ok {
+			t.Fatalf("update lease %q failed", id)
+		}
+	}
+
+	updateLease("lease-visible", "", `{"description":"Visible lease"}`, []string{"tcp"}, 101)
+	admin.GetApproveManager().ApproveLease("lease-visible")
+	admin.GetBPSManager().SetBPSLimit("lease-visible", 2048)
+	visibleLease, ok := leaseManager.GetLeaseByID("lease-visible")
+	if !ok {
+		t.Fatal("visible lease not found")
+	}
+	visibleLease.LastSeen = time.Now()
+
+	updateLease("lease-hidden", "hidden", `{"hide":true}`, []string{"http/1.1"}, 102)
+	admin.GetApproveManager().ApproveLease("lease-hidden")
+
+	updateLease("lease-stale", "stale", `{"description":"stale"}`, nil, 103)
+	admin.GetApproveManager().ApproveLease("lease-stale")
+	staleLease, ok := leaseManager.GetLeaseByID("lease-stale")
+	if !ok {
+		t.Fatal("stale lease not found")
+	}
+	staleLease.LastSeen = time.Now().Add(-4 * time.Minute)
+
+	updateLease("lease-unapproved", "pending", `{"description":"pending"}`, nil, 104)
+
+	updateLease("lease-banned", "banned", `{"description":"banned"}`, nil, 105)
+	admin.GetApproveManager().ApproveLease("lease-banned")
+	leaseManager.BanLease("lease-banned")
+
+	rows := convertLeaseEntriesToRows(serv, admin, f.portalURL, f.portalAppURL)
+	if len(rows) != 1 {
+		t.Fatalf("len(rows) = %d, want 1", len(rows))
+	}
+
+	row := rows[0]
+	expectedFallbackName := "(" + "unnamed" + ")"
+	if row.Peer != "lease-visible" {
+		t.Fatalf("row.Peer = %q, want %q", row.Peer, "lease-visible")
+	}
+	if row.Name != expectedFallbackName {
+		t.Fatalf("row.Name = %q, want %q", row.Name, expectedFallbackName)
+	}
+	if row.Kind != "tcp" {
+		t.Fatalf("row.Kind = %q, want %q", row.Kind, "tcp")
+	}
+	if row.BPS != 2048 {
+		t.Fatalf("row.BPS = %d, want %d", row.BPS, 2048)
+	}
+	if row.Link != "//.portal.example.com/" {
+		t.Fatalf("row.Link = %q, want %q", row.Link, "//.portal.example.com/")
+	}
+	if row.StaleRed {
+		t.Fatal("row.StaleRed = true, want false for recent lease")
+	}
+}
 
 func TestInjectOGMetadata(t *testing.T) {
 	t.Parallel()
