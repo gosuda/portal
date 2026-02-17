@@ -124,6 +124,47 @@ func TestWithCORSMiddleware_GETSetsHeadersAndCallsInnerHandler(t *testing.T) {
 	assertCORSHeaders(t, rec.Header())
 }
 
+func TestServeWebTransportInvalidAddrTriggersShutdownAndCleanup(t *testing.T) {
+	cert, _, err := generateSelfSignedCert()
+	if err != nil {
+		t.Fatalf("generateSelfSignedCert() error = %v", err)
+	}
+
+	shutdownCalled := make(chan struct{}, 1)
+	cleanup := serveWebTransport(":-1", newTestRelayServer(t), nil, &cert, func() {
+		select {
+		case shutdownCalled <- struct{}{}:
+		default:
+		}
+	})
+
+	select {
+	case <-shutdownCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown callback was not invoked within timeout")
+	}
+
+	cleanupDone := make(chan struct{})
+	cleanupPanic := make(chan any, 1)
+	go func() {
+		defer close(cleanupDone)
+		defer func() {
+			if r := recover(); r != nil {
+				cleanupPanic <- r
+			}
+		}()
+		cleanup()
+	}()
+
+	select {
+	case p := <-cleanupPanic:
+		t.Fatalf("cleanup function panicked: %v", p)
+	case <-cleanupDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup function did not return within timeout")
+	}
+}
+
 func TestWrapRelayStream_NilAndEmptyIPPassthrough(t *testing.T) {
 	t.Parallel()
 

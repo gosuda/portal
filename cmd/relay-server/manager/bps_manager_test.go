@@ -214,6 +214,47 @@ func TestBPSManagerCopy(t *testing.T) {
 	}
 }
 
+func TestEstablishRelayWithBPS(t *testing.T) {
+	t.Parallel()
+
+	clientPayload := []byte("client-to-lease")
+	leasePayload := []byte("lease-to-client")
+
+	clientStream := newScriptedRelayStream(scriptedRead{
+		data: clientPayload,
+		err:  io.EOF,
+	})
+	leaseStream := newScriptedRelayStream(scriptedRead{
+		data: leasePayload,
+		err:  errors.New("lease read failed"),
+	})
+
+	done := make(chan struct{})
+	go func() {
+		EstablishRelayWithBPS(clientStream, leaseStream, "lease-establish", NewBPSManager())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("EstablishRelayWithBPS did not return")
+	}
+
+	if got := leaseStream.CloseCalls(); got == 0 {
+		t.Fatal("lease stream was not closed")
+	}
+	if got := clientStream.CloseCalls(); got == 0 {
+		t.Fatal("client stream was not closed")
+	}
+	if got := leaseStream.WrittenData(); !bytes.Equal(got, clientPayload) {
+		t.Fatalf("lease stream wrote %q, want %q", got, clientPayload)
+	}
+	if got := clientStream.WrittenData(); !bytes.Equal(got, leasePayload) {
+		t.Fatalf("client stream wrote %q, want %q", got, leasePayload)
+	}
+}
+
 func TestNewBucketValidationAndDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -441,6 +482,71 @@ func TestCopyEOFCompletesWithoutError(t *testing.T) {
 	if got := dst.String(); got != "abc" {
 		t.Fatalf("copy output = %q, want %q", got, "abc")
 	}
+}
+
+type scriptedRead struct {
+	data []byte
+	err  error
+}
+
+type scriptedRelayStream struct {
+	mu sync.Mutex
+
+	readScript []scriptedRead
+	readIdx    int
+
+	writes     bytes.Buffer
+	closeCalls int
+}
+
+func newScriptedRelayStream(steps ...scriptedRead) *scriptedRelayStream {
+	script := make([]scriptedRead, 0, len(steps))
+	for _, step := range steps {
+		script = append(script, scriptedRead{
+			data: append([]byte(nil), step.data...),
+			err:  step.err,
+		})
+	}
+	return &scriptedRelayStream{readScript: script}
+}
+
+func (s *scriptedRelayStream) Read(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.readIdx >= len(s.readScript) {
+		return 0, io.EOF
+	}
+
+	step := s.readScript[s.readIdx]
+	s.readIdx++
+	n := copy(p, step.data)
+	return n, step.err
+}
+
+func (s *scriptedRelayStream) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.writes.Write(p)
+}
+
+func (s *scriptedRelayStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeCalls++
+	return nil
+}
+
+func (s *scriptedRelayStream) CloseCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeCalls
+}
+
+func (s *scriptedRelayStream) WrittenData() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.writes.Bytes()...)
 }
 
 type alwaysErrReader struct {

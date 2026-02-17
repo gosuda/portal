@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunServerTLSFlagValidationMismatch(t *testing.T) {
@@ -48,5 +49,30 @@ func TestRunServerTLSFlagValidationMismatch(t *testing.T) {
 				t.Fatalf("error = %q, want mention of --tls-cert and --tls-key", msg)
 			}
 		})
+	}
+}
+
+func TestRunServerInvalidPortReturnsNilWithoutHanging(t *testing.T) {
+	cfg := serverConfig{
+		PortalURL:      "http://localhost:4017",
+		PortalAppURL:   "https://*.localhost:4017",
+		Bootstraps:     []string{"127.0.0.1:4017"},
+		ALPN:           "http/1.1",
+		Port:           -1,
+		AdminSecretKey: "test-admin-secret",
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runServer(cfg)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runServer() error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServer() did not return within timeout")
 	}
 }
