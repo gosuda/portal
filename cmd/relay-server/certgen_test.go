@@ -1,84 +1,54 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/x509"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateSelfSignedCert_BasicSuccess(t *testing.T) {
 	tlsCert, hash, err := generateSelfSignedCert()
-	if err != nil {
-		t.Fatalf("generateSelfSignedCert() error = %v", err)
-	}
+	require.NoError(t, err, "generateSelfSignedCert() error")
 
-	if len(tlsCert.Certificate) == 0 || len(tlsCert.Certificate[0]) == 0 {
-		t.Fatal("expected non-empty tls.Certificate DER chain")
-	}
-	if len(hash) != sha256.Size {
-		t.Fatalf("hash length = %d, want %d", len(hash), sha256.Size)
-	}
+	require.NotEmpty(t, tlsCert.Certificate, "expected non-empty tls.Certificate DER chain")
+	require.NotEmpty(t, tlsCert.Certificate[0], "expected non-empty tls.Certificate DER chain")
+	require.Len(t, hash, sha256.Size, "hash length")
 }
 
 func TestGenerateSelfSignedCert_HashMatchesDER(t *testing.T) {
 	tlsCert, hash, err := generateSelfSignedCert()
-	if err != nil {
-		t.Fatalf("generateSelfSignedCert() error = %v", err)
-	}
-	if len(tlsCert.Certificate) == 0 {
-		t.Fatal("expected certificate chain to be non-empty")
-	}
+	require.NoError(t, err, "generateSelfSignedCert() error")
+
+	require.NotEmpty(t, tlsCert.Certificate, "expected certificate chain to be non-empty")
 
 	sum := sha256.Sum256(tlsCert.Certificate[0])
-	if !bytes.Equal(hash, sum[:]) {
-		t.Fatalf("hash mismatch: got %x want %x", hash, sum)
-	}
+	require.Equal(t, sum[:], hash, "hash mismatch")
 }
 
 func TestGenerateSelfSignedCert_X509Properties(t *testing.T) {
 	tlsCert, _, err := generateSelfSignedCert()
-	if err != nil {
-		t.Fatalf("generateSelfSignedCert() error = %v", err)
-	}
-	if len(tlsCert.Certificate) == 0 {
-		t.Fatal("expected certificate chain to be non-empty")
-	}
+	require.NoError(t, err, "generateSelfSignedCert() error")
+
+	require.NotEmpty(t, tlsCert.Certificate, "expected certificate chain to be non-empty")
 
 	cert, err := x509.ParseCertificate(tlsCert.Certificate[0])
-	if err != nil {
-		t.Fatalf("x509.ParseCertificate() error = %v", err)
-	}
+	require.NoError(t, err, "x509.ParseCertificate() error")
 
-	if cert.Subject.CommonName != "portal-dev" {
-		t.Fatalf("subject common name = %q, want %q", cert.Subject.CommonName, "portal-dev")
-	}
-	if !slices.Contains(cert.DNSNames, "localhost") {
-		t.Fatalf("DNSNames = %v, want to contain %q", cert.DNSNames, "localhost")
-	}
-	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
-		t.Fatalf("KeyUsage = %v, want DigitalSignature bit set", cert.KeyUsage)
-	}
-	if !slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
-		t.Fatalf("ExtKeyUsage = %v, want to contain ServerAuth", cert.ExtKeyUsage)
-	}
+	require.Equal(t, "portal-dev", cert.Subject.CommonName, "subject common name")
+	require.True(t, slices.Contains(cert.DNSNames, "localhost"), "DNSNames should contain localhost")
+	require.NotZero(t, cert.KeyUsage&x509.KeyUsageDigitalSignature, "KeyUsage should have DigitalSignature bit set")
+	require.True(t, slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth), "ExtKeyUsage should contain ServerAuth")
 
 	validity := cert.NotAfter.Sub(cert.NotBefore)
-	if validity >= 14*24*time.Hour {
-		t.Fatalf("validity duration = %v, want < %v", validity, 14*24*time.Hour)
-	}
-	if validity <= 10*24*time.Hour {
-		t.Fatalf("validity duration = %v, want > %v", validity, 10*24*time.Hour)
-	}
+	require.Less(t, validity, 14*24*time.Hour, "validity duration")
+	require.Greater(t, validity, 10*24*time.Hour, "validity duration")
 
 	now := time.Now()
 	const skew = 2 * time.Minute
-	if cert.NotBefore.After(now.Add(skew)) {
-		t.Fatalf("NotBefore = %v, now = %v, skew = %v", cert.NotBefore, now, skew)
-	}
-	if cert.NotAfter.Before(now.Add(-skew)) {
-		t.Fatalf("NotAfter = %v, now = %v, skew = %v", cert.NotAfter, now, skew)
-	}
+	require.False(t, cert.NotBefore.After(now.Add(skew)), "NotBefore should not be in the future")
+	require.False(t, cert.NotAfter.Before(now.Add(-skew)), "NotAfter should not be in the past")
 }

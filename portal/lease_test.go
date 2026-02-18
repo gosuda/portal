@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
@@ -40,29 +43,19 @@ func TestLeaseManager_NameConflict(t *testing.T) {
 	}
 
 	// First lease should succeed
-	if !lm.UpdateLease(lease1, 1) {
-		t.Fatal("First lease registration should succeed")
-	}
+	require.True(t, lm.UpdateLease(lease1, 1), "First lease registration should succeed")
 
 	// Second lease with same name should fail (name conflict)
-	if lm.UpdateLease(lease2, 2) {
-		t.Fatal("Second lease registration should fail due to name conflict")
-	}
+	require.False(t, lm.UpdateLease(lease2, 2), "Second lease registration should fail due to name conflict")
 
 	// Verify only first lease exists
 	entry, exists := lm.GetLeaseByID(identity1.Id)
-	if !exists {
-		t.Fatal("First lease should exist")
-	}
-	if entry.Lease.Name != "my-service" {
-		t.Errorf("Expected lease name 'my-service', got '%s'", entry.Lease.Name)
-	}
+	require.True(t, exists, "First lease should exist")
+	assert.Equal(t, "my-service", entry.Lease.Name)
 
 	// Verify second lease was not added
 	_, exists = lm.GetLeaseByID(identity2.Id)
-	if exists {
-		t.Fatal("Second lease should not exist due to name conflict")
-	}
+	require.False(t, exists, "Second lease should not exist due to name conflict")
 }
 
 func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
@@ -91,23 +84,15 @@ func TestLeaseManager_SameIdentityUpdate(t *testing.T) {
 	}
 
 	// First registration
-	if !lm.UpdateLease(lease1, 1) {
-		t.Fatal("First lease registration should succeed")
-	}
+	require.True(t, lm.UpdateLease(lease1, 1), "First lease registration should succeed")
 
 	// Update with same identity should succeed (no conflict)
-	if !lm.UpdateLease(lease2, 1) {
-		t.Fatal("Updating own lease should succeed")
-	}
+	require.True(t, lm.UpdateLease(lease2, 1), "Updating own lease should succeed")
 
 	// Verify lease was updated
 	entry, exists := lm.GetLeaseByID(identity.Id)
-	if !exists {
-		t.Fatal("Lease should exist")
-	}
-	if len(entry.Lease.Alpn) != 2 {
-		t.Errorf("Expected 2 ALPNs, got %d", len(entry.Lease.Alpn))
-	}
+	require.True(t, exists, "Lease should exist")
+	assert.Len(t, entry.Lease.Alpn, 2)
 }
 
 func TestLeaseManager_EmptyNameAllowed(t *testing.T) {
@@ -139,13 +124,8 @@ func TestLeaseManager_EmptyNameAllowed(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1) {
-		t.Fatal("First lease with empty name should succeed")
-	}
-
-	if !lm.UpdateLease(lease2, 2) {
-		t.Fatal("Second lease with empty name should succeed (empty names don't conflict)")
-	}
+	require.True(t, lm.UpdateLease(lease1, 1), "First lease with empty name should succeed")
+	require.True(t, lm.UpdateLease(lease2, 2), "Second lease with empty name should succeed (empty names don't conflict)")
 }
 
 func TestLeaseManager_UnnamedAllowed(t *testing.T) {
@@ -177,13 +157,8 @@ func TestLeaseManager_UnnamedAllowed(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1) {
-		t.Fatal("First lease with '(unnamed)' should succeed")
-	}
-
-	if !lm.UpdateLease(lease2, 2) {
-		t.Fatal("Second lease with '(unnamed)' should succeed (unnamed don't conflict)")
-	}
+	require.True(t, lm.UpdateLease(lease1, 1), "First lease with '(unnamed)' should succeed")
+	require.True(t, lm.UpdateLease(lease2, 2), "Second lease with '(unnamed)' should succeed (unnamed don't conflict)")
 }
 
 func TestLeaseManager_UnicodeNameConflict(t *testing.T) {
@@ -215,13 +190,8 @@ func TestLeaseManager_UnicodeNameConflict(t *testing.T) {
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	}
 
-	if !lm.UpdateLease(lease1, 1) {
-		t.Fatal("First lease with Korean name should succeed")
-	}
-
-	if lm.UpdateLease(lease2, 2) {
-		t.Fatal("Second lease with same Korean name should fail")
-	}
+	require.True(t, lm.UpdateLease(lease1, 1), "First lease with Korean name should succeed")
+	require.False(t, lm.UpdateLease(lease2, 2), "Second lease with same Korean name should fail")
 }
 
 func TestLeaseManager_GetLeaseByName_SelectsValidOverExpiredAndBanned(t *testing.T) {

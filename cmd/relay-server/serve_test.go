@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"gosuda.org/portal/portal"
 )
 
@@ -70,15 +71,9 @@ func (s *fakeSession) Close() error {
 func assertCORSHeaders(t *testing.T, headers http.Header) {
 	t.Helper()
 
-	if got := headers.Get("Access-Control-Allow-Origin"); got != "*" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want %q", got, "*")
-	}
-	if got := headers.Get("Access-Control-Allow-Methods"); got != "GET, OPTIONS" {
-		t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, "GET, OPTIONS")
-	}
-	if got := headers.Get("Access-Control-Allow-Headers"); got != "Content-Type, Accept, Accept-Encoding" {
-		t.Fatalf("Access-Control-Allow-Headers = %q, want %q", got, "Content-Type, Accept, Accept-Encoding")
-	}
+	require.Equal(t, "*", headers.Get("Access-Control-Allow-Origin"), "Access-Control-Allow-Origin")
+	require.Equal(t, "GET, OPTIONS", headers.Get("Access-Control-Allow-Methods"), "Access-Control-Allow-Methods")
+	require.Equal(t, "Content-Type, Accept, Accept-Encoding", headers.Get("Access-Control-Allow-Headers"), "Access-Control-Allow-Headers")
 }
 
 func TestWithCORSMiddleware_OPTIONSShortCircuitsInnerHandler(t *testing.T) {
@@ -93,12 +88,8 @@ func TestWithCORSMiddleware_OPTIONSShortCircuitsInnerHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodOptions, "/app", http.NoBody)
 	handler(rec, req)
 
-	if innerCalled {
-		t.Fatal("expected OPTIONS request to bypass inner handler")
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
+	require.False(t, innerCalled, "expected OPTIONS request to bypass inner handler")
+	require.Equal(t, http.StatusOK, rec.Code, "status")
 	assertCORSHeaders(t, rec.Header())
 }
 
@@ -115,20 +106,14 @@ func TestWithCORSMiddleware_GETSetsHeadersAndCallsInnerHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/app", http.NoBody)
 	handler(rec, req)
 
-	if !innerCalled {
-		t.Fatal("expected GET request to call inner handler")
-	}
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
-	}
+	require.True(t, innerCalled, "expected GET request to call inner handler")
+	require.Equal(t, http.StatusNoContent, rec.Code, "status")
 	assertCORSHeaders(t, rec.Header())
 }
 
 func TestServeWebTransportInvalidAddrTriggersShutdownAndCleanup(t *testing.T) {
 	cert, _, err := generateSelfSignedCert()
-	if err != nil {
-		t.Fatalf("generateSelfSignedCert() error = %v", err)
-	}
+	require.NoError(t, err, "generateSelfSignedCert()")
 
 	shutdownCalled := make(chan struct{}, 1)
 	cleanup := serveWebTransport(":-1", newTestRelayServer(t), nil, &cert, func() {
@@ -169,12 +154,8 @@ func TestWrapRelayStream_NilAndEmptyIPPassthrough(t *testing.T) {
 	t.Parallel()
 
 	baseStream := &fakeStream{}
-	if got := wrapRelayStream(baseStream, ""); got != baseStream {
-		t.Fatal("expected empty IP to return original stream")
-	}
-	if got := wrapRelayStream(nil, "203.0.113.11"); got != nil {
-		t.Fatal("expected nil stream to remain nil")
-	}
+	require.Equal(t, baseStream, wrapRelayStream(baseStream, ""), "expected empty IP to return original stream")
+	require.Nil(t, wrapRelayStream(nil, "203.0.113.11"), "expected nil stream to remain nil")
 }
 
 func TestStreamClientIP_FromWrappedStream(t *testing.T) {
@@ -182,24 +163,16 @@ func TestStreamClientIP_FromWrappedStream(t *testing.T) {
 
 	baseStream := &fakeStream{}
 	wrapped := wrapRelayStream(baseStream, "203.0.113.12")
-	if wrapped == baseStream {
-		t.Fatal("expected non-empty IP to wrap stream")
-	}
-	if got := streamClientIP(wrapped); got != "203.0.113.12" {
-		t.Fatalf("streamClientIP(wrapped) = %q, want %q", got, "203.0.113.12")
-	}
-	if got := streamClientIP(baseStream); got != "" {
-		t.Fatalf("streamClientIP(unwrapped) = %q, want empty", got)
-	}
+	require.NotEqual(t, baseStream, wrapped, "expected non-empty IP to wrap stream")
+	require.Equal(t, "203.0.113.12", streamClientIP(wrapped), "streamClientIP(wrapped)")
+	require.Equal(t, "", streamClientIP(baseStream), "streamClientIP(unwrapped)")
 }
 
 func TestWrapRelaySession_EmptyIPPassthrough(t *testing.T) {
 	t.Parallel()
 
 	baseSession := &fakeSession{}
-	if got := wrapRelaySession(baseSession, ""); got != baseSession {
-		t.Fatal("expected empty IP to return original session")
-	}
+	require.Equal(t, baseSession, wrapRelaySession(baseSession, ""), "expected empty IP to return original session")
 }
 
 func TestWrapRelaySession_WithIPWrapsOpenAndAcceptStreams(t *testing.T) {
@@ -215,33 +188,17 @@ func TestWrapRelaySession_WithIPWrapsOpenAndAcceptStreams(t *testing.T) {
 	wrappedSession := wrapRelaySession(baseSession, "203.0.113.13")
 
 	openStream, err := wrappedSession.OpenStream(context.Background())
-	if err != nil {
-		t.Fatalf("OpenStream() error = %v", err)
-	}
-	if openStream == openBase {
-		t.Fatal("expected OpenStream result to be wrapped")
-	}
-	if got := streamClientIP(openStream); got != "203.0.113.13" {
-		t.Fatalf("streamClientIP(OpenStream()) = %q, want %q", got, "203.0.113.13")
-	}
+	require.NoError(t, err, "OpenStream()")
+	require.NotEqual(t, openBase, openStream, "expected OpenStream result to be wrapped")
+	require.Equal(t, "203.0.113.13", streamClientIP(openStream), "streamClientIP(OpenStream())")
 
 	acceptStream, err := wrappedSession.AcceptStream(context.Background())
-	if err != nil {
-		t.Fatalf("AcceptStream() error = %v", err)
-	}
-	if acceptStream == acceptBase {
-		t.Fatal("expected AcceptStream result to be wrapped")
-	}
-	if got := streamClientIP(acceptStream); got != "203.0.113.13" {
-		t.Fatalf("streamClientIP(AcceptStream()) = %q, want %q", got, "203.0.113.13")
-	}
+	require.NoError(t, err, "AcceptStream()")
+	require.NotEqual(t, acceptBase, acceptStream, "expected AcceptStream result to be wrapped")
+	require.Equal(t, "203.0.113.13", streamClientIP(acceptStream), "streamClientIP(AcceptStream())")
 
-	if baseSession.openCalls != 1 {
-		t.Fatalf("OpenStream called %d times, want 1", baseSession.openCalls)
-	}
-	if baseSession.acceptCalls != 1 {
-		t.Fatalf("AcceptStream called %d times, want 1", baseSession.acceptCalls)
-	}
+	require.Equal(t, 1, baseSession.openCalls, "OpenStream called")
+	require.Equal(t, 1, baseSession.acceptCalls, "AcceptStream called")
 }
 
 func TestWrapRelaySession_OpenStreamErrorPropagation(t *testing.T) {
@@ -252,12 +209,8 @@ func TestWrapRelaySession_OpenStreamErrorPropagation(t *testing.T) {
 	wrappedSession := wrapRelaySession(baseSession, "203.0.113.14")
 
 	gotStream, err := wrappedSession.OpenStream(context.Background())
-	if !errors.Is(err, openErr) {
-		t.Fatalf("OpenStream() error = %v, want %v", err, openErr)
-	}
-	if gotStream != nil {
-		t.Fatal("expected nil stream when OpenStream fails")
-	}
+	require.ErrorIs(t, err, openErr, "OpenStream()")
+	require.Nil(t, gotStream, "expected nil stream when OpenStream fails")
 }
 
 func TestWrapRelaySession_AcceptStreamErrorPropagation(t *testing.T) {
@@ -268,10 +221,6 @@ func TestWrapRelaySession_AcceptStreamErrorPropagation(t *testing.T) {
 	wrappedSession := wrapRelaySession(baseSession, "203.0.113.15")
 
 	gotStream, err := wrappedSession.AcceptStream(context.Background())
-	if !errors.Is(err, acceptErr) {
-		t.Fatalf("AcceptStream() error = %v, want %v", err, acceptErr)
-	}
-	if gotStream != nil {
-		t.Fatal("expected nil stream when AcceptStream fails")
-	}
+	require.ErrorIs(t, err, acceptErr, "AcceptStream()")
+	require.Nil(t, gotStream, "expected nil stream when AcceptStream fails")
 }

@@ -4,8 +4,9 @@ import (
 	"embed"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestServeTunnelScript(t *testing.T) {
@@ -20,12 +21,8 @@ func TestServeTunnelScript(t *testing.T) {
 
 		serveTunnelScript(rec, req, portalURL)
 
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-		}
-		if got := rec.Header().Get("Allow"); got != expectedAllowGetOrHead {
-			t.Fatalf("Allow = %q, want %q", got, expectedAllowGetOrHead)
-		}
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code, "status")
+		require.Equal(t, expectedAllowGetOrHead, rec.Header().Get("Allow"), "Allow header")
 	})
 
 	t.Run("GetDefaultShellScript", func(t *testing.T) {
@@ -34,26 +31,14 @@ func TestServeTunnelScript(t *testing.T) {
 
 		serveTunnelScript(rec, req, portalURL)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if got := rec.Header().Get("Content-Type"); got != "text/x-shellscript" {
-			t.Fatalf("Content-Type = %q, want %q", got, "text/x-shellscript")
-		}
-		if got := rec.Header().Get("Content-Disposition"); got != `inline; filename="tunnel.sh"` {
-			t.Fatalf("Content-Disposition = %q, want %q", got, `inline; filename="tunnel.sh"`)
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status")
+		require.Equal(t, "text/x-shellscript", rec.Header().Get("Content-Type"), "Content-Type header")
+		require.Equal(t, `inline; filename="tunnel.sh"`, rec.Header().Get("Content-Disposition"), "Content-Disposition header")
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "#!/usr/bin/env sh") {
-			t.Fatalf("body missing shell shebang:\n%s", body)
-		}
-		if !strings.Contains(body, portalURL) {
-			t.Fatalf("body missing portal URL %q", portalURL)
-		}
-		if !strings.Contains(body, "tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH") {
-			t.Fatalf("body missing non-windows tunnel path")
-		}
+		require.Contains(t, body, "#!/usr/bin/env sh", "body missing shell shebang")
+		require.Contains(t, body, portalURL, "body missing portal URL")
+		require.Contains(t, body, "tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH", "body missing non-windows tunnel path")
 	})
 
 	t.Run("GetWindowsFromQueryParam", func(t *testing.T) {
@@ -62,23 +47,13 @@ func TestServeTunnelScript(t *testing.T) {
 
 		serveTunnelScript(rec, req, portalURL)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if got := rec.Header().Get("Content-Type"); got != "text/plain" {
-			t.Fatalf("Content-Type = %q, want %q", got, "text/plain")
-		}
-		if got := rec.Header().Get("Content-Disposition"); got != `inline; filename="tunnel.ps1"` {
-			t.Fatalf("Content-Disposition = %q, want %q", got, `inline; filename="tunnel.ps1"`)
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status")
+		require.Equal(t, "text/plain", rec.Header().Get("Content-Type"), "Content-Type header")
+		require.Equal(t, `inline; filename="tunnel.ps1"`, rec.Header().Get("Content-Disposition"), "Content-Disposition header")
 
 		body := rec.Body.String()
-		if !strings.Contains(body, `$ErrorActionPreference = "Stop"`) {
-			t.Fatalf("body missing PowerShell marker")
-		}
-		if !strings.Contains(body, "windows-$TunnelArch") {
-			t.Fatalf("body missing windows tunnel path")
-		}
+		require.Contains(t, body, `$ErrorActionPreference = "Stop"`, "body missing PowerShell marker")
+		require.Contains(t, body, "windows-$TunnelArch", "body missing windows tunnel path")
 	})
 
 	t.Run("GetWindowsFromUserAgentFallback", func(t *testing.T) {
@@ -88,15 +63,9 @@ func TestServeTunnelScript(t *testing.T) {
 
 		serveTunnelScript(rec, req, portalURL)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if got := rec.Header().Get("Content-Type"); got != "text/plain" {
-			t.Fatalf("Content-Type = %q, want %q", got, "text/plain")
-		}
-		if !strings.Contains(rec.Body.String(), `$ErrorActionPreference = "Stop"`) {
-			t.Fatalf("body missing PowerShell marker")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status")
+		require.Equal(t, "text/plain", rec.Header().Get("Content-Type"), "Content-Type header")
+		require.Contains(t, rec.Body.String(), `$ErrorActionPreference = "Stop"`, "body missing PowerShell marker")
 	})
 
 	t.Run("HeadReturnsHeadersAndNoBody", func(t *testing.T) {
@@ -105,15 +74,9 @@ func TestServeTunnelScript(t *testing.T) {
 
 		serveTunnelScript(rec, req, portalURL)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if got := rec.Header().Get("Content-Type"); got != "text/x-shellscript" {
-			t.Fatalf("Content-Type = %q, want %q", got, "text/x-shellscript")
-		}
-		if rec.Body.Len() != 0 {
-			t.Fatalf("body length = %d, want 0", rec.Body.Len())
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status")
+		require.Equal(t, "text/x-shellscript", rec.Header().Get("Content-Type"), "Content-Type header")
+		require.Equal(t, 0, rec.Body.Len(), "body length")
 	})
 }
 
@@ -129,12 +92,8 @@ func TestServeTunnelBinary(t *testing.T) {
 
 		serveTunnelBinary(rec, req)
 
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
-		}
-		if got := rec.Header().Get("Allow"); got != expectedAllowGetOrHead {
-			t.Fatalf("Allow = %q, want %q", got, expectedAllowGetOrHead)
-		}
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code, "status")
+		require.Equal(t, expectedAllowGetOrHead, rec.Header().Get("Allow"), "Allow header")
 	})
 
 	t.Run("UnknownSlugReturnsNotFound", func(t *testing.T) {
@@ -143,9 +102,7 @@ func TestServeTunnelBinary(t *testing.T) {
 
 		serveTunnelBinary(rec, req)
 
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-		}
+		require.Equal(t, http.StatusNotFound, rec.Code, "status")
 	})
 
 	t.Run("KnownSlugMissingBinaryReturnsNotFound", func(t *testing.T) {
@@ -162,9 +119,7 @@ func TestServeTunnelBinary(t *testing.T) {
 
 				serveTunnelBinary(rec, req)
 
-				if rec.Code != http.StatusNotFound {
-					t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-				}
+				require.Equal(t, http.StatusNotFound, rec.Code, "status")
 			})
 		}
 	})

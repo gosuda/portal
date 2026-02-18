@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/quic-go/webtransport-go"
+	"github.com/stretchr/testify/assert"
 
 	"gosuda.org/portal/portal"
 )
@@ -36,15 +37,9 @@ func TestHandleWebTransportRelayRequest_BansUsingForwardedIP(t *testing.T) {
 		},
 	)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("expected HTTP %d, got %d", http.StatusForbidden, rec.Code)
-	}
-	if upgradeCalled {
-		t.Fatal("upgrade should not be called for banned forwarded IP")
-	}
-	if handleSessionCalled {
-		t.Fatal("handleSession should not be called for banned forwarded IP")
-	}
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.False(t, upgradeCalled, "upgrade should not be called for banned forwarded IP")
+	assert.False(t, handleSessionCalled, "handleSession should not be called for banned forwarded IP")
 }
 
 func TestHandleWebTransportRelayRequest_FailedUpgradeDoesNotPolluteAssociation(t *testing.T) {
@@ -69,13 +64,7 @@ func TestHandleWebTransportRelayRequest_FailedUpgradeDoesNotPolluteAssociation(t
 		},
 	)
 
-	if handleSessionCalled {
-		t.Fatal("handleSession should not be called after failed upgrade")
-	}
-	if pending := admin.GetIPManager().PopPendingIP(); pending != "" {
-		t.Fatalf("expected no pending IP after failed upgrade, got %q", pending)
-	}
-	if ip := admin.GetIPManager().GetLeaseIP("lease-1"); ip != "" {
-		t.Fatalf("expected no lease association after failed upgrade, got %q", ip)
-	}
+	assert.False(t, handleSessionCalled, "handleSession should not be called after failed upgrade")
+	assert.Empty(t, admin.GetIPManager().PopPendingIP(), "expected no pending IP after failed upgrade")
+	assert.Empty(t, admin.GetIPManager().GetLeaseIP("lease-1"), "expected no lease association after failed upgrade")
 }

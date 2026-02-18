@@ -5,21 +5,17 @@ import (
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewApproveManagerDefaults(t *testing.T) {
 	t.Parallel()
 
 	m := NewApproveManager()
-	if got := m.GetApprovalMode(); got != ApprovalModeAuto {
-		t.Fatalf("GetApprovalMode() = %q, want %q", got, ApprovalModeAuto)
-	}
-	if got := m.GetApprovedLeases(); len(got) != 0 {
-		t.Fatalf("GetApprovedLeases() len = %d, want 0", len(got))
-	}
-	if got := m.GetDeniedLeases(); len(got) != 0 {
-		t.Fatalf("GetDeniedLeases() len = %d, want 0", len(got))
-	}
+	require.Equal(t, ApprovalModeAuto, m.GetApprovalMode(), "GetApprovalMode() mismatch")
+	require.Empty(t, m.GetApprovedLeases(), "GetApprovedLeases() should be empty")
+	require.Empty(t, m.GetDeniedLeases(), "GetDeniedLeases() should be empty")
 }
 
 func TestApproveManagerSetApprovalMode(t *testing.T) {
@@ -40,9 +36,7 @@ func TestApproveManagerSetApprovalMode(t *testing.T) {
 
 			m := NewApproveManager()
 			m.SetApprovalMode(tt.mode)
-			if got := m.GetApprovalMode(); got != tt.mode {
-				t.Fatalf("GetApprovalMode() = %q, want %q", got, tt.mode)
-			}
+			require.Equal(t, tt.mode, m.GetApprovalMode(), "GetApprovalMode() mismatch")
 		})
 	}
 }
@@ -127,12 +121,8 @@ func TestApproveManagerLeaseStateTransitions(t *testing.T) {
 			m := NewApproveManager()
 			tt.setup(m, tt.leaseID)
 
-			if got := m.IsLeaseApproved(tt.leaseID); got != tt.wantApproved {
-				t.Fatalf("IsLeaseApproved(%q) = %v, want %v", tt.leaseID, got, tt.wantApproved)
-			}
-			if got := m.IsLeaseDenied(tt.leaseID); got != tt.wantDenied {
-				t.Fatalf("IsLeaseDenied(%q) = %v, want %v", tt.leaseID, got, tt.wantDenied)
-			}
+			require.Equal(t, tt.wantApproved, m.IsLeaseApproved(tt.leaseID), "IsLeaseApproved(%q) mismatch", tt.leaseID)
+			require.Equal(t, tt.wantDenied, m.IsLeaseDenied(tt.leaseID), "IsLeaseDenied(%q) mismatch", tt.leaseID)
 		})
 	}
 }
@@ -149,16 +139,12 @@ func TestApproveManagerLeaseLists(t *testing.T) {
 	approved := m.GetApprovedLeases()
 	slices.Sort(approved)
 	wantApproved := []string{"lease-a", "lease-b"}
-	if !slices.Equal(approved, wantApproved) {
-		t.Fatalf("GetApprovedLeases() = %v, want %v", approved, wantApproved)
-	}
+	require.Equal(t, wantApproved, approved, "GetApprovedLeases() mismatch")
 
 	denied := m.GetDeniedLeases()
 	slices.Sort(denied)
 	wantDenied := []string{"lease-c", "lease-d"}
-	if !slices.Equal(denied, wantDenied) {
-		t.Fatalf("GetDeniedLeases() = %v, want %v", denied, wantDenied)
-	}
+	require.Equal(t, wantDenied, denied, "GetDeniedLeases() mismatch")
 }
 
 func TestApproveManagerConcurrentApprovals(t *testing.T) {
@@ -179,16 +165,10 @@ func TestApproveManagerConcurrentApprovals(t *testing.T) {
 	wg.Wait()
 
 	leases := m.GetApprovedLeases()
-	if len(leases) != workers {
-		t.Fatalf("GetApprovedLeases() len = %d, want %d", len(leases), workers)
-	}
+	require.Len(t, leases, workers, "GetApprovedLeases() length mismatch")
 	for i := range workers {
 		leaseID := fmt.Sprintf("lease-%02d", i)
-		if !m.IsLeaseApproved(leaseID) {
-			t.Fatalf("lease %q was not approved", leaseID)
-		}
-		if m.IsLeaseDenied(leaseID) {
-			t.Fatalf("lease %q should not be denied", leaseID)
-		}
+		require.True(t, m.IsLeaseApproved(leaseID), "lease %q should be approved", leaseID)
+		require.False(t, m.IsLeaseDenied(leaseID), "lease %q should not be denied", leaseID)
 	}
 }

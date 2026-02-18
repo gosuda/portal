@@ -2,12 +2,14 @@ package portal
 
 import (
 	"context"
-	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdverb"
@@ -17,9 +19,7 @@ func newRelayTestCredential(t *testing.T) *cryptoops.Credential {
 	t.Helper()
 
 	cred, err := cryptoops.NewCredential()
-	if err != nil {
-		t.Fatalf("cryptoops.NewCredential: %v", err)
-	}
+	require.NoError(t, err, "cryptoops.NewCredential")
 
 	return cred
 }
@@ -125,20 +125,14 @@ func TestRelayServerHandleSessionRejectsAfterStop(t *testing.T) {
 	connIDCounter := server.connidCounter
 	server.connectionsLock.RUnlock()
 
-	if connectionCount != 0 {
-		t.Fatalf("expected no registered connections after stop, got %d", connectionCount)
-	}
-	if connIDCounter != 0 {
-		t.Fatalf("expected connidCounter to remain 0 after stop, got %d", connIDCounter)
-	}
+	assert.Zero(t, connectionCount, "expected no registered connections after stop, got %d", connectionCount)
+	assert.Zero(t, connIDCounter, "expected connidCounter to remain 0 after stop, got %d", connIDCounter)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
 	_, err := serverSess.AcceptStream(ctx)
-	if !errors.Is(err, ErrPipeSessionClosed) {
-		t.Fatalf("expected incoming session to be closed after stop, got %v", err)
-	}
+	assert.ErrorIs(t, err, ErrPipeSessionClosed, "expected incoming session to be closed after stop")
 }
 
 func TestRelayServerStopRejectsLateAcceptedStream(t *testing.T) {
@@ -162,19 +156,13 @@ func TestRelayServerStopRejectsLateAcceptedStream(t *testing.T) {
 
 	waitForSignal(t, stopDone, "Stop completion")
 
-	if got := stream.readCalls.Load(); got != 0 {
-		t.Fatalf("expected no stream handler reads after stop, got %d", got)
-	}
-	if got := stream.closeCalls.Load(); got == 0 {
-		t.Fatal("expected late-accepted stream to be closed during stop")
-	}
+	assert.Zero(t, stream.readCalls.Load(), "expected no stream handler reads after stop")
+	assert.NotZero(t, stream.closeCalls.Load(), "expected late-accepted stream to be closed during stop")
 
 	server.connectionsLock.RLock()
 	connectionCount := len(server.connections)
 	server.connectionsLock.RUnlock()
-	if connectionCount != 0 {
-		t.Fatalf("expected all connections cleaned up after stop, got %d", connectionCount)
-	}
+	assert.Zero(t, connectionCount, "expected all connections cleaned up after stop")
 }
 
 func TestRelayServerStopWaitsForRelayedConnectionWorker(t *testing.T) {
@@ -191,9 +179,7 @@ func TestRelayServerStopWaitsForRelayedConnectionWorker(t *testing.T) {
 		Name: "stop-waits-for-relay-worker",
 		Alpn: []string{"test-proto"},
 	})
-	if err != nil {
-		t.Fatalf("RegisterLease: %v", err)
-	}
+	require.NoError(t, err, "RegisterLease")
 
 	peerClientSession, peerServerSession := NewPipeSessionPair()
 	server.HandleSession(peerServerSession)

@@ -3,11 +3,12 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
@@ -23,9 +24,7 @@ func TestSetAdmin(t *testing.T) {
 
 	f.SetAdmin(admin)
 
-	if f.admin != admin {
-		t.Fatalf("frontend admin pointer not assigned")
-	}
+	require.Equal(t, admin, f.admin, "frontend admin pointer not assigned")
 }
 
 func TestConvertLeaseEntriesToRows(t *testing.T) {
@@ -49,18 +48,14 @@ func TestConvertLeaseEntriesToRows(t *testing.T) {
 			Alpn:     alpn,
 			Metadata: metadata,
 		}, connectionID)
-		if !ok {
-			t.Fatalf("update lease %q failed", id)
-		}
+		require.True(t, ok, "update lease %q failed", id)
 	}
 
 	updateLease("lease-visible", "", `{"description":"Visible lease"}`, []string{"tcp"}, 101)
 	admin.GetApproveManager().ApproveLease("lease-visible")
 	admin.GetBPSManager().SetBPSLimit("lease-visible", 2048)
 	visibleLease, ok := leaseManager.GetLeaseByID("lease-visible")
-	if !ok {
-		t.Fatal("visible lease not found")
-	}
+	require.True(t, ok, "visible lease not found")
 	visibleLease.LastSeen = time.Now()
 
 	updateLease("lease-hidden", "hidden", `{"hide":true}`, []string{"http/1.1"}, 102)
@@ -69,9 +64,7 @@ func TestConvertLeaseEntriesToRows(t *testing.T) {
 	updateLease("lease-stale", "stale", `{"description":"stale"}`, nil, 103)
 	admin.GetApproveManager().ApproveLease("lease-stale")
 	staleLease, ok := leaseManager.GetLeaseByID("lease-stale")
-	if !ok {
-		t.Fatal("stale lease not found")
-	}
+	require.True(t, ok, "stale lease not found")
 	staleLease.LastSeen = time.Now().Add(-4 * time.Minute)
 
 	updateLease("lease-unapproved", "pending", `{"description":"pending"}`, nil, 104)
@@ -81,30 +74,16 @@ func TestConvertLeaseEntriesToRows(t *testing.T) {
 	leaseManager.BanLease("lease-banned")
 
 	rows := convertLeaseEntriesToRows(serv, admin, f.portalURL, f.portalAppURL)
-	if len(rows) != 1 {
-		t.Fatalf("len(rows) = %d, want 1", len(rows))
-	}
+	require.Len(t, rows, 1, "len(rows) should be 1")
 
 	row := rows[0]
 	expectedFallbackName := "(" + "unnamed" + ")"
-	if row.Peer != "lease-visible" {
-		t.Fatalf("row.Peer = %q, want %q", row.Peer, "lease-visible")
-	}
-	if row.Name != expectedFallbackName {
-		t.Fatalf("row.Name = %q, want %q", row.Name, expectedFallbackName)
-	}
-	if row.Kind != "tcp" {
-		t.Fatalf("row.Kind = %q, want %q", row.Kind, "tcp")
-	}
-	if row.BPS != 2048 {
-		t.Fatalf("row.BPS = %d, want %d", row.BPS, 2048)
-	}
-	if row.Link != "//.portal.example.com/" {
-		t.Fatalf("row.Link = %q, want %q", row.Link, "//.portal.example.com/")
-	}
-	if row.StaleRed {
-		t.Fatal("row.StaleRed = true, want false for recent lease")
-	}
+	require.Equal(t, "lease-visible", row.Peer, "row.Peer mismatch")
+	require.Equal(t, expectedFallbackName, row.Name, "row.Name mismatch")
+	require.Equal(t, "tcp", row.Kind, "row.Kind mismatch")
+	require.Equal(t, int64(2048), row.BPS, "row.BPS mismatch")
+	require.Equal(t, "//.portal.example.com/", row.Link, "row.Link mismatch")
+	require.False(t, row.StaleRed, "row.StaleRed should be false for recent lease")
 }
 
 func TestInjectOGMetadata(t *testing.T) {
@@ -164,9 +143,7 @@ func TestInjectOGMetadata(t *testing.T) {
 
 			got := f.injectOGMetadata(tt.html, tt.title, tt.description, tt.imageURL)
 			for _, w := range tt.want {
-				if !strings.Contains(got, w) {
-					t.Errorf("injectOGMetadata() = %v, want to contain %v", got, w)
-				}
+				assert.Contains(t, got, w)
 			}
 		})
 	}
@@ -216,14 +193,12 @@ func TestServeAsset(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/asset.js", http.NoBody)
 			mux.ServeHTTP(rec, req)
 
-			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			require.Equal(t, tt.wantStatus, rec.Code, "status mismatch")
+			if tt.wantBody != "" {
+				require.Equal(t, tt.wantBody, rec.Body.String(), "body mismatch")
 			}
-			if tt.wantBody != "" && rec.Body.String() != tt.wantBody {
-				t.Fatalf("body = %q, want %q", rec.Body.String(), tt.wantBody)
-			}
-			if tt.wantContentType != "" && rec.Header().Get("Content-Type") != tt.wantContentType {
-				t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), tt.wantContentType)
+			if tt.wantContentType != "" {
+				require.Equal(t, tt.wantContentType, rec.Header().Get("Content-Type"), "content-type mismatch")
 			}
 		})
 	}
@@ -252,12 +227,8 @@ func TestServeAppStatic(t *testing.T) {
 
 		f.ServeAppStatic(rec, req, "../secret", nil)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-		}
-		if !strings.Contains(rec.Body.String(), "Invalid path") {
-			t.Fatalf("body = %q, want to contain %q", rec.Body.String(), "Invalid path")
-		}
+		require.Equal(t, http.StatusBadRequest, rec.Code, "status mismatch")
+		require.Contains(t, rec.Body.String(), "Invalid path", "body should contain Invalid path")
 	})
 
 	t.Run("root path serves SSR html", func(t *testing.T) {
@@ -272,23 +243,13 @@ func TestServeAppStatic(t *testing.T) {
 
 		f.ServeAppStatic(rec, req, "/", nil)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
-		}
-		if rec.Header().Get("Cache-Control") != "no-cache, must-revalidate" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "no-cache, must-revalidate")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "no-cache, must-revalidate", rec.Header().Get("Cache-Control"), "cache-control mismatch")
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "Portal Proxy Gateway") {
-			t.Fatalf("body = %q, want default OG title", body)
-		}
-		if !strings.Contains(body, "__SSR_DATA__") {
-			t.Fatalf("body = %q, want SSR data script marker", body)
-		}
+		require.Contains(t, body, "Portal Proxy Gateway", "body should contain default OG title")
+		require.Contains(t, body, "__SSR_DATA__", "body should contain SSR data script marker")
 	})
 
 	t.Run("existing static file", func(t *testing.T) {
@@ -303,18 +264,10 @@ func TestServeAppStatic(t *testing.T) {
 
 		f.ServeAppStatic(rec, req, "assets/app.js", nil)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "application/javascript" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "application/javascript")
-		}
-		if rec.Header().Get("Cache-Control") != "public, max-age=3600" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "public, max-age=3600")
-		}
-		if rec.Body.String() != "console.log('app');" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "console.log('app');")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "application/javascript", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "public, max-age=3600", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+		require.Equal(t, "console.log('app');", rec.Body.String(), "body mismatch")
 	})
 
 	t.Run("missing file falls back to SSR", func(t *testing.T) {
@@ -329,18 +282,10 @@ func TestServeAppStatic(t *testing.T) {
 
 		f.ServeAppStatic(rec, req, "missing.js", nil)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
-		}
-		if rec.Header().Get("Cache-Control") != "no-cache, must-revalidate" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "no-cache, must-revalidate")
-		}
-		if !strings.Contains(rec.Body.String(), "Portal Proxy Gateway") {
-			t.Fatalf("body = %q, want default OG metadata", rec.Body.String())
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "no-cache, must-revalidate", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+		require.Contains(t, rec.Body.String(), "Portal Proxy Gateway", "body should contain default OG metadata")
 	})
 }
 
@@ -356,12 +301,8 @@ func TestServePortalStatic(t *testing.T) {
 
 		f.ServePortalStatic(rec, req)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
-		}
-		if !strings.Contains(rec.Body.String(), "Invalid path") {
-			t.Fatalf("body = %q, want to contain %q", rec.Body.String(), "Invalid path")
-		}
+		require.Equal(t, http.StatusBadRequest, rec.Code, "status mismatch")
+		require.Contains(t, rec.Body.String(), "Invalid path", "body should contain Invalid path")
 	})
 
 	t.Run("portal.jpg special headers", func(t *testing.T) {
@@ -375,18 +316,10 @@ func TestServePortalStatic(t *testing.T) {
 
 		f.ServePortalStatic(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Cache-Control") != "public, max-age=604800" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "public, max-age=604800")
-		}
-		if rec.Header().Get("Content-Type") != "image/jpeg" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "image/jpeg")
-		}
-		if rec.Body.String() != "jpg-bytes" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "jpg-bytes")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "public, max-age=604800", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+		require.Equal(t, "image/jpeg", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "jpg-bytes", rec.Body.String(), "body mismatch")
 	})
 
 	t.Run("portal.mp4 special headers", func(t *testing.T) {
@@ -400,18 +333,10 @@ func TestServePortalStatic(t *testing.T) {
 
 		f.ServePortalStatic(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Cache-Control") != "public, max-age=604800" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "public, max-age=604800")
-		}
-		if rec.Header().Get("Content-Type") != "video/mp4" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "video/mp4")
-		}
-		if rec.Body.String() != "mp4-bytes" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "mp4-bytes")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "public, max-age=604800", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+		require.Equal(t, "video/mp4", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "mp4-bytes", rec.Body.String(), "body mismatch")
 	})
 
 	t.Run("generic missing path falls back to portal.html", func(t *testing.T) {
@@ -425,18 +350,10 @@ func TestServePortalStatic(t *testing.T) {
 
 		f.ServePortalStatic(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Cache-Control") != "public, max-age=3600" {
-			t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "public, max-age=3600")
-		}
-		if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
-		}
-		if rec.Body.String() != "<html>portal fallback</html>" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "<html>portal fallback</html>")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "public, max-age=3600", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+		require.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "<html>portal fallback</html>", rec.Body.String(), "body mismatch")
 	})
 }
 
@@ -452,18 +369,10 @@ func TestServePortalStaticFile(t *testing.T) {
 
 	f.ServePortalStaticFile(rec, req, "assets/site.css")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec.Header().Get("Cache-Control") != "public, max-age=3600" {
-		t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "public, max-age=3600")
-	}
-	if rec.Header().Get("Content-Type") != "text/css" {
-		t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/css")
-	}
-	if rec.Body.String() != "body { color: #111; }" {
-		t.Fatalf("body = %q, want %q", rec.Body.String(), "body { color: #111; }")
-	}
+	require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+	require.Equal(t, "public, max-age=3600", rec.Header().Get("Cache-Control"), "cache-control mismatch")
+	require.Equal(t, "text/css", rec.Header().Get("Content-Type"), "content-type mismatch")
+	require.Equal(t, "body { color: #111; }", rec.Body.String(), "body mismatch")
 }
 
 func TestServeStaticFileWithFallback(t *testing.T) {
@@ -480,15 +389,9 @@ func TestServeStaticFileWithFallback(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/assets/data.json", http.NoBody)
 		f.serveStaticFileWithFallback(rec, req, "assets/data.json", "")
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "application/json" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "application/json")
-		}
-		if rec.Body.String() != `{"ok":true}` {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), `{"ok":true}`)
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "application/json", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, `{"ok":true}`, rec.Body.String(), "body mismatch")
 	})
 
 	t.Run("existing file respects explicit content type", func(t *testing.T) {
@@ -502,15 +405,9 @@ func TestServeStaticFileWithFallback(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/assets/blob.bin", http.NoBody)
 		f.serveStaticFileWithFallback(rec, req, "assets/blob.bin", "application/octet-stream")
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "application/octet-stream" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "application/octet-stream")
-		}
-		if rec.Body.String() != "blob" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "blob")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "blob", rec.Body.String(), "body mismatch")
 	})
 
 	t.Run("missing file falls back to portal html", func(t *testing.T) {
@@ -524,15 +421,9 @@ func TestServeStaticFileWithFallback(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/missing", http.NoBody)
 		f.serveStaticFileWithFallback(rec, req, "does-not-exist", "application/octet-stream")
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-		}
-		if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-			t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
-		}
-		if rec.Body.String() != "<html>fallback</html>" {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), "<html>fallback</html>")
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+		require.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"), "content-type mismatch")
+		require.Equal(t, "<html>fallback</html>", rec.Body.String(), "body mismatch")
 	})
 }
 
@@ -552,9 +443,7 @@ func TestServePortalHTMLWithSSR(t *testing.T) {
 		Name:     "demo",
 		Metadata: `{"description":"Demo service","thumbnail":"https://cdn.example.com/demo.jpg"}`,
 	}, 1)
-	if !ok {
-		t.Fatal("expected lease update to succeed")
-	}
+	require.True(t, ok, "expected lease update to succeed")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "https://demo.portal.example.com/", http.NoBody)
@@ -562,26 +451,14 @@ func TestServePortalHTMLWithSSR(t *testing.T) {
 
 	f.ServePortalHTMLWithSSR(rec, req, serv)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-		t.Fatalf("content-type = %q, want %q", rec.Header().Get("Content-Type"), "text/html; charset=utf-8")
-	}
-	if rec.Header().Get("Cache-Control") != "no-cache, must-revalidate" {
-		t.Fatalf("cache-control = %q, want %q", rec.Header().Get("Cache-Control"), "no-cache, must-revalidate")
-	}
+	require.Equal(t, http.StatusOK, rec.Code, "status mismatch")
+	require.Equal(t, "text/html; charset=utf-8", rec.Header().Get("Content-Type"), "content-type mismatch")
+	require.Equal(t, "no-cache, must-revalidate", rec.Header().Get("Cache-Control"), "cache-control mismatch")
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "<title>demo</title>") {
-		t.Fatalf("body = %q, want lease name injected in title", body)
-	}
-	if !strings.Contains(body, `content="Demo service"`) {
-		t.Fatalf("body = %q, want lease description injected", body)
-	}
-	if !strings.Contains(body, `content="https://cdn.example.com/demo.jpg"`) {
-		t.Fatalf("body = %q, want lease thumbnail injected", body)
-	}
+	require.Contains(t, body, "<title>demo</title>", "body should contain lease name injected in title")
+	require.Contains(t, body, `content="Demo service"`, "body should contain lease description injected")
+	require.Contains(t, body, `content="https://cdn.example.com/demo.jpg"`, "body should contain lease thumbnail injected")
 }
 
 func newTestFrontendWithDistFS(dist fstest.MapFS) *Frontend {
@@ -594,9 +471,7 @@ func newTestRelayServer(t *testing.T) *portal.RelayServer {
 	t.Helper()
 
 	cred, err := cryptoops.NewCredential()
-	if err != nil {
-		t.Fatalf("cryptoops.NewCredential: %v", err)
-	}
+	require.NoError(t, err, "cryptoops.NewCredential failed")
 
 	return portal.NewRelayServer(cred, []string{"127.0.0.1:4017"})
 }

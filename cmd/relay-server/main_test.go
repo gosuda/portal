@@ -4,9 +4,10 @@ import (
 	"flag"
 	"io"
 	"os"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRunServerTLSFlagValidationMismatch(t *testing.T) {
@@ -43,14 +44,11 @@ func TestRunServerTLSFlagValidationMismatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := runServer(tt.cfg)
-			if err == nil {
-				t.Fatalf("runServer() error = nil, want mismatch error")
-			}
+			require.Error(t, err, "runServer() should return error")
 
 			msg := err.Error()
-			if !strings.Contains(msg, "--tls-cert") || !strings.Contains(msg, "--tls-key") {
-				t.Fatalf("error = %q, want mention of --tls-cert and --tls-key", msg)
-			}
+			require.Contains(t, msg, "--tls-cert", "error should mention --tls-cert")
+			require.Contains(t, msg, "--tls-key", "error should mention --tls-key")
 		})
 	}
 }
@@ -72,9 +70,7 @@ func TestRunServerInvalidPortReturnsNilWithoutHanging(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("runServer() error = %v, want nil", err)
-		}
+		require.NoError(t, err, "runServer() should return nil")
 	case <-time.After(2 * time.Second):
 		t.Fatal("runServer() did not return within timeout")
 	}
@@ -93,12 +89,8 @@ func TestRunServerTLSCertLoadError(t *testing.T) {
 	}
 
 	err := runServer(cfg)
-	if err == nil {
-		t.Fatal("runServer() error = nil, want load TLS certificate error")
-	}
-	if !strings.Contains(err.Error(), "load TLS certificate") {
-		t.Fatalf("error = %q, want load TLS certificate context", err.Error())
-	}
+	require.Error(t, err, "runServer() should return error")
+	require.Contains(t, err.Error(), "load TLS certificate", "error should mention load TLS certificate")
 }
 
 func TestRunServerTLSAutoInvalidPortReturnsNilWithoutHanging(t *testing.T) {
@@ -119,9 +111,7 @@ func TestRunServerTLSAutoInvalidPortReturnsNilWithoutHanging(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("runServer() error = %v, want nil", err)
-		}
+		require.NoError(t, err, "runServer() should return nil")
 	case <-time.After(2 * time.Second):
 		t.Fatal("runServer() with TLS auto did not return within timeout")
 	}

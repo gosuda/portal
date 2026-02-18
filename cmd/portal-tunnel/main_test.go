@@ -22,6 +22,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFetchConsistentCertHashAutoSingleRelaySuccess(t *testing.T) {
@@ -30,13 +33,8 @@ func TestFetchConsistentCertHashAutoSingleRelaySuccess(t *testing.T) {
 	srv, expectedHash := newCertHashTLSServer(t)
 
 	hash, err := fetchConsistentCertHash(context.Background(), []string{relayURL(srv, "/relay")})
-	if err != nil {
-		t.Fatalf("fetchConsistentCertHash() error = %v", err)
-	}
-
-	if got := hex.EncodeToString(hash); got != expectedHash {
-		t.Fatalf("fetchConsistentCertHash() hash = %s, want %s", got, expectedHash)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, expectedHash, hex.EncodeToString(hash))
 }
 
 func TestFetchConsistentCertHashAutoMultiRelaySameCertSuccess(t *testing.T) {
@@ -50,13 +48,8 @@ func TestFetchConsistentCertHashAutoMultiRelaySameCertSuccess(t *testing.T) {
 		context.Background(),
 		[]string{relayURL(srv1, "/relay-a"), relayURL(srv2, "/relay-b")},
 	)
-	if err != nil {
-		t.Fatalf("fetchConsistentCertHash() error = %v", err)
-	}
-
-	if got := hex.EncodeToString(hash); got != expectedHash {
-		t.Fatalf("fetchConsistentCertHash() hash = %s, want %s", got, expectedHash)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, expectedHash, hex.EncodeToString(hash))
 }
 
 func TestFetchConsistentCertHashAutoMultiRelayDifferentCertFails(t *testing.T) {
@@ -70,17 +63,13 @@ func TestFetchConsistentCertHashAutoMultiRelayDifferentCertFails(t *testing.T) {
 	hash2 := certificateHashHex(t, cert2)
 	srv2 := newCertHashTLSServerWithCertificate(t, cert2, hash2)
 
-	if hash1 == hash2 {
-		t.Fatal("expected different hashes from distinct certificates")
-	}
+	assert.NotEqual(t, hash1, hash2, "expected different hashes from distinct certificates")
 
 	relay1 := relayURL(srv1, "/relay-a")
 	relay2 := relayURL(srv2, "/relay-b")
 
 	_, err := fetchConsistentCertHash(context.Background(), []string{relay1, relay2})
-	if err == nil {
-		t.Fatal("fetchConsistentCertHash() expected mismatch error, got nil")
-	}
+	require.Error(t, err, "fetchConsistentCertHash() expected mismatch error")
 
 	errMsg := err.Error()
 	for _, want := range []string{
@@ -90,9 +79,7 @@ func TestFetchConsistentCertHashAutoMultiRelayDifferentCertFails(t *testing.T) {
 		hash1,
 		hash2,
 	} {
-		if !strings.Contains(errMsg, want) {
-			t.Fatalf("mismatch error %q does not include %q", errMsg, want)
-		}
+		assert.Contains(t, errMsg, want)
 	}
 }
 
@@ -178,12 +165,8 @@ func TestFetchCertHashFailures(t *testing.T) {
 			srv := newFixedCertHashResponseTLSServer(t, tc.status, tc.body)
 
 			_, err := fetchCertHash(context.Background(), relayURL(srv, "/relay"))
-			if err == nil {
-				t.Fatal("fetchCertHash() expected error, got nil")
-			}
-			if !strings.Contains(err.Error(), tc.wantError) {
-				t.Fatalf("fetchCertHash() error = %q, want contains %q", err.Error(), tc.wantError)
-			}
+			require.Error(t, err, "fetchCertHash() expected error")
+			assert.Contains(t, err.Error(), tc.wantError)
 		})
 	}
 }
@@ -486,15 +469,11 @@ func newSelfSignedTLSCertificate(t *testing.T, commonName string) tls.Certificat
 	t.Helper()
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("ecdsa.GenerateKey() error = %v", err)
-	}
+	require.NoError(t, err, "ecdsa.GenerateKey() error")
 
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 62)
 	serialNumber, err := rand.Int(rand.Reader, serialLimit)
-	if err != nil {
-		t.Fatalf("rand.Int() error = %v", err)
-	}
+	require.NoError(t, err, "rand.Int() error")
 
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
@@ -509,14 +488,10 @@ func newSelfSignedTLSCertificate(t *testing.T, commonName string) tls.Certificat
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
-	if err != nil {
-		t.Fatalf("x509.CreateCertificate() error = %v", err)
-	}
+	require.NoError(t, err, "x509.CreateCertificate() error")
 
 	keyDER, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		t.Fatalf("x509.MarshalECPrivateKey() error = %v", err)
-	}
+	require.NoError(t, err, "x509.MarshalECPrivateKey() error")
 
 	certPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
@@ -528,9 +503,7 @@ func newSelfSignedTLSCertificate(t *testing.T, commonName string) tls.Certificat
 	})
 
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("tls.X509KeyPair() error = %v", err)
-	}
+	require.NoError(t, err, "tls.X509KeyPair() error")
 
 	return cert
 }

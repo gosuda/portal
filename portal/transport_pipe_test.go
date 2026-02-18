@@ -1,26 +1,22 @@
 package portal
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"io"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPipeSessionPair(t *testing.T) {
 	client, server := NewPipeSessionPair()
-	if client == nil || server == nil {
-		t.Fatal("NewPipeSessionPair returned nil")
-	}
-	if client.peer != server {
-		t.Error("client peer not set to server")
-	}
-	if server.peer != client {
-		t.Error("server peer not set to client")
-	}
+	require.NotNil(t, client, "NewPipeSessionPair returned nil client")
+	require.NotNil(t, server, "NewPipeSessionPair returned nil server")
+	assert.Equal(t, server, client.peer, "client peer not set to server")
+	assert.Equal(t, client, server.peer, "server peer not set to client")
 }
 
 func TestPipeSessionBidirectionalStreams(t *testing.T) {
@@ -50,27 +46,19 @@ func TestPipeSessionBidirectionalStreams(t *testing.T) {
 
 		wg.Wait()
 
-		if clientErr != nil {
-			t.Fatalf("client.OpenStream: %v", clientErr)
-		}
-		if serverErr != nil {
-			t.Fatalf("server.AcceptStream: %v", serverErr)
-		}
+		require.NoError(t, clientErr, "client.OpenStream")
+		require.NoError(t, serverErr, "server.AcceptStream")
 
 		// Test data transfer
 		msg := []byte("hello from client")
-		if _, err := clientStream.Write(msg); err != nil {
-			t.Fatalf("clientStream.Write: %v", err)
-		}
+		_, err := clientStream.Write(msg)
+		require.NoError(t, err, "clientStream.Write")
 
 		buf := make([]byte, len(msg))
-		if _, err := io.ReadFull(serverStream, buf); err != nil {
-			t.Fatalf("serverStream.Read: %v", err)
-		}
+		_, err = io.ReadFull(serverStream, buf)
+		require.NoError(t, err, "serverStream.Read")
 
-		if !bytes.Equal(buf, msg) {
-			t.Errorf("got %q, want %q", buf, msg)
-		}
+		assert.Equal(t, msg, buf, "data mismatch")
 
 		clientStream.Close()
 		serverStream.Close()
@@ -96,27 +84,19 @@ func TestPipeSessionBidirectionalStreams(t *testing.T) {
 
 		wg.Wait()
 
-		if serverErr != nil {
-			t.Fatalf("server.OpenStream: %v", serverErr)
-		}
-		if clientErr != nil {
-			t.Fatalf("client.AcceptStream: %v", clientErr)
-		}
+		require.NoError(t, serverErr, "server.OpenStream")
+		require.NoError(t, clientErr, "client.AcceptStream")
 
 		// Test data transfer
 		msg := []byte("hello from server")
-		if _, err := serverStream.Write(msg); err != nil {
-			t.Fatalf("serverStream.Write: %v", err)
-		}
+		_, err := serverStream.Write(msg)
+		require.NoError(t, err, "serverStream.Write")
 
 		buf := make([]byte, len(msg))
-		if _, err := io.ReadFull(clientStream, buf); err != nil {
-			t.Fatalf("clientStream.Read: %v", err)
-		}
+		_, err = io.ReadFull(clientStream, buf)
+		require.NoError(t, err, "clientStream.Read")
 
-		if !bytes.Equal(buf, msg) {
-			t.Errorf("got %q, want %q", buf, msg)
-		}
+		assert.Equal(t, msg, buf, "data mismatch")
 
 		serverStream.Close()
 		clientStream.Close()
@@ -142,9 +122,7 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 	}()
 
 	serverStream, err := server.AcceptStream(ctx)
-	if err != nil {
-		t.Fatalf("server.AcceptStream: %v", err)
-	}
+	require.NoError(t, err, "server.AcceptStream")
 	clientStream := <-streamC
 
 	defer clientStream.Close()
@@ -156,33 +134,21 @@ func TestPipeSessionDataTransfer(t *testing.T) {
 
 	// Client -> Server
 	_, err = clientStream.Write(msg1)
-	if err != nil {
-		t.Fatalf("Write ping: %v", err)
-	}
+	require.NoError(t, err, "Write ping")
 
 	buf1 := make([]byte, len(msg1))
 	_, err = io.ReadFull(serverStream, buf1)
-	if err != nil {
-		t.Fatalf("Read ping: %v", err)
-	}
-	if !bytes.Equal(buf1, msg1) {
-		t.Errorf("got %q, want %q", buf1, msg1)
-	}
+	require.NoError(t, err, "Read ping")
+	assert.Equal(t, msg1, buf1)
 
 	// Server -> Client
 	_, err = serverStream.Write(msg2)
-	if err != nil {
-		t.Fatalf("Write pong: %v", err)
-	}
+	require.NoError(t, err, "Write pong")
 
 	buf2 := make([]byte, len(msg2))
 	_, err = io.ReadFull(clientStream, buf2)
-	if err != nil {
-		t.Fatalf("Read pong: %v", err)
-	}
-	if !bytes.Equal(buf2, msg2) {
-		t.Errorf("got %q, want %q", buf2, msg2)
-	}
+	require.NoError(t, err, "Read pong")
+	assert.Equal(t, msg2, buf2)
 }
 
 func TestPipeSessionClose(t *testing.T) {
@@ -191,24 +157,18 @@ func TestPipeSessionClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Close client
-	if err := client.Close(); err != nil {
-		t.Errorf("client.Close: %v", err)
-	}
+	assert.NoError(t, client.Close(), "client.Close")
 
 	// Subsequent OpenStream should fail
-	if _, err := client.OpenStream(ctx); err == nil {
-		t.Error("OpenStream on closed session should fail")
-	}
+	_, err := client.OpenStream(ctx)
+	assert.Error(t, err, "OpenStream on closed session should fail")
 
 	// Subsequent AcceptStream should fail
-	if _, err := client.AcceptStream(ctx); err == nil {
-		t.Error("AcceptStream on closed session should fail")
-	}
+	_, err = client.AcceptStream(ctx)
+	assert.Error(t, err, "AcceptStream on closed session should fail")
 
 	// Double close should be idempotent (no error)
-	if err := client.Close(); err != nil {
-		t.Errorf("double Close should be idempotent, got error: %v", err)
-	}
+	assert.NoError(t, client.Close(), "double Close should be idempotent")
 
 	server.Close()
 }
@@ -223,12 +183,8 @@ func TestPipeSessionAcceptContextCancel(t *testing.T) {
 
 	// AcceptStream should return context error when canceled
 	_, err := server.AcceptStream(ctx)
-	if err == nil {
-		t.Fatal("AcceptStream should fail on context timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected context.DeadlineExceeded, got %v", err)
-	}
+	assert.Error(t, err, "AcceptStream should fail on context timeout")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestPipeSessionAcceptUnblocksOnClose(t *testing.T) {
@@ -251,15 +207,11 @@ func TestPipeSessionAcceptUnblocksOnClose(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	if err := server.Close(); err != nil {
-		t.Fatalf("server.Close: %v", err)
-	}
+	require.NoError(t, server.Close(), "server.Close")
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, ErrPipeSessionClosed) {
-			t.Fatalf("expected ErrPipeSessionClosed, got %v", err)
-		}
+		assert.ErrorIs(t, err, ErrPipeSessionClosed)
 	case <-time.After(time.Second):
 		t.Fatal("AcceptStream did not unblock after close")
 	}
@@ -275,12 +227,8 @@ func TestPipeSessionOpenContextCancel(t *testing.T) {
 
 	// OpenStream should fail on canceled context
 	_, err := client.OpenStream(ctx)
-	if err == nil {
-		t.Fatal("OpenStream should fail on canceled context")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("expected context.Canceled, got %v", err)
-	}
+	assert.Error(t, err, "OpenStream should fail on canceled context")
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestPipeSessionConcurrentOpenCloseRace(t *testing.T) {
@@ -316,24 +264,18 @@ func TestPipeSessionConcurrentOpenCloseRace(t *testing.T) {
 	}
 
 	close(start)
-	if err := server.Close(); err != nil {
-		t.Fatalf("server.Close: %v", err)
-	}
+	require.NoError(t, server.Close(), "server.Close")
 
 	for range openers {
 		select {
 		case res := <-results:
-			if res.panicValue != nil {
-				t.Fatalf("OpenStream panicked during close race: %v", res.panicValue)
-			}
-			if res.stream == nil && res.err == nil {
-				t.Fatal("OpenStream returned nil stream and nil error")
-			}
+			assert.Nil(t, res.panicValue, "OpenStream panicked during close race")
+			assert.False(t, res.stream == nil && res.err == nil, "OpenStream returned nil stream and nil error")
 			if res.stream != nil {
 				_ = res.stream.Close()
 			}
-			if res.err != nil && !errors.Is(res.err, ErrPipeSessionClosed) {
-				t.Fatalf("unexpected OpenStream error during close race: %v", res.err)
+			if res.err != nil {
+				assert.ErrorIs(t, res.err, ErrPipeSessionClosed, "unexpected OpenStream error during close race")
 			}
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for OpenStream result")
@@ -354,35 +296,35 @@ func TestPipeSessionMultipleStreams(t *testing.T) {
 
 	// Open multiple streams concurrently
 	for i := range numStreams {
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
 			stream, err := client.OpenStream(ctx)
 			if err != nil {
-				t.Errorf("OpenStream %d: %v", i, err)
+				t.Errorf("OpenStream %d: %v", idx, err)
 				return
 			}
 			defer stream.Close()
 
-			msg := []byte{byte(i)}
+			msg := []byte{byte(idx)}
 			if _, writeErr := stream.Write(msg); writeErr != nil {
-				t.Errorf("Write %d: %v", i, writeErr)
+				t.Errorf("Write %d: %v", idx, writeErr)
 			}
-		}()
+		}(i)
 
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
 			stream, err := server.AcceptStream(ctx)
 			if err != nil {
-				t.Errorf("AcceptStream %d: %v", i, err)
+				t.Errorf("AcceptStream %d: %v", idx, err)
 				return
 			}
 			defer stream.Close()
 
 			buf := make([]byte, 1)
 			if _, readErr := io.ReadFull(stream, buf); readErr != nil {
-				t.Errorf("Read %d: %v", i, readErr)
+				t.Errorf("Read %d: %v", idx, readErr)
 			}
-		}()
+		}(i)
 	}
 
 	wg.Wait()
@@ -408,13 +350,9 @@ func TestPipeStreamDeadlines(t *testing.T) {
 	}()
 
 	serverStream, err := server.AcceptStream(ctx)
-	if err != nil {
-		t.Fatalf("AcceptStream: %v", err)
-	}
+	require.NoError(t, err, "AcceptStream")
 	clientStream := <-streamC
-	if clientStream == nil {
-		t.Fatal("clientStream is nil")
-	}
+	require.NotNil(t, clientStream, "clientStream is nil")
 
 	defer clientStream.Close()
 	defer serverStream.Close()
@@ -423,28 +361,20 @@ func TestPipeStreamDeadlines(t *testing.T) {
 
 	// Test SetDeadline (must run before write loop fills the channel)
 	setErr := clientStream.SetDeadline(time.Now().Add(10 * time.Millisecond))
-	if setErr != nil {
-		t.Errorf("SetDeadline: %v", setErr)
-	}
+	assert.NoError(t, setErr, "SetDeadline")
 
 	_, err = clientStream.Read(buf)
-	if err == nil {
-		t.Error("Read should timeout after SetDeadline")
-	}
+	assert.Error(t, err, "Read should timeout after SetDeadline")
 
 	// Reset deadline
 	clientStream.SetDeadline(time.Time{})
 
 	// Test SetReadDeadline
 	setErr = serverStream.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
-	if setErr != nil {
-		t.Errorf("SetReadDeadline: %v", setErr)
-	}
+	assert.NoError(t, setErr, "SetReadDeadline")
 
 	_, err = serverStream.Read(buf)
-	if err == nil {
-		t.Error("Read should timeout")
-	}
+	assert.Error(t, err, "Read should timeout")
 
 	// Test SetWriteDeadline
 	// Fill the pipe buffer first
@@ -465,27 +395,18 @@ func TestPipeSessionCloseWithPendingStreams(t *testing.T) {
 
 	// Open some streams
 	stream1, err := client.OpenStream(ctx)
-	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
-	}
+	require.NoError(t, err, "OpenStream")
 
 	stream2, err := server.AcceptStream(ctx)
-	if err != nil {
-		t.Fatalf("AcceptStream: %v", err)
-	}
+	require.NoError(t, err, "AcceptStream")
 
 	// Write data
 	msg := []byte("test")
 	_, err = stream1.Write(msg)
-	if err != nil {
-		t.Fatalf("Write: %v", err)
-	}
+	require.NoError(t, err, "Write")
 
 	// Close session (should close pending streams)
-	err = client.Close()
-	if err != nil {
-		t.Errorf("Close: %v", err)
-	}
+	assert.NoError(t, client.Close(), "Close")
 
 	// Reads/writes on closed streams should fail
 	buf := make([]byte, len(msg))
@@ -493,9 +414,8 @@ func TestPipeSessionCloseWithPendingStreams(t *testing.T) {
 	// Read may succeed if data was buffered, or fail if pipe closed
 	// Either is acceptable behavior
 
-	if _, writeErr := stream1.Write(msg); writeErr == nil {
-		t.Error("Write on stream after session close should fail")
-	}
+	_, writeErr := stream1.Write(msg)
+	assert.Error(t, writeErr, "Write on stream after session close should fail")
 
 	server.Close()
 }
