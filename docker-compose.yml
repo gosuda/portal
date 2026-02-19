@@ -8,11 +8,15 @@ services:
     command:
       - "--port"
       - "${PORTAL_PORT:-4017}"
+      - "--tls-auto"
     environment:
-      PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
-      PORTAL_APP_URL: ${PORTAL_APP_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
+      PORTAL_URL: ${PORTAL_URL:-https://localhost:${PORTAL_PORT:-4017}}
+      PORTAL_APP_URL: ${PORTAL_APP_URL:-https://*.localhost:${PORTAL_PORT:-4017}}
+      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-https://localhost:${PORTAL_PORT:-4017}/relay}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
     ports:
       - "4017:4017"
+    sysctls:
+      - net.core.rmem_max=7500000
+      - net.core.wmem_max=7500000
     restart: unless-stopped

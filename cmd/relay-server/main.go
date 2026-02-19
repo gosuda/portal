@@ -154,6 +154,9 @@ func runServer(cfg serverConfig) error {
 		log.Info().
 			Str("hash", hex.EncodeToString(certHash)).
 			Msg("[server] auto-generated TLS certificate (valid <14 days)")
+		// Force HTTPS scheme for auto-generated TLS
+		cfg.PortalURL = strings.Replace(cfg.PortalURL, "http://", "https://", 1)
+		cfg.PortalAppURL = strings.Replace(cfg.PortalAppURL, "http://", "https://", 1)
 	} else if cfg.TLSCert != "" && cfg.TLSKey != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
