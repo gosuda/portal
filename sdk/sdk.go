@@ -18,7 +18,7 @@ import (
 	"gosuda.org/portal/portal/core/cryptoops"
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 func NewCredential() *cryptoops.Credential {

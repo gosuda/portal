@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"crypto/ecdsa"
@@ -14,10 +14,10 @@ import (
 	"time"
 )
 
-// generateSelfSignedCert creates a self-signed ECDSA P-256 certificate for development.
+// GenerateSelfSignedCert creates a self-signed ECDSA P-256 certificate for development.
 // The certificate is valid for less than 14 days (required by browser's serverCertificateHashes API).
 // Returns the TLS certificate and the SHA-256 hash of the DER-encoded certificate.
-func generateSelfSignedCert() (tls.Certificate, []byte, error) {
+func GenerateSelfSignedCert() (tls.Certificate, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("generate key: %w", err)

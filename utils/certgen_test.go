@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"crypto/sha256"
@@ -11,8 +11,8 @@ import (
 )
 
 func TestGenerateSelfSignedCert_BasicSuccess(t *testing.T) {
-	tlsCert, hash, err := generateSelfSignedCert()
-	require.NoError(t, err, "generateSelfSignedCert() error")
+	tlsCert, hash, err := GenerateSelfSignedCert()
+	require.NoError(t, err, "GenerateSelfSignedCert() error")
 
 	require.NotEmpty(t, tlsCert.Certificate, "expected non-empty tls.Certificate DER chain")
 	require.NotEmpty(t, tlsCert.Certificate[0], "expected non-empty tls.Certificate DER chain")
@@ -20,8 +20,8 @@ func TestGenerateSelfSignedCert_BasicSuccess(t *testing.T) {
 }
 
 func TestGenerateSelfSignedCert_HashMatchesDER(t *testing.T) {
-	tlsCert, hash, err := generateSelfSignedCert()
-	require.NoError(t, err, "generateSelfSignedCert() error")
+	tlsCert, hash, err := GenerateSelfSignedCert()
+	require.NoError(t, err, "GenerateSelfSignedCert() error")
 
 	require.NotEmpty(t, tlsCert.Certificate, "expected certificate chain to be non-empty")
 
@@ -30,8 +30,8 @@ func TestGenerateSelfSignedCert_HashMatchesDER(t *testing.T) {
 }
 
 func TestGenerateSelfSignedCert_X509Properties(t *testing.T) {
-	tlsCert, _, err := generateSelfSignedCert()
-	require.NoError(t, err, "generateSelfSignedCert() error")
+	tlsCert, _, err := GenerateSelfSignedCert()
+	require.NoError(t, err, "GenerateSelfSignedCert() error")
 
 	require.NotEmpty(t, tlsCert.Certificate, "expected certificate chain to be non-empty")
 

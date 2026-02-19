@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/utils"
 )
 
 type fakeStream struct{}
@@ -112,7 +113,7 @@ func TestWithCORSMiddleware_GETSetsHeadersAndCallsInnerHandler(t *testing.T) {
 }
 
 func TestServeWebTransportInvalidAddrTriggersShutdownAndCleanup(t *testing.T) {
-	cert, _, err := generateSelfSignedCert()
+	cert, _, err := utils.GenerateSelfSignedCert()
 	require.NoError(t, err, "generateSelfSignedCert()")
 
 	shutdownCalled := make(chan struct{}, 1)

@@ -20,7 +20,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 type serverConfig struct {
@@ -145,7 +145,7 @@ func runServer(cfg serverConfig) error {
 	var certHash []byte
 
 	if cfg.TLSAuto {
-		cert, hash, err := generateSelfSignedCert()
+		cert, hash, err := utils.GenerateSelfSignedCert()
 		if err != nil {
 			return fmt.Errorf("generate self-signed cert: %w", err)
 		}

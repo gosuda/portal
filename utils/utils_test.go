@@ -1,4 +1,4 @@
-package portalnet
+package utils
 
 import (
 	"net/http"

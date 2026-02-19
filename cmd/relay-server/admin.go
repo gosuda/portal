@@ -15,7 +15,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 const adminCookieName = "portal_admin"

@@ -22,7 +22,7 @@ import (
 	"gopkg.eu.org/broccoli"
 
 	"gosuda.org/portal/sdk"
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 // bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate

@@ -16,7 +16,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 type readDirFileFS interface {

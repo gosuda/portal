@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	utils "gosuda.org/portal/utils"
+	"gosuda.org/portal/utils"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
