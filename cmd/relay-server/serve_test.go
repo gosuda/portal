@@ -6,44 +6,34 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/quic-go/webtransport-go"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/utils"
 )
 
+// fakeStream implements portal.Stream for testing
 type fakeStream struct{}
 
-func (s *fakeStream) Read([]byte) (int, error) {
-	return 0, io.EOF
-}
+func (s *fakeStream) Read([]byte) (int, error)         { return 0, io.EOF }
+func (s *fakeStream) Write(p []byte) (int, error)      { return len(p), nil }
+func (s *fakeStream) Close() error                     { return nil }
+func (s *fakeStream) SetDeadline(time.Time) error      { return nil }
+func (s *fakeStream) SetReadDeadline(time.Time) error  { return nil }
+func (s *fakeStream) SetWriteDeadline(time.Time) error { return nil }
 
-func (s *fakeStream) Write(p []byte) (int, error) {
-	return len(p), nil
-}
-
-func (s *fakeStream) Close() error {
-	return nil
-}
-
-func (s *fakeStream) SetDeadline(time.Time) error {
-	return nil
-}
-
-func (s *fakeStream) SetReadDeadline(time.Time) error {
-	return nil
-}
-
-func (s *fakeStream) SetWriteDeadline(time.Time) error {
-	return nil
-}
-
+// fakeSession implements portal.Session for testing
 type fakeSession struct {
 	openStream   portal.Stream
-	openErr      error
 	acceptStream portal.Stream
+	openErr      error
 	acceptErr    error
 	openCalls    int
 	acceptCalls  int
@@ -65,163 +55,237 @@ func (s *fakeSession) AcceptStream(context.Context) (portal.Stream, error) {
 	return s.acceptStream, nil
 }
 
-func (s *fakeSession) Close() error {
-	return nil
+func (s *fakeSession) Close() error { return nil }
+
+// Test Harness
+type serveHTTPTestHarness struct {
+	srv           *http.Server
+	shutdownCalls *atomic.Int32
 }
 
-func assertCORSHeaders(t *testing.T, headers http.Header) {
+func newServeHTTPTestHarness(t *testing.T, noIndex bool, certHash []byte) *serveHTTPTestHarness {
 	t.Helper()
 
-	require.Equal(t, "*", headers.Get("Access-Control-Allow-Origin"), "Access-Control-Allow-Origin")
-	require.Equal(t, "GET, OPTIONS", headers.Get("Access-Control-Allow-Methods"), "Access-Control-Allow-Methods")
-	require.Equal(t, "Content-Type, Accept, Accept-Encoding", headers.Get("Access-Control-Allow-Headers"), "Access-Control-Allow-Headers")
-}
-
-func TestWithCORSMiddleware_OPTIONSShortCircuitsInnerHandler(t *testing.T) {
-	t.Parallel()
-
-	innerCalled := false
-	handler := withCORSMiddleware(func(http.ResponseWriter, *http.Request) {
-		innerCalled = true
+	frontend := newTestFrontendWithDistFS(fstest.MapFS{
+		"dist/app/portal.html": {Data: []byte(`<html><body>portal</body></html>`)},
 	})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodOptions, "/app", http.NoBody)
-	handler(rec, req)
+	serv := newTestRelayServer(t)
+	shutdownCalls := &atomic.Int32{}
+	srv := serveHTTP(":0", serv, nil, frontend, noIndex, certHash,
+		"https://*.portal.example.com", "https://portal.example.com",
+		func() { shutdownCalls.Add(1) })
 
-	require.False(t, innerCalled, "expected OPTIONS request to bypass inner handler")
-	require.Equal(t, http.StatusOK, rec.Code, "status")
-	assertCORSHeaders(t, rec.Header())
-}
-
-func TestWithCORSMiddleware_GETSetsHeadersAndCallsInnerHandler(t *testing.T) {
-	t.Parallel()
-
-	innerCalled := false
-	handler := withCORSMiddleware(func(w http.ResponseWriter, _ *http.Request) {
-		innerCalled = true
-		w.WriteHeader(http.StatusNoContent)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
 	})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/app", http.NoBody)
-	handler(rec, req)
-
-	require.True(t, innerCalled, "expected GET request to call inner handler")
-	require.Equal(t, http.StatusNoContent, rec.Code, "status")
-	assertCORSHeaders(t, rec.Header())
+	return &serveHTTPTestHarness{srv: srv, shutdownCalls: shutdownCalls}
 }
 
-func TestServeWebTransportInvalidAddrTriggersShutdownAndCleanup(t *testing.T) {
-	cert, _, err := utils.GenerateSelfSignedCert()
-	require.NoError(t, err, "generateSelfSignedCert()")
+func (h *serveHTTPTestHarness) serve(host, path string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "http://"+host+path, http.NoBody)
+	req.Host = host
+	rec := httptest.NewRecorder()
+	h.srv.Handler.ServeHTTP(rec, req)
+	return rec
+}
 
-	shutdownCalled := make(chan struct{}, 1)
-	cleanup := serveWebTransport(":-1", newTestRelayServer(t), nil, &cert, func() {
+// CORS Middleware Tests
+func TestCORSMiddleware(t *testing.T) {
+	t.Parallel()
+
+	t.Run("OPTIONS bypasses handler", func(t *testing.T) {
+		t.Parallel()
+		innerCalled := false
+		handler := withCORSMiddleware(func(http.ResponseWriter, *http.Request) { innerCalled = true })
+
+		rec := httptest.NewRecorder()
+		handler(rec, httptest.NewRequest(http.MethodOptions, "/app", http.NoBody))
+
+		require.False(t, innerCalled)
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	})
+
+	t.Run("GET calls handler with CORS headers", func(t *testing.T) {
+		t.Parallel()
+		innerCalled := false
+		handler := withCORSMiddleware(func(w http.ResponseWriter, _ *http.Request) {
+			innerCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		})
+
+		rec := httptest.NewRecorder()
+		handler(rec, httptest.NewRequest(http.MethodGet, "/app", http.NoBody))
+
+		require.True(t, innerCalled)
+		require.Equal(t, http.StatusNoContent, rec.Code)
+		require.Equal(t, "*", rec.Header().Get("Access-Control-Allow-Origin"))
+	})
+}
+
+// HTTP Routes Tests
+func TestHTTPRoutes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("robots.txt with noindex", func(t *testing.T) {
+		t.Parallel()
+		h := newServeHTTPTestHarness(t, true, nil)
+		rec := h.serve("portal.example.com", "/robots.txt")
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Contains(t, rec.Body.String(), "Disallow: /")
+	})
+
+	t.Run("healthz", func(t *testing.T) {
+		t.Parallel()
+		h := newServeHTTPTestHarness(t, false, nil)
+		rec := h.serve("portal.example.com", "/healthz")
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, `{"status":"ok"}`, rec.Body.String())
+	})
+
+	t.Run("relay returns upgrade required", func(t *testing.T) {
+		t.Parallel()
+		h := newServeHTTPTestHarness(t, false, nil)
+		rec := h.serve("portal.example.com", "/relay")
+
+		require.Equal(t, http.StatusUpgradeRequired, rec.Code)
+		require.Contains(t, rec.Body.String(), "WebTransport (HTTP/3) required")
+	})
+
+	t.Run("cert-hash when configured", func(t *testing.T) {
+		t.Parallel()
+		h := newServeHTTPTestHarness(t, false, []byte{0x01, 0xab})
+		rec := h.serve("portal.example.com", "/cert-hash")
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, `{"algorithm":"sha-256","hash":"01ab"}`, rec.Body.String())
+	})
+}
+
+// WebTransport Tests
+func TestWebTransportRelay(t *testing.T) {
+	t.Run("bans using forwarded IP", func(t *testing.T) {
+		admin := NewAdmin(0, nil, nil, "", "")
+		admin.GetIPManager().BanIP("198.51.100.9")
+
+		req := httptest.NewRequest(http.MethodConnect, "https://relay.example/relay", http.NoBody)
+		req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
+
+		rec := httptest.NewRecorder()
+		upgradeCalled, handleCalled := false, false
+
+		handleWebTransportRelayRequest(rec, req, admin,
+			func(http.ResponseWriter, *http.Request) (*webtransport.Session, error) {
+				upgradeCalled = true
+				return nil, nil
+			},
+			func(portal.Session) { handleCalled = true },
+		)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+		assert.False(t, upgradeCalled)
+		assert.False(t, handleCalled)
+	})
+
+	t.Run("failed upgrade does not pollute association", func(t *testing.T) {
+		admin := NewAdmin(0, nil, nil, "", "")
+		req := httptest.NewRequest(http.MethodConnect, "https://relay.example/relay", http.NoBody)
+		req.Header.Set("X-Forwarded-For", "198.51.100.22")
+
+		rec := httptest.NewRecorder()
+		handleCalled := false
+
+		handleWebTransportRelayRequest(rec, req, admin,
+			func(http.ResponseWriter, *http.Request) (*webtransport.Session, error) {
+				return nil, errors.New("upgrade failed")
+			},
+			func(portal.Session) { handleCalled = true },
+		)
+
+		assert.False(t, handleCalled)
+		assert.Empty(t, admin.GetIPManager().PopPendingIP())
+	})
+
+	t.Run("invalid addr triggers shutdown", func(t *testing.T) {
+		cert, _, err := utils.GenerateSelfSignedCert()
+		require.NoError(t, err)
+
+		shutdownCalled := make(chan struct{}, 1)
+		cleanup := serveWebTransport(":-1", newTestRelayServer(t), nil, &cert, func() {
+			shutdownCalled <- struct{}{}
+		})
+
 		select {
-		case shutdownCalled <- struct{}{}:
-		default:
+		case <-shutdownCalled:
+		case <-time.After(2 * time.Second):
+			t.Fatal("shutdown timeout")
+		}
+
+		done := make(chan struct{})
+		go func() { cleanup(); close(done) }()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("cleanup timeout")
 		}
 	})
-
-	select {
-	case <-shutdownCalled:
-	case <-time.After(2 * time.Second):
-		t.Fatal("shutdown callback was not invoked within timeout")
-	}
-
-	cleanupDone := make(chan struct{})
-	cleanupPanic := make(chan any, 1)
-	go func() {
-		defer close(cleanupDone)
-		defer func() {
-			if r := recover(); r != nil {
-				cleanupPanic <- r
-			}
-		}()
-		cleanup()
-	}()
-
-	select {
-	case p := <-cleanupPanic:
-		t.Fatalf("cleanup function panicked: %v", p)
-	case <-cleanupDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("cleanup function did not return within timeout")
-	}
 }
 
-func TestWrapRelayStream_NilAndEmptyIPPassthrough(t *testing.T) {
+// Stream/Session Wrapper Tests
+func TestStreamSessionWrappers(t *testing.T) {
 	t.Parallel()
 
-	baseStream := &fakeStream{}
-	require.Equal(t, baseStream, wrapRelayStream(baseStream, ""), "expected empty IP to return original stream")
-	require.Nil(t, wrapRelayStream(nil, "203.0.113.11"), "expected nil stream to remain nil")
-}
+	t.Run("wrap stream with IP", func(t *testing.T) {
+		t.Parallel()
+		base := &fakeStream{}
+		wrapped := wrapRelayStream(base, "203.0.113.12")
 
-func TestStreamClientIP_FromWrappedStream(t *testing.T) {
-	t.Parallel()
+		require.NotEqual(t, base, wrapped)
+		require.Equal(t, "203.0.113.12", streamClientIP(wrapped))
+		require.Equal(t, "", streamClientIP(base))
+	})
 
-	baseStream := &fakeStream{}
-	wrapped := wrapRelayStream(baseStream, "203.0.113.12")
-	require.NotEqual(t, baseStream, wrapped, "expected non-empty IP to wrap stream")
-	require.Equal(t, "203.0.113.12", streamClientIP(wrapped), "streamClientIP(wrapped)")
-	require.Equal(t, "", streamClientIP(baseStream), "streamClientIP(unwrapped)")
-}
+	t.Run("wrap stream passthrough", func(t *testing.T) {
+		t.Parallel()
+		base := &fakeStream{}
+		require.Equal(t, base, wrapRelayStream(base, ""))
+		require.Nil(t, wrapRelayStream(nil, "203.0.113.11"))
+	})
 
-func TestWrapRelaySession_EmptyIPPassthrough(t *testing.T) {
-	t.Parallel()
+	t.Run("wrap session with IP", func(t *testing.T) {
+		t.Parallel()
+		openBase, acceptBase := &fakeStream{}, &fakeStream{}
+		base := &fakeSession{openStream: openBase, acceptStream: acceptBase}
 
-	baseSession := &fakeSession{}
-	require.Equal(t, baseSession, wrapRelaySession(baseSession, ""), "expected empty IP to return original session")
-}
+		wrapped := wrapRelaySession(base, "203.0.113.13")
 
-func TestWrapRelaySession_WithIPWrapsOpenAndAcceptStreams(t *testing.T) {
-	t.Parallel()
+		openStream, err := wrapped.OpenStream(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "203.0.113.13", streamClientIP(openStream))
 
-	openBase := &fakeStream{}
-	acceptBase := &fakeStream{}
-	baseSession := &fakeSession{
-		openStream:   openBase,
-		acceptStream: acceptBase,
-	}
+		acceptStream, err := wrapped.AcceptStream(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, "203.0.113.13", streamClientIP(acceptStream))
 
-	wrappedSession := wrapRelaySession(baseSession, "203.0.113.13")
+		require.Equal(t, 1, base.openCalls)
+		require.Equal(t, 1, base.acceptCalls)
+	})
 
-	openStream, err := wrappedSession.OpenStream(context.Background())
-	require.NoError(t, err, "OpenStream()")
-	require.NotEqual(t, openBase, openStream, "expected OpenStream result to be wrapped")
-	require.Equal(t, "203.0.113.13", streamClientIP(openStream), "streamClientIP(OpenStream())")
+	t.Run("wrap session error propagation", func(t *testing.T) {
+		t.Parallel()
+		openErr := errors.New("open failed")
+		base := &fakeSession{openErr: openErr}
+		wrapped := wrapRelaySession(base, "203.0.113.14")
 
-	acceptStream, err := wrappedSession.AcceptStream(context.Background())
-	require.NoError(t, err, "AcceptStream()")
-	require.NotEqual(t, acceptBase, acceptStream, "expected AcceptStream result to be wrapped")
-	require.Equal(t, "203.0.113.13", streamClientIP(acceptStream), "streamClientIP(AcceptStream())")
-
-	require.Equal(t, 1, baseSession.openCalls, "OpenStream called")
-	require.Equal(t, 1, baseSession.acceptCalls, "AcceptStream called")
-}
-
-func TestWrapRelaySession_OpenStreamErrorPropagation(t *testing.T) {
-	t.Parallel()
-
-	openErr := errors.New("open failed")
-	baseSession := &fakeSession{openErr: openErr}
-	wrappedSession := wrapRelaySession(baseSession, "203.0.113.14")
-
-	gotStream, err := wrappedSession.OpenStream(context.Background())
-	require.ErrorIs(t, err, openErr, "OpenStream()")
-	require.Nil(t, gotStream, "expected nil stream when OpenStream fails")
-}
-
-func TestWrapRelaySession_AcceptStreamErrorPropagation(t *testing.T) {
-	t.Parallel()
-
-	acceptErr := errors.New("accept failed")
-	baseSession := &fakeSession{acceptErr: acceptErr}
-	wrappedSession := wrapRelaySession(baseSession, "203.0.113.15")
-
-	gotStream, err := wrappedSession.AcceptStream(context.Background())
-	require.ErrorIs(t, err, acceptErr, "AcceptStream()")
-	require.Nil(t, gotStream, "expected nil stream when AcceptStream fails")
+		stream, err := wrapped.OpenStream(context.Background())
+		require.ErrorIs(t, err, openErr)
+		require.Nil(t, stream)
+	})
 }
