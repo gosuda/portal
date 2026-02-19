@@ -1,4 +1,6 @@
 bin/
+relay-server
+portal-tunnel
 
 # Git
 .git
