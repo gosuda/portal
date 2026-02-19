@@ -1,6 +1,6 @@
 services:
   portal:
-    image: ghcr.io/gosuda/portal:1
+    image: ghcr.io/gosuda/portal:local
     pull_policy: always
     build:
       context: .
@@ -8,10 +8,9 @@ services:
     command:
       - "--port"
       - "${PORTAL_PORT:-4017}"
+      - "--tls-auto"
     environment:
-      PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
-      PORTAL_APP_URL: ${PORTAL_APP_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
+      PORTAL_URL: ${PORTAL_URL:-https://localhost:${PORTAL_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
     ports:
       - "4017:4017"

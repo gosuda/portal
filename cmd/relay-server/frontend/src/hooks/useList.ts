@@ -1,20 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
-
-// Base server interface that both ClientServer and AdminServer extend
-export interface BaseServer {
-  id: number;
-  name: string;
-  description: string;
-  tags: string[];
-  thumbnail: string;
-  owner: string;
-  online: boolean;
-  dns: string;
-  link: string;
-  lastUpdated?: string;
-  firstSeen?: string;
-}
+import type { BaseServer } from "@/types/server";
 
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];
@@ -40,6 +26,8 @@ export interface UseListReturn<T extends BaseServer> {
   handleTagToggle: (tag: string) => void;
   handleToggleFavorite: (serverId: number) => void;
 }
+
+const MISSING_FIRST_SEEN_SORT_VALUE = Number.MAX_SAFE_INTEGER;
 
 export function useList<T extends BaseServer>({
   servers,
@@ -120,8 +108,12 @@ export function useList<T extends BaseServer>({
           // Duration = Now - FirstSeen.
           // Longer duration = Older FirstSeen.
           // Sort Descending (Longest/Oldest first) -> Ascending FirstSeen timestamp.
-          const aTime = a.firstSeen ? Date.parse(a.firstSeen) : Date.now();
-          const bTime = b.firstSeen ? Date.parse(b.firstSeen) : Date.now();
+          const aTime = a.firstSeen
+            ? Date.parse(a.firstSeen)
+            : MISSING_FIRST_SEEN_SORT_VALUE;
+          const bTime = b.firstSeen
+            ? Date.parse(b.firstSeen)
+            : MISSING_FIRST_SEEN_SORT_VALUE;
           return aTime - bTime;
         });
         break;

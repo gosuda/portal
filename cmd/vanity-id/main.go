@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -46,7 +45,7 @@ func main() {
 	// Start worker goroutines
 	for range *workers {
 		wg.Add(1)
-		go worker(*prefix, &attempts, &found, results, &wg, *maxResults, ctx)
+		go worker(*prefix, &attempts, &found, results, &wg, ctx)
 	}
 
 	// Start stats reporter
@@ -86,12 +85,12 @@ func main() {
 
 type Result struct {
 	ID         string
-	PrivateKey ed25519.PrivateKey
-	PublicKey  ed25519.PublicKey
+	PrivateKey []byte
+	PublicKey  []byte
 	Attempt    uint64
 }
 
-func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *sync.WaitGroup, maxResults int, ctx <-chan struct{}) {
+func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *sync.WaitGroup, ctx <-chan struct{}) {
 	defer wg.Done()
 
 	var seed [32]byte
@@ -107,14 +106,14 @@ func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *
 		// Generate random seed using randpool
 		randpool.Rand(seed[:])
 
-		// Generate private key from seed (this is 64 bytes: 32 byte seed + 32 byte public key)
-		privateKey := ed25519.NewKeyFromSeed(seed[:])
+		cred, err := cryptoops.NewCredentialFromPrivateKey(seed[:])
+		if err != nil {
+			continue
+		}
 
-		// Extract public key (last 32 bytes of private key)
-		publicKey := ed25519.PublicKey(privateKey[32:])
-
-		// Derive ID
-		id := cryptoops.DeriveID(publicKey)
+		privateKey := cred.X25519PrivateKey()
+		publicKey := cred.PublicKey()
+		id := cred.ID()
 
 		// Increment attempts counter
 		attemptNum := atomic.AddUint64(attempts, 1)
@@ -139,7 +138,7 @@ func worker(prefix string, attempts, found *uint64, results chan<- *Result, wg *
 	}
 }
 
-func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan bool, prefixLen int, maxResults int) {
+func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan bool, prefixLen, maxResults int) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -157,16 +156,18 @@ func statsReporter(attempts, found *uint64, startTime time.Time, done <-chan boo
 			// Calculate estimated time to completion
 			var etaStr string
 			if rate > 0 && maxResults > 0 {
-				remainingResults := maxResults - int(f)
-				if remainingResults > 0 {
+				maxResultsUint64 := uint64(maxResults)
+				if f < maxResultsUint64 {
+					remainingResults := maxResultsUint64 - f
 					expectedRemainingAttempts := float64(remainingResults) * expectedAttemptsPerResult
 					etaSeconds := expectedRemainingAttempts / rate
 
-					if etaSeconds < 60 {
+					switch {
+					case etaSeconds < 60:
 						etaStr = fmt.Sprintf(" | ETA: %.0fs", etaSeconds)
-					} else if etaSeconds < 3600 {
+					case etaSeconds < 3600:
 						etaStr = fmt.Sprintf(" | ETA: %.1fm", etaSeconds/60)
-					} else {
+					default:
 						etaStr = fmt.Sprintf(" | ETA: %.1fh", etaSeconds/3600)
 					}
 				}

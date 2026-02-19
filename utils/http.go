@@ -8,7 +8,7 @@ import (
 )
 
 // IsHTMLContentType checks if the Content-Type header indicates HTML content
-// It properly handles media type parsing with parameters like charset
+// It properly handles media type parsing with parameters like charset.
 func IsHTMLContentType(contentType string) bool {
 	if contentType == "" {
 		return false
@@ -20,7 +20,7 @@ func IsHTMLContentType(contentType string) bool {
 	return mediaType == "text/html"
 }
 
-// GetContentType returns the MIME type for a file extension
+// GetContentType returns the MIME type for a file extension.
 func GetContentType(ext string) string {
 	switch ext {
 	case ".html":
@@ -29,8 +29,6 @@ func GetContentType(ext string) string {
 		return "application/javascript"
 	case ".json":
 		return "application/json"
-	case ".wasm":
-		return "application/wasm"
 	case ".css":
 		return "text/css"
 	case ".mp4":
@@ -46,11 +44,16 @@ func GetContentType(ext string) string {
 	}
 }
 
-// SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers
+// SetCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers.
 func SetCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
+	headers := w.Header()
+	headers.Set("Access-Control-Allow-Origin", "*")
+	headers.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	headers.Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
+}
+
+func isLoopbackOrPrivate(ip net.IP) bool {
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }
 
 func IsLocalhost(r *http.Request) bool {
@@ -64,18 +67,19 @@ func IsLocalhost(r *http.Request) bool {
 		return true
 	}
 
-	ip := net.ParseIP(host)
-	if ip == nil {
-		// Try resolving hostnames to IPs (best-effort).
-		if addrs, err := net.LookupIP(host); err == nil {
-			for _, a := range addrs {
-				if a.IsLoopback() || a.IsPrivate() {
-					return true
-				}
-			}
-		}
-		return false
+	if ip := net.ParseIP(host); ip != nil {
+		return isLoopbackOrPrivate(ip)
 	}
 
-	return ip.IsLoopback() || ip.IsPrivate()
+	// Try resolving hostnames to IPs (best-effort).
+	addrs, err := net.DefaultResolver.LookupIPAddr(r.Context(), host)
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		if isLoopbackOrPrivate(addr.IP) {
+			return true
+		}
+	}
+	return false
 }

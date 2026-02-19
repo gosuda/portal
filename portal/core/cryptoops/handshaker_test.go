@@ -2,19 +2,19 @@ package cryptoops
 
 import (
 	"bytes"
-	"crypto/rand"
+	"context"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/curve25519"
-	"gosuda.org/portal/portal/core/proto/rdsec"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// pipeConn creates a bidirectional pipe for testing using TCP loopback
-func pipeConn() (net.Conn, net.Conn) {
+// pipeConn creates a bidirectional pipe for testing using TCP loopback.
+func pipeConn() (clientConn, serverConn net.Conn) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
@@ -22,50 +22,76 @@ func pipeConn() (net.Conn, net.Conn) {
 
 	connCh := make(chan net.Conn, 1)
 	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			panic(err)
+		acceptedConn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			panic(acceptErr)
 		}
-		connCh <- conn
+		connCh <- acceptedConn
 		listener.Close()
 	}()
 
-	clientConn, err := net.Dial("tcp", listener.Addr().String())
+	clientConn, err = net.Dial("tcp", listener.Addr().String())
 	if err != nil {
 		panic(err)
 	}
 
-	serverConn := <-connCh
+	serverConn = <-connCh
 	return clientConn, serverConn
 }
 
-// TestNewHandshaker tests handshaker creation
-func TestNewHandshaker(t *testing.T) {
-	cred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create credential: %v", err)
-	}
-
-	h := NewHandshaker(cred)
-	if h == nil {
-		t.Fatal("NewHandshaker returned nil")
-	}
-	if h.credential != cred {
-		t.Error("Handshaker credential mismatch")
-	}
+type shortWriter struct {
+	writer   io.Writer
+	maxChunk int
 }
 
-// TestHandshakeSuccess tests a successful handshake
-func TestHandshakeSuccess(t *testing.T) {
-	clientCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create client credential: %v", err)
+func (w *shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
 	}
 
-	serverCred, err := NewCredential()
-	if err != nil {
-		t.Fatalf("Failed to create server credential: %v", err)
+	n := w.maxChunk
+	if n <= 0 || n > len(p) {
+		n = len(p)
 	}
+
+	return w.writer.Write(p[:n])
+}
+
+type shortWriteReadWriteCloser struct {
+	io.ReadWriteCloser
+	maxChunk int
+}
+
+func (c *shortWriteReadWriteCloser) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	n := c.maxChunk
+	if n <= 0 || n > len(p) {
+		n = len(p)
+	}
+
+	return c.ReadWriteCloser.Write(p[:n])
+}
+
+// TestNewHandshaker tests handshaker creation.
+func TestNewHandshaker(t *testing.T) {
+	cred, err := NewCredential()
+	require.NoError(t, err, "Failed to create credential")
+
+	h := NewHandshaker(cred)
+	require.NotNil(t, h, "NewHandshaker returned nil")
+	assert.Equal(t, cred, h.credential, "Handshaker credential mismatch")
+}
+
+// TestHandshakeSuccess tests a successful handshake.
+func TestHandshakeSuccess(t *testing.T) {
+	clientCred, err := NewCredential()
+	require.NoError(t, err, "Failed to create client credential")
+
+	serverCred, err := NewCredential()
+	require.NoError(t, err, "Failed to create server credential")
 
 	clientConn, serverConn := pipeConn()
 
@@ -80,114 +106,94 @@ func TestHandshakeSuccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, clientErr = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, clientErr = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, serverErr = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
 
-	if clientErr != nil {
-		t.Fatalf("Client handshake failed: %v", clientErr)
-	}
-	if serverErr != nil {
-		t.Fatalf("Server handshake failed: %v", serverErr)
-	}
-	if clientSecure == nil || serverSecure == nil {
-		t.Fatal("Secure connections are nil")
-	}
+	require.NoError(t, clientErr, "Client handshake failed")
+	require.NoError(t, serverErr, "Server handshake failed")
+	require.NotNil(t, clientSecure, "Client secure connection is nil")
+	require.NotNil(t, serverSecure, "Server secure connection is nil")
+	assert.NotEmpty(t, clientSecure.LocalID(), "Client local ID should not be empty")
+	assert.NotEmpty(t, clientSecure.RemoteID(), "Client remote ID should not be empty")
+	assert.NotEmpty(t, serverSecure.LocalID(), "Server local ID should not be empty")
+	assert.NotEmpty(t, serverSecure.RemoteID(), "Server remote ID should not be empty")
+	assert.Equal(t, clientSecure.LocalID(), serverSecure.RemoteID(), "Client local ID should match server remote ID")
+	assert.Equal(t, serverSecure.LocalID(), clientSecure.RemoteID(), "Server local ID should match client remote ID")
 
 	// Test that connections can communicate
 	testMessage := []byte("Hello, secure world!")
 
 	// Client sends to server
 	_, err = clientSecure.Write(testMessage)
-	if err != nil {
-		t.Fatalf("Client write failed: %v", err)
-	}
+	require.NoError(t, err, "Client write failed")
 
 	// Server receives
 	received := make([]byte, len(testMessage))
 	n, err := io.ReadFull(serverSecure, received)
-	if err != nil {
-		t.Fatalf("Server read failed: %v", err)
-	}
-	if n != len(testMessage) {
-		t.Fatalf("Expected to read %d bytes, got %d", len(testMessage), n)
-	}
-	if !bytes.Equal(testMessage, received) {
-		t.Errorf("Message mismatch: expected %q, got %q", testMessage, received)
-	}
+	require.NoError(t, err, "Server read failed")
+	assert.Equal(t, len(testMessage), n, "Expected to read %d bytes, got %d", len(testMessage), n)
+	assert.Equal(t, testMessage, received, "Message mismatch")
 
 	// Server sends to client
 	responseMessage := []byte("Hello back!")
 	_, err = serverSecure.Write(responseMessage)
-	if err != nil {
-		t.Fatalf("Server write failed: %v", err)
-	}
+	require.NoError(t, err, "Server write failed")
 
 	// Client receives
 	received = make([]byte, len(responseMessage))
 	n, err = io.ReadFull(clientSecure, received)
-	if err != nil {
-		t.Fatalf("Client read failed: %v", err)
-	}
-	if n != len(responseMessage) {
-		t.Fatalf("Expected to read %d bytes, got %d", len(responseMessage), n)
-	}
-	if !bytes.Equal(responseMessage, received) {
-		t.Errorf("Message mismatch: expected %q, got %q", responseMessage, received)
-	}
+	require.NoError(t, err, "Client read failed")
+	assert.Equal(t, len(responseMessage), n, "Expected to read %d bytes, got %d", len(responseMessage), n)
+	assert.Equal(t, responseMessage, received, "Message mismatch")
 
 	clientSecure.Close()
 	serverSecure.Close()
 }
 
-// TestHandshakeInvalidSignature tests handshake validation
-func TestHandshakeInvalidSignature(t *testing.T) {
-	// This is tested implicitly through validateClientInit/validateServerInit
-	// Detailed unit tests would require mocking which is complex
-	t.Skip("Covered by integration tests")
+// TestHandshakeALPNMismatch tests that mismatched ALPN causes handshake failure.
+func TestHandshakeALPNMismatch(t *testing.T) {
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
+
+	clientConn, serverConn := pipeConn()
+
+	clientHandshaker := NewHandshaker(clientCred)
+	serverHandshaker := NewHandshaker(serverCred)
+
+	var serverErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "alpn-a")
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"alpn-b"})
+	}()
+
+	wg.Wait()
+
+	require.Error(t, serverErr, "Expected server handshake to fail with ALPN mismatch")
 }
 
-// TestHandshakeInvalidTimestamp tests timestamp validation
-func TestHandshakeInvalidTimestamp(t *testing.T) {
-	// Test the validateTimestamp function directly
-	now := time.Now().Unix()
-
-	// Valid timestamp
-	if err := validateTimestamp(now); err != nil {
-		t.Errorf("Current timestamp should be valid: %v", err)
-	}
-
-	// Old timestamp (> 30s)
-	if err := validateTimestamp(now - 100); err == nil {
-		t.Error("Old timestamp should be invalid")
-	}
-
-	// Future timestamp (> 30s)
-	if err := validateTimestamp(now + 100); err == nil {
-		t.Error("Future timestamp should be invalid")
-	}
-}
-
-// TestHandshakeInvalidProtocolVersion tests protocol version
-func TestHandshakeInvalidProtocolVersion(t *testing.T) {
-	t.Skip("Covered by integration tests")
-}
-
-// TestHandshakeInvalidALPN tests ALPN validation
-func TestHandshakeInvalidALPN(t *testing.T) {
-	t.Skip("Covered by integration tests")
-}
-
-// TestEncryptionRoundTrip tests encryption and decryption
+// TestEncryptionRoundTrip tests encryption and decryption.
 func TestEncryptionRoundTrip(t *testing.T) {
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	clientConn, serverConn := pipeConn()
 
@@ -200,12 +206,12 @@ func TestEncryptionRoundTrip(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -225,36 +231,24 @@ func TestEncryptionRoundTrip(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Client to Server
 			_, err := clientSecure.Write(tc.message)
-			if err != nil {
-				t.Fatalf("Write failed: %v", err)
-			}
+			require.NoError(t, err, "Write failed")
 
 			received := make([]byte, len(tc.message))
 			if len(tc.message) > 0 {
 				_, err = io.ReadFull(serverSecure, received)
-				if err != nil {
-					t.Fatalf("Read failed: %v", err)
-				}
-				if !bytes.Equal(tc.message, received) {
-					t.Error("Message mismatch")
-				}
+				require.NoError(t, err, "Read failed")
+				assert.Equal(t, tc.message, received, "Message mismatch")
 			}
 
 			// Server to Client
 			_, err = serverSecure.Write(tc.message)
-			if err != nil {
-				t.Fatalf("Write failed: %v", err)
-			}
+			require.NoError(t, err, "Write failed")
 
 			received = make([]byte, len(tc.message))
 			if len(tc.message) > 0 {
 				_, err = io.ReadFull(clientSecure, received)
-				if err != nil {
-					t.Fatalf("Read failed: %v", err)
-				}
-				if !bytes.Equal(tc.message, received) {
-					t.Error("Message mismatch")
-				}
+				require.NoError(t, err, "Read failed")
+				assert.Equal(t, tc.message, received, "Message mismatch")
 			}
 		})
 	}
@@ -263,10 +257,12 @@ func TestEncryptionRoundTrip(t *testing.T) {
 	serverSecure.Close()
 }
 
-// TestFragmentation tests large message fragmentation
+// TestFragmentation tests large message fragmentation.
 func TestFragmentation(t *testing.T) {
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	clientConn, serverConn := pipeConn()
 
@@ -279,12 +275,12 @@ func TestFragmentation(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -294,9 +290,7 @@ func TestFragmentation(t *testing.T) {
 
 	go func() {
 		_, err := clientSecure.Write(largeMessage)
-		if err != nil {
-			t.Errorf("Write large message failed: %v", err)
-		}
+		require.NoError(t, err, "Write large message failed")
 	}()
 
 	// Read in chunks
@@ -304,24 +298,76 @@ func TestFragmentation(t *testing.T) {
 	totalRead := 0
 	for totalRead < len(largeMessage) {
 		n, err := serverSecure.Read(received[totalRead:])
-		if err != nil {
-			t.Fatalf("Read failed at %d bytes: %v", totalRead, err)
-		}
+		require.NoError(t, err, "Read failed at %d bytes", totalRead)
 		totalRead += n
 	}
 
-	if !bytes.Equal(largeMessage, received) {
-		t.Error("Large message mismatch after fragmentation")
-	}
+	assert.Equal(t, largeMessage, received, "Large message mismatch after fragmentation")
 
 	clientSecure.Close()
 	serverSecure.Close()
 }
 
-// TestConcurrentWrites tests concurrent writes
+func TestSecureConnectionWriteShortWriteRegression(t *testing.T) {
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
+
+	clientConn, serverConn := pipeConn()
+
+	clientHandshaker := NewHandshaker(clientCred)
+	serverHandshaker := NewHandshaker(serverCred)
+
+	var clientSecure, serverSecure *SecureConnection
+	var clientErr, serverErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		clientSecure, clientErr = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
+	}()
+
+	go func() {
+		defer wg.Done()
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
+	}()
+
+	wg.Wait()
+
+	require.NoError(t, clientErr, "Client handshake failed")
+	require.NoError(t, serverErr, "Server handshake failed")
+
+	clientSecure.conn = &shortWriteReadWriteCloser{
+		ReadWriteCloser: clientSecure.conn,
+		maxChunk:        5,
+	}
+
+	message := bytes.Repeat([]byte("Z"), 4096)
+	_, err = clientSecure.Write(message)
+	require.NoError(t, err, "Client write failed")
+
+	err = serverSecure.SetReadDeadline(time.Now().Add(2 * time.Second))
+	require.NoError(t, err, "SetReadDeadline failed")
+	defer serverSecure.SetReadDeadline(time.Time{})
+
+	received := make([]byte, len(message))
+	n, err := io.ReadFull(serverSecure, received)
+	require.NoError(t, err, "Server read failed")
+	assert.Equal(t, len(message), n, "Expected to read %d bytes, got %d", len(message), n)
+	assert.Equal(t, message, received, "Message mismatch after short writes")
+
+	_ = clientSecure.Close()
+	_ = serverSecure.Close()
+}
+
+// TestConcurrentWrites tests concurrent writes.
 func TestConcurrentWrites(t *testing.T) {
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	clientConn, serverConn := pipeConn()
 
@@ -334,12 +380,12 @@ func TestConcurrentWrites(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -366,163 +412,44 @@ func TestConcurrentWrites(t *testing.T) {
 	for range numMessages {
 		buf := make([]byte, 2)
 		_, err := io.ReadFull(serverSecure, buf)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
+		require.NoError(t, err, "Read failed")
 		key := string(buf)
-		if received[key] {
-			t.Errorf("Duplicate message received: %v", buf)
-		}
+		assert.False(t, received[key], "Duplicate message received: %v", buf)
 		received[key] = true
 	}
 
-	if len(received) != numMessages {
-		t.Errorf("Expected %d unique messages, got %d", numMessages, len(received))
-	}
+	assert.Len(t, received, numMessages, "Expected %d unique messages, got %d", numMessages, len(received))
 
 	clientSecure.Close()
 	serverSecure.Close()
 }
 
-// TestInvalidIdentity tests identity validation
-func TestInvalidIdentity(t *testing.T) {
-	cred, _ := NewCredential()
+// TestX25519KeyDerivation tests X25519 key generation behavior.
+func TestX25519KeyDerivation(t *testing.T) {
+	cred1, err := NewCredential()
+	require.NoError(t, err)
+	cred2, err := NewCredential()
+	require.NoError(t, err)
 
-	// Valid identity
-	validIdentity := &rdsec.Identity{
-		Id:        cred.ID(),
-		PublicKey: cred.PublicKey(),
-	}
-	if !ValidateIdentity(validIdentity) {
-		t.Error("Valid identity should pass validation")
-	}
+	priv1 := cred1.X25519PrivateKey()
+	pub1 := cred1.X25519PublicKey()
+	priv2 := cred2.X25519PrivateKey()
+	pub2 := cred2.X25519PublicKey()
 
-	// Wrong ID
-	invalidIdentity := &rdsec.Identity{
-		Id:        "WRONG_ID",
-		PublicKey: cred.PublicKey(),
-	}
-	if ValidateIdentity(invalidIdentity) {
-		t.Error("Identity with wrong ID should fail validation")
-	}
+	// Key sizes
+	assert.Len(t, priv1, 32, "Expected X25519 private key size 32, got %d", len(priv1))
+	assert.Len(t, pub1, 32, "Expected X25519 public key size 32, got %d", len(pub1))
 
-	// Wrong key size
-	invalidIdentity2 := &rdsec.Identity{
-		Id:        cred.ID(),
-		PublicKey: []byte{1, 2, 3},
-	}
-	if ValidateIdentity(invalidIdentity2) {
-		t.Error("Identity with wrong key size should fail validation")
-	}
+	// Different credentials produce different keys
+	assert.NotEqual(t, priv1, priv2, "Different credentials produced same X25519 private key")
+	assert.NotEqual(t, pub1, pub2, "Different credentials produced same X25519 public key")
+
+	// Deterministic: same credential always produces same key
+	assert.Equal(t, priv1, cred1.X25519PrivateKey(), "X25519PrivateKey not deterministic")
+	assert.Equal(t, pub1, cred1.X25519PublicKey(), "X25519PublicKey not deterministic")
 }
 
-// TestGenerateX25519KeyPair tests X25519 key pair generation
-func TestGenerateX25519KeyPair(t *testing.T) {
-	priv1, pub1, err := generateX25519KeyPair()
-	if err != nil {
-		t.Fatalf("Failed to generate key pair: %v", err)
-	}
-
-	if len(priv1) != curve25519.ScalarSize {
-		t.Errorf("Expected private key size %d, got %d", curve25519.ScalarSize, len(priv1))
-	}
-	if len(pub1) != curve25519.PointSize {
-		t.Errorf("Expected public key size %d, got %d", curve25519.PointSize, len(pub1))
-	}
-
-	// Generate another pair and ensure they're different
-	priv2, pub2, err := generateX25519KeyPair()
-	if err != nil {
-		t.Fatalf("Failed to generate second key pair: %v", err)
-	}
-
-	if bytes.Equal(priv1, priv2) {
-		t.Error("Generated same private key twice")
-	}
-	if bytes.Equal(pub1, pub2) {
-		t.Error("Generated same public key twice")
-	}
-
-	// Verify public key derivation
-	derivedPub, err := curve25519.X25519(priv1, curve25519.Basepoint)
-	if err != nil {
-		t.Fatalf("Failed to derive public key: %v", err)
-	}
-	if !bytes.Equal(pub1, derivedPub) {
-		t.Error("Public key doesn't match derived key")
-	}
-}
-
-// TestDeriveKey tests HKDF key derivation
-func TestDeriveKey(t *testing.T) {
-	sharedSecret := make([]byte, 32)
-	rand.Read(sharedSecret)
-
-	salt1 := []byte("salt1")
-	salt2 := []byte("salt2")
-	info1 := []byte(clientKeyInfo)
-	info2 := []byte(serverKeyInfo)
-
-	key1 := deriveKey(sharedSecret, salt1, info1)
-	key2 := deriveKey(sharedSecret, salt2, info1)
-	key3 := deriveKey(sharedSecret, salt1, info2)
-	key4 := deriveKey(sharedSecret, salt1, info1) // Same as key1
-
-	// Check key size
-	if len(key1) != sessionKeySize {
-		t.Errorf("Expected key size %d, got %d", sessionKeySize, len(key1))
-	}
-
-	// Keys with different salts should be different
-	if bytes.Equal(key1, key2) {
-		t.Error("Keys with different salts are the same")
-	}
-
-	// Keys with different info should be different
-	if bytes.Equal(key1, key3) {
-		t.Error("Keys with different info are the same")
-	}
-
-	// Same inputs should produce same key
-	if !bytes.Equal(key1, key4) {
-		t.Error("Same inputs produced different keys")
-	}
-}
-
-// TestValidateTimestamp tests timestamp validation
-func TestValidateTimestamp(t *testing.T) {
-	now := time.Now().Unix()
-
-	testCases := []struct {
-		name      string
-		timestamp int64
-		expectErr bool
-	}{
-		{"Current", now, false},
-		{"5 seconds ago", now - 5, false},
-		{"5 seconds future", now + 5, false},
-		{"30 seconds ago", now - 30, false},
-		{"30 seconds future", now + 30, false},
-		{"31 seconds ago", now - 31, true},
-		{"31 seconds future", now + 31, true},
-		{"100 seconds ago", now - 100, true},
-		{"100 seconds future", now + 100, true},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateTimestamp(tc.timestamp)
-			if tc.expectErr && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tc.expectErr && err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-// TestLengthPrefixedReadWrite tests length-prefixed message encoding
+// TestLengthPrefixedReadWrite tests length-prefixed message encoding.
 func TestLengthPrefixedReadWrite(t *testing.T) {
 	testMessages := [][]byte{
 		{},
@@ -538,24 +465,36 @@ func TestLengthPrefixedReadWrite(t *testing.T) {
 
 			// Write
 			err := writeLengthPrefixed(&buf, msg)
-			if err != nil {
-				t.Fatalf("Write failed: %v", err)
-			}
+			require.NoError(t, err, "Write failed")
 
 			// Read
 			received, err := readLengthPrefixed(&buf)
-			if err != nil {
-				t.Fatalf("Read failed: %v", err)
-			}
+			require.NoError(t, err, "Read failed")
 
-			if !bytes.Equal(msg, received) {
-				t.Errorf("Message mismatch: expected %v, got %v", msg, received)
-			}
+			assert.Equal(t, msg, received, "Message mismatch")
 		})
 	}
 }
 
-// TestReadLengthPrefixedTooLarge tests reading message exceeding size limit
+func TestLengthPrefixedReadWriteShortWriteRegression(t *testing.T) {
+	message := bytes.Repeat([]byte("S"), 2048)
+
+	var buf bytes.Buffer
+	writer := &shortWriter{
+		writer:   &buf,
+		maxChunk: 3,
+	}
+
+	err := writeLengthPrefixed(writer, message)
+	require.NoError(t, err, "Write failed")
+
+	received, err := readLengthPrefixed(&buf)
+	require.NoError(t, err, "Read failed")
+
+	assert.Equal(t, message, received, "Message mismatch after short writes")
+}
+
+// TestReadLengthPrefixedTooLarge tests reading message exceeding size limit.
 func TestReadLengthPrefixedTooLarge(t *testing.T) {
 	var buf bytes.Buffer
 
@@ -570,12 +509,10 @@ func TestReadLengthPrefixedTooLarge(t *testing.T) {
 	buf.Write(lengthBytes)
 
 	_, err := readLengthPrefixed(&buf)
-	if err != ErrHandshakeFailed {
-		t.Errorf("Expected ErrHandshakeFailed for oversized message, got %v", err)
-	}
+	assert.ErrorIs(t, err, ErrHandshakeFailed, "Expected ErrHandshakeFailed for oversized message")
 }
 
-// TestWipeMemory tests memory wiping functionality
+// TestWipeMemory tests memory wiping functionality.
 func TestWipeMemory(t *testing.T) {
 	data := []byte{0x01, 0x02, 0x03, 0x04, 0x05}
 	originalCap := cap(data)
@@ -585,22 +522,16 @@ func TestWipeMemory(t *testing.T) {
 	// Check that all bytes in the capacity are zeroed
 	fullData := data[:originalCap]
 	for i, b := range fullData {
-		if b != 0 {
-			t.Errorf("Byte at index %d not wiped: %02x", i, b)
-		}
+		assert.Zero(t, b, "Byte at index %d not wiped: %02x", i, b)
 	}
 }
 
-// TestBufferManagement tests buffer acquisition and release
+// TestBufferManagement tests buffer acquisition and release.
 func TestBufferManagement(t *testing.T) {
 	// Acquire buffer
 	buf := acquireBuffer(1024)
-	if buf == nil {
-		t.Fatal("acquireBuffer returned nil")
-	}
-	if cap(buf.B) < 1024 {
-		t.Errorf("Expected capacity >= 1024, got %d", cap(buf.B))
-	}
+	require.NotNil(t, buf, "acquireBuffer returned nil")
+	assert.GreaterOrEqual(t, cap(buf.B), 1024, "Expected capacity >= 1024, got %d", cap(buf.B))
 
 	// Write some data
 	testData := []byte("sensitive data")
@@ -612,17 +543,17 @@ func TestBufferManagement(t *testing.T) {
 	// Acquire again and verify it's clean
 	buf2 := acquireBuffer(1024)
 	for i := 0; i < len(testData) && i < len(buf2.B); i++ {
-		if buf2.B[i] != 0 {
-			t.Errorf("Buffer not properly wiped at index %d", i)
-		}
+		assert.Zero(t, buf2.B[i], "Buffer not properly wiped at index %d", i)
 	}
 	releaseBuffer(buf2)
 }
 
-// TestSecureConnectionPartialRead tests reading when buffer is smaller than message
+// TestSecureConnectionPartialRead tests reading when buffer is smaller than message.
 func TestSecureConnectionPartialRead(t *testing.T) {
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	clientConn, serverConn := pipeConn()
 
@@ -635,12 +566,12 @@ func TestSecureConnectionPartialRead(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -648,45 +579,39 @@ func TestSecureConnectionPartialRead(t *testing.T) {
 	message := []byte("This is a longer message that will be read in parts")
 
 	// Send message
-	_, err := clientSecure.Write(message)
-	if err != nil {
-		t.Fatalf("Write failed: %v", err)
-	}
+	_, err = clientSecure.Write(message)
+	require.NoError(t, err, "Write failed")
 
 	// Read in small chunks
 	received := make([]byte, 0, len(message))
 	smallBuf := make([]byte, 10) // Smaller than message
 
 	for len(received) < len(message) {
-		n, err := serverSecure.Read(smallBuf)
-		if err != nil {
-			t.Fatalf("Read failed: %v", err)
-		}
+		n, readErr := serverSecure.Read(smallBuf)
+		require.NoError(t, readErr, "Read failed")
 		received = append(received, smallBuf[:n]...)
 	}
 
-	if !bytes.Equal(message, received) {
-		t.Error("Message mismatch with partial reads")
-	}
+	assert.Equal(t, message, received, "Message mismatch with partial reads")
 
 	clientSecure.Close()
 	serverSecure.Close()
 }
 
-// TestRealNetworkConnection tests with actual TCP connection
+// TestRealNetworkConnection tests with actual TCP connection.
 func TestRealNetworkConnection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping network test in short mode")
 	}
 
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	// Start server
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to start listener: %v", err)
-	}
+	require.NoError(t, err, "Failed to start listener")
 	defer listener.Close()
 
 	serverAddr := listener.Addr().String()
@@ -697,57 +622,45 @@ func TestRealNetworkConnection(t *testing.T) {
 
 	go func() {
 		defer close(serverDone)
-		conn, err := listener.Accept()
-		if err != nil {
-			serverErr = err
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr = acceptErr
 			return
 		}
 
 		serverHandshaker := NewHandshaker(serverCred)
-		serverSecure, serverErr = serverHandshaker.ServerHandshake(conn, []string{"test-alpn"})
+		serverSecure, serverErr = serverHandshaker.ServerHandshake(context.Background(), conn, []string{"test-alpn"})
 	}()
 
 	// Connect client
 	clientConn, err := net.Dial("tcp", serverAddr)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
+	require.NoError(t, err, "Failed to connect")
 
 	clientHandshaker := NewHandshaker(clientCred)
-	clientSecure, clientErr := clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+	clientSecure, clientErr := clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 
 	<-serverDone
 
-	if clientErr != nil {
-		t.Fatalf("Client handshake failed: %v", clientErr)
-	}
-	if serverErr != nil {
-		t.Fatalf("Server handshake failed: %v", serverErr)
-	}
+	require.NoError(t, clientErr, "Client handshake failed")
+	require.NoError(t, serverErr, "Server handshake failed")
 
 	// Test communication
 	testMessage := []byte("Hello over real network!")
 
 	_, err = clientSecure.Write(testMessage)
-	if err != nil {
-		t.Fatalf("Write failed: %v", err)
-	}
+	require.NoError(t, err, "Write failed")
 
 	received := make([]byte, len(testMessage))
 	_, err = io.ReadFull(serverSecure, received)
-	if err != nil {
-		t.Fatalf("Read failed: %v", err)
-	}
+	require.NoError(t, err, "Read failed")
 
-	if !bytes.Equal(testMessage, received) {
-		t.Error("Message mismatch over network")
-	}
+	assert.Equal(t, testMessage, received, "Message mismatch over network")
 
 	clientSecure.Close()
 	serverSecure.Close()
 }
 
-// BenchmarkHandshake benchmarks the handshake process
+// BenchmarkHandshake benchmarks the handshake process.
 func BenchmarkHandshake(b *testing.B) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -764,19 +677,19 @@ func BenchmarkHandshake(b *testing.B) {
 
 		go func() {
 			defer wg.Done()
-			clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+			clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 		}()
 
 		go func() {
 			defer wg.Done()
-			serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+			serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 		}()
 
 		wg.Wait()
 	}
 }
 
-// BenchmarkEncryption benchmarks encryption throughput
+// BenchmarkEncryption benchmarks encryption throughput.
 func BenchmarkEncryption(b *testing.B) {
 	clientCred, _ := NewCredential()
 	serverCred, _ := NewCredential()
@@ -792,12 +705,12 @@ func BenchmarkEncryption(b *testing.B) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -822,10 +735,12 @@ func BenchmarkEncryption(b *testing.B) {
 	serverSecure.Close()
 }
 
-// TestConcurrentReadClose tests that closing the connection while reading is safe
+// TestConcurrentReadClose tests that closing the connection while reading is safe.
 func TestConcurrentReadClose(t *testing.T) {
-	clientCred, _ := NewCredential()
-	serverCred, _ := NewCredential()
+	clientCred, err := NewCredential()
+	require.NoError(t, err)
+	serverCred, err := NewCredential()
+	require.NoError(t, err)
 
 	clientConn, serverConn := pipeConn()
 
@@ -838,12 +753,12 @@ func TestConcurrentReadClose(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		clientSecure, _ = clientHandshaker.ClientHandshake(clientConn, "test-alpn")
+		clientSecure, _ = clientHandshaker.ClientHandshake(context.Background(), clientConn, "test-alpn")
 	}()
 
 	go func() {
 		defer wg.Done()
-		serverSecure, _ = serverHandshaker.ServerHandshake(serverConn, []string{"test-alpn"})
+		serverSecure, _ = serverHandshaker.ServerHandshake(context.Background(), serverConn, []string{"test-alpn"})
 	}()
 
 	wg.Wait()
@@ -865,9 +780,7 @@ func TestConcurrentReadClose(t *testing.T) {
 	// Check the read error
 	select {
 	case err := <-readErrCh:
-		if err == nil {
-			t.Error("Expected error from Read after Close, got nil")
-		}
+		assert.Error(t, err, "Expected error from Read after Close")
 		// We expect either net.ErrClosed or an IO error depending on timing
 	case <-time.After(1 * time.Second):
 		t.Error("Read did not return after Close")

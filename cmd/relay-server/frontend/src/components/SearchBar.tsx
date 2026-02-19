@@ -2,7 +2,7 @@ import { Search, Settings } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { SortOption, StatusFilter } from "@/types/filters";
 import { TagCombobox } from "@/components/TagCombobox";
-import { Dispatch, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { SortbySelect } from "@/components/select/SortbySelect";
 

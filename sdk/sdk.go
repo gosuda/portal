@@ -2,14 +2,16 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/quic-go/webtransport-go"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
@@ -27,12 +29,31 @@ func NewCredential() *cryptoops.Credential {
 	return cred
 }
 
+func newWebTransportDialer(tlsConfig *tls.Config) func(context.Context, string) (portal.Session, error) {
+	return func(ctx context.Context, url string) (portal.Session, error) {
+		var dialer webtransport.Dialer
+		dialer.TLSClientConfig = tlsConfig
+		resp, sess, err := dialer.Dial(ctx, url, nil)
+		if resp != nil {
+			defer func() {
+				if closeErr := resp.Body.Close(); closeErr != nil {
+					log.Debug().Err(closeErr).Msg("[SDK] Failed to close WebTransport dial response body")
+				}
+			}()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("webtransport dial %s: %w", url, err)
+		}
+		return portal.NewWTSession(sess), nil
+	}
+}
+
 type Client struct {
 	config *ClientConfig
 	mu     sync.Mutex
 
 	relays    map[string]*connRelay
-	listeners map[string]*listener
+	listeners map[string]*Listener
 
 	stopch    chan struct{}
 	stopOnce  sync.Once      // Ensure stopch is closed only once
@@ -43,7 +64,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	log.Debug().Msg("[SDK] Creating new Client")
 
 	config := &ClientConfig{
-		Dialer:              utils.NewWebSocketDialer(),
+		// Dialer intentionally nil — created after options are applied
 		HealthCheckInterval: 10 * time.Second,
 		ReconnectMaxRetries: 0,
 		ReconnectInterval:   5 * time.Second,
@@ -53,9 +74,14 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 		o(config)
 	}
 
+	// Create default dialer if none was provided
+	if config.Dialer == nil {
+		config.Dialer = newWebTransportDialer(config.TLSConfig)
+	}
+
 	client := &Client{
 		relays:    make(map[string]*connRelay),
-		listeners: make(map[string]*listener),
+		listeners: make(map[string]*Listener),
 		config:    config,
 		stopch:    make(chan struct{}),
 	}
@@ -69,7 +95,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 				Err(err).
 				Str("server", server).
 				Msg("[SDK] Invalid bootstrap server")
-			connectionErrors = append(connectionErrors, err)
+			connectionErrors = append(connectionErrors, fmt.Errorf("invalid bootstrap server %q: %w", server, err))
 			continue
 		}
 
@@ -79,7 +105,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 				Err(err).
 				Str("server", normalized).
 				Msg("[SDK] Failed to connect to bootstrap server")
-			connectionErrors = append(connectionErrors, err)
+			connectionErrors = append(connectionErrors, fmt.Errorf("connect bootstrap server %q: %w", normalized, err))
 			continue
 		}
 		log.Debug().
@@ -91,14 +117,14 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	// If no relays were successfully connected, return an error
 	if len(client.relays) == 0 && len(config.BootstrapServers) > 0 {
 		log.Error().Int("attempted", len(config.BootstrapServers)).Msg("[SDK] Failed to connect to any bootstrap servers")
-		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %v", connectionErrors)
+		return nil, fmt.Errorf("failed to connect to any bootstrap servers: %w", errors.Join(connectionErrors...))
 	}
 
 	log.Debug().Int("relay_count", len(client.relays)).Msg("[SDK] Client created successfully")
 	return client, nil
 }
 
-func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (*connection, error) {
+func (g *Client) Dial(cred *cryptoops.Credential, leaseID, alpn string) (*Connection, error) {
 	log.Debug().
 		Str("lease_id", leaseID).
 		Str("alpn", alpn).
@@ -128,13 +154,14 @@ func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (
 			}
 
 			for _, lease := range info.Leases {
-				if lease.Identity.Id == leaseID {
-					log.Debug().Str("relay", relay.addr).Str("lease_id", leaseID).Msg("[SDK] Found lease on relay")
-					availableRelaysMu.Lock()
-					availableRelays = append(availableRelays, relay)
-					availableRelaysMu.Unlock()
-					break
+				if lease.Identity.Id != leaseID {
+					continue
 				}
+				log.Debug().Str("relay", relay.addr).Str("lease_id", leaseID).Msg("[SDK] Found lease on relay")
+				availableRelaysMu.Lock()
+				availableRelays = append(availableRelays, relay)
+				availableRelaysMu.Unlock()
+				break
 			}
 		}(relay)
 	}
@@ -164,14 +191,14 @@ func (g *Client) Dial(cred *cryptoops.Credential, leaseID string, alpn string) (
 			Str("local", conn.LocalID()).
 			Str("remote", conn.RemoteID()).
 			Msg("[SDK] Connection established successfully")
-		return &connection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
+		return &Connection{via: relay, conn: conn, localAddr: conn.LocalID(), remoteAddr: conn.RemoteID()}, nil
 	}
 
 	log.Warn().Str("lease_id", leaseID).Msg("[SDK] All connection attempts failed")
 	return nil, ErrNoAvailableRelay
 }
 
-func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*listener, error) {
+func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string, options ...MetadataOption) (*Listener, error) {
 	log.Debug().
 		Str("lease_id", cred.ID()).
 		Str("name", name).
@@ -228,11 +255,11 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 	}
 
 	// Create listener with lease metadata for re-registration
-	listener := &listener{
+	listener := &Listener{
 		cred:   cred,
 		lease:  lease,
-		conns:  make(map[*connection]struct{}),
-		connCh: make(chan *connection, 100),
+		conns:  make(map[*Connection]struct{}),
+		connCh: make(chan *Connection, 100),
 		closed: false,
 	}
 
@@ -247,9 +274,9 @@ func (g *Client) Listen(cred *cryptoops.Credential, name string, alpns []string,
 	// Register lease with all available relays
 	for _, relay := range g.relays {
 		go func(r *connRelay) {
-			err := r.client.RegisterLease(cred, listener.lease)
-			if err != nil {
-				log.Error().Err(err).Str("relay", r.addr).Msg("[SDK] Failed to register lease")
+			registerErr := r.client.RegisterLease(cred, listener.lease)
+			if registerErr != nil {
+				log.Error().Err(registerErr).Str("relay", r.addr).Msg("[SDK] Failed to register lease")
 			} else {
 				log.Debug().Str("relay", r.addr).Msg("[SDK] Lease registered successfully")
 				// Store lease info in listener for future re-registration
@@ -299,11 +326,13 @@ func (g *Client) listenerWorker(server *connRelay) {
 
 			if !exists {
 				log.Warn().Str("lease_id", lease).Msg("[SDK] No listener found for lease, closing connection")
-				incoming.Close() // Close unused connection
+				if closeErr := incoming.Close(); closeErr != nil {
+					log.Error().Err(closeErr).Str("lease_id", lease).Msg("[SDK] Failed to close unused incoming connection")
+				}
 				continue
 			}
 
-			conn := &connection{
+			conn := &Connection{
 				via:        server,
 				conn:       incoming.SecureConnection,
 				localAddr:  incoming.LocalID(),
@@ -315,7 +344,9 @@ func (g *Client) listenerWorker(server *connRelay) {
 			if listener.closed {
 				log.Debug().Str("lease_id", lease).Msg("[SDK] Listener closed, rejecting connection")
 				listener.mu.Unlock()
-				conn.Close()
+				if closeErr := conn.Close(); closeErr != nil {
+					log.Error().Err(closeErr).Str("lease_id", lease).Msg("[SDK] Failed to close connection for closed listener")
+				}
 				continue
 			}
 			listener.conns[conn] = struct{}{}
@@ -332,7 +363,9 @@ func (g *Client) listenerWorker(server *connRelay) {
 				listener.mu.Lock()
 				delete(listener.conns, conn)
 				listener.mu.Unlock()
-				conn.Close()
+				if closeErr := conn.Close(); closeErr != nil {
+					log.Error().Err(closeErr).Str("lease_id", lease).Msg("[SDK] Failed to close connection after channel overflow")
+				}
 			}
 		}
 	}
@@ -348,7 +381,7 @@ func (g *Client) Close() error {
 	})
 
 	g.mu.Lock()
-	listeners := make([]*listener, 0, len(g.listeners))
+	listeners := make([]*Listener, 0, len(g.listeners))
 	for _, listener := range g.listeners {
 		listeners = append(listeners, listener)
 	}
@@ -368,7 +401,7 @@ func (g *Client) Close() error {
 
 	// Stop all relays
 	for _, relay := range relays {
-		if err := g.RemoveRelay(relay.addr); err != nil && err != ErrRelayNotFound {
+		if err := g.RemoveRelay(relay.addr); err != nil && !errors.Is(err, ErrRelayNotFound) {
 			log.Error().Err(err).Str("relay", relay.addr).Msg("[SDK] Error removing relay")
 			errs = append(errs, err)
 		}
@@ -385,7 +418,7 @@ func (g *Client) Close() error {
 	return nil
 }
 
-// healthCheckWorker periodically checks relay health and reconnects if needed
+// healthCheckWorker periodically checks relay health and reconnects if needed.
 func (g *Client) healthCheckWorker(relay *connRelay) {
 	defer g.waitGroup.Done()
 
@@ -437,7 +470,7 @@ func (g *Client) healthCheckWorker(relay *connRelay) {
 	}
 }
 
-// reconnectRelay attempts to reconnect to a relay server
+// reconnectRelay attempts to reconnect to a relay server.
 func (g *Client) reconnectRelay(relay *connRelay) {
 	addr := relay.addr
 	dialer := relay.dialer
@@ -445,15 +478,12 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 	log.Debug().Str("relay", addr).Msg("[SDK] Starting reconnection process")
 
 	// Remove the failed relay
-	if err := g.RemoveRelay(addr); err != nil && err != ErrRelayNotFound {
+	if err := g.RemoveRelay(addr); err != nil && !errors.Is(err, ErrRelayNotFound) {
 		log.Error().Err(err).Str("relay", addr).Msg("[SDK] Error removing relay during reconnection")
 	}
 
 	// Start reconnection in a goroutine
-	g.waitGroup.Add(1)
-	go func() {
-		defer g.waitGroup.Done()
-
+	g.waitGroup.Go(func() {
 		retries := 0
 		maxRetries := g.config.ReconnectMaxRetries
 
@@ -473,7 +503,7 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 				return
 			}
 
-			if err == ErrRelayExists {
+			if errors.Is(err, ErrRelayExists) {
 				log.Debug().Str("relay", addr).Msg("[SDK] Relay already exists, reconnection complete")
 				return
 			}
@@ -505,11 +535,11 @@ func (g *Client) reconnectRelay(relay *connRelay) {
 				// Continue to next retry
 			}
 		}
-	}()
+	})
 }
 
-// AddRelay adds a new relay server to the client
-func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.ReadWriteCloser, error)) error {
+// AddRelay adds a new relay server to the client.
+func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (portal.Session, error)) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -519,17 +549,12 @@ func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.
 	}
 
 	// Connect to relay
-	conn, err := dialer(context.Background(), addr)
+	sess, err := dialer(context.Background(), addr)
 	if err != nil {
 		return err
 	}
 
-	// Create relay client
-	relayClient := portal.NewRelayClient(conn)
-	if relayClient == nil {
-		conn.Close()
-		return ErrRelayNotFound
-	}
+	relayClient := portal.NewRelayClient(sess)
 
 	// Add relay
 	relay := &connRelay{
@@ -545,10 +570,10 @@ func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.
 		cred := listener.cred // immutable
 		lease := listener.lease.CloneVT()
 		go func(cred *cryptoops.Credential, lease *rdverb.Lease) {
-			err := relayClient.RegisterLease(cred, lease)
-			if err != nil {
+			registerErr := relayClient.RegisterLease(cred, lease)
+			if registerErr != nil {
 				log.Error().
-					Err(err).
+					Err(registerErr).
 					Str("relay", addr).
 					Str("lease_id", cred.ID()).
 					Msg("[SDK] Failed to register lease with new relay")
@@ -574,7 +599,7 @@ func (g *Client) AddRelay(addr string, dialer func(context.Context, string) (io.
 	return nil
 }
 
-// RemoveRelay removes a relay server from the client
+// RemoveRelay removes a relay server from the client.
 func (g *Client) RemoveRelay(addr string) error {
 	g.mu.Lock()
 	relay, exists := g.relays[addr]
@@ -610,7 +635,7 @@ func (g *Client) RemoveRelay(addr string) error {
 	return nil
 }
 
-// GetRelays returns a list of all relay addresses
+// GetRelays returns a list of all relay addresses.
 func (g *Client) GetRelays() []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -650,20 +675,20 @@ func (g *Client) LookupName(name string) (*rdverb.Lease, error) {
 	return nil, ErrNoAvailableRelay
 }
 
-type listener struct {
+type Listener struct {
 	mu sync.Mutex
 
 	cred  *cryptoops.Credential
 	lease *rdverb.Lease
 
-	conns map[*connection]struct{}
+	conns map[*Connection]struct{}
 
-	connCh chan *connection
+	connCh chan *Connection
 	closed bool
 }
 
-// Implement net.Listener interface for Listener
-func (l *listener) Accept() (net.Conn, error) {
+// Implement net.Listener interface for Listener.
+func (l *Listener) Accept() (net.Conn, error) {
 	conn, ok := <-l.connCh
 	if !ok {
 		return nil, net.ErrClosed
@@ -671,7 +696,7 @@ func (l *listener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-func (l *listener) Close() error {
+func (l *Listener) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -693,62 +718,62 @@ func (l *listener) Close() error {
 	}
 
 	// Clear the connections map
-	l.conns = make(map[*connection]struct{})
+	l.conns = make(map[*Connection]struct{})
 
 	return nil
 }
 
-func (l *listener) Addr() net.Addr {
+func (l *Listener) Addr() net.Addr {
 	return addr(l.cred.ID())
 }
 
 type connRelay struct {
 	addr     string
 	client   *portal.RelayClient
-	dialer   func(context.Context, string) (io.ReadWriteCloser, error)
+	dialer   func(context.Context, string) (portal.Session, error)
 	stop     chan struct{}
 	stopOnce sync.Once // Ensure stop channel is closed only once
 	mu       sync.Mutex
 }
 
-var _ net.Conn = (*connection)(nil)
+var _ net.Conn = (*Connection)(nil)
 
-type connection struct {
+type Connection struct {
 	via        *connRelay
 	localAddr  string
 	remoteAddr string
 	conn       *cryptoops.SecureConnection
 }
 
-func (r *connection) Read(b []byte) (n int, err error) {
+func (r *Connection) Read(b []byte) (n int, err error) {
 	return r.conn.Read(b)
 }
 
-func (r *connection) Write(b []byte) (n int, err error) {
+func (r *Connection) Write(b []byte) (n int, err error) {
 	return r.conn.Write(b)
 }
 
-func (r *connection) Close() error {
+func (r *Connection) Close() error {
 	return r.conn.Close()
 }
 
-func (r *connection) LocalAddr() net.Addr {
+func (r *Connection) LocalAddr() net.Addr {
 	return addr(r.localAddr)
 }
 
-func (r *connection) RemoteAddr() net.Addr {
+func (r *Connection) RemoteAddr() net.Addr {
 	return addr(r.remoteAddr)
 }
 
-func (r *connection) SetDeadline(t time.Time) error {
+func (r *Connection) SetDeadline(t time.Time) error {
 	return r.conn.SetDeadline(t)
 }
 
-func (r *connection) SetReadDeadline(t time.Time) error {
+func (r *Connection) SetReadDeadline(t time.Time) error {
 	return r.conn.SetReadDeadline(t)
 }
 
-func (r *connection) SetWriteDeadline(t time.Time) error {
+func (r *Connection) SetWriteDeadline(t time.Time) error {
 	return r.conn.SetWriteDeadline(t)
 }
 

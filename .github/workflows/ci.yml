@@ -5,128 +5,78 @@ on:
     branches: [main]
   push:
     branches: ["*"]
-  workflow_dispatch:
 
 jobs:
+  check-go:
+    name: Check Go Project
+    runs-on: ubuntu-latest
+    outputs:
+      is-go-project: ${{ steps.check.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: check
+        run: |
+          if [ -f "go.mod" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✓ go.mod found - proceeding with Go CI pipeline"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "⊘ go.mod not found - skipping Go CI pipeline"
+          fi
+
   test:
     name: Test
     runs-on: ubuntu-latest
-
+    needs: check-go
+    if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Install protobuf compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Install protoc-gen-go and protoc-gen-go-vtproto
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest
-
-      - name: Generate protobuf files
-        run: make build-protoc
-
-      - name: Run vet
-        run: go vet ./...
-
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test -v -race -coverprofile=coverage.out ./...
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    needs: check-go
+    if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-
-      - name: Run golangci-lint
-        run: golangci-lint run
+      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      - run: golangci-lint run
 
   security:
     name: Security
     runs-on: ubuntu-latest
+    needs: check-go
+    if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Run govulncheck
-        run: govulncheck ./...
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
 
   build:
     name: Build
     runs-on: ubuntu-latest
-
+    needs: [check-go, test, lint, security]
+    if: needs.check-go.outputs.is-go-project == 'true'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           check-latest: true
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler binaryen
-
-      - name: Install protoc-gen-go and protoc-gen-go-vtproto
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest
-
-      - name: Build all components
-        run: make build
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: portal-binaries
-          path: bin/
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          tags: portal:latest
+      - run: go mod download
+      - run: go build ./...

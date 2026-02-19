@@ -30,10 +30,7 @@ export function TagCombobox({
     if (!query) return pool.slice(0, 8);
     return pool.filter((tag) => tag.toLowerCase().includes(query)).slice(0, 8);
   }, [availableTags, selectedTags, inputValue]);
-
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [filtered.length]);
+  const clampedActiveIndex = filtered.length === 0 ? 0 : Math.min(activeIndex, filtered.length - 1);
 
   useEffect(() => {
     if (!open) return;
@@ -63,23 +60,24 @@ export function TagCombobox({
     onAdd(tag);
     setInputValue("");
     setOpen(false);
+    setActiveIndex(0);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setOpen(true);
-      setActiveIndex((i) => (i + 1) % Math.max(filtered.length, 1));
+      setActiveIndex((clampedActiveIndex + 1) % Math.max(filtered.length, 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setOpen(true);
-      setActiveIndex((i) =>
-        filtered.length === 0 ? 0 : (i - 1 + filtered.length) % filtered.length
+      setActiveIndex(
+        filtered.length === 0 ? 0 : (clampedActiveIndex - 1 + filtered.length) % filtered.length
       );
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (open && filtered[activeIndex]) {
-        addTag(filtered[activeIndex]);
+      if (open && filtered[clampedActiveIndex]) {
+        addTag(filtered[clampedActiveIndex]);
       } else if (inputValue.trim()) {
         addTag(inputValue.trim());
       }
@@ -118,6 +116,7 @@ export function TagCombobox({
             value={inputValue}
             onChange={(e) => {
               setInputValue(e.target.value);
+              setActiveIndex(0);
               setOpen(true);
             }}
             onFocus={() => setOpen(true)}
@@ -148,12 +147,12 @@ export function TagCombobox({
               className="max-h-56 overflow-auto py-1"
             >
               {filtered.map((tag, idx) => (
-                <li key={tag} role="option" aria-selected={idx === activeIndex}>
+                <li key={tag} role="option" aria-selected={idx === clampedActiveIndex}>
                   <button
                     type="button"
                     className={cn(
                       "flex w-full items-center px-3 py-2 text-left text-sm transition-colors",
-                      idx === activeIndex
+                      idx === clampedActiveIndex
                         ? "bg-primary/20 text-foreground"
                         : "hover:bg-border/60"
                     )}

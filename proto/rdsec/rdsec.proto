@@ -23,11 +23,6 @@ message ClientInitPayload {
   bytes session_public_key = 6;
 }
 
-message SignedPayload {
-  bytes data = 1;
-  bytes signature = 2;
-}
-
 message ServerInitPayload {
   ProtocolVersion version = 1;
   bytes nonce = 2;

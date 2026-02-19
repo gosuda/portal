@@ -24,6 +24,8 @@ const adminCookieName = "portal_admin"
 type Admin struct {
 	settingsPath string
 	settingsMu   sync.Mutex
+	portalURL    string
+	portalAppURL string
 
 	approveManager *manager.ApproveManager
 	bpsManager     *manager.BPSManager
@@ -33,13 +35,15 @@ type Admin struct {
 	frontend *Frontend
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
+func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager, portalURL, portalAppURL string) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
 	}
 	return &Admin{
 		settingsPath:   "admin_settings.json",
+		portalURL:      portalURL,
+		portalAppURL:   portalAppURL,
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
 		ipManager:      manager.NewIPManager(),
@@ -63,7 +67,7 @@ func (a *Admin) GetIPManager() *manager.IPManager {
 	return a.ipManager
 }
 
-// adminSettings stores persistent admin configuration
+// adminSettings stores persistent admin configuration.
 type adminSettings struct {
 	BannedLeases   []string             `json:"banned_leases"`
 	BPSLimits      map[string]int64     `json:"bps_limits"`
@@ -118,14 +122,16 @@ func (a *Admin) SaveSettings(serv *portal.RelayServer) {
 
 	dir := filepath.Dir(a.settingsPath)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Error().Err(err).Msg("[Admin] Failed to create settings directory")
+		mkdirErr := os.MkdirAll(dir, 0o750)
+		if mkdirErr != nil {
+			log.Error().Err(mkdirErr).Msg("[Admin] Failed to create settings directory")
 			return
 		}
 	}
 
-	if err := os.WriteFile(a.settingsPath, data, 0644); err != nil {
-		log.Error().Err(err).Msg("[Admin] Failed to save admin settings")
+	writeErr := os.WriteFile(a.settingsPath, data, 0o600)
+	if writeErr != nil {
+		log.Error().Err(writeErr).Msg("[Admin] Failed to save admin settings")
 		return
 	}
 
@@ -147,8 +153,9 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 	}
 
 	var settings adminSettings
-	if err := json.Unmarshal(data, &settings); err != nil {
-		log.Error().Err(err).Msg("[Admin] Failed to parse admin settings")
+	unmarshalErr := json.Unmarshal(data, &settings)
+	if unmarshalErr != nil {
+		log.Error().Err(unmarshalErr).Msg("[Admin] Failed to parse admin settings")
 		return
 	}
 
@@ -190,7 +197,7 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 		Msg("[Admin] Loaded admin settings")
 }
 
-// isAuthenticated checks if the request has a valid admin session
+// isAuthenticated checks if the request has a valid admin session.
 func (a *Admin) isAuthenticated(r *http.Request) bool {
 	// If no secret key is configured, deny all access
 	if a.authManager == nil || !a.authManager.HasSecretKey() {
@@ -246,7 +253,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	case route == "leases/banned" && r.Method == http.MethodGet:
 		writeJSON(w, serv.GetLeaseManager().GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"leases_count": len(serv.GetAllLeaseEntries()),
 			"uptime":       "TODO",
 		})
@@ -269,7 +276,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	}
 }
 
-// handleLogin handles POST /admin/login
+// handleLogin handles POST /admin/login.
 func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	clientIP := manager.ExtractClientIP(r)
 
@@ -277,7 +284,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.authManager.IsIPLocked(clientIP) {
 		remaining := a.authManager.GetLockRemainingSeconds(clientIP)
 		w.WriteHeader(http.StatusTooManyRequests)
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success":           false,
 			"error":             "Too many failed attempts. Please try again later.",
 			"locked":            true,
@@ -289,7 +296,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Key string `json:"key"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeRequestJSON(r, &req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -299,7 +306,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 		nowLocked := a.authManager.RecordFailedLogin(clientIP)
 		log.Warn().Str("ip", clientIP).Bool("now_locked", nowLocked).Msg("[Admin] Failed login attempt")
 
-		response := map[string]interface{}{
+		response := map[string]any{
 			"success": false,
 			"error":   "Invalid key",
 			"locked":  nowLocked,
@@ -326,12 +333,12 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	log.Info().Str("ip", clientIP).Msg("[Admin] Successful login")
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"success": true,
 	})
 }
 
-// handleLogout handles POST /admin/logout
+// handleLogout handles POST /admin/logout.
 func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(adminCookieName)
 	if err == nil && cookie.Value != "" {
@@ -348,19 +355,19 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1, // Delete cookie
 	})
 
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"success": true,
 	})
 }
 
-// handleAuthStatus handles GET /admin/auth/status
+// handleAuthStatus handles GET /admin/auth/status.
 func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	authenticated := a.isAuthenticated(r)
 
 	// Check if secret key is configured
 	authEnabled := a.authManager != nil && a.authManager.HasSecretKey()
 
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"authenticated": authenticated,
 		"auth_enabled":  authEnabled,
 	})
@@ -394,7 +401,7 @@ func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, se
 }
 
 func (a *Admin) handleGetSettings(w http.ResponseWriter) {
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"approval_mode":   a.approveManager.GetApprovalMode(),
 		"approved_leases": a.approveManager.GetApprovedLeases(),
 		"denied_leases":   a.approveManager.GetDeniedLeases(),
@@ -404,14 +411,14 @@ func (a *Admin) handleGetSettings(w http.ResponseWriter) {
 func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"approval_mode": a.approveManager.GetApprovalMode(),
 		})
 	case http.MethodPost:
 		var req struct {
 			Mode string `json:"mode"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequestJSON(r, &req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -423,7 +430,7 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 		a.approveManager.SetApprovalMode(mode)
 		a.SaveSettings(serv)
 		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"approval_mode": mode,
 		})
 	default:
@@ -508,7 +515,7 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 		var req struct {
 			BPS int64 `json:"bps"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequestJSON(r, &req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -578,7 +585,7 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 	}
 }
 
-// convertLeaseEntriesToAdminRows converts LeaseEntry data to leaseRow format for admin API
+// convertLeaseEntriesToAdminRows converts LeaseEntry data to leaseRow format for admin API.
 func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
 	leaseEntries := serv.GetAllLeaseEntries()
 	rows := []leaseRow{}
@@ -590,24 +597,22 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		}
 
 		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
+		identityID := lease.Identity.Id
 
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
 		if ttl > 0 {
-			if ttl > time.Hour {
+			switch {
+			case ttl > time.Hour:
 				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
-			} else if ttl > time.Minute {
+			case ttl > time.Minute:
 				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
-			} else {
+			default:
 				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
 			}
 		}
 
-		since := now.Sub(leaseEntry.LastSeen)
-		if since < 0 {
-			since = 0
-		}
+		since := max(now.Sub(leaseEntry.LastSeen), 0)
 		lastSeenStr := func(d time.Duration) string {
 			if d >= time.Hour {
 				h := int(d / time.Hour)
@@ -647,9 +652,9 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
+		base := a.portalAppURL
 		if base == "" {
-			base = flagPortalURL
+			base = a.portalURL
 		}
 		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
@@ -709,4 +714,9 @@ func decodeLeaseID(encoded string) (string, bool) {
 		}
 	}
 	return string(idBytes), true
+}
+
+func decodeRequestJSON(r *http.Request, dst any) error {
+	decoder := json.NewDecoder(r.Body)
+	return decoder.Decode(dst)
 }

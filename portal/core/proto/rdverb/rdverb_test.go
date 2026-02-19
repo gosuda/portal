@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	rdsec "gosuda.org/portal/portal/core/proto/rdsec"
 )
 
-// TestPacket_MarshalVT_UnmarshalVT tests round-trip serialization for Packet
+// TestPacket_MarshalVT_UnmarshalVT tests round-trip serialization for Packet.
 func TestPacket_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -46,26 +49,22 @@ func TestPacket_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &Packet{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestPacket_AllPacketTypes tests serialization of all packet types
+// TestPacket_AllPacketTypes tests serialization of all packet types.
 func TestPacket_AllPacketTypes(t *testing.T) {
 	packetTypes := []PacketType{
 		PacketType_PACKET_TYPE_RELAY_INFO_REQUEST,
@@ -86,23 +85,17 @@ func TestPacket_AllPacketTypes(t *testing.T) {
 			}
 
 			data, err := msg.MarshalVT()
-			if err != nil {
-				t.Fatalf("MarshalVT() error = %v", err)
-			}
+			require.NoError(t, err)
 
 			got := &Packet{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
-			}
+			require.NoError(t, got.UnmarshalVT(data))
 
-			if !msg.EqualVT(got) {
-				t.Errorf("roundtrip mismatch for %v", pt)
-			}
+			assert.True(t, msg.EqualVT(got), "roundtrip mismatch for %v", pt)
 		})
 	}
 }
 
-// TestRelayInfo_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestRelayInfo_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestRelayInfo_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -160,26 +153,22 @@ func TestRelayInfo_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &RelayInfo{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestRelayInfo_WithMultipleLeases tests array handling for leases
+// TestRelayInfo_WithMultipleLeases tests array handling for leases.
 func TestRelayInfo_WithMultipleLeases(t *testing.T) {
 	leases := []*Lease{
 		{Identity: &rdsec.Identity{Id: "l1"}, Expires: 100, Name: "lease1"},
@@ -195,27 +184,19 @@ func TestRelayInfo_WithMultipleLeases(t *testing.T) {
 	}
 
 	data, err := msg.MarshalVT()
-	if err != nil {
-		t.Fatalf("MarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	got := &RelayInfo{}
-	if err := got.UnmarshalVT(data); err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
-	}
+	require.NoError(t, got.UnmarshalVT(data))
 
-	if len(got.Leases) != len(leases) {
-		t.Fatalf("got %d leases, want %d", len(got.Leases), len(leases))
-	}
+	assert.Len(t, got.Leases, len(leases))
 
 	for i, want := range leases {
-		if got.Leases[i].Name != want.Name {
-			t.Errorf("lease[%d].Name = %v, want %v", i, got.Leases[i].Name, want.Name)
-		}
+		assert.Equal(t, want.Name, got.Leases[i].Name, "lease[%d].Name", i)
 	}
 }
 
-// TestLease_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLease_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLease_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -254,26 +235,22 @@ func TestLease_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &Lease{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestLeaseUpdateRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLeaseUpdateRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	lease := &Lease{
 		Identity: &rdsec.Identity{Id: "update-lease"},
@@ -289,9 +266,7 @@ func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 		{
 			name: "full",
 			input: &LeaseUpdateRequest{
-				Lease:     lease,
-				Nonce:     []byte{0x01, 0x02, 0x03, 0x04},
-				Timestamp: 9876543210,
+				Lease: lease,
 			},
 			wantErr: false,
 		},
@@ -305,26 +280,22 @@ func TestLeaseUpdateRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &LeaseUpdateRequest{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestResponseCode_AllValues tests all response code values
+// TestResponseCode_AllValues tests all response code values.
 func TestResponseCode_AllValues(t *testing.T) {
 	codes := []ResponseCode{
 		ResponseCode_RESPONSE_CODE_UNKNOWN,
@@ -341,23 +312,17 @@ func TestResponseCode_AllValues(t *testing.T) {
 			msg := &LeaseUpdateResponse{Code: code}
 
 			data, err := msg.MarshalVT()
-			if err != nil {
-				t.Fatalf("MarshalVT() error = %v", err)
-			}
+			require.NoError(t, err)
 
 			got := &LeaseUpdateResponse{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
-			}
+			require.NoError(t, got.UnmarshalVT(data))
 
-			if got.Code != code {
-				t.Errorf("Code = %v, want %v", got.Code, code)
-			}
+			assert.Equal(t, code, got.Code)
 		})
 	}
 }
 
-// TestLeaseDeleteRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestLeaseDeleteRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -367,9 +332,7 @@ func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 		{
 			name: "full",
 			input: &LeaseDeleteRequest{
-				Identity:  &rdsec.Identity{Id: "delete-id", PublicKey: []byte{0x01}},
-				Nonce:     []byte{0x01, 0x02, 0x03},
-				Timestamp: 1234567890,
+				Identity: &rdsec.Identity{Id: "delete-id", PublicKey: []byte{0x01}},
 			},
 			wantErr: false,
 		},
@@ -383,26 +346,22 @@ func TestLeaseDeleteRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &LeaseDeleteRequest{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestConnectionRequest_MarshalVT_UnmarshalVT tests round-trip serialization
+// TestConnectionRequest_MarshalVT_UnmarshalVT tests round-trip serialization.
 func TestConnectionRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -434,46 +393,36 @@ func TestConnectionRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.input.MarshalVT()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MarshalVT() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 
 			got := &ConnectionRequest{}
 			err = got.UnmarshalVT(data)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("UnmarshalVT() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
+			require.NoError(t, err)
 
-			if !tt.input.EqualVT(got) {
-				t.Errorf("roundtrip mismatch")
-			}
+			assert.True(t, tt.input.EqualVT(got), "roundtrip mismatch")
 		})
 	}
 }
 
-// TestRelayInfoRequest_MarshalVT_UnmarshalVT tests empty message
+// TestRelayInfoRequest_MarshalVT_UnmarshalVT tests empty message.
 func TestRelayInfoRequest_MarshalVT_UnmarshalVT(t *testing.T) {
 	msg := &RelayInfoRequest{}
 
 	data, err := msg.MarshalVT()
-	if err != nil {
-		t.Fatalf("MarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	got := &RelayInfoRequest{}
 	err = got.UnmarshalVT(data)
-	if err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !msg.EqualVT(got) {
-		t.Error("roundtrip mismatch for empty RelayInfoRequest")
-	}
+	assert.True(t, msg.EqualVT(got), "roundtrip mismatch for empty RelayInfoRequest")
 }
 
-// TestRelayInfoResponse_MarshalVT_UnmarshalVT tests with RelayInfo
+// TestRelayInfoResponse_MarshalVT_UnmarshalVT tests with RelayInfo.
 func TestRelayInfoResponse_MarshalVT_UnmarshalVT(t *testing.T) {
 	relayInfo := &RelayInfo{
 		Identity: &rdsec.Identity{Id: "response-relay"},
@@ -486,22 +435,16 @@ func TestRelayInfoResponse_MarshalVT_UnmarshalVT(t *testing.T) {
 	msg := &RelayInfoResponse{RelayInfo: relayInfo}
 
 	data, err := msg.MarshalVT()
-	if err != nil {
-		t.Fatalf("MarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	got := &RelayInfoResponse{}
 	err = got.UnmarshalVT(data)
-	if err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !msg.EqualVT(got) {
-		t.Error("roundtrip mismatch")
-	}
+	assert.True(t, msg.EqualVT(got), "roundtrip mismatch")
 }
 
-// TestCloneVT tests cloning creates independent copies
+// TestCloneVT tests cloning creates independent copies.
 func TestCloneVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		original := &Packet{
@@ -513,12 +456,8 @@ func TestCloneVT(t *testing.T) {
 		cloned.Type = PacketType_PACKET_TYPE_LEASE_UPDATE_REQUEST
 		cloned.Payload[0] = 0xFF
 
-		if original.Type != PacketType_PACKET_TYPE_CONNECTION_REQUEST {
-			t.Error("original.Type was modified")
-		}
-		if original.Payload[0] != 0x01 {
-			t.Error("original.Payload was modified")
-		}
+		assert.Equal(t, PacketType_PACKET_TYPE_CONNECTION_REQUEST, original.Type)
+		assert.Equal(t, byte(0x01), original.Payload[0])
 	})
 
 	t.Run("RelayInfo", func(t *testing.T) {
@@ -535,15 +474,9 @@ func TestCloneVT(t *testing.T) {
 		cloned.Address[0] = "modified-addr"
 		cloned.Leases[0].Name = "modified-lease"
 
-		if original.Identity.Id != "test" {
-			t.Error("original.Identity.Id was modified")
-		}
-		if original.Address[0] != "addr1" {
-			t.Error("original.Address was modified")
-		}
-		if original.Leases[0].Name != "lease1" {
-			t.Error("original.Leases[0].Name was modified")
-		}
+		assert.Equal(t, "test", original.Identity.Id)
+		assert.Equal(t, "addr1", original.Address[0])
+		assert.Equal(t, "lease1", original.Leases[0].Name)
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -560,40 +493,24 @@ func TestCloneVT(t *testing.T) {
 		cloned.Name = "modified"
 		cloned.Alpn[0] = "modified"
 
-		if original.Identity.Id != "lease-clone" {
-			t.Error("original.Identity.Id was modified")
-		}
-		if original.Expires != 12345 {
-			t.Error("original.Expires was modified")
-		}
-		if original.Name != "clone-lease" {
-			t.Error("original.Name was modified")
-		}
-		if original.Alpn[0] != "h2" {
-			t.Error("original.Alpn was modified")
-		}
+		assert.Equal(t, "lease-clone", original.Identity.Id)
+		assert.Equal(t, int64(12345), original.Expires)
+		assert.Equal(t, "clone-lease", original.Name)
+		assert.Equal(t, "h2", original.Alpn[0])
 	})
 }
 
-// TestEqualVT tests equality comparison
+// TestEqualVT tests equality comparison.
 func TestEqualVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		a := &Packet{Type: PacketType_PACKET_TYPE_CONNECTION_REQUEST, Payload: []byte{0x01}}
 		b := &Packet{Type: PacketType_PACKET_TYPE_CONNECTION_REQUEST, Payload: []byte{0x01}}
 		c := &Packet{Type: PacketType_PACKET_TYPE_LEASE_UPDATE_REQUEST, Payload: []byte{0x01}}
 
-		if !a.EqualVT(b) {
-			t.Error("Equal packets should be equal")
-		}
-		if a.EqualVT(c) {
-			t.Error("Different packet types should not be equal")
-		}
-		if a.EqualVT(nil) {
-			t.Error("Packet should not equal nil")
-		}
-		if !(*Packet)(nil).EqualVT(nil) {
-			t.Error("nil should equal nil")
-		}
+		assert.True(t, a.EqualVT(b), "Equal packets should be equal")
+		assert.False(t, a.EqualVT(c), "Different packet types should not be equal")
+		assert.False(t, a.EqualVT(nil), "Packet should not equal nil")
+		assert.True(t, (*Packet)(nil).EqualVT(nil), "nil should equal nil")
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -602,16 +519,12 @@ func TestEqualVT(t *testing.T) {
 		b := &Lease{Identity: identity, Expires: 123, Name: "test"}
 		c := &Lease{Identity: identity, Expires: 456, Name: "test"}
 
-		if !a.EqualVT(b) {
-			t.Error("Equal leases should be equal")
-		}
-		if a.EqualVT(c) {
-			t.Error("Leases with different Expires should not be equal")
-		}
+		assert.True(t, a.EqualVT(b), "Equal leases should be equal")
+		assert.False(t, a.EqualVT(c), "Leases with different Expires should not be equal")
 	})
 }
 
-// TestSizeVT tests size calculation accuracy
+// TestSizeVT tests size calculation accuracy.
 func TestSizeVT(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		msg := &Packet{
@@ -621,13 +534,9 @@ func TestSizeVT(t *testing.T) {
 
 		size := msg.SizeVT()
 		data, err := msg.MarshalVT()
-		if err != nil {
-			t.Fatalf("MarshalVT() error = %v", err)
-		}
+		require.NoError(t, err)
 
-		if size != len(data) {
-			t.Errorf("SizeVT() = %v, MarshalVT() produced %v bytes", size, len(data))
-		}
+		assert.Equal(t, len(data), size)
 	})
 
 	t.Run("RelayInfo", func(t *testing.T) {
@@ -641,13 +550,9 @@ func TestSizeVT(t *testing.T) {
 
 		size := msg.SizeVT()
 		data, err := msg.MarshalVT()
-		if err != nil {
-			t.Fatalf("MarshalVT() error = %v", err)
-		}
+		require.NoError(t, err)
 
-		if size != len(data) {
-			t.Errorf("SizeVT() = %v, MarshalVT() produced %v bytes", size, len(data))
-		}
+		assert.Equal(t, len(data), size)
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -661,24 +566,19 @@ func TestSizeVT(t *testing.T) {
 
 		size := msg.SizeVT()
 		data, err := msg.MarshalVT()
-		if err != nil {
-			t.Fatalf("MarshalVT() error = %v", err)
-		}
+		require.NoError(t, err)
 
-		if size != len(data) {
-			t.Errorf("SizeVT() = %v, MarshalVT() produced %v bytes", size, len(data))
-		}
+		assert.Equal(t, len(data), size)
 	})
 }
 
-// TestReset tests Reset clears all fields
+// TestReset tests Reset clears all fields.
 func TestReset(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		p := &Packet{Type: PacketType_PACKET_TYPE_CONNECTION_REQUEST, Payload: []byte{0x01}}
 		p.Reset()
-		if p.Type != 0 || p.Payload != nil {
-			t.Error("Packet not properly reset")
-		}
+		assert.Equal(t, PacketType(0), p.Type)
+		assert.Nil(t, p.Payload)
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -690,13 +590,15 @@ func TestReset(t *testing.T) {
 			Metadata: "meta",
 		}
 		l.Reset()
-		if l.Identity != nil || l.Expires != 0 || l.Name != "" || l.Alpn != nil || l.Metadata != "" {
-			t.Error("Lease not properly reset")
-		}
+		assert.Nil(t, l.Identity)
+		assert.Zero(t, l.Expires)
+		assert.Empty(t, l.Name)
+		assert.Nil(t, l.Alpn)
+		assert.Empty(t, l.Metadata)
 	})
 }
 
-// TestGetters tests getter methods
+// TestGetters tests getter methods.
 func TestGetters(t *testing.T) {
 	t.Run("Packet", func(t *testing.T) {
 		p := &Packet{
@@ -704,12 +606,8 @@ func TestGetters(t *testing.T) {
 			Payload: []byte{0x01, 0x02},
 		}
 
-		if p.GetType() != PacketType_PACKET_TYPE_CONNECTION_REQUEST {
-			t.Error("GetType() returned wrong value")
-		}
-		if !bytes.Equal(p.GetPayload(), []byte{0x01, 0x02}) {
-			t.Error("GetPayload() returned wrong value")
-		}
+		assert.Equal(t, PacketType_PACKET_TYPE_CONNECTION_REQUEST, p.GetType())
+		assert.Equal(t, []byte{0x01, 0x02}, p.GetPayload())
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -722,44 +620,24 @@ func TestGetters(t *testing.T) {
 			Metadata: "lease-metadata",
 		}
 
-		if l.GetIdentity() != identity {
-			t.Error("GetIdentity() returned wrong value")
-		}
-		if l.GetExpires() != 12345 {
-			t.Error("GetExpires() returned wrong value")
-		}
-		if l.GetName() != "lease-name" {
-			t.Error("GetName() returned wrong value")
-		}
-		if len(l.GetAlpn()) != 2 {
-			t.Error("GetAlpn() returned wrong value")
-		}
-		if l.GetMetadata() != "lease-metadata" {
-			t.Error("GetMetadata() returned wrong value")
-		}
+		assert.Equal(t, identity, l.GetIdentity())
+		assert.Equal(t, int64(12345), l.GetExpires())
+		assert.Equal(t, "lease-name", l.GetName())
+		assert.Len(t, l.GetAlpn(), 2)
+		assert.Equal(t, "lease-metadata", l.GetMetadata())
 	})
 
 	t.Run("nil Lease", func(t *testing.T) {
 		var l *Lease
-		if l.GetIdentity() != nil {
-			t.Error("GetIdentity() on nil should return nil")
-		}
-		if l.GetExpires() != 0 {
-			t.Error("GetExpires() on nil should return 0")
-		}
-		if l.GetName() != "" {
-			t.Error("GetName() on nil should return empty string")
-		}
-		if l.GetAlpn() != nil {
-			t.Error("GetAlpn() on nil should return nil")
-		}
-		if l.GetMetadata() != "" {
-			t.Error("GetMetadata() on nil should return empty string")
-		}
+		assert.Nil(t, l.GetIdentity())
+		assert.Zero(t, l.GetExpires())
+		assert.Empty(t, l.GetName())
+		assert.Nil(t, l.GetAlpn())
+		assert.Empty(t, l.GetMetadata())
 	})
 }
 
-// TestNilHandling tests nil message handling
+// TestNilHandling tests nil message handling.
 func TestNilHandling(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -767,63 +645,43 @@ func TestNilHandling(t *testing.T) {
 	}{
 		{"Packet", func(t *testing.T) {
 			var msg *Packet
-			if data, err := msg.MarshalVT(); err != nil || data != nil {
-				t.Errorf("MarshalVT() on nil Packet = (%v, %v), want (nil, nil)", data, err)
-			}
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil Packet should return nil")
-			}
-			if msg.SizeVT() != 0 {
-				t.Error("SizeVT() on nil Packet should return 0")
-			}
+			data, err := msg.MarshalVT()
+			assert.NoError(t, err)
+			assert.Nil(t, data)
+			assert.Nil(t, msg.CloneVT())
+			assert.Zero(t, msg.SizeVT())
 		}},
 		{"RelayInfo", func(t *testing.T) {
 			var msg *RelayInfo
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil RelayInfo should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"Lease", func(t *testing.T) {
 			var msg *Lease
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil Lease should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"LeaseUpdateRequest", func(t *testing.T) {
 			var msg *LeaseUpdateRequest
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil LeaseUpdateRequest should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"LeaseUpdateResponse", func(t *testing.T) {
 			var msg *LeaseUpdateResponse
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil LeaseUpdateResponse should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"LeaseDeleteRequest", func(t *testing.T) {
 			var msg *LeaseDeleteRequest
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil LeaseDeleteRequest should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"LeaseDeleteResponse", func(t *testing.T) {
 			var msg *LeaseDeleteResponse
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil LeaseDeleteResponse should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"ConnectionRequest", func(t *testing.T) {
 			var msg *ConnectionRequest
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil ConnectionRequest should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 		{"ConnectionResponse", func(t *testing.T) {
 			var msg *ConnectionResponse
-			if msg.CloneVT() != nil {
-				t.Error("CloneVT() on nil ConnectionResponse should return nil")
-			}
+			assert.Nil(t, msg.CloneVT())
 		}},
 	}
 
@@ -832,30 +690,24 @@ func TestNilHandling(t *testing.T) {
 	}
 }
 
-// TestMarshalVTStrict tests strict marshaling
-func TestMarshalVTStrict(t *testing.T) {
+// TestMarshalVT_Roundtrip tests marshal/unmarshal roundtrip.
+func TestMarshalVT_Roundtrip(t *testing.T) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
 		Payload: []byte{0x01, 0x02, 0x03},
 	}
 
-	data, err := msg.MarshalVTStrict()
-	if err != nil {
-		t.Fatalf("MarshalVTStrict() error = %v", err)
-	}
+	data, err := msg.MarshalVT()
+	require.NoError(t, err)
 
 	got := &Packet{}
 	err = got.UnmarshalVT(data)
-	if err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !msg.EqualVT(got) {
-		t.Error("MarshalVTStrict roundtrip mismatch")
-	}
+	assert.True(t, msg.EqualVT(got), "MarshalVT roundtrip mismatch")
 }
 
-// TestUnmarshalVTUnsafe tests unsafe unmarshaling
+// TestUnmarshalVTUnsafe tests unsafe unmarshaling.
 func TestUnmarshalVTUnsafe(t *testing.T) {
 	msg := &ConnectionRequest{
 		LeaseId:        "unsafe-test",
@@ -863,22 +715,16 @@ func TestUnmarshalVTUnsafe(t *testing.T) {
 	}
 
 	data, err := msg.MarshalVT()
-	if err != nil {
-		t.Fatalf("MarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	got := &ConnectionRequest{}
 	err = got.UnmarshalVTUnsafe(data)
-	if err != nil {
-		t.Fatalf("UnmarshalVTUnsafe() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !msg.EqualVT(got) {
-		t.Error("UnmarshalVTUnsafe roundtrip mismatch")
-	}
+	assert.True(t, msg.EqualVT(got), "UnmarshalVTUnsafe roundtrip mismatch")
 }
 
-// TestEmptyResponseMessages tests response messages
+// TestEmptyResponseMessages tests response messages.
 func TestEmptyResponseMessages(t *testing.T) {
 	responses := []ResponseCode{
 		ResponseCode_RESPONSE_CODE_UNKNOWN,
@@ -894,23 +740,17 @@ func TestEmptyResponseMessages(t *testing.T) {
 		t.Run(code.String(), func(t *testing.T) {
 			updateResp := &LeaseUpdateResponse{Code: code}
 			data, err := updateResp.MarshalVT()
-			if err != nil {
-				t.Fatalf("MarshalVT() error = %v", err)
-			}
+			require.NoError(t, err)
 
 			got := &LeaseUpdateResponse{}
-			if err := got.UnmarshalVT(data); err != nil {
-				t.Fatalf("UnmarshalVT() error = %v", err)
-			}
+			require.NoError(t, got.UnmarshalVT(data))
 
-			if got.Code != code {
-				t.Errorf("Code = %v, want %v", got.Code, code)
-			}
+			assert.Equal(t, code, got.Code)
 		})
 	}
 }
 
-// TestComplexRelayInfo tests complex RelayInfo with multiple nested elements
+// TestComplexRelayInfo tests complex RelayInfo with multiple nested elements.
 func TestComplexRelayInfo(t *testing.T) {
 	// Create a complex RelayInfo with multiple addresses and leases
 	msg := &RelayInfo{
@@ -948,30 +788,20 @@ func TestComplexRelayInfo(t *testing.T) {
 	}
 
 	data, err := msg.MarshalVT()
-	if err != nil {
-		t.Fatalf("MarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
 	got := &RelayInfo{}
 	err = got.UnmarshalVT(data)
-	if err != nil {
-		t.Fatalf("UnmarshalVT() error = %v", err)
-	}
+	require.NoError(t, err)
 
-	if !msg.EqualVT(got) {
-		t.Error("complex RelayInfo roundtrip mismatch")
-	}
+	assert.True(t, msg.EqualVT(got), "complex RelayInfo roundtrip mismatch")
 
 	// Verify all fields
-	if len(got.Address) != 3 {
-		t.Errorf("got %d addresses, want 3", len(got.Address))
-	}
-	if len(got.Leases) != 2 {
-		t.Errorf("got %d leases, want 2", len(got.Leases))
-	}
+	assert.Len(t, got.Address, 3)
+	assert.Len(t, got.Leases, 2)
 }
 
-// BenchmarkPacket_MarshalVT benchmarks packet marshaling
+// BenchmarkPacket_MarshalVT benchmarks packet marshaling.
 func BenchmarkPacket_MarshalVT(b *testing.B) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
@@ -984,7 +814,7 @@ func BenchmarkPacket_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkPacket_UnmarshalVT benchmarks packet unmarshaling
+// BenchmarkPacket_UnmarshalVT benchmarks packet unmarshaling.
 func BenchmarkPacket_UnmarshalVT(b *testing.B) {
 	msg := &Packet{
 		Type:    PacketType_PACKET_TYPE_CONNECTION_REQUEST,
@@ -1000,7 +830,7 @@ func BenchmarkPacket_UnmarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkRelayInfo_MarshalVT benchmarks complex relay info marshaling
+// BenchmarkRelayInfo_MarshalVT benchmarks complex relay info marshaling.
 func BenchmarkRelayInfo_MarshalVT(b *testing.B) {
 	msg := &RelayInfo{
 		Identity: &rdsec.Identity{
@@ -1030,7 +860,7 @@ func BenchmarkRelayInfo_MarshalVT(b *testing.B) {
 	}
 }
 
-// BenchmarkLease_MarshalVT benchmarks lease marshaling
+// BenchmarkLease_MarshalVT benchmarks lease marshaling.
 func BenchmarkLease_MarshalVT(b *testing.B) {
 	msg := &Lease{
 		Identity: &rdsec.Identity{
@@ -1049,7 +879,7 @@ func BenchmarkLease_MarshalVT(b *testing.B) {
 	}
 }
 
-// TestPacketType_String tests enum String method
+// TestPacketType_String tests enum String method.
 func TestPacketType_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1068,24 +898,22 @@ func TestPacketType_String(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.enum.String(); got != tt.want {
-				t.Errorf("PacketType.String() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.enum.String())
 		})
 	}
 }
 
-// TestPacketType_Enum tests Enum method
+// TestPacketType_Enum tests Enum method.
 func TestPacketType_Enum(t *testing.T) {
-	if PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum() != nil && *PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum() != 6 {
-		t.Error("PacketType.Enum() returned wrong value")
+	if PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum() != nil {
+		assert.Equal(t, PacketType_PACKET_TYPE_CONNECTION_REQUEST, *PacketType_PACKET_TYPE_CONNECTION_REQUEST.Enum())
 	}
-	if PacketType_PACKET_TYPE_RELAY_INFO_REQUEST.Enum() != nil && *PacketType_PACKET_TYPE_RELAY_INFO_REQUEST.Enum() != 0 {
-		t.Error("PACKET_TYPE_RELAY_INFO_REQUEST.Enum() should be 0")
+	if PacketType_PACKET_TYPE_RELAY_INFO_REQUEST.Enum() != nil {
+		assert.Equal(t, PacketType_PACKET_TYPE_RELAY_INFO_REQUEST, *PacketType_PACKET_TYPE_RELAY_INFO_REQUEST.Enum())
 	}
 }
 
-// TestResponseCode_String tests enum String method
+// TestResponseCode_String tests enum String method.
 func TestResponseCode_String(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1103,24 +931,22 @@ func TestResponseCode_String(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.enum.String(); got != tt.want {
-				t.Errorf("ResponseCode.String() = %v, want %v", got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.enum.String())
 		})
 	}
 }
 
-// TestResponseCode_Enum tests Enum method
+// TestResponseCode_Enum tests Enum method.
 func TestResponseCode_Enum(t *testing.T) {
-	if ResponseCode_RESPONSE_CODE_ACCEPTED.Enum() != nil && *ResponseCode_RESPONSE_CODE_ACCEPTED.Enum() != 1 {
-		t.Error("ResponseCode.Enum() returned wrong value")
+	if ResponseCode_RESPONSE_CODE_ACCEPTED.Enum() != nil {
+		assert.Equal(t, ResponseCode_RESPONSE_CODE_ACCEPTED, *ResponseCode_RESPONSE_CODE_ACCEPTED.Enum())
 	}
-	if ResponseCode_RESPONSE_CODE_UNKNOWN.Enum() != nil && *ResponseCode_RESPONSE_CODE_UNKNOWN.Enum() != 0 {
-		t.Error("RESPONSE_CODE_UNKNOWN.Enum() should be 0")
+	if ResponseCode_RESPONSE_CODE_UNKNOWN.Enum() != nil {
+		assert.Equal(t, ResponseCode_RESPONSE_CODE_UNKNOWN, *ResponseCode_RESPONSE_CODE_UNKNOWN.Enum())
 	}
 }
 
-// TestRelayInfo_Getters tests all getter methods
+// TestRelayInfo_Getters tests all getter methods.
 func TestRelayInfo_Getters(t *testing.T) {
 	identity := &rdsec.Identity{Id: "relay-test", PublicKey: []byte{0xAA}}
 	msg := &RelayInfo{
@@ -1129,30 +955,18 @@ func TestRelayInfo_Getters(t *testing.T) {
 		Leases:   []*Lease{{Name: "lease1"}},
 	}
 
-	if got := msg.GetIdentity(); got == nil || got.Id != "relay-test" {
-		t.Errorf("GetIdentity() = %v, want Id='relay-test'", got)
-	}
-	if got := msg.GetAddress(); len(got) != 2 {
-		t.Errorf("GetAddress() length = %v, want 2", len(got))
-	}
-	if got := msg.GetLeases(); len(got) != 1 {
-		t.Errorf("GetLeases() length = %v, want 1", len(got))
-	}
+	assert.Equal(t, identity, msg.GetIdentity())
+	assert.Len(t, msg.GetAddress(), 2)
+	assert.Len(t, msg.GetLeases(), 1)
 
 	// Test nil defaults
 	empty := &RelayInfo{}
-	if got := empty.GetIdentity(); got != nil {
-		t.Errorf("empty GetIdentity() = %v, want nil", got)
-	}
-	if got := empty.GetAddress(); got != nil {
-		t.Errorf("empty GetAddress() = %v, want nil", got)
-	}
-	if got := empty.GetLeases(); got != nil {
-		t.Errorf("empty GetLeases() = %v, want nil", got)
-	}
+	assert.Nil(t, empty.GetIdentity())
+	assert.Nil(t, empty.GetAddress())
+	assert.Nil(t, empty.GetLeases())
 }
 
-// TestRelayInfo_Reset tests Reset method
+// TestRelayInfo_Reset tests Reset method.
 func TestRelayInfo_Reset(t *testing.T) {
 	msg := &RelayInfo{
 		Identity: &rdsec.Identity{Id: "test"},
@@ -1162,42 +976,32 @@ func TestRelayInfo_Reset(t *testing.T) {
 
 	msg.Reset()
 
-	if msg.Identity != nil {
-		t.Error("Reset() did not clear Identity")
-	}
-	if msg.Address != nil {
-		t.Error("Reset() did not clear Address")
-	}
-	if msg.Leases != nil {
-		t.Error("Reset() did not clear Leases")
-	}
+	assert.Nil(t, msg.Identity)
+	assert.Nil(t, msg.Address)
+	assert.Nil(t, msg.Leases)
 }
 
-// TestRelayInfoRequest_Reset tests Reset method
+// TestRelayInfoRequest_Reset tests Reset method.
 func TestRelayInfoRequest_Reset(t *testing.T) {
 	msg := &RelayInfoRequest{}
 	msg.Reset() // Should not panic
 }
 
-// TestRelayInfoResponse_Getters tests all getter methods
+// TestRelayInfoResponse_Getters tests all getter methods.
 func TestRelayInfoResponse_Getters(t *testing.T) {
 	relay := &RelayInfo{Identity: &rdsec.Identity{Id: "response-test"}}
 	msg := &RelayInfoResponse{
 		RelayInfo: relay,
 	}
 
-	if got := msg.GetRelayInfo(); got == nil || got.Identity.Id != "response-test" {
-		t.Errorf("GetRelayInfo() = %v, want Id='response-test'", got)
-	}
+	assert.Equal(t, relay, msg.GetRelayInfo())
 
 	// Test nil defaults
 	empty := &RelayInfoResponse{}
-	if got := empty.GetRelayInfo(); got != nil {
-		t.Errorf("empty GetRelayInfo() = %v, want nil", got)
-	}
+	assert.Nil(t, empty.GetRelayInfo())
 }
 
-// TestRelayInfoResponse_Reset tests Reset method
+// TestRelayInfoResponse_Reset tests Reset method.
 func TestRelayInfoResponse_Reset(t *testing.T) {
 	msg := &RelayInfoResponse{
 		RelayInfo: &RelayInfo{Identity: &rdsec.Identity{Id: "test"}},
@@ -1205,62 +1009,34 @@ func TestRelayInfoResponse_Reset(t *testing.T) {
 
 	msg.Reset()
 
-	if msg.RelayInfo != nil {
-		t.Error("Reset() did not clear RelayInfo")
-	}
+	assert.Nil(t, msg.RelayInfo)
 }
 
-// TestLeaseUpdateRequest_Getters tests all getter methods
+// TestLeaseUpdateRequest_Getters tests all getter methods.
 func TestLeaseUpdateRequest_Getters(t *testing.T) {
 	lease := &Lease{Name: "update-lease"}
 	msg := &LeaseUpdateRequest{
-		Lease:     lease,
-		Nonce:     []byte{0x01, 0x02},
-		Timestamp: 1234567890,
+		Lease: lease,
 	}
 
-	if got := msg.GetLease(); got == nil || got.Name != "update-lease" {
-		t.Errorf("GetLease() = %v, want Name='update-lease'", got)
-	}
-	if got := msg.GetNonce(); !bytes.Equal(got, []byte{0x01, 0x02}) {
-		t.Errorf("GetNonce() = %v, want [1 2]", got)
-	}
-	if got := msg.GetTimestamp(); got != 1234567890 {
-		t.Errorf("GetTimestamp() = %v, want 1234567890", got)
-	}
-
+	assert.Equal(t, lease, msg.GetLease())
 	// Test nil defaults
 	empty := &LeaseUpdateRequest{}
-	if got := empty.GetLease(); got != nil {
-		t.Errorf("empty GetLease() = %v, want nil", got)
-	}
-	if got := empty.GetNonce(); got != nil {
-		t.Errorf("empty GetNonce() = %v, want nil", got)
-	}
+	assert.Nil(t, empty.GetLease())
 }
 
-// TestLeaseUpdateRequest_Reset tests Reset method
+// TestLeaseUpdateRequest_Reset tests Reset method.
 func TestLeaseUpdateRequest_Reset(t *testing.T) {
 	msg := &LeaseUpdateRequest{
-		Lease:     &Lease{Name: "test"},
-		Nonce:     []byte{0x01},
-		Timestamp: 123,
+		Lease: &Lease{Name: "test"},
 	}
 
 	msg.Reset()
 
-	if msg.Lease != nil {
-		t.Error("Reset() did not clear Lease")
-	}
-	if msg.Nonce != nil {
-		t.Error("Reset() did not clear Nonce")
-	}
-	if msg.Timestamp != 0 {
-		t.Error("Reset() did not clear Timestamp")
-	}
+	assert.Nil(t, msg.Lease)
 }
 
-// TestLeaseUpdateResponse_Reset tests Reset method
+// TestLeaseUpdateResponse_Reset tests Reset method.
 func TestLeaseUpdateResponse_Reset(t *testing.T) {
 	msg := &LeaseUpdateResponse{
 		Code: ResponseCode_RESPONSE_CODE_ACCEPTED,
@@ -1268,12 +1044,10 @@ func TestLeaseUpdateResponse_Reset(t *testing.T) {
 
 	msg.Reset()
 
-	if msg.Code != ResponseCode_RESPONSE_CODE_UNKNOWN {
-		t.Error("Reset() did not clear Code to default")
-	}
+	assert.Equal(t, ResponseCode_RESPONSE_CODE_UNKNOWN, msg.Code)
 }
 
-// TestLeaseDeleteRequest_Reset tests Reset method
+// TestLeaseDeleteRequest_Reset tests Reset method.
 func TestLeaseDeleteRequest_Reset(t *testing.T) {
 	msg := &LeaseDeleteRequest{
 		Identity: &rdsec.Identity{Id: "delete-test"},
@@ -1281,12 +1055,10 @@ func TestLeaseDeleteRequest_Reset(t *testing.T) {
 
 	msg.Reset()
 
-	if msg.Identity != nil {
-		t.Error("Reset() did not clear Identity")
-	}
+	assert.Nil(t, msg.Identity)
 }
 
-// TestLeaseDeleteResponse_Reset tests Reset method
+// TestLeaseDeleteResponse_Reset tests Reset method.
 func TestLeaseDeleteResponse_Reset(t *testing.T) {
 	msg := &LeaseDeleteResponse{
 		Code: ResponseCode_RESPONSE_CODE_ACCEPTED,
@@ -1294,7 +1066,5 @@ func TestLeaseDeleteResponse_Reset(t *testing.T) {
 
 	msg.Reset()
 
-	if msg.Code != ResponseCode_RESPONSE_CODE_UNKNOWN {
-		t.Error("Reset() did not clear Code to default")
-	}
+	assert.Equal(t, ResponseCode_RESPONSE_CODE_UNKNOWN, msg.Code)
 }

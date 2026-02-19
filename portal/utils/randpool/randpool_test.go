@@ -1,8 +1,9 @@
 package randpool
 
 import (
-	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRandOverwrite(t *testing.T) {
@@ -15,9 +16,7 @@ func TestRandOverwrite(t *testing.T) {
 	Rand(buf)
 
 	// Verify that the buffer has changed
-	if bytes.Equal(buf, original) {
-		t.Error("Buffer should have changed after Rand")
-	}
+	assert.NotEqual(t, original, buf, "Buffer should have changed after Rand")
 
 	// Verify that it's not just XORed (though hard to prove deterministically without mocking,
 	// the fact that we zeroed it in code gives us confidence.
@@ -29,12 +28,10 @@ func TestRandOverwrite(t *testing.T) {
 	buf2 := make([]byte, 5) // Zeros
 	Rand(buf2)
 
-	if bytes.Equal(buf, buf2) {
-		t.Error("Two random calls produced same output")
-	}
+	assert.NotEqual(t, buf, buf2, "Two random calls produced same output")
 }
 
-func TestRandConcurrency(t *testing.T) {
+func TestRandConcurrency(_ *testing.T) {
 	// Just run a bunch of goroutines to trigger the pool and potential race conditions
 	// (though the fallback race is hard to trigger without fault injection)
 	done := make(chan bool)

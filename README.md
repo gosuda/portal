@@ -1,90 +1,70 @@
-# PORTAL — Public Open Relay To Access Localhost
+# Portal
 
-<p align="center">
-  <img src="/portal.jpg" alt="Portal logo" width="540" />
-</p>
+Self-hosted relay that enables peer-to-peer, end-to-end encrypted connections through a central hub. Participants authenticate with Ed25519 credentials, perform a Noise XX handshake, and communicate over ChaCha20-Poly1305 encrypted channels. The relay cannot decrypt application traffic — it only forwards ciphertext.
 
-Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [See more.](https://gosuda.org/portal/)
+All relay connections use **WebTransport** (HTTP/3 over QUIC) for NAT/firewall traversal.
 
-## Table of Contents
+## Binaries
 
-- [Overview](#overview)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [License](#license)
+| Binary | Description |
+|--------|-------------|
+| `cmd/relay-server` | Relay server with React admin UI, WebTransport endpoint, and subdomain routing |
+| `cmd/portal-tunnel` | CLI tunnel client — registers a lease and proxies connections to a local TCP service |
+| `cmd/vanity-id` | Brute-force tool for generating credential IDs matching a desired prefix |
 
-## Overview
+## SDK
 
-Portal connects local applications to web users through a secure relay layer.
-Each application is assigned a subdomain within Portal, and all traffic between endpoints is end-to-end encrypted.
-This enables developers to publish local services globally without managing servers or cloud infrastructure.
+The `sdk/` package provides the public API for service publishers:
 
-## Features
+- `Client` manages relay connections with automatic reconnect and health checking
+- `Listen()` registers a lease and returns incoming connections
+- `Dial()` connects to a lease on a relay and performs the E2EE handshake
 
-- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network.
-- 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication, including browser sessions via a WASM-based Service Worker proxy.
-- 🕊️ **Permissionless Hosting**: Anyone can open or choose their own Portal — no approval, no central authority.
-- 🚀 **High Performance**: Multiplexed connections using yamux
-- ⚙️ **Simple Setup**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
+## Prerequisites
+
+- **Go 1.26+** — [install](https://go.dev/dl/)
+- **npm** — required only for the admin frontend (`cmd/relay-server/frontend/`)
 
 ## Quick Start
-You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
-
-### Running the Portal Network
-Run Portal with Docker Compose:
 
 ```bash
-# 1. Start services
-docker compose up
+# Run the relay server (auto-generates self-signed TLS cert for WebTransport)
+go run ./cmd/relay-server/ --port 4017 --tls-auto
 
-# 2. Open in browser
-http://localhost:4017
-
-# 3. Access admin panel at http://localhost:4017/admin
-# If ADMIN_SECRET_KEY is not set, a random key will be auto-generated and shown in logs
-# To use your own key:
-ADMIN_SECRET_KEY=your-secret-key docker compose up
+# In another terminal, expose a local service
+go run ./cmd/portal-tunnel/ --relay https://localhost:4017/relay --local localhost:8080
 ```
 
-For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
+> **Note:** `--tls-auto` generates a self-signed ECDSA P-256 certificate valid for <14 days.
+> The cert hash is available at `/cert-hash` for browser `serverCertificateHashes` pinning.
+> For production, use `--tls-cert` and `--tls-key` with CA-signed certificates.
 
-### Running a Portal App using Tunnel
+## Build Binaries
 
 ```bash
-# 1. Start your local service
-
-# 2. Run the tunnel client to expose
-## If you use it in windows
-$env:HOST="localhost:3000"; $env:NAME="myapp"; irm http://localhost:4017/tunnel | iex
-## Else
-curl -fsSL http://localhost:4017/tunnel | HOST=localhost:3000 NAME=myapp sh
+make build
+# or
+just build
 ```
 
-### Running a Portal App using the SDK
-See [portal-toys](https://github.com/gosuda/portal-toys)
+Built binaries are written to `./bin`:
 
-## Architecture
+- `./bin/relay-server`
+- `./bin/portal-tunnel`
+- `./bin/demo-app`
+- `./bin/vanity-id`
 
-For a detailed overview of system components and data flow, see the [architecture documentation](docs/architecture.md).
+## Development
 
-## Glossary
+```bash
+make all        # fmt, vet, lint, test, vuln, build, frontend
+make test       # go test -v -race -coverprofile=coverage.out ./...
+make lint       # golangci-lint run
+make proto      # buf generate + buf lint
+```
 
-If you need Portal-specific terminology, check the [Portal glossary](docs/glossary.md)
-## Contributing
-
-We welcome contributions from the community!
-Before getting started, please check the [development guide](docs/development.md)
- for setup instructions and best practices.
-
-### Steps to Contribute
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+See [AGENTS.md](AGENTS.md) for architecture details and coding guidelines.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE).

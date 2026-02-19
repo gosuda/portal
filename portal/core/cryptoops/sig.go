@@ -1,71 +1,63 @@
 package cryptoops
 
 import (
-	"crypto/ed25519"
-	"crypto/hmac"
+	"crypto/ecdh"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base32"
 	"errors"
+	"fmt"
 )
 
-var _id_magic = []byte("RDVERB_PROTOCOL_VER_01_SHA256_ID")
-var _base32_encoding = base32.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").WithPadding(base32.NoPadding)
-
-func DeriveID(publickey ed25519.PublicKey) string {
-	h := hmac.New(sha256.New, _id_magic)
-	h.Write(publickey)
-	hash := h.Sum(nil)
-	return _base32_encoding.EncodeToString(hash[:16])
-}
-
 type Credential struct {
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
-	id         string
+	x25519PrivateKey []byte
+	x25519PublicKey  []byte
 }
 
-func NewCredentialFromPrivateKey(privateKey ed25519.PrivateKey) (*Credential, error) {
-	if len(privateKey) != ed25519.PrivateKeySize {
+func NewCredentialFromPrivateKey(privateKey []byte) (*Credential, error) {
+	if len(privateKey) != 32 {
 		return nil, errors.New("invalid private key length")
 	}
 
-	publicKey := privateKey.Public().(ed25519.PublicKey)
+	curve := ecdh.X25519()
+	key, err := curve.NewPrivateKey(privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid private key: %w", err)
+	}
+
 	return &Credential{
-		privateKey: privateKey,
-		publicKey:  publicKey,
-		id:         DeriveID(publicKey),
+		x25519PrivateKey: append([]byte(nil), key.Bytes()...),
+		x25519PublicKey:  append([]byte(nil), key.PublicKey().Bytes()...),
 	}, nil
 }
 
 func NewCredential() (*Credential, error) {
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	curve := ecdh.X25519()
+	key, err := curve.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewCredentialFromPrivateKey(privateKey)
+	return &Credential{
+		x25519PrivateKey: append([]byte(nil), key.Bytes()...),
+		x25519PublicKey:  append([]byte(nil), key.PublicKey().Bytes()...),
+	}, nil
+}
+
+func (c *Credential) X25519PrivateKey() []byte {
+	return append([]byte(nil), c.x25519PrivateKey...)
+}
+
+func (c *Credential) X25519PublicKey() []byte {
+	return append([]byte(nil), c.x25519PublicKey...)
 }
 
 func (c *Credential) ID() string {
-	return c.id
+	return DeriveID(c.x25519PublicKey)
 }
 
-func (c *Credential) Sign(data []byte) []byte {
-	return ed25519.Sign(c.privateKey, data)
+func (c *Credential) PublicKey() []byte {
+	return c.X25519PublicKey()
 }
 
-func (c *Credential) Verify(data, sig []byte) bool {
-	if len(sig) != ed25519.SignatureSize {
-		return false
-	}
-	return ed25519.Verify(c.publicKey, data, sig)
-}
-
-func (c *Credential) PublicKey() ed25519.PublicKey {
-	return c.publicKey
-}
-
-func (c *Credential) PrivateKey() ed25519.PrivateKey {
-	return c.privateKey
+func DeriveID(publicKey []byte) string {
+	return deriveConnectionID(publicKey)
 }

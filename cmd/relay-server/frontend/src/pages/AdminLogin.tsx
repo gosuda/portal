@@ -1,4 +1,4 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { KeyRound, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -17,6 +17,8 @@ export function AdminLogin() {
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const authDisabledError =
+    "Admin authentication is not configured. Set ADMIN_SECRET_KEY in your environment.";
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -25,18 +27,11 @@ export function AdminLogin() {
     }
   }, [isAuthenticated, isLoading, navigate]);
 
-  // Show auth not enabled message
-  useEffect(() => {
-    if (!isLoading && !authEnabled) {
-      setError(
-        "Admin authentication is not configured. Set ADMIN_SECRET_KEY in your environment."
-      );
-    }
-  }, [isLoading, authEnabled]);
+  const displayError = !isLoading && !authEnabled ? authDisabledError : error;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!key.trim() || isLocked || submitting) return;
+    if (!key.trim() || isLocked || submitting || !authEnabled) return;
 
     setSubmitting(true);
     setError("");
@@ -129,9 +124,9 @@ export function AdminLogin() {
                   </div>
 
                   {/* Error Message */}
-                  {error && (
+                  {displayError && (
                     <div className="text-destructive text-sm text-center bg-destructive/10 p-3 rounded-md">
-                      {error}
+                      {displayError}
                     </div>
                   )}
 

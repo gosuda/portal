@@ -2,9 +2,6 @@ import { SsgoiTransition } from "@ssgoi/react";
 import { useServerList } from "@/hooks/useServerList";
 import { ServerListView } from "@/components/ServerListView";
 
-// Re-export for backwards compatibility
-export type { ClientServer } from "@/hooks/useServerList";
-
 export function ServerList() {
   // Controller: useServerList hook handles all server list logic
   const {

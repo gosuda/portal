@@ -1,20 +1,49 @@
+frontend_dir := "cmd/relay-server/frontend"
+bin_dir := "bin"
+
 fmt:
-    golangci-lint run --fast-only --allow-parallel-runners --fix > /dev/null || true
     gofmt -w .
-
-lint:
-    golangci-lint run -D errcheck --allow-parallel-runners
-
-lint-fix:
-    golangci-lint run --allow-parallel-runners --fix
-
-tidy:
-    go mod tidy
+    goimports -w .
 
 vet:
     go vet ./...
 
-test:
-    go test -race -v ./...
+lint:
+    golangci-lint run
 
-all: fmt vet test tidy lint-fix
+lint-fix:
+    golangci-lint run --fix
+
+test:
+    go test -v -race -coverprofile=coverage.out ./...
+
+vuln:
+    govulncheck ./...
+
+tidy:
+    go mod tidy
+    go mod verify
+
+build:
+    just build-cmd
+
+build-cmd:
+    mkdir -p {{bin_dir}}
+    go build -o {{bin_dir}}/relay-server ./cmd/relay-server
+    go build -o {{bin_dir}}/portal-tunnel ./cmd/portal-tunnel
+    go build -o {{bin_dir}}/demo-app ./cmd/demo-app
+    go build -o {{bin_dir}}/vanity-id ./cmd/vanity-id
+
+proto:
+    buf generate
+    buf lint
+
+lint-frontend:
+    cd {{frontend_dir}} && npm run lint
+
+build-frontend:
+    cd {{frontend_dir}} && npm run build
+
+frontend: lint-frontend build-frontend
+
+all: fmt vet lint test vuln build frontend

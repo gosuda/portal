@@ -1,4 +1,4 @@
-import type { ApprovalMode } from "@/hooks/useAdmin";
+import type { ApprovalMode } from "@/types/server";
 
 interface ApprovalModeToggleProps {
   approvalMode: ApprovalMode;

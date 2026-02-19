@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -12,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -22,17 +23,20 @@ import (
 	"gosuda.org/portal/utils"
 )
 
-var (
-	flagPortalURL      string
-	flagPortalAppURL   string
-	flagBootstraps     []string
-	flagALPN           string
-	flagPort           int
-	flagMaxLease       int
-	flagLeaseBPS       int
-	flagNoIndex        bool
-	flagAdminSecretKey string
-)
+type serverConfig struct {
+	PortalURL      string
+	PortalAppURL   string
+	Bootstraps     []string
+	ALPN           string
+	Port           int
+	MaxLease       int
+	LeaseBPS       int
+	NoIndex        bool
+	AdminSecretKey string
+	TLSCert        string
+	TLSKey         string
+	TLSAuto        bool
+}
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
@@ -51,74 +55,82 @@ func main() {
 		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
 	}
 
+	var cfg serverConfig
 	var flagBootstrapsCSV string
-	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
+	flag.StringVar(&cfg.PortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
+	flag.StringVar(&cfg.PortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
-	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
-	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
+	flag.StringVar(&cfg.ALPN, "alpn", "http/1.1", "ALPN identifier for this service")
+	flag.IntVar(&cfg.Port, "port", 4017, "app UI and HTTP proxy port")
+	flag.IntVar(&cfg.MaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
+	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
 
 	defaultNoIndex := os.Getenv("NOINDEX") == "true"
-	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
+	flag.BoolVar(&cfg.NoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
 
 	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
-	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+
+	flag.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file path (required for WebTransport)")
+	flag.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file path (required for WebTransport)")
+	flag.BoolVar(&cfg.TLSAuto, "tls-auto", false, "auto-generate self-signed TLS certificate for development")
+
 	flag.Parse()
 
-	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
-	if err := runServer(); err != nil {
+	cfg.Bootstraps = utils.ParseURLs(flagBootstrapsCSV)
+	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
-func runServer() error {
+func runServer(cfg serverConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	log.Info().
-		Str("portal_base_url", flagPortalURL).
-		Str("app_url", flagPortalAppURL).
-		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
+		Str("portal_base_url", cfg.PortalURL).
+		Str("app_url", cfg.PortalAppURL).
+		Str("bootstrap_uris", strings.Join(cfg.Bootstraps, ",")).
 		Msg("[server] frontend configuration")
 
 	cred := sdk.NewCredential()
 
-	serv := portal.NewRelayServer(cred, flagBootstraps)
-	if flagMaxLease > 0 {
-		serv.SetMaxRelayedPerLease(flagMaxLease)
+	serv := portal.NewRelayServer(cred, cfg.Bootstraps)
+	if cfg.MaxLease > 0 {
+		serv.SetMaxRelayedPerLease(cfg.MaxLease)
 	}
 
 	// Create AuthManager for admin authentication
 	// Auto-generate secret key if not provided
-	if flagAdminSecretKey == "" {
+	adminSecretKey := cfg.AdminSecretKey
+	if adminSecretKey == "" {
 		randomBytes := make([]byte, 16)
 		if _, err := rand.Read(randomBytes); err != nil {
-			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
+			return fmt.Errorf("generate random admin secret key: %w", err)
 		}
-		flagAdminSecretKey = hex.EncodeToString(randomBytes)
-		log.Warn().Str("key", flagAdminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+		adminSecretKey = hex.EncodeToString(randomBytes)
+		log.Warn().
+			Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+		_, _ = fmt.Fprintf(os.Stderr, "AUTO_GENERATED_ADMIN_SECRET_KEY=%s\n", adminSecretKey)
 	} else {
-		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
+		log.Info().Msg("[server] admin authentication enabled")
 	}
-	authManager := manager.NewAuthManager(flagAdminSecretKey)
+	authManager := manager.NewAuthManager(adminSecretKey)
 
 	// Create Frontend first, then Admin, then attach Admin back to Frontend.
-	frontend := NewFrontend()
-	admin := NewAdmin(int64(flagLeaseBPS), frontend, authManager)
+	frontend := NewFrontend(cfg.PortalURL, cfg.PortalAppURL)
+	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager, cfg.PortalURL, cfg.PortalAppURL)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
 	admin.LoadSettings(serv)
 
 	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		// Associate pending IP with this lease
+	serv.SetEstablishRelayCallback(func(clientStream, leaseStream portal.Stream, leaseID string) {
 		ipManager := admin.GetIPManager()
 		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
+			if clientIP := streamClientIP(leaseStream); clientIP != "" {
+				ipManager.RegisterLeaseIP(leaseID, clientIP)
 			}
 		}
 		bpsManager := admin.GetBPSManager()
@@ -128,10 +140,49 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+	// Setup TLS for WebTransport (HTTP/3)
+	var tlsCert *tls.Certificate
+	var certHash []byte
+
+	if cfg.TLSAuto {
+		cert, hash, err := utils.GenerateSelfSignedCert()
+		if err != nil {
+			return fmt.Errorf("generate self-signed cert: %w", err)
+		}
+		tlsCert = &cert
+		certHash = hash
+		log.Info().
+			Str("hash", hex.EncodeToString(certHash)).
+			Msg("[server] auto-generated TLS certificate (valid <14 days)")
+		// Force HTTPS scheme for auto-generated TLS
+		cfg.PortalURL = strings.Replace(cfg.PortalURL, "http://", "https://", 1)
+		cfg.PortalAppURL = strings.Replace(cfg.PortalAppURL, "http://", "https://", 1)
+	} else if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+		if err != nil {
+			return fmt.Errorf("load TLS certificate: %w", err)
+		}
+		tlsCert = &cert
+		log.Info().Msg("[server] loaded TLS certificate from files")
+	}
+
+	if (cfg.TLSCert != "") != (cfg.TLSKey != "") {
+		return errors.New("both --tls-cert and --tls-key must be provided together")
+	}
+
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.Port), serv, admin, frontend, cfg.NoIndex, certHash, cfg.PortalAppURL, cfg.PortalURL, stop)
+
+	var wtCleanup func()
+	if tlsCert != nil {
+		wtCleanup = serveWebTransport(fmt.Sprintf(":%d", cfg.Port), serv, admin, tlsCert, stop)
+	}
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
+
+	if wtCleanup != nil {
+		wtCleanup()
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

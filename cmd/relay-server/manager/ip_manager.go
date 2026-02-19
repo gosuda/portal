@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// IPManager manages IP-based bans and lease-to-IP mapping
+// IPManager manages IP-based bans and lease-to-IP mapping.
 type IPManager struct {
 	mu         sync.RWMutex
 	bannedIPs  map[string]struct{} // set of banned IPs
@@ -20,7 +20,7 @@ type IPManager struct {
 	pendingIPsMax   int // Keep last N IPs
 }
 
-// NewIPManager creates a new IP manager
+// NewIPManager creates a new IP manager.
 func NewIPManager() *IPManager {
 	return &IPManager{
 		bannedIPs:     make(map[string]struct{}),
@@ -30,21 +30,21 @@ func NewIPManager() *IPManager {
 	}
 }
 
-// BanIP adds an IP to the ban list
+// BanIP adds an IP to the ban list.
 func (m *IPManager) BanIP(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bannedIPs[ip] = struct{}{}
 }
 
-// UnbanIP removes an IP from the ban list
+// UnbanIP removes an IP from the ban list.
 func (m *IPManager) UnbanIP(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.bannedIPs, ip)
 }
 
-// IsIPBanned checks if an IP is banned
+// IsIPBanned checks if an IP is banned.
 func (m *IPManager) IsIPBanned(ip string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -52,7 +52,7 @@ func (m *IPManager) IsIPBanned(ip string) bool {
 	return banned
 }
 
-// GetBannedIPs returns all banned IPs
+// GetBannedIPs returns all banned IPs.
 func (m *IPManager) GetBannedIPs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -63,7 +63,7 @@ func (m *IPManager) GetBannedIPs() []string {
 	return result
 }
 
-// SetBannedIPs sets the banned IPs list (for loading from settings)
+// SetBannedIPs sets the banned IPs list (for loading from settings).
 func (m *IPManager) SetBannedIPs(ips []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -73,7 +73,7 @@ func (m *IPManager) SetBannedIPs(ips []string) {
 	}
 }
 
-// RegisterLeaseIP associates a lease ID with an IP address
+// RegisterLeaseIP associates a lease ID with an IP address.
 func (m *IPManager) RegisterLeaseIP(leaseID, ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -87,7 +87,7 @@ func (m *IPManager) RegisterLeaseIP(leaseID, ip string) {
 	m.ipToLeases[ip] = append(m.ipToLeases[ip], leaseID)
 }
 
-// removeLeaseFromIP removes a lease from IP's lease list (must hold lock)
+// removeLeaseFromIP removes a lease from IP's lease list (must hold lock).
 func (m *IPManager) removeLeaseFromIP(leaseID, ip string) {
 	leases := m.ipToLeases[ip]
 	for i, id := range leases {
@@ -101,14 +101,14 @@ func (m *IPManager) removeLeaseFromIP(leaseID, ip string) {
 	}
 }
 
-// GetLeaseIP returns the IP address for a lease ID
+// GetLeaseIP returns the IP address for a lease ID.
 func (m *IPManager) GetLeaseIP(leaseID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.leaseToIP[leaseID]
 }
 
-// GetIPLeases returns all lease IDs for an IP
+// GetIPLeases returns all lease IDs for an IP.
 func (m *IPManager) GetIPLeases(ip string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -117,13 +117,13 @@ func (m *IPManager) GetIPLeases(ip string) []string {
 	return result
 }
 
-// ExtractClientIP extracts the client IP from an HTTP request
+// ExtractClientIP extracts the client IP from an HTTP request.
 func ExtractClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header first (for proxied requests)
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, take the first one
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
+		if before, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(before)
 		}
 		return strings.TrimSpace(xff)
 	}

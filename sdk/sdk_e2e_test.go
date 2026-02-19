@@ -3,33 +3,48 @@ package sdk
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/core/cryptoops"
-	"gosuda.org/portal/utils"
 )
 
-func init() {
-	// Set zerolog to Debug level for testing
-	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+var configureTestLoggerOnce sync.Once
+
+func configureTestLogger() {
+	configureTestLoggerOnce.Do(func() {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	})
+}
+
+// pipeDialer returns a dialer that creates PipeSession pairs connected to the relay server.
+// Each call to the dialer establishes a new in-memory session without any network I/O.
+func pipeDialer(relayServer *portal.RelayServer) func(context.Context, string) (portal.Session, error) {
+	return func(_ context.Context, _ string) (portal.Session, error) {
+		client, server := portal.NewPipeSessionPair()
+		go relayServer.HandleSession(server)
+		return client, nil
+	}
 }
 
 // TestE2E_ClientToAppThroughRelay tests the full end-to-end flow:
-// SDK Client -> Relay Server -> Demo App
+// SDK Client -> Relay Server -> Demo App.
 func TestE2E_ClientToAppThroughRelay(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting E2E Test ===")
 
 	// 1. Create relay server credential
@@ -40,44 +55,9 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 
 	// 2. Start relay server
 	log.Info().Msg("[TEST] Step 2: Starting relay server")
-	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14017/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"pipe://relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
-
-	// Start WebSocket server for relay
-	relayAddr := "127.0.0.1:14017"
-	relayMux := http.NewServeMux()
-	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		log.Debug().Str("remote", r.RemoteAddr).Msg("[TEST] Relay server accepting WebSocket connection")
-		stream, _, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[TEST] Failed to upgrade WebSocket")
-			return
-		}
-		if err := relayServer.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[TEST] Relay server error handling connection")
-		}
-	})
-
-	relayHTTPServer := &http.Server{
-		Addr:    relayAddr,
-		Handler: relayMux,
-	}
-
-	go func() {
-		log.Info().Str("addr", relayAddr).Msg("[TEST] Relay HTTP server starting")
-		if err := relayHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("[TEST] Relay HTTP server error")
-		}
-	}()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		relayHTTPServer.Shutdown(ctx)
-	}()
-
-	// Wait for relay server to start
-	time.Sleep(500 * time.Millisecond)
 	log.Info().Msg("[TEST] Relay server started")
 
 	// 3. Create app credential and SDK client
@@ -88,7 +68,8 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	// 4. Create app SDK client and register listener
 	log.Info().Msg("[TEST] Step 4: Creating app SDK client")
 	appClient, err := NewClient(func(c *ClientConfig) {
-		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
+		c.BootstrapServers = []string{"pipe://relay"}
+		c.Dialer = pipeDialer(relayServer)
 	})
 	require.NoError(t, err, "Failed to create app SDK client")
 	defer appClient.Close()
@@ -115,10 +96,9 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 		fmt.Fprintf(w, "Request from: %s\n", r.RemoteAddr)
 	})
 
-	appErrChan := make(chan error, 1)
 	go func() {
 		log.Info().Msg("[TEST] App HTTP server starting on listener")
-		appErrChan <- http.Serve(appListener, appMux)
+		http.Serve(appListener, appMux)
 	}()
 
 	// Wait for app to be ready
@@ -133,7 +113,8 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	// 8. Create client SDK client
 	log.Info().Msg("[TEST] Step 8: Creating client SDK client")
 	clientSDK, err := NewClient(func(c *ClientConfig) {
-		c.BootstrapServers = []string{"ws://127.0.0.1:14017/relay"}
+		c.BootstrapServers = []string{"pipe://relay"}
+		c.Dialer = pipeDialer(relayServer)
 	})
 	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()
@@ -157,13 +138,12 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	log.Info().Msg("[TEST] Step 11: Sending HTTP request through connection")
 
 	// Create HTTP request
-	req, err := http.NewRequest("GET", "http://test-app/", nil)
+	req, err := http.NewRequest(http.MethodGet, "http://test-app/", http.NoBody)
 	require.NoError(t, err, "Failed to create HTTP request")
 
 	// Write HTTP request to connection
-	if err := req.Write(conn); err != nil {
-		require.NoError(t, err, "Failed to write HTTP request")
-	}
+	err = req.Write(conn)
+	require.NoError(t, err, "Failed to write HTTP request")
 	log.Debug().Msg("[TEST] HTTP request sent")
 
 	// Read HTTP response
@@ -197,47 +177,26 @@ func TestE2E_ClientToAppThroughRelay(t *testing.T) {
 	log.Info().Msg("=== E2E Test Completed Successfully ===")
 }
 
-// TestE2E_MultipleConnections tests multiple concurrent connections
+// TestE2E_MultipleConnections tests multiple concurrent connections.
 func TestE2E_MultipleConnections(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting Multiple Connections Test ===")
 
 	// Setup relay server
 	relayServerCred, err := cryptoops.NewCredential()
 	require.NoError(t, err, "Failed to create relay server credential")
 
-	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14018/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"pipe://relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
-
-	relayAddr := "127.0.0.1:14018"
-	relayMux := http.NewServeMux()
-	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		stream, _, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			return
-		}
-		relayServer.HandleConnection(stream)
-	})
-
-	relayHTTPServer := &http.Server{
-		Addr:    relayAddr,
-		Handler: relayMux,
-	}
-
-	go relayHTTPServer.ListenAndServe()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		relayHTTPServer.Shutdown(ctx)
-	}()
-
-	time.Sleep(500 * time.Millisecond)
 
 	// Setup app
 	appCred := NewCredential()
 
 	appClient, err := NewClient(func(c *ClientConfig) {
-		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
+		c.BootstrapServers = []string{"pipe://relay"}
+		c.Dialer = pipeDialer(relayServer)
 	})
 	require.NoError(t, err, "Failed to create app SDK client")
 	defer appClient.Close()
@@ -249,14 +208,14 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	// Serve echo server
 	go func() {
 		for {
-			conn, err := appListener.Accept()
-			if err != nil {
+			acceptedConn, acceptErr := appListener.Accept()
+			if acceptErr != nil {
 				return
 			}
 			go func(c net.Conn) {
 				defer c.Close()
 				io.Copy(c, c) // Echo back
-			}(conn)
+			}(acceptedConn)
 		}
 	}()
 
@@ -266,7 +225,8 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	clientCred := NewCredential()
 
 	clientSDK, err := NewClient(func(c *ClientConfig) {
-		c.BootstrapServers = []string{"ws://127.0.0.1:14018/relay"}
+		c.BootstrapServers = []string{"pipe://relay"}
+		c.Dialer = pipeDialer(relayServer)
 	})
 	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()
@@ -277,59 +237,73 @@ func TestE2E_MultipleConnections(t *testing.T) {
 	numConnections := 5
 	log.Info().Int("count", numConnections).Msg("[TEST] Testing multiple concurrent connections")
 
+	var wg sync.WaitGroup
+	resultCh := make(chan error, numConnections)
 	for i := range numConnections {
+		connNum := i
+		wg.Go(func() {
+			log.Debug().Int("conn_num", connNum).Msg("[TEST] Starting connection")
 
-		go func() {
-			log.Debug().Int("conn_num", i).Msg("[TEST] Starting connection")
-
-			conn, err := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
-			if !assert.NoError(t, err, "Connection %d failed to dial", i) {
+			conn, dialErr := clientSDK.Dial(clientCred, appCred.ID(), "http/1.1")
+			if dialErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to dial: %w", connNum, dialErr)
 				return
 			}
 			defer conn.Close()
 
-			testData := fmt.Sprintf("test-message-%d", i)
+			testData := fmt.Sprintf("test-message-%d", connNum)
 
 			// Write test data
-			_, err = conn.Write([]byte(testData))
-			if !assert.NoError(t, err, "Connection %d failed to write", i) {
+			if _, writeErr := conn.Write([]byte(testData)); writeErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to write: %w", connNum, writeErr)
 				return
 			}
 
 			// Read echoed data
 			buf := make([]byte, len(testData))
-			_, err = io.ReadFull(conn, buf)
-			if !assert.NoError(t, err, "Connection %d failed to read", i) {
+			if _, readErr := io.ReadFull(conn, buf); readErr != nil {
+				resultCh <- fmt.Errorf("connection %d failed to read: %w", connNum, readErr)
 				return
 			}
 
-			if !assert.Equal(t, testData, string(buf), "Connection %d: unexpected echo data", i) {
+			if echoed := string(buf); echoed != testData {
+				resultCh <- fmt.Errorf("connection %d unexpected echo data: got %q want %q", connNum, echoed, testData)
 				return
 			}
 
-			log.Debug().Int("conn_num", i).Msg("[TEST] Connection successful")
-		}()
+			log.Debug().Int("conn_num", connNum).Msg("[TEST] Connection successful")
+			resultCh <- nil
+		})
 	}
 
-	time.Sleep(5 * time.Second)
+	wg.Wait()
+	close(resultCh)
+	for result := range resultCh {
+		require.NoError(t, result)
+	}
 	log.Info().Msg("=== Multiple Connections Test Completed ===")
 }
 
-// TestE2E_ConnectionTimeout tests timeout scenarios
+// TestE2E_ConnectionTimeout tests timeout scenarios.
 func TestE2E_ConnectionTimeout(t *testing.T) {
+	configureTestLogger()
+
 	log.Info().Msg("=== Starting Connection Timeout Test ===")
 
-	// Create client with non-existent relay
+	// Create client with a dialer that always fails
 	clientCred := NewCredential()
 
-	// This should fail or timeout appropriately
+	// This should fail because the dialer returns an error
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	done := make(chan error, 1)
 	go func() {
 		_, err := NewClient(func(c *ClientConfig) {
-			c.BootstrapServers = []string{"ws://127.0.0.1:19999/relay"} // Non-existent
+			c.BootstrapServers = []string{"pipe://nonexistent"}
+			c.Dialer = func(_ context.Context, _ string) (portal.Session, error) {
+				return nil, errors.New("connection refused")
+			}
 		})
 		done <- err
 	}()
@@ -345,36 +319,13 @@ func TestE2E_ConnectionTimeout(t *testing.T) {
 	// Try to dial to non-existent lease
 	relayServerCred := NewCredential()
 
-	relayServer := portal.NewRelayServer(relayServerCred, []string{"ws://127.0.0.1:14019/relay"})
+	relayServer := portal.NewRelayServer(relayServerCred, []string{"pipe://relay"})
 	relayServer.Start()
 	defer relayServer.Stop()
 
-	relayAddr := "127.0.0.1:14019"
-	relayMux := http.NewServeMux()
-	relayMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		stream, _, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			return
-		}
-		relayServer.HandleConnection(stream)
-	})
-
-	relayHTTPServer := &http.Server{
-		Addr:    relayAddr,
-		Handler: relayMux,
-	}
-
-	go relayHTTPServer.ListenAndServe()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		relayHTTPServer.Shutdown(ctx)
-	}()
-
-	time.Sleep(500 * time.Millisecond)
-
 	clientSDK, err := NewClient(func(c *ClientConfig) {
-		c.BootstrapServers = []string{"ws://127.0.0.1:14019/relay"}
+		c.BootstrapServers = []string{"pipe://relay"}
+		c.Dialer = pipeDialer(relayServer)
 	})
 	require.NoError(t, err, "Failed to create client SDK")
 	defer clientSDK.Close()

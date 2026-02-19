@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -18,7 +19,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
 //go:embed static
@@ -27,35 +27,39 @@ var staticFiles embed.FS
 //go:embed static/thumbnail.png
 var thumbnailPNG []byte
 
-var (
-	flagServerURL string
-	flagPort      int
-	flagName      string
-	flagDesc      string
-	flagTags      string
-	flagOwner     string
-	flagHide      bool
-)
+type demoConfig struct {
+	ServerURL   string
+	Port        int
+	Name        string
+	Description string
+	Tags        string
+	Owner       string
+	Hide        bool
+}
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
-	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
-	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
-	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
-	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
-	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
-	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
+	var cfg demoConfig
+	flag.StringVar(&cfg.ServerURL, "server-url", "https://localhost:4017/relay", "relay server URL")
+	flag.IntVar(&cfg.Port, "port", 8092, "local demo HTTP port")
+	flag.StringVar(&cfg.Name, "name", "demo-app", "backend display name")
+	flag.StringVar(&cfg.Description, "description", "Portal demo connectivity app", "lease description")
+	flag.StringVar(&cfg.Tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
+	flag.StringVar(&cfg.Owner, "owner", "PortalApp Developer", "lease owner")
+	flag.BoolVar(&cfg.Hide, "hide", false, "hide this lease from listings")
 
 	flag.Parse()
 
-	if err := runDemo(); err != nil {
+	if err := runDemo(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute demo command")
 	}
 }
 
 // handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
 func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := utils.UpgradeWebSocket(w, r, nil)
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("upgrade websocket")
 		return
@@ -63,28 +67,29 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Error().Err(err).Msg("read websocket message")
+		messageType, data, readErr := conn.ReadMessage()
+		if readErr != nil {
+			if websocket.IsUnexpectedCloseError(readErr, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Error().Err(readErr).Msg("read websocket message")
 			}
 			break
 		}
 
-		if err := conn.WriteMessage(messageType, data); err != nil {
-			log.Error().Err(err).Msg("write websocket message")
+		writeErr := conn.WriteMessage(messageType, data)
+		if writeErr != nil {
+			log.Error().Err(writeErr).Msg("write websocket message")
 			break
 		}
 	}
 }
 
-func runDemo() error {
+func runDemo(cfg demoConfig) error {
 	// 1) Create credential for this demo app
 	cred := sdk.NewCredential()
 
 	// 2) Create SDK client and connect to relay(s)
 	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = []string{flagServerURL}
+		c.BootstrapServers = []string{cfg.ServerURL}
 	})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
@@ -97,13 +102,13 @@ func runDemo() error {
 
 	listener, err := client.Listen(
 		cred,
-		flagName,
+		cfg.Name,
 		[]string{"http/1.1"},
-		sdk.WithDescription(flagDesc),
-		sdk.WithTags(strings.Split(flagTags, ",")),
-		sdk.WithOwner(flagOwner),
+		sdk.WithDescription(cfg.Description),
+		sdk.WithTags(strings.Split(cfg.Tags, ",")),
+		sdk.WithOwner(cfg.Owner),
 		sdk.WithThumbnail(thumbnailDataURI),
-		sdk.WithHide(flagHide),
+		sdk.WithHide(cfg.Hide),
 	)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -121,14 +126,15 @@ func runDemo() error {
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	// Simple HTTP ping endpoint for connectivity checks
-	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
 			"message": "pong",
 			"time":    time.Now().UTC().Format(time.RFC3339),
 		}
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			log.Error().Err(err).Msg("write ping response")
+		encodeErr := json.NewEncoder(w).Encode(resp)
+		if encodeErr != nil {
+			log.Error().Err(encodeErr).Msg("write ping response")
 		}
 	})
 
@@ -136,7 +142,7 @@ func runDemo() error {
 	mux.HandleFunc("/ws", handleWS)
 
 	// Test endpoint for multiple Set-Cookie headers
-	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, _ *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:     "session_id",
 			Value:    "abc123",
@@ -157,26 +163,39 @@ func runDemo() error {
 			MaxAge: 86400,
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		encodeErr := json.NewEncoder(w).Encode(map[string]any{
 			"message": "3 cookies set: session_id, csrf_token, user_pref",
 		})
+		if encodeErr != nil {
+			log.Error().Err(encodeErr).Msg("write cookie test response")
+		}
 	})
 
 	// 5) Serve HTTP over relay listener
-	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", cfg.Name, cred.ID())
 
 	// Also serve on local port for direct testing
 	go func() {
-		localAddr := fmt.Sprintf(":%d", flagPort)
+		localAddr := fmt.Sprintf(":%d", cfg.Port)
 		log.Info().Msgf("[demo] also serving on local port %s for direct testing", localAddr)
-		if err := http.ListenAndServe(localAddr, mux); err != nil {
-			log.Error().Err(err).Msg("local http serve error")
+		localSrv := &http.Server{
+			Addr:              localAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		serveErr := localSrv.ListenAndServe()
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Error().Err(serveErr).Msg("local http serve error")
 		}
 	}()
 
+	relaySrv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	srvErr := make(chan error, 1)
 	go func() {
-		srvErr <- http.Serve(listener, mux)
+		srvErr <- relaySrv.Serve(listener)
 	}()
 
 	sig := make(chan os.Signal, 1)
@@ -185,9 +204,9 @@ func runDemo() error {
 	select {
 	case <-sig:
 		log.Info().Msg("[demo] shutting down...")
-	case err := <-srvErr:
-		if err != nil {
-			log.Error().Err(err).Msg("[demo] http serve error")
+	case serveErr := <-srvErr:
+		if serveErr != nil {
+			log.Error().Err(serveErr).Msg("[demo] http serve error")
 		}
 	}
 

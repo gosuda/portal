@@ -18,7 +18,7 @@ type Bucket struct {
 
 // NewBucket creates a limiter for rateBps with burst bytes.
 // burst is translated to time slack = burst * perByte.
-func NewBucket(rateBps int64, burst int64) *Bucket {
+func NewBucket(rateBps, burst int64) *Bucket {
 	if rateBps <= 0 {
 		return nil
 	}
@@ -58,21 +58,13 @@ func (b *Bucket) Take(n int64) {
 	}
 }
 
-// internal buffer pool for Copy
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufPool = sync.Pool{New: func() any {
-	b := make([]byte, 64*1024)
-	return &b
-}}
-
 // Copy copies from src to dst, enforcing the provided byte-rate bucket if not nil.
 // Returns bytes written and any copy error encountered.
 func Copy(dst io.Writer, src io.Reader, b *Bucket) (int64, error) {
 	if b == nil {
 		return io.Copy(dst, src)
 	}
-	buf := *bufPool.Get().(*[]byte)
-	defer bufPool.Put(&buf)
+	buf := make([]byte, 64*1024)
 
 	var total int64
 	for {
