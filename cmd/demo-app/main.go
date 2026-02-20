@@ -136,13 +136,19 @@ func runDemo() error {
 	mux.HandleFunc("/ws", handleWS)
 
 	// Test endpoint for multiple Set-Cookie headers
+	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)
 	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
-			Name:     "session_id",
-			Value:    "abc123",
-			Path:     "/",
-			HttpOnly: true,
-			MaxAge:   3600,
+			Name:   "session_id",
+			Value:  "abc123",
+			Path:   "/",
+			MaxAge: 3600,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:   "auth_token",
+			Value:  "secret456",
+			Path:   "/",
+			MaxAge: 3600,
 		})
 		http.SetCookie(w, &http.Cookie{
 			Name:   "csrf_token",
@@ -158,7 +164,7 @@ func runDemo() error {
 		})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"message": "3 cookies set: session_id, csrf_token, user_pref",
+			"message": "4 cookies set: session_id, auth_token, csrf_token, user_pref",
 		})
 	})
 

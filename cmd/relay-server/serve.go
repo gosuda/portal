@@ -137,15 +137,25 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		frontend.ServeDynamicServiceWorker(w, r)
 	})
 
-	// Root and SPA fallback for portal subdomains
-	portalMux.HandleFunc("/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			// Serve portal HTML with SSR for OG metadata
-			frontend.ServePortalHTMLWithSSR(w, r, serv)
+	// Create HTTP reverse proxy for subdomain tunneling (same-origin cookie support)
+	httpProxy := NewHTTPProxy(serv)
+
+	// Root handler: try server-side reverse proxy first, then fall back to portal HTML
+	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Try server-side reverse proxy to tunnel backend
+		if httpProxy.TryProxy(w, r) {
 			return
 		}
-		frontend.ServePortalStatic(w, r)
-	}))
+
+		// Fallback: serve portal frontend (Service Worker based proxy)
+		withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/" {
+				frontend.ServePortalHTMLWithSSR(w, r, serv)
+				return
+			}
+			frontend.ServePortalStatic(w, r)
+		})(w, r)
+	})
 
 	// routes based on host and path
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
