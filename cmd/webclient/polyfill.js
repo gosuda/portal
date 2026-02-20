@@ -18,35 +18,6 @@
     }
   }
 
-  // Global Service Worker message handler registry
-  // Key: clientId, Value: handler function
-  const swMessageHandlers = new Map();
-
-  // Single global Service Worker message listener
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.addEventListener("message", (event) => {
-      const data = event.data;
-      if (!data) return;
-
-      // Handle SET_COOKIES globally (browsers ignore Set-Cookie in SW responses)
-      if (data.type === "SET_COOKIES") {
-        const cookies = data.cookies;
-        if (Array.isArray(cookies)) {
-          for (let i = 0; i < cookies.length; i++) {
-            document.cookie = cookies[i];
-          }
-        }
-        return;
-      }
-
-      // Route to per-client WebSocket handler
-      if (data.clientId) {
-        const handler = swMessageHandlers.get(data.clientId);
-        if (handler) handler(data);
-      }
-    });
-  }
-
   // Generate unique client ID
   function generateClientId() {
     return `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;

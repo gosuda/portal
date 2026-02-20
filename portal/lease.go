@@ -3,6 +3,7 @@ package portal
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -240,6 +241,31 @@ func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
 				continue
 			}
 			// Check if expired
+			if now.After(lease.Expires) {
+				continue
+			}
+			return lease, true
+		}
+	}
+	return nil, false
+}
+
+// GetLeaseByNameFold returns a lease entry by name using case-insensitive matching.
+// This is needed because DNS subdomains are case-insensitive.
+func (lm *LeaseManager) GetLeaseByNameFold(name string) (*LeaseEntry, bool) {
+	lm.leasesLock.RLock()
+	defer lm.leasesLock.RUnlock()
+
+	if name == "" {
+		return nil, false
+	}
+
+	now := time.Now()
+	for _, lease := range lm.leases {
+		if strings.EqualFold(lease.Lease.Name, name) {
+			if _, banned := lm.bannedLeases[string(lease.Lease.Identity.Id)]; banned {
+				continue
+			}
 			if now.After(lease.Expires) {
 				continue
 			}

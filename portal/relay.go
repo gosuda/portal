@@ -1,7 +1,10 @@
 package portal
 
 import (
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -11,6 +14,27 @@ import (
 	"gosuda.org/portal/portal/core/proto/rdsec"
 	"gosuda.org/portal/portal/core/proto/rdverb"
 )
+
+var (
+	// ErrLeaseNotFound is returned when the requested lease does not exist or has expired
+	ErrLeaseNotFound = errors.New("lease not found")
+	// ErrConnectionNotAvailable is returned when the tunnel connection for a lease is not available
+	ErrConnectionNotAvailable = errors.New("connection not available")
+)
+
+// portalAddr implements net.Addr for portal tunnel connections.
+type portalAddr string
+
+func (a portalAddr) Network() string { return "portal" }
+func (a portalAddr) String() string  { return string(a) }
+
+// leaseNetConn wraps a SecureConnection as net.Conn for use with http.Transport.
+type leaseNetConn struct {
+	*cryptoops.SecureConnection
+}
+
+func (c *leaseNetConn) LocalAddr() net.Addr  { return portalAddr(c.SecureConnection.LocalID()) }
+func (c *leaseNetConn) RemoteAddr() net.Addr { return portalAddr(c.SecureConnection.RemoteID()) }
 
 type Connection struct {
 	conn io.ReadWriteCloser
@@ -274,6 +298,11 @@ func (g *RelayServer) GetLeaseByName(name string) (*LeaseEntry, bool) {
 	return g.leaseManager.GetLeaseByName(name)
 }
 
+// GetLeaseByNameFold returns a lease entry by name using case-insensitive matching.
+func (g *RelayServer) GetLeaseByNameFold(name string) (*LeaseEntry, bool) {
+	return g.leaseManager.GetLeaseByNameFold(name)
+}
+
 // IsConnectionActive checks if a connection with the given ID is still active
 func (g *RelayServer) IsConnectionActive(connectionID int64) bool {
 	g.connectionsLock.RLock()
@@ -341,4 +370,50 @@ func (g *RelayServer) SetEstablishRelayCallback(
 	callback func(clientStream, leaseStream *yamux.Stream, leaseID string),
 ) {
 	g.onEstablishRelay = callback
+}
+
+// DialLease establishes a direct connection to a tunnel client's lease,
+// using the relay server's own credential for the RDSEC handshake.
+// Returns a net.Conn that transparently encrypts/decrypts through the tunnel.
+func (g *RelayServer) DialLease(leaseID, alpn string) (net.Conn, error) {
+	// 1. Look up lease entry
+	leaseEntry, exists := g.leaseManager.GetLeaseByID(leaseID)
+	if !exists {
+		return nil, ErrLeaseNotFound
+	}
+
+	// 2. Get the tunnel client's yamux Connection
+	g.connectionsLock.RLock()
+	conn, connExists := g.connections[leaseEntry.ConnectionID]
+	g.connectionsLock.RUnlock()
+	if !connExists {
+		return nil, ErrConnectionNotAvailable
+	}
+
+	// 3. Forward CONNECTION_REQUEST to tunnel client and get acceptance
+	req := &rdverb.ConnectionRequest{
+		LeaseId:        leaseID,
+		ClientIdentity: g.identity,
+	}
+	leaseStream, respCode, err := g.forwardConnectionRequest(conn, req)
+	if err != nil {
+		if leaseStream != nil {
+			leaseStream.Close()
+		}
+		return nil, fmt.Errorf("forward connection request: %w", err)
+	}
+	if respCode != rdverb.ResponseCode_RESPONSE_CODE_ACCEPTED {
+		leaseStream.Close()
+		return nil, ErrConnectionRejected
+	}
+
+	// 4. Perform RDSEC client handshake (relay acts as "client" to the tunnel)
+	handshaker := cryptoops.NewHandshaker(g.credential)
+	secConn, err := handshaker.ClientHandshake(leaseStream, alpn)
+	if err != nil {
+		leaseStream.Close()
+		return nil, fmt.Errorf("client handshake: %w", err)
+	}
+
+	return &leaseNetConn{SecureConnection: secConn}, nil
 }

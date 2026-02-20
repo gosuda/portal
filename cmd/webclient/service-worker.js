@@ -791,17 +791,6 @@ self.addEventListener("fetch", (e) => {
         // Process request
         const resp = await __go_jshttp(e.request);
 
-        // Forward Set-Cookie values to client via postMessage
-        // (browsers filter Set-Cookie from Response headers, so Go WASM attaches them as _setCookies)
-        const setCookies = resp._setCookies;
-        if (setCookies && setCookies.length > 0) {
-          const msg = { type: "SET_COOKIES", cookies: setCookies };
-          const clientId = e.clientId || e.resultingClientId;
-          if (clientId) {
-            self.clients.get(clientId).then(c => c && c.postMessage(msg));
-          }
-        }
-
         return resp;
       } catch (error) {
         console.error("[SW] Request handling failed:", error);

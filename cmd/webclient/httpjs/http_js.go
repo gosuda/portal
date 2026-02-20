@@ -405,17 +405,10 @@ func JSRequestToHTTPRequest(jsReq js.Value) (*http.Request, error) {
 
 // HTTPResponseToJSResponse converts an http.Response to a JavaScript Response object with streaming support
 func HTTPResponseToJSResponse(httpResp *http.Response) js.Value {
-	// Create JS Headers object (supports multiple values per key, e.g., Set-Cookie)
-	jsHeaders := _Headers.New()
-
-	// Extract Set-Cookie separately (browsers filter them from Response headers)
-	// http.Header uses canonical form "Set-Cookie", so direct lookup is safe
-	setCookies := httpResp.Header["Set-Cookie"]
+	// Create JS headers object
+	jsHeaders := _Object.New()
 
 	for key, values := range httpResp.Header {
-		if key == "Set-Cookie" {
-			continue // handled separately via _setCookies property
-		}
 		for _, value := range values {
 			jsHeaders.Call("append", key, value)
 		}
@@ -436,19 +429,8 @@ func HTTPResponseToJSResponse(httpResp *http.Response) js.Value {
 	jsOptions.Set("statusText", httpResp.Status)
 	jsOptions.Set("headers", jsHeaders)
 
-	// Create JS Response
+	// Create and return JS Response
 	jsResp := _Response.New(jsBody, jsOptions)
-
-	// Attach Set-Cookie values as a custom property (browsers filter Set-Cookie from headers)
-	// Service Worker will read this property and forward cookies via postMessage
-	if len(setCookies) > 0 {
-		jsArray := _Array.New(len(setCookies))
-		for i, cookie := range setCookies {
-			jsArray.SetIndex(i, cookie)
-		}
-		jsResp.Set("_setCookies", jsArray)
-	}
-
 	return jsResp
 }
 
