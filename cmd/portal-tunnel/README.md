@@ -10,7 +10,7 @@ You can run the tunnel using command-line flags or a configuration file.
 
 ```bash
 ./bin/portal-tunnel --host localhost:8080 \
-  --relay ws://portal.gosuda.org/relay,ws://portal.thumbgo.kr/relay,ws://portal.iwanhae.kr/relay \
+  --relay https://portal.gosuda.org,https://portal.thumbgo.kr,https://portal.iwanhae.kr \
   --name <service> \
   --description "Service description" \
   --tags tag1,tag2 \
@@ -24,7 +24,7 @@ Usage:
         portal-tunnel [OPTIONS] [ARGUMENTS]
 
 Options:
-        --relay           Portal relay server URLs (comma-separated) [default: ws://localhost:4017/relay] [env: RELAYS]
+        --relay           Portal relay server API URLs (comma-separated, http/https) [default: http://localhost:4017] [env: RELAYS]
         --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
         --name            Service name  [env: APP_NAME]
         --protocols       ALPN protocols (comma-separated) [default: http/1.1,h2] [env: APP_PROTOCOLS]

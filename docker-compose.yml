@@ -10,8 +10,7 @@ services:
       - "${PORTAL_PORT:-4017}"
     environment:
       PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
-      PORTAL_APP_URL: ${PORTAL_APP_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
+      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-http://localhost:${PORTAL_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
     ports:
       - "4017:4017"

@@ -30,12 +30,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler binaryen
-
-      - name: Install protoc-gen-go and protoc-gen-go-vtproto
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest
+          sudo apt-get install -y binaryen
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

@@ -1,11 +1,10 @@
-.PHONY: help fmt vet lint test vuln tidy all run build build-protoc build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint test vuln tidy all run build build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
 help:
 	@echo "Available targets:"
-	@echo "  make build             - Build everything (protoc, frontend, server)"
-	@echo "  make build-protoc      - Generate Go code from protobuf definitions"
+	@echo "  make build             - Build everything (frontend, tunnel, server)"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-tunnel      - Build portal-tunnel binaries"
 	@echo "  make build-server      - Build Go relay server (includes frontend build)"
@@ -39,15 +38,6 @@ run:
 
 # Convenience target
 build: build-frontend build-tunnel build-server
-
-build-protoc:
-	protoc -I . \
-		--go_out=. \
-		--go_opt=paths=source_relative \
-		--go-vtproto_out=. \
-		--go-vtproto_opt=paths=source_relative \
-		portal/core/proto/rdsec/rdsec.proto \
-		portal/core/proto/rdverb/rdverb.proto
 
 # Build React frontend with Tailwind CSS 4
 build-frontend:

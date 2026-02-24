@@ -31,7 +31,7 @@ var bufferPool = sync.Pool{
 type Config struct {
 	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
-	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
+	RelayURLs string `flag:"relay" env:"RELAYS" default:"http://localhost:4017" about:"Portal relay server API URLs (comma-separated, http/https)"`
 	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
 
@@ -261,20 +261,6 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	}
 
 	if err != nil {
-		// Return HTTP 503 response to relay instead of closing connection
-		log.Error().
-			Str("local_addr", localAddr).
-			Err(err).
-			Msg("Failed to connect to local service after retries")
-
-		// Send HTTP 503 response
-		httpResponse := "HTTP/1.1 503 Service Unavailable\r\n" +
-			"Content-Type: text/plain\r\n" +
-			"Content-Length: 29\r\n" +
-			"Connection: close\r\n" +
-			"\r\n" +
-			"Local service not available"
-		relayConn.Write([]byte(httpResponse))
 		return fmt.Errorf("local service unavailable: %w", err)
 	}
 

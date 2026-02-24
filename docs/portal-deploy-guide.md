@@ -26,8 +26,7 @@ Portal requires a single wildcard TLS certificate for all app subdomains (`*.you
   ```
   PORTAL_PORT=4017
   PORTAL_URL=https://yourdomain.com
-  PORTAL_APP_URL=https://*.yourdomain.com
-  BOOTSTRAP_URIS=wss://yourdomain.com/relay
+  BOOTSTRAP_URIS=https://yourdomain.com
   ```
 
 ## Deploy

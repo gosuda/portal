@@ -10,7 +10,6 @@ Build:
 - `make build-frontend` (React admin UI)
 - `make build-wasm` (webclient WASM)
 - `make build-tunnel` (portal-tunnel binaries)
-- `make build-protoc` (protobufs)
 
 Run:
 - `make run` (run `./bin/relay-server`)
@@ -39,7 +38,7 @@ Portal is a relay network that connects Apps (service publishers) and Clients (s
 Core components:
 - Relay server: `cmd/relay-server` (HTTP + WS relay, admin UI serving)
 - Relay core logic: `portal/` (lease manager, connection handlers, forwarding)
-- Crypto + protocols: `portal/core/` and `portal/core/proto/` (RDSEC/RDVERB)
+- Crypto + protocols: `portal/core/`
 - SDK for Apps: `sdk/`
 - Tunnel client: `cmd/portal-tunnel/` (exposes local services)
 - Webclient: `cmd/webclient/` (WASM + service worker served by relay)
@@ -64,7 +63,6 @@ Core components:
 
 - `cmd/relay-server/` (entrypoint and HTTP/WS relay)
 - `portal/` (core relay logic)
-- `portal/core/proto/` (protocol definitions)
 - `sdk/` (App integration)
 - `cmd/portal-tunnel/` (tunnel client)
 - `cmd/webclient/` (WASM client)

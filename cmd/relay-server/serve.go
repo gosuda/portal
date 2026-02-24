@@ -58,7 +58,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, sniRouter *sni.Router, adm
 	})
 
 	// SDK Registry API for lease registration (used by SDK and tunnel clients)
-	registry := NewSDKRegistry(serv, sniRouter, flagPortalAppURL)
+	registry := NewSDKRegistry(serv, sniRouter)
 	appMux.HandleFunc("/api/register", registry.HandleRegister)
 	appMux.HandleFunc("/api/unregister", registry.HandleUnregister)
 	appMux.HandleFunc("/api/renew", registry.HandleRenew)
@@ -85,9 +85,10 @@ func serveHTTP(addr string, serv *portal.RelayServer, sniRouter *sni.Router, adm
 	})
 
 	// Create the main handler
+	appDomain := utils.DefaultAppPattern(flagPortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle subdomain requests
-		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
+		if utils.IsSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
@@ -171,7 +172,7 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 // based on the lease's TLSEnabled setting.
 // Returns true if TLS is NOT enabled (can proxy via HTTP).
 func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
-	leaseName, ok := leaseNameFromHost(host, flagPortalAppURL)
+	leaseName, ok := leaseNameFromHost(host, utils.DefaultAppPattern(flagPortalURL))
 	if !ok {
 		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
 		return false
@@ -194,7 +195,7 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 }
 
 func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	leaseName, ok := leaseNameFromHost(r.Host, flagPortalAppURL)
+	leaseName, ok := leaseNameFromHost(r.Host, utils.DefaultAppPattern(flagPortalURL))
 	if !ok {
 		http.Error(w, "invalid subdomain", http.StatusBadRequest)
 		return

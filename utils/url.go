@@ -21,55 +21,45 @@ func IsURLSafeName(name string) bool {
 }
 
 // NormalizePortalURL takes various user-friendly server inputs and
-// converts them into a proper WebSocket URL.
+// converts them into a relay API base URL.
 // Examples:
-//   - "wss://localhost:4017/relay" -> unchanged
-//   - "ws://localhost:4017/relay"  -> unchanged
-//   - "http://example.com"        -> "ws://example.com/relay"
-//   - "https://example.com"       -> "wss://example.com/relay"
-//   - "localhost:4017"            -> "wss://localhost:4017/relay"
-//   - "example.com"               -> "wss://example.com/relay"
+//   - "http://example.com"  -> "http://example.com"
+//   - "https://example.com" -> "https://example.com"
+//   - "localhost:4017"      -> "http://localhost:4017"
+//   - "example.com"         -> "http://example.com"
 func NormalizePortalURL(raw string) (string, error) {
 	server := strings.TrimSpace(raw)
 	if server == "" {
 		return "", fmt.Errorf("bootstrap server is empty")
 	}
 
-	// Already a WebSocket URL
-	if strings.HasPrefix(server, "ws://") || strings.HasPrefix(server, "wss://") {
-		return server, nil
+	// Accept host:port input.
+	if !strings.Contains(server, "://") {
+		server = "http://" + server
 	}
 
-	// HTTP/HTTPS -> WS/WSS with default /relay path
-	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
-		u, err := url.Parse(server)
-		if err != nil {
-			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-		}
-		switch u.Scheme {
-		case "http":
-			u.Scheme = "ws"
-		case "https":
-			u.Scheme = "wss"
-		}
-		if u.Path == "" || u.Path == "/" {
-			u.Path = "/relay"
-		}
-		return u.String(), nil
-	}
-
-	// Bare host[:port][/path] -> assume WSS and /relay if no path
-	u, err := url.Parse("wss://" + server)
+	u, err := url.Parse(server)
 	if err != nil {
 		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
 	}
 	if u.Host == "" {
 		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
 	}
-	if u.Path == "" || u.Path == "/" {
-		u.Path = "/relay"
+
+	switch u.Scheme {
+	case "http", "https":
+	default:
+		return "", fmt.Errorf("invalid bootstrap server %q: unsupported scheme %q (use http/https)", raw, u.Scheme)
 	}
-	return u.String(), nil
+
+	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
+		return "", fmt.Errorf("invalid bootstrap server %q: path is not allowed", raw)
+	}
+
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimSuffix(u.String(), "/"), nil
 }
 
 // ParseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
@@ -183,24 +173,85 @@ func DefaultAppPattern(base string) string {
 	return "*." + host
 }
 
-// DefaultBootstrapFrom derives a websocket bootstrap URL from a base portal URL or host.
+// DefaultBootstrapFrom derives a relay API bootstrap URL from a base portal URL or host.
 // It prefers NormalizePortalURL for consistent mapping and falls back to localhost.
 // Examples:
-//   - "https://portal.example.com" -> "wss://portal.example.com/relay"
-//   - "http://portal.example.com"  -> "ws://portal.example.com/relay"
-//   - "localhost:4017"             -> "wss://localhost:4017/relay"
-//   - ""                           -> "ws://localhost:4017/relay"
+//   - "https://portal.example.com" -> "https://portal.example.com"
+//   - "http://portal.example.com"  -> "http://portal.example.com"
+//   - "localhost:4017"             -> "http://localhost:4017"
+//   - ""                           -> "http://localhost:4017"
 func DefaultBootstrapFrom(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		return "ws://localhost:4017/relay"
+		return "http://localhost:4017"
 	}
 	if u, err := NormalizePortalURL(base); err == nil && u != "" {
 		return u
 	}
-	host := StripScheme(strings.TrimSuffix(base, "/"))
-	if host == "" {
-		return "ws://localhost:4017/relay"
+
+	// Fallback for non-standard input while keeping api-base format.
+	if strings.Contains(base, "://") {
+		return "http://localhost:4017"
 	}
-	return "ws://" + host + "/relay"
+	u, err := url.Parse("http://" + strings.TrimSuffix(base, "/"))
+	if err != nil || u.Host == "" {
+		return "http://localhost:4017"
+	}
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimSuffix(u.String(), "/")
+}
+
+// PortalHostPort returns normalized host[:port] from a portal URL-like input.
+// Examples:
+//   - "https://Portal.Example.com" -> "portal.example.com"
+//   - "http://portal.example.com:4017" -> "portal.example.com:4017"
+func PortalHostPort(portalURL string) string {
+	return strings.ToLower(strings.TrimSpace(
+		StripWildCard(StripScheme(portalURL)),
+	))
+}
+
+// PortalBaseHostNoPort returns host without port from a portal URL-like input.
+// Examples:
+//   - "https://portal.example.com:4017" -> "portal.example.com"
+func PortalBaseHostNoPort(portalURL string) string {
+	return strings.ToLower(strings.TrimSpace(StripPort(PortalHostPort(portalURL))))
+}
+
+// ServicePublicURL returns a service URL derived from portalURL and service name.
+// Examples:
+//   - portalURL: "https://portal.example.com", serviceName: "demo"
+//     -> "https://demo.portal.example.com"
+func ServicePublicURL(portalURL, serviceName string) string {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return ""
+	}
+
+	raw := strings.TrimSpace(portalURL)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Host) == "" {
+		return ""
+	}
+
+	host := strings.TrimSpace(StripWildCard(u.Host))
+	if host == "" {
+		return ""
+	}
+
+	scheme := strings.TrimSpace(u.Scheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+
+	return fmt.Sprintf("%s://%s.%s", scheme, serviceName, host)
 }

@@ -14,13 +14,13 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "ws relay path", in: "ws://localhost:4017/relay", want: "http://localhost:4017"},
-		{name: "wss relay path", in: "wss://example.com/relay", want: "https://example.com"},
 		{name: "localhost subdomain to localhost", in: "http://demo-app.localhost:4017", want: "http://localhost:4017"},
-		{name: "localhost subdomain with relay path", in: "ws://demo-app.localhost:4017/relay", want: "http://localhost:4017"},
 		{name: "http base", in: "http://example.com", want: "http://example.com"},
 		{name: "https base", in: "https://example.com/", want: "https://example.com"},
 		{name: "bare host", in: "localhost:4017", want: "http://localhost:4017"},
+		{name: "invalid ws scheme", in: "ws://localhost:4017", wantErr: true},
+		{name: "invalid wss scheme", in: "wss://example.com", wantErr: true},
+		{name: "invalid relay path", in: "http://localhost:4017/relay", wantErr: true},
 		{name: "invalid scheme", in: "ftp://example.com", wantErr: true},
 		{name: "empty", in: "", wantErr: true},
 	}
@@ -50,7 +50,7 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 func TestFirstRelayAPIURL(t *testing.T) {
 	t.Parallel()
 
-	got, err := firstRelayAPIURL([]string{"invalid://relay", "ws://localhost:4017/relay"})
+	got, err := firstRelayAPIURL([]string{"invalid://relay", "http://localhost:4017"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

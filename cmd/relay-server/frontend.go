@@ -249,11 +249,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
-		if base == "" {
-			base = flagPortalURL
-		}
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
+		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.PortalHostPort(flagPortalURL))
 
 		var bps int64
 		if bpsMgr := admin.GetBPSManager(); bpsMgr != nil {

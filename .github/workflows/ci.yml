@@ -25,19 +25,6 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Install protobuf compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-
-      - name: Install protoc-gen-go and protoc-gen-go-vtproto
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest
-
-      - name: Generate protobuf files
-        run: make build-protoc
-
       - name: Run vet
         run: go vet ./...
 
@@ -108,12 +95,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler binaryen
-
-      - name: Install protoc-gen-go and protoc-gen-go-vtproto
-        run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-          go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@latest
+          sudo apt-get install -y binaryen
 
       - name: Build all components
         run: make build

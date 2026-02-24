@@ -604,10 +604,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			}
 		}
 
-		since := now.Sub(leaseEntry.LastSeen)
-		if since < 0 {
-			since = 0
-		}
+		since := max(now.Sub(leaseEntry.LastSeen), 0)
 		lastSeenStr := func(d time.Duration) string {
 			if d >= time.Hour {
 				h := int(d / time.Hour)
@@ -648,11 +645,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
-		if base == "" {
-			base = flagPortalURL
-		}
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
+		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.PortalHostPort(flagPortalURL))
 
 		var bps int64
 		if a.bpsManager != nil {
@@ -669,6 +662,16 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			}
 		}
 
+		metadata := lease.Metadata
+		metadataStr := ""
+		if metadata.Description != "" || len(metadata.Tags) > 0 || metadata.Thumbnail != "" || metadata.Owner != "" || metadata.Hide {
+			if b, err := json.Marshal(metadata); err == nil {
+				metadataStr = string(b)
+			} else {
+				log.Warn().Err(err).Str("lease_id", identityID).Msg("[Admin] Failed to marshal lease metadata")
+			}
+		}
+
 		rows = append(rows, leaseRow{
 			Peer:         identityID,
 			Name:         name,
@@ -682,7 +685,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			Link:         link,
 			StaleRed:     !connected && since >= 15*time.Second,
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:     "", // TODO: Convert portal.Metadata to string if needed
+			Metadata:     metadataStr,
 			BPS:          bps,
 			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(identityID),
 			IsDenied:     a.approveManager.IsLeaseDenied(identityID),

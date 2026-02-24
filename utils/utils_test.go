@@ -83,49 +83,44 @@ func TestNormalizePortalURL(t *testing.T) {
 		shouldFail bool
 	}{
 		{
-			name:  "already ws",
-			input: "ws://localhost:4017/relay",
-			want:  "ws://localhost:4017/relay",
-		},
-		{
-			name:  "already wss",
-			input: "wss://localhost:4017/relay",
-			want:  "wss://localhost:4017/relay",
-		},
-		{
 			name:  "localhost with port",
 			input: "localhost:4017",
-			want:  "wss://localhost:4017/relay",
+			want:  "http://localhost:4017",
 		},
 		{
 			name:  "domain without port",
 			input: "example.com",
-			want:  "wss://example.com/relay",
+			want:  "http://example.com",
 		},
 		{
 			name:  "http scheme without path",
 			input: "http://example.com",
-			want:  "ws://example.com/relay",
+			want:  "http://example.com",
 		},
 		{
 			name:  "https scheme without path",
 			input: "https://example.com",
-			want:  "wss://example.com/relay",
+			want:  "https://example.com",
 		},
 		{
-			name:  "http scheme with path",
-			input: "http://example.com/custom",
-			want:  "ws://example.com/custom",
+			name:       "http scheme with path",
+			input:      "http://example.com/custom",
+			shouldFail: true,
 		},
 		{
-			name:  "https scheme with path",
-			input: "https://example.com/custom",
-			want:  "wss://example.com/custom",
+			name:       "https scheme with path",
+			input:      "https://example.com/custom",
+			shouldFail: true,
 		},
 		{
-			name:  "bare host with path",
-			input: "example.com/custom",
-			want:  "wss://example.com/custom",
+			name:       "unsupported ws scheme",
+			input:      "ws://example.com",
+			shouldFail: true,
+		},
+		{
+			name:       "unsupported wss scheme",
+			input:      "wss://example.com",
+			shouldFail: true,
 		},
 		{
 			name:       "empty",
@@ -445,25 +440,87 @@ func TestDefaultBootstrapFrom(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"empty string", "", "ws://localhost:4017/relay"},
-		{"whitespace", "   ", "ws://localhost:4017/relay"},
-		{"localhost with port", "localhost:4017", "wss://localhost:4017/relay"},
-		{"https with domain", "https://portal.example.com", "wss://portal.example.com/relay"},
-		{"http with domain", "http://portal.example.com", "ws://portal.example.com/relay"},
-		{"ws scheme", "ws://example.com", "ws://example.com"},
-		{"wss scheme", "wss://example.com", "wss://example.com"},
-		{"ws with path", "ws://example.com/relay", "ws://example.com/relay"},
-		{"wss with path", "wss://example.com/relay", "wss://example.com/relay"},
-		{"domain only", "example.com", "wss://example.com/relay"},
-		{"with trailing slash", "example.com/", "wss://example.com/relay"},
-		{"with path", "example.com/custom", "wss://example.com/custom"},
-		{"edge case invalid url", "://invalid", "wss://://invalid"},
+		{"empty string", "", "http://localhost:4017"},
+		{"whitespace", "   ", "http://localhost:4017"},
+		{"localhost with port", "localhost:4017", "http://localhost:4017"},
+		{"https with domain", "https://portal.example.com", "https://portal.example.com"},
+		{"http with domain", "http://portal.example.com", "http://portal.example.com"},
+		{"ws scheme", "ws://example.com", "http://localhost:4017"},
+		{"wss scheme", "wss://example.com", "http://localhost:4017"},
+		{"domain only", "example.com", "http://example.com"},
+		{"with trailing slash", "example.com/", "http://example.com"},
+		{"with path", "example.com/custom", "http://example.com"},
+		{"edge case invalid url", "://invalid", "http://localhost:4017"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := DefaultBootstrapFrom(tt.input)
 			assert.Equal(t, tt.expected, result, "DefaultBootstrapFrom(%q)", tt.input)
+		})
+	}
+}
+
+func TestPortalHostPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"https lowercase", "https://Portal.Example.com", "portal.example.com"},
+		{"with port", "http://portal.example.com:4017", "portal.example.com:4017"},
+		{"wildcard", "https://*.portal.example.com", "portal.example.com"},
+		{"bare host", "portal.example.com", "portal.example.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, PortalHostPort(tt.input))
+		})
+	}
+}
+
+func TestPortalBaseHostNoPort(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"with port", "https://portal.example.com:4017", "portal.example.com"},
+		{"no port", "https://portal.example.com", "portal.example.com"},
+		{"localhost", "localhost:4017", "localhost"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, PortalBaseHostNoPort(tt.input))
+		})
+	}
+}
+
+func TestServicePublicURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		portalURL  string
+		service    string
+		expected   string
+		shouldFail bool
+	}{
+		{"https url", "https://portal.example.com", "demo", "https://demo.portal.example.com", false},
+		{"http url", "http://portal.example.com:4017", "demo", "http://demo.portal.example.com:4017", false},
+		{"bare host", "portal.example.com", "demo", "http://demo.portal.example.com", false},
+		{"empty service", "https://portal.example.com", "", "", true},
+		{"empty portal", "", "demo", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ServicePublicURL(tt.portalURL, tt.service)
+			if tt.shouldFail {
+				assert.Equal(t, "", got)
+				return
+			}
+			assert.Equal(t, tt.expected, got)
 		})
 	}
 }

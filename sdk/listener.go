@@ -469,21 +469,18 @@ func normalizeRelayAPIURL(raw string) (string, error) {
 	}
 
 	switch u.Scheme {
-	case "ws":
-		u.Scheme = "http"
-	case "wss":
-		u.Scheme = "https"
 	case "http", "https":
 	default:
-		return "", fmt.Errorf("unsupported relay URL scheme: %q", u.Scheme)
+		return "", fmt.Errorf("unsupported relay URL scheme: %q (use http/https)", u.Scheme)
+	}
+
+	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
+		return "", fmt.Errorf("relay URL must not include path: %q", raw)
 	}
 
 	u.RawQuery = ""
 	u.Fragment = ""
-	u.Path = strings.TrimSuffix(u.Path, "/")
-	if u.Path == "/relay" {
-		u.Path = ""
-	}
+	u.Path = ""
 
 	return strings.TrimSuffix(u.String(), "/"), nil
 }

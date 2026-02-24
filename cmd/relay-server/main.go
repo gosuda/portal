@@ -24,7 +24,6 @@ import (
 
 var (
 	flagPortalURL      string
-	flagPortalAppURL   string
 	flagBootstraps     []string
 	flagALPN           string
 	flagPort           int
@@ -42,10 +41,6 @@ func main() {
 		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
 		defaultPortalURL = "http://localhost:4017"
 	}
-	defaultAppURL := os.Getenv("PORTAL_APP_URL")
-	if defaultAppURL == "" {
-		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
-	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
 		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
@@ -53,7 +48,6 @@ func main() {
 
 	var flagBootstrapsCSV string
 	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
 	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
 	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
@@ -79,7 +73,6 @@ func runServer() error {
 
 	log.Info().
 		Str("portal_base_url", flagPortalURL).
-		Str("app_url", flagPortalAppURL).
 		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
 		Msg("[server] frontend configuration")
 

@@ -25,14 +25,11 @@ type SDKRegistry struct {
 }
 
 // NewSDKRegistry creates a new SDK registry
-func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router, appURL string) *SDKRegistry {
-	baseHost := strings.ToLower(strings.TrimSpace(
-		utils.StripPort(utils.StripWildCard(utils.StripScheme(appURL))),
-	))
+func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router) *SDKRegistry {
 	return &SDKRegistry{
 		server:    server,
 		sniRouter: sniRouter,
-		baseHost:  baseHost,
+		baseHost:  utils.PortalBaseHostNoPort(flagPortalURL),
 	}
 }
 
@@ -152,10 +149,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
-	publicURL := ""
-	if flagPortalAppURL != "" {
-		publicURL = "https://" + registerReq.Name + "." + stripWildcard(flagPortalAppURL)
-	}
+	publicURL := utils.ServicePublicURL(flagPortalURL, registerReq.Name)
 
 	writeJSON(w, RegisterResponse{
 		Success:   true,
@@ -333,12 +327,4 @@ func (r *SDKRegistry) unregisterSNIRoute(leaseID string) {
 		return
 	}
 	r.sniRouter.UnregisterRouteByLeaseID(leaseID)
-}
-
-// stripWildcard removes the wildcard prefix from a domain
-func stripWildcard(domain string) string {
-	if len(domain) > 2 && domain[:2] == "*." {
-		return domain[2:]
-	}
-	return domain
 }
