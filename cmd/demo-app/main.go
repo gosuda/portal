@@ -14,11 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
 //go:embed static
@@ -38,7 +36,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay URL (ws/wss/http/https)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
@@ -53,52 +51,20 @@ func main() {
 	}
 }
 
-// handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
-func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := utils.UpgradeWebSocket(w, r, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("upgrade websocket")
-		return
-	}
-	defer conn.Close()
-
-	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Error().Err(err).Msg("read websocket message")
-			}
-			break
-		}
-
-		if err := conn.WriteMessage(messageType, data); err != nil {
-			log.Error().Err(err).Msg("write websocket message")
-			break
-		}
-	}
-}
-
 func runDemo() error {
-	// 1) Create credential for this demo app
-	cred := sdk.NewCredential()
-
-	// 2) Create SDK client and connect to relay(s)
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = []string{flagServerURL}
-	})
+	// 1) Create SDK client and connect to relay(s)
+	client, err := sdk.NewClient(sdk.WithBootstrapServers([]string{flagServerURL}))
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
 	defer client.Close()
 
-	// 3) Register lease
+	// 2) Register lease
 	// Create base64 data URI from embedded thumbnail
 	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
 
 	listener, err := client.Listen(
-		cred,
 		flagName,
-		[]string{"http/1.1"},
 		sdk.WithDescription(flagDesc),
 		sdk.WithTags(strings.Split(flagTags, ",")),
 		sdk.WithOwner(flagOwner),
@@ -131,9 +97,6 @@ func runDemo() error {
 			log.Error().Err(err).Msg("write ping response")
 		}
 	})
-
-	// WebSocket echo endpoint for bidirectional test
-	mux.HandleFunc("/ws", handleWS)
 
 	// Test endpoint for multiple Set-Cookie headers
 	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)
@@ -169,7 +132,7 @@ func runDemo() error {
 	})
 
 	// 5) Serve HTTP over relay listener
-	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s", flagName)
 
 	// Also serve on local port for direct testing
 	go func() {

@@ -1,13 +1,11 @@
 package utils
 
 import (
-	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestIsURLSafeName(t *testing.T) {
@@ -235,8 +233,6 @@ func TestIsSubdomain(t *testing.T) {
 		})
 	}
 }
-
-// Tests for http.go functions
 
 func TestIsHTMLContentType(t *testing.T) {
 	tests := []struct {
@@ -468,167 +464,6 @@ func TestDefaultBootstrapFrom(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := DefaultBootstrapFrom(tt.input)
 			assert.Equal(t, tt.expected, result, "DefaultBootstrapFrom(%q)", tt.input)
-		})
-	}
-}
-
-// Tests for ws.go functions
-
-func TestNewWebSocketDialer(t *testing.T) {
-	ctx := context.Background()
-	dialer := NewWebSocketDialer()
-
-	// Test with invalid URL - should error
-	_, err := dialer(ctx, "not-a-url")
-	assert.Error(t, err)
-
-	// Test with unreachable server - should error
-	_, err = dialer(ctx, "ws://localhost:9999/unreachable")
-	assert.Error(t, err)
-}
-
-func TestUpgradeWebSocket(t *testing.T) {
-	tests := []struct {
-		name           string
-		requestHeaders map[string]string
-		expectError    bool
-	}{
-		{
-			name: "valid websocket upgrade request",
-			requestHeaders: map[string]string{
-				"Connection":            "Upgrade",
-				"Upgrade":               "websocket",
-				"Sec-WebSocket-Version": "13",
-				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
-			},
-			expectError: false,
-		},
-		{
-			name: "missing upgrade header",
-			requestHeaders: map[string]string{
-				"Connection": "Upgrade",
-			},
-			expectError: true,
-		},
-		{
-			name:           "no headers",
-			requestHeaders: map[string]string{},
-			expectError:    true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			for k, v := range tt.requestHeaders {
-				req.Header.Set(k, v)
-			}
-
-			w := httptest.NewRecorder()
-
-			conn, err := UpgradeWebSocket(w, req, nil)
-
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Nil(t, conn)
-			} else {
-				// If no error, we should get a connection
-				// Note: The response might have been written already
-				if err == nil {
-					assert.NotNil(t, conn)
-					conn.Close()
-				} else {
-					// Some error cases are acceptable in test environment
-					assert.NotNil(t, err)
-				}
-			}
-		})
-	}
-}
-
-func TestUpgradeToWSStream(t *testing.T) {
-	tests := []struct {
-		name           string
-		requestHeaders map[string]string
-	}{
-		{
-			name: "valid websocket upgrade request",
-			requestHeaders: map[string]string{
-				"Connection":            "Upgrade",
-				"Upgrade":               "websocket",
-				"Sec-WebSocket-Version": "13",
-				"Sec-WebSocket-Key":     "dGhlIHNhbXBsZSBub25jZQ==",
-			},
-		},
-		{
-			name: "missing connection header",
-			requestHeaders: map[string]string{
-				"Upgrade": "websocket",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
-			for k, v := range tt.requestHeaders {
-				req.Header.Set(k, v)
-			}
-
-			w := httptest.NewRecorder()
-
-			stream, conn, err := UpgradeToWSStream(w, req, nil)
-
-			// Check return values
-			if tt.requestHeaders["Connection"] == "Upgrade" && tt.requestHeaders["Upgrade"] == "websocket" {
-				// Valid upgrade request
-				if err == nil {
-					require.NotNil(t, stream, "stream should not be nil on success")
-					require.NotNil(t, conn, "conn should not be nil on success")
-					conn.Close()
-				}
-				// Note: In test environment, upgrade might fail for various reasons
-				// The important thing is the function doesn't panic
-			} else {
-				// Invalid request should error
-				if err == nil {
-					require.NotNil(t, stream)
-					require.NotNil(t, conn)
-					conn.Close()
-				} else {
-					assert.Nil(t, stream)
-					assert.Nil(t, conn)
-				}
-			}
-		})
-	}
-}
-
-// Additional edge case tests for improved coverage
-
-func TestStripPort_EdgeCases(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"empty string", "", ""},
-		{"no colon", "example.com", "example.com"},
-		{"colon at end", "example.com:", "example.com:"},
-		{"colon no port but path", "example.com:/path", "example.com:/path"},
-		{"non-digit port", "example.com:abc", "example.com:abc"},
-		{"mixed port", "example.com:12a34", "example.com:12a34"},
-		{"multiple colons - last not all digits", "example.com:8080:extra", "example.com:8080:extra"},
-		{"IPv6 with port", "[::1]:8080", "[::1]"},
-		{"IPv6 no port", "[::1]", "[::1]"},
-		{"just colon", ":", ":"},
-		{"just digits after colon", ":8080", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := StripPort(tt.input)
-			assert.Equal(t, tt.expected, result, "StripPort(%q)", tt.input)
 		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"gopkg.eu.org/broccoli"
@@ -33,6 +34,13 @@ type Config struct {
 	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
 	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
+
+	// TLS Mode
+	TLSEnable   bool   `flag:"tls" env:"TLS_ENABLE" about:"Enable TLS termination on tunnel client (requires TLS cert)"`
+	TLSDomain   string `flag:"tls-domain" env:"TLS_DOMAIN" about:"Domain for TLS certificate (e.g., tunnel.example.com)"`
+	TLSCert     string `flag:"tls-cert" env:"TLS_CERT" about:"Path to TLS certificate file (optional, uses autocert if not set)"`
+	TLSKey      string `flag:"tls-key" env:"TLS_KEY" about:"Path to TLS key file (optional, uses autocert if not set)"`
+	TLSAutocert bool   `flag:"tls-autocert" env:"TLS_AUTOCERT" about:"Use Let's Encrypt autocert for TLS (default: true if TLS enabled)"`
 
 	// Metadata
 	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
@@ -97,38 +105,45 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
-	protocols := strings.Split(cfg.Protocols, ",")
-	if len(protocols) == 0 {
-		protocols = []string{"http/1.1", "h2"}
-	}
 
-	cred := sdk.NewCredential()
-	leaseID := cred.ID()
-	if cfg.Name == "" {
-		cfg.Name = fmt.Sprintf("tunnel-%s", leaseID[:8])
-		log.Info().Str("service", cfg.Name).Msg("No service name provided; generated automatically")
-	}
 	log.Info().Str("service", cfg.Name).Msgf("Local service is reachable at %s", cfg.Host)
 	log.Info().Str("service", cfg.Name).Msgf("Starting Portal Tunnel (%s)...", origin)
 	log.Info().Str("service", cfg.Name).Msgf("  Local:    %s", cfg.Host)
 	log.Info().Str("service", cfg.Name).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Str("service", cfg.Name).Msgf("  Lease ID: %s", leaseID)
+	log.Info().Str("service", cfg.Name).Msgf("  TLS Mode: %v", cfg.TLSEnable)
 
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = relayURLs
-	})
+	// Build SDK client options
+	var clientOpts []sdk.ClientOption
+	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
+
+	// Configure TLS if enabled
+	if cfg.TLSEnable {
+		if cfg.TLSDomain == "" {
+			return fmt.Errorf("TLS enabled but domain not specified")
+		}
+		clientOpts = append(clientOpts, sdk.WithTLS(cfg.TLSDomain))
+		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			clientOpts = append(clientOpts, sdk.WithTLSCert(cfg.TLSCert, cfg.TLSKey))
+		}
+	}
+
+	client, err := sdk.NewClient(clientOpts...)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to connect to relay: %w", cfg.Name, err)
+		return fmt.Errorf("service %s: failed to create client: %w", cfg.Name, err)
 	}
 	defer client.Close()
 
-	listener, err := client.Listen(cred, cfg.Name, protocols,
+	// Create metadata options
+	metadataOptions := []sdk.MetadataOption{
 		sdk.WithDescription(cfg.Description),
-		sdk.WithTags(strings.Split(cfg.Tags, ",")),
+		sdk.WithTags(splitCSV(cfg.Tags)),
 		sdk.WithOwner(cfg.Owner),
 		sdk.WithThumbnail(cfg.Thumbnail),
 		sdk.WithHide(cfg.Hide),
-	)
+	}
+
+	// Create listener (with or without TLS based on config)
+	listener, err := client.Listen(cfg.Name, metadataOptions...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", cfg.Name, err)
 	}
@@ -141,9 +156,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 
 	log.Info().Str("service", cfg.Name).Msg("")
 	log.Info().Str("service", cfg.Name).Msg("Access via:")
-	log.Info().Str("service", cfg.Name).Msgf("- Name:     /peer/%s", cfg.Name)
-	log.Info().Str("service", cfg.Name).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", cfg.Name).Msgf("- Example:  %s/peer/%s", relayURLs[0], cfg.Name)
+	log.Info().Str("service", cfg.Name).Msgf("- Relay:    %s", relayURLs[0])
+	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
+		log.Info().Str("service", cfg.Name).Msgf("- Lease ID: %s", leaseAware.LeaseID())
+	}
+	if cfg.TLSEnable {
+		log.Info().Str("service", cfg.Name).Msgf("- TLS:      Enabled (%s)", cfg.TLSDomain)
+	}
 
 	log.Info().Str("service", cfg.Name).Msg("")
 
@@ -174,23 +193,86 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Proxy error")
+			proxyType := "TCP"
+			if cfg.TLSEnable {
+				proxyType = "TLS→TCP"
 			}
-			log.Info().Str("service", cfg.Name).Msg("Connection closed")
+			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
+				log.Error().Str("service", cfg.Name).Str("proxy", proxyType).Err(err).Msg("Proxy error")
+			}
+			log.Info().Str("service", cfg.Name).Str("proxy", proxyType).Msg("Connection closed")
 		}(relayConn)
 	}
 }
 
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// proxyConnection proxies data between relay and local service.
+// If local service is not available, it retries with backoff instead of failing immediately.
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	dialer := new(net.Dialer)
-	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to local service %s: %w", localAddr, err)
+	// Try to connect to local service with retry
+	var localConn net.Conn
+	var err error
+
+	maxRetries := 30
+	retryDelay := 500 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		localConn, err = dialer.DialContext(ctx, "tcp", localAddr)
+		if err == nil {
+			break
+		}
+
+		if i == 0 {
+			log.Warn().
+				Str("local_addr", localAddr).
+				Err(err).
+				Msg("Local service not ready, retrying...")
+		}
+
+		time.Sleep(retryDelay)
 	}
+
+	if err != nil {
+		// Return HTTP 503 response to relay instead of closing connection
+		log.Error().
+			Str("local_addr", localAddr).
+			Err(err).
+			Msg("Failed to connect to local service after retries")
+
+		// Send HTTP 503 response
+		httpResponse := "HTTP/1.1 503 Service Unavailable\r\n" +
+			"Content-Type: text/plain\r\n" +
+			"Content-Length: 29\r\n" +
+			"Connection: close\r\n" +
+			"\r\n" +
+			"Local service not available"
+		relayConn.Write([]byte(httpResponse))
+		return fmt.Errorf("local service unavailable: %w", err)
+	}
+
 	defer localConn.Close()
+
+	log.Info().Str("local_addr", localAddr).Msg("Connected to local service")
 
 	errCh := make(chan error, 2)
 	stopCh := make(chan struct{})

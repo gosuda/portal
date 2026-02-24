@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/websocket"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/utils"
 )
 
@@ -17,14 +22,9 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
-	}
-
-	// Initialize WASM cache used by content handlers
-	if err := frontend.InitWasmCache(); err != nil {
-		log.Error().Err(err).Msg("failed to initialize WASM cache")
 	}
 
 	// Create app UI mux
@@ -49,17 +49,6 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		frontend.ServeAppStatic(w, r, p, serv)
 	}))
 
-	// Portal frontend files (for unified caching)
-	appMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
-
-		frontend.ServePortalStaticFile(w, r, p)
-	}))
-
 	// Tunnel installer script and binaries
 	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelScript(w, r)
@@ -68,38 +57,14 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		serveTunnelBinary(w, r)
 	})
 
-	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Check if IP is banned
-		clientIP := manager.ExtractClientIP(r)
-		ipManager := admin.GetIPManager()
-		if ipManager != nil && ipManager.IsIPBanned(clientIP) {
-			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
-		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] websocket upgrade failed")
-			return
-		}
-
-		// Store pending IP for lease association (will be linked when lease is registered)
-		if ipManager != nil && clientIP != "" {
-			ipManager.StorePendingIP(clientIP)
-		}
-
-		if err := serv.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[server] websocket relay connection error")
-			wsConn.Close()
-			return
-		}
+	// SDK Registry API for lease registration (used by SDK and tunnel clients)
+	registry := NewSDKRegistry(serv, sniRouter, flagPortalAppURL)
+	appMux.HandleFunc("/api/register", registry.HandleRegister)
+	appMux.HandleFunc("/api/unregister", registry.HandleUnregister)
+	appMux.HandleFunc("/api/renew", registry.HandleRenew)
+	appMux.Handle("/api/connect", websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler:   websocket.Handler(serv.GetReverseHub().HandleConnect),
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
@@ -119,53 +84,28 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		admin.HandleAdminRequest(w, r, serv)
 	})
 
-	// Create portal frontend mux (routes only)
-	portalMux := http.NewServeMux()
-
-	// Static file handler for /frontend/ (for unified caching)
-	portalMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
-		frontend.ServePortalStaticFile(w, r, p)
-	}))
-
-	// Service worker for portal subdomains (serve from dist/wasm)
-	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
-		frontend.ServeDynamicServiceWorker(w, r)
-	})
-
-	// Create HTTP reverse proxy for subdomain tunneling (same-origin cookie support)
-	httpProxy := NewHTTPProxy(serv)
-
-	// Root handler: try server-side reverse proxy first, then fall back to portal HTML
-	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Try server-side reverse proxy to tunnel backend
-		if httpProxy.TryProxy(w, r) {
-			return
-		}
-
-		// Fallback: serve portal frontend (Service Worker based proxy)
-		withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/" {
-				frontend.ServePortalHTMLWithSSR(w, r, serv)
+	// Create the main handler
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Handle subdomain requests
+		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
+			log.Debug().
+				Str("host", r.Host).
+				Str("url", r.URL.String()).
+				Msg("[server] handling subdomain request")
+			// Check if the tunnel has TLS enabled by looking up the lease
+			if shouldProxyHTTP(r.Host, serv) {
+				// TLS is not enabled on the tunnel, proxy via HTTP
+				log.Debug().Str("host", r.Host).Msg("[server] proxying to HTTP")
+				proxyToHTTP(w, r, serv)
 				return
 			}
-			frontend.ServePortalStatic(w, r)
-		})(w, r)
-	})
-
-	// routes based on host and path
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Route subdomain requests (e.g., *.example.com) to portalMux
-		// and everything else to the app UI mux.
-		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
-			portalMux.ServeHTTP(w, r)
-		} else {
-			appMux.ServeHTTP(w, r)
+			// TLS is enabled, redirect to HTTPS
+			// The SNI router handles TLS passthrough on :443.
+			log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
+			redirectToHTTPS(w, r)
+			return
 		}
+		appMux.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{
@@ -182,6 +122,146 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	}()
 
 	return srv
+}
+
+// leaseNameFromHost extracts the lease name from a subdomain host.
+// It returns the lease name and true if the host is a valid subdomain of appURL.
+func leaseNameFromHost(host, appURL string) (string, bool) {
+	if !utils.IsSubdomain(appURL, host) {
+		return "", false
+	}
+
+	normalizedHost := strings.ToLower(strings.TrimSpace(utils.StripPort(host)))
+	baseHost := strings.ToLower(strings.TrimSpace(
+		utils.StripPort(utils.StripWildCard(utils.StripScheme(appURL))),
+	))
+
+	if normalizedHost == "" || baseHost == "" || normalizedHost == baseHost {
+		return "", false
+	}
+
+	suffix := "." + baseHost
+	if !strings.HasSuffix(normalizedHost, suffix) {
+		return "", false
+	}
+
+	leaseName := strings.TrimSuffix(normalizedHost, suffix)
+	if leaseName == "" || strings.Contains(leaseName, ".") {
+		// Lease names do not include dots; avoid ambiguous nested subdomains.
+		return "", false
+	}
+
+	return leaseName, true
+}
+
+// redirectToHTTPS redirects the request to HTTPS on port 443
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	target := "https://" + r.Host + r.URL.Path
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	log.Debug().
+		Str("from", r.URL.String()).
+		Str("to", target).
+		Msg("[server] redirecting to HTTPS")
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+// shouldProxyHTTP checks if the request should be proxied via HTTP
+// based on the lease's TLSEnabled setting.
+// Returns true if TLS is NOT enabled (can proxy via HTTP).
+func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
+	leaseName, ok := leaseNameFromHost(host, flagPortalAppURL)
+	if !ok {
+		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
+		return false
+	}
+
+	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
+	if !ok {
+		log.Debug().Str("lease_name", leaseName).Msg("[proxy] shouldProxyHTTP: lease not found")
+		return true
+	}
+
+	// If TLS is NOT enabled, we can proxy via HTTP
+	shouldProxy := !entry.Lease.TLSEnabled
+	log.Debug().
+		Str("lease_name", leaseName).
+		Bool("tls_enabled", entry.Lease.TLSEnabled).
+		Bool("should_proxy_http", shouldProxy).
+		Msg("[proxy] shouldProxyHTTP check")
+	return shouldProxy
+}
+
+func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	leaseName, ok := leaseNameFromHost(r.Host, flagPortalAppURL)
+	if !ok {
+		http.Error(w, "invalid subdomain", http.StatusBadRequest)
+		return
+	}
+
+	// Find lease by name
+	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
+	if !ok {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
+
+	if entry.Lease.TLSEnabled {
+		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
+		return
+	}
+
+	targetConn, releaseConn, err := openLeaseConnection(entry.Lease.ID, serv)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("lease", leaseName).
+			Str("target", entry.Lease.Address).
+			Msg("[proxy] failed to connect to backend")
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer releaseConn()
+
+	// Write the HTTP request to the tunnel
+	if err := r.Write(targetConn); err != nil {
+		log.Error().Err(err).Msg("[proxy] failed to write request to tunnel")
+		http.Error(w, "proxy error", http.StatusInternalServerError)
+		return
+	}
+
+	// Read the response from the tunnel
+	resp, err := http.ReadResponse(bufio.NewReader(targetConn), r)
+	if err != nil {
+		log.Error().Err(err).Msg("[proxy] failed to read response from tunnel")
+		http.Error(w, "proxy error", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy headers
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+
+	// Write status code
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy body
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Debug().Err(err).Msg("[proxy] error copying response body")
+	}
+}
+
+func openLeaseConnection(leaseID string, serv *portal.RelayServer) (net.Conn, func(), error) {
+	reverseConn, err := serv.GetReverseHub().AcquireStarted(leaseID, portal.ReverseHTTPWait)
+	if err != nil {
+		return nil, nil, fmt.Errorf("no reverse connection available for lease %s: %w", leaseID, err)
+	}
+	return reverseConn.Conn, reverseConn.Close, nil
 }
 
 func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {

@@ -6,19 +6,19 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/utils"
 )
 
@@ -83,12 +83,7 @@ func runServer() error {
 		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
 		Msg("[server] frontend configuration")
 
-	cred := sdk.NewCredential()
-
-	serv := portal.NewRelayServer(cred, flagBootstraps)
-	if flagMaxLease > 0 {
-		serv.SetMaxRelayedPerLease(flagMaxLease)
-	}
+	serv := portal.NewRelayServer(flagBootstraps)
 
 	// Create AuthManager for admin authentication
 	// Auto-generate secret key if not provided
@@ -112,23 +107,65 @@ func runServer() error {
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
 	admin.LoadSettings(serv)
 
-	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		// Associate pending IP with this lease
-		ipManager := admin.GetIPManager()
-		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
-			}
+	// Start SNI-based TCP router for TLS passthrough
+	sniRouter := sni.NewRouter()
+
+	// Set up connection callback to route to tunnel backends
+	sniRouter.SetConnectionCallback(func(clientConn net.Conn, route *sni.Route) {
+		if _, ok := serv.GetLeaseManager().GetLeaseByID(route.LeaseID); !ok {
+			log.Warn().
+				Str("lease_id", route.LeaseID).
+				Str("sni", route.SNI).
+				Msg("[SNI] Lease not active; dropping connection and unregistering route")
+			sniRouter.UnregisterRouteByLeaseID(route.LeaseID)
+			clientConn.Close()
+			return
 		}
+
+		// Get BPS manager for rate limiting
 		bpsManager := admin.GetBPSManager()
-		manager.EstablishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
+
+		// Prefer reverse tunnel (NAT-friendly) if available.
+		if reverseConn, err := serv.GetReverseHub().AcquireStarted(route.LeaseID, portal.ReverseSNIAcquireWait); err == nil {
+			defer reverseConn.Close()
+			manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, route.LeaseID, bpsManager)
+			return
+		}
+
+		// Connect to tunnel backend
+		tunnelConn, err := net.DialTimeout("tcp", route.TargetAddr, 10*time.Second)
+		if err != nil {
+			log.Error().
+				Err(err).
+				Str("target", route.TargetAddr).
+				Str("sni", route.SNI).
+				Msg("[SNI] Failed to connect to tunnel backend")
+			clientConn.Close()
+			return
+		}
+
+		// Establish relay with BPS limiting
+		manager.EstablishRelayWithBPS(clientConn, tunnelConn, route.LeaseID, bpsManager)
 	})
+
+	// Start SNI router on port 443 (or configurable port)
+	sniPort := ":443"
+	if envPort := os.Getenv("SNI_PORT"); envPort != "" {
+		sniPort = envPort
+	}
+
+	if err := sniRouter.Start(sniPort); err != nil {
+		log.Error().Err(err).Str("port", sniPort).Msg("[server] Failed to start SNI router")
+		// Continue without SNI router - HTTP proxy still works
+	} else {
+		log.Info().Str("port", sniPort).Msg("[server] SNI router started")
+		defer sniRouter.Stop()
+	}
 
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, sniRouter, admin, frontend, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

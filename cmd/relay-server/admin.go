@@ -590,7 +590,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		}
 
 		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
+		identityID := lease.ID
 
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
@@ -630,16 +630,17 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
 		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
 
-		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
+		connected := since < 15*time.Second
 
 		name := lease.Name
 		if name == "" {
 			name = "(unnamed)"
 		}
 
-		kind := "client"
-		if len(lease.Alpn) > 0 {
-			kind = lease.Alpn[0]
+		// Determine protocol based on TLS setting
+		kind := "http"
+		if lease.TLSEnabled {
+			kind = "https"
 		}
 
 		dnsLabel := identityID
@@ -681,7 +682,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			Link:         link,
 			StaleRed:     !connected && since >= 15*time.Second,
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:     lease.Metadata,
+			Metadata:     "", // TODO: Convert portal.Metadata to string if needed
 			BPS:          bps,
 			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(identityID),
 			IsDenied:     a.approveManager.IsLeaseDenied(identityID),

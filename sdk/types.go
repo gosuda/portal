@@ -24,6 +24,17 @@ type ClientConfig struct {
 	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
 	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
+	ReverseWorkers      int           // Number of reverse websocket workers per listener (default: 2)
+	ReverseDialTimeout  time.Duration // Reverse websocket dial timeout (default: 5 seconds)
+
+	// TLS configuration for tunnel server mode
+	TLSEnabled     bool   // Enable TLS listener
+	TLSDomain      string // Domain for TLS certificate
+	TLSCert        string // Path to TLS certificate file (optional)
+	TLSKey         string // Path to TLS key file (optional)
+	TLSAutocert    bool   // Use Let's Encrypt autocert
+	TLSListenAddr  string // Listen address for TLS (default: ":443")
+	TLSAutocertDir string // Directory for autocert cache
 }
 
 type ClientOption func(*ClientConfig)
@@ -55,6 +66,47 @@ func WithReconnectMaxRetries(retries int) ClientOption {
 func WithReconnectInterval(interval time.Duration) ClientOption {
 	return func(c *ClientConfig) {
 		c.ReconnectInterval = interval
+	}
+}
+
+func WithReverseWorkers(workers int) ClientOption {
+	return func(c *ClientConfig) {
+		c.ReverseWorkers = workers
+	}
+}
+
+func WithReverseDialTimeout(timeout time.Duration) ClientOption {
+	return func(c *ClientConfig) {
+		c.ReverseDialTimeout = timeout
+	}
+}
+
+// TLS configuration options
+func WithTLS(domain string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSEnabled = true
+		c.TLSDomain = domain
+		c.TLSAutocert = true
+	}
+}
+
+func WithTLSCert(certPath, keyPath string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSCert = certPath
+		c.TLSKey = keyPath
+		c.TLSAutocert = false
+	}
+}
+
+func WithTLSListenAddr(addr string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSListenAddr = addr
+	}
+}
+
+func WithTLSAutocertDir(dir string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSAutocertDir = dir
 	}
 }
 

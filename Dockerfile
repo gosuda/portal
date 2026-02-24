@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   make && rm -rf /var/lib/apt/lists/*
 
 COPY cmd/relay-server/frontend ./cmd/relay-server/frontend
-COPY cmd/webclient ./cmd/webclient
 COPY Makefile ./
 
 RUN --mount=type=cache,target=/root/.npm \
@@ -19,7 +18,7 @@ FROM --platform=$BUILDPLATFORM golang:1 AS go-builder
 WORKDIR /src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-  brotli make binaryen && rm -rf /var/lib/apt/lists/*
+  make && rm -rf /var/lib/apt/lists/*
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -32,7 +31,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
   --mount=type=cache,target=/root/.cache/go-build \
-  make build-wasm build-tunnel && \
+  make build-tunnel && \
   GOOS=${TARGETOS} GOARCH=${TARGETARCH} make build-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
