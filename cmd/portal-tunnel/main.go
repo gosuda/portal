@@ -121,9 +121,17 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		if cfg.TLSDomain == "" {
 			return fmt.Errorf("TLS enabled but domain not specified")
 		}
-		clientOpts = append(clientOpts, sdk.WithTLS(cfg.TLSDomain))
+
 		if cfg.TLSCert != "" && cfg.TLSKey != "" {
+			// Use custom certificate
 			clientOpts = append(clientOpts, sdk.WithTLSCert(cfg.TLSCert, cfg.TLSKey))
+			log.Info().Str("service", cfg.Name).Msg("TLS: Using custom certificate")
+		} else if cfg.TLSAutocert {
+			// Use Let's Encrypt autocert
+			clientOpts = append(clientOpts, sdk.WithTLS(cfg.TLSDomain))
+			log.Info().Str("service", cfg.Name).Str("domain", cfg.TLSDomain).Msg("TLS: Using Let's Encrypt autocert")
+		} else {
+			return fmt.Errorf("TLS enabled but no certificate source configured (set --tls-autocert or provide --tls-cert and --tls-key)")
 		}
 	}
 
