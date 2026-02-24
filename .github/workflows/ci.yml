@@ -5,37 +5,48 @@ on:
     branches: [main]
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
   test:
-    name: Test & Build
+    name: Test
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
-          check-latest: true
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test -v -race ./...
+      - run: make build
 
-      - name: Download dependencies
-        run: go mod download
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+      - run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      - run: golangci-lint run
 
-      - name: Run vet
-        run: go vet ./...
-
-      - name: Run tests
-        run: go test -v -race ./...
-
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-
-      - name: Run golangci-lint
-        run: golangci-lint run
-
-      - name: Build all components
-        run: make build
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, lint]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+      - run: make release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/*
+          draft: true
