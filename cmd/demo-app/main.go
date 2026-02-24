@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/sdk"
 )
@@ -97,6 +98,25 @@ func runDemo() error {
 			log.Error().Err(err).Msg("write ping response")
 		}
 	})
+
+	// WebSocket echo endpoint
+	mux.Handle("/ws", websocket.Handler(func(conn *websocket.Conn) {
+		defer conn.Close()
+		for {
+			var msg string
+			if err := websocket.Message.Receive(conn, &msg); err != nil {
+				if err.Error() != "EOF" {
+					log.Error().Err(err).Msg("websocket read error")
+				}
+				break
+			}
+			log.Debug().Str("msg", msg).Msg("websocket received")
+			if err := websocket.Message.Send(conn, "echo: "+msg); err != nil {
+				log.Error().Err(err).Msg("websocket write error")
+				break
+			}
+		}
+	}))
 
 	// Test endpoint for multiple Set-Cookie headers
 	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)

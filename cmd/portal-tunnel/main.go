@@ -225,51 +225,30 @@ func splitCSV(raw string) []string {
 	return out
 }
 
-// proxyConnection proxies data between relay and local service.
-// If local service is not available, it retries with backoff instead of failing immediately.
+// proxyConnection proxies data between relay and local service using raw TCP.
+// It ensures complete data transfer before closing connections.
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	// Try to connect to local service with retry
-	var localConn net.Conn
-	var err error
-
-	maxRetries := 30
-	retryDelay := 500 * time.Millisecond
-
-	for i := 0; i < maxRetries; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		localConn, err = dialer.DialContext(ctx, "tcp", localAddr)
-		if err == nil {
-			break
-		}
-
-		if i == 0 {
-			log.Warn().
-				Str("local_addr", localAddr).
-				Err(err).
-				Msg("Local service not ready, retrying...")
-		}
-
-		time.Sleep(retryDelay)
-	}
-
+	// Try to connect to local service (no retry)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
-		return fmt.Errorf("local service unavailable: %w", err)
+		log.Debug().
+			Str("local_addr", localAddr).
+			Err(err).
+			Msg("Local service unavailable, returning service unavailable page")
+		return writeEmptyHTTPResponse(relayConn)
 	}
-
 	defer localConn.Close()
 
 	log.Info().Str("local_addr", localAddr).Msg("Connected to local service")
 
+	// Use bidirectional copy with proper error handling
 	errCh := make(chan error, 2)
 	stopCh := make(chan struct{})
+
+	// Context cancellation handler
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -279,24 +258,61 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		}
 	}()
 
+	// Relay -> Local
 	go func() {
 		buf := *bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(&buf)
 		_, err := io.CopyBuffer(localConn, relayConn, buf)
+		if err != nil {
+			log.Debug().Err(err).Msg("relay->local copy ended")
+		}
+		// Shut down localConn write side to signal EOF to local service
+		if tcpConn, ok := localConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
 		errCh <- err
 	}()
 
+	// Local -> Relay
 	go func() {
 		buf := *bufferPool.Get().(*[]byte)
 		defer bufferPool.Put(&buf)
 		_, err := io.CopyBuffer(relayConn, localConn, buf)
+		if err != nil {
+			log.Debug().Err(err).Msg("local->relay copy ended")
+		}
 		errCh <- err
 	}()
 
-	err = <-errCh
-	close(stopCh)
-	relayConn.Close()
-	<-errCh
+	// Wait for both directions to finish
+	var firstErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 
+	close(stopCh)
+	return firstErr
+}
+
+// writeEmptyHTTPResponse writes an HTML response indicating the service is unavailable.
+// Used when the local service is unavailable to avoid showing browser error pages.
+func writeEmptyHTTPResponse(conn net.Conn) error {
+	htmlBody := `<!DOCTYPE html>
+<html>
+<head><title>Service Unavailable</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px;">
+<h1>🔌 Service Unavailable</h1>
+<p>The local service is not currently running.</p>
+<p>Please start your local application and refresh this page.</p>
+</body>
+</html>`
+	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\n"+
+		"Content-Type: text/html; charset=utf-8\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n"+
+		"\r\n%s", len(htmlBody), htmlBody)
+	_, err := conn.Write([]byte(response))
 	return err
 }

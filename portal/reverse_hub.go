@@ -12,11 +12,12 @@ import (
 )
 
 const (
-	ReverseStartMarker    = byte(0x01)
-	ReverseQueueSize      = 64
-	ReverseAcquireWait    = 2 * time.Second
-	ReverseHTTPWait       = 1500 * time.Millisecond
-	ReverseSNIAcquireWait = 2 * time.Second
+	ReverseStartMarker        = byte(0x01)
+	ReverseQueueSize          = 64
+	ReverseAcquireWait        = 2 * time.Second
+	ReverseHTTPWait           = 1500 * time.Millisecond
+	ReverseSNIAcquireWait     = 2 * time.Second
+	ReverseHandleConnectDelay = 2 * time.Second
 )
 
 type ReverseConn struct {
@@ -193,11 +194,13 @@ func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
 	}
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
+		time.Sleep(ReverseHandleConnectDelay)
 		ws.Close()
 		return
 	}
 	if !h.isAuthorized(leaseID, token) {
 		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Unauthorized reverse connect")
+		time.Sleep(ReverseHandleConnectDelay)
 		ws.Close()
 		return
 	}

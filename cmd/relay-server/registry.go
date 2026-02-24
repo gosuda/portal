@@ -13,6 +13,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/sni"
+	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/utils"
 )
 
@@ -33,24 +34,6 @@ func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router) *SDKRegis
 	}
 }
 
-// RegisterRequest represents an SDK lease registration request
-type RegisterRequest struct {
-	LeaseID      string          `json:"lease_id"`
-	Name         string          `json:"name"`
-	Address      string          `json:"address"` // Backend address for TCP connection
-	Metadata     portal.Metadata `json:"metadata"`
-	TLSEnabled   bool            `json:"tls_enabled"` // Whether the backend handles TLS termination
-	ReverseToken string          `json:"reverse_token"`
-}
-
-// RegisterResponse represents an SDK lease registration response
-type RegisterResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message,omitempty"`
-	LeaseID   string `json:"lease_id,omitempty"`
-	PublicURL string `json:"public_url,omitempty"`
-}
-
 // HandleRegister handles SDK lease registration requests
 func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
@@ -59,10 +42,10 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var registerReq RegisterRequest
+	var registerReq sdk.RegisterRequest
 	if err := json.NewDecoder(req.Body).Decode(&registerReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode registration request")
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "invalid request body",
 		})
@@ -71,7 +54,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 
 	// Validate request
 	if registerReq.LeaseID == "" {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "lease_id is required",
 		})
@@ -79,7 +62,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if registerReq.Name == "" {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "name is required",
 		})
@@ -87,14 +70,14 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if registerReq.Address == "" {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "address is required",
 		})
 		return
 	}
 	if strings.TrimSpace(registerReq.ReverseToken) == "" {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "reverse_token is required",
 		})
@@ -103,7 +86,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 
 	resolvedAddr, err := resolveLeaseAddress(req, registerReq.Address)
 	if err != nil {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: err.Error(),
 		})
@@ -123,7 +106,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 
 	// Register with lease manager
 	if !r.server.GetLeaseManager().UpdateLease(lease) {
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "failed to register lease (name conflict or policy violation)",
 		})
@@ -133,7 +116,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	if err := r.registerSNIRoute(registerReq.LeaseID, registerReq.Name, resolvedAddr); err != nil {
 		// Keep lease and route state consistent on partial failure.
 		r.server.GetLeaseManager().DeleteLease(registerReq.LeaseID)
-		writeJSON(w, RegisterResponse{
+		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: fmt.Sprintf("failed to register SNI route: %v", err),
 		})
@@ -151,7 +134,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	// Build public URL
 	publicURL := utils.ServicePublicURL(flagPortalURL, registerReq.Name)
 
-	writeJSON(w, RegisterResponse{
+	writeJSON(w, sdk.RegisterResponse{
 		Success:   true,
 		LeaseID:   registerReq.LeaseID,
 		PublicURL: publicURL,

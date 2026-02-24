@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"time"
+
+	"gosuda.org/portal/portal"
 )
 
 var (
@@ -148,4 +150,36 @@ func WithHide(hide bool) MetadataOption {
 	return func(m *Metadata) {
 		m.Hide = hide
 	}
+}
+
+// API Types for /api/ endpoints
+// These types are shared between SDK and relay server
+type RegisterRequest struct {
+	LeaseID      string          `json:"lease_id"`
+	Name         string          `json:"name"`
+	Address      string          `json:"address"` // Backend address for TCP connection
+	Metadata     portal.Metadata `json:"metadata"`
+	TLSEnabled   bool            `json:"tls_enabled"` // Whether the backend handles TLS termination
+	ReverseToken string          `json:"reverse_token"`
+}
+
+type RegisterResponse struct {
+	Success   bool   `json:"success"`
+	Message   string `json:"message,omitempty"`
+	LeaseID   string `json:"lease_id,omitempty"`
+	PublicURL string `json:"public_url,omitempty"`
+}
+
+type UnregisterRequest struct {
+	LeaseID string `json:"lease_id"`
+}
+
+type RenewRequest struct {
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
+}
+
+type APIResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
 }

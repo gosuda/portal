@@ -256,6 +256,13 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			bps = bpsMgr.GetBPSLimit(identityID)
 		}
 
+		metadataStr := ""
+		if b, err := json.Marshal(metadata); err == nil {
+			metadataStr = string(b)
+		} else {
+			log.Warn().Err(err).Str("lease_id", identityID).Msg("[Frontend] Failed to marshal lease metadata")
+		}
+
 		row := leaseRow{
 			Peer:         identityID,
 			Name:         name,
@@ -269,7 +276,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			Link:         link,
 			StaleRed:     !connected && since >= 15*time.Second,
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:     "",
+			Metadata:     metadataStr,
 			BPS:          bps,
 		}
 

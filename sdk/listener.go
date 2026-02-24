@@ -253,6 +253,20 @@ func (l *Listener) keepaliveLoop() {
 			return
 		case <-ticker.C:
 			if err := l.sendKeepalive(); err != nil {
+				if isLeaseNotFoundError(err) {
+					if rerr := l.reRegisterLease(); rerr != nil {
+						log.Warn().
+							Err(rerr).
+							Str("lease_id", l.lease.ID).
+							Msg("[SDK] Relay keepalive failed and re-register failed")
+					} else {
+						log.Info().
+							Str("lease_id", l.lease.ID).
+							Str("name", l.lease.Name).
+							Msg("[SDK] Lease re-registered after relay reset")
+					}
+					continue
+				}
 				log.Warn().Err(err).Str("lease_id", l.lease.ID).Msg("[SDK] Relay keepalive failed")
 			}
 		}
@@ -381,14 +395,7 @@ func (l *Listener) waitForReverseStart(conn net.Conn) error {
 }
 
 func (l *Listener) registerWithRelay(tunnelAddr string) error {
-	reqBody := struct {
-		LeaseID      string          `json:"lease_id"`
-		Name         string          `json:"name"`
-		Address      string          `json:"address"`
-		Metadata     portal.Metadata `json:"metadata"`
-		TLSEnabled   bool            `json:"tls_enabled"`
-		ReverseToken string          `json:"reverse_token"`
-	}{
+	reqBody := RegisterRequest{
 		LeaseID:      l.lease.ID,
 		Name:         l.lease.Name,
 		Address:      tunnelAddr,
@@ -401,23 +408,28 @@ func (l *Listener) registerWithRelay(tunnelAddr string) error {
 }
 
 func (l *Listener) unregisterFromRelay() error {
-	reqBody := struct {
-		LeaseID string `json:"lease_id"`
-	}{
+	reqBody := UnregisterRequest{
 		LeaseID: l.lease.ID,
 	}
 	return l.postJSON("/api/unregister", reqBody)
 }
 
 func (l *Listener) sendKeepalive() error {
-	reqBody := struct {
-		LeaseID      string `json:"lease_id"`
-		ReverseToken string `json:"reverse_token"`
-	}{
+	reqBody := RenewRequest{
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
 	return l.postJSON("/api/renew", reqBody)
+}
+
+func (l *Listener) reRegisterLease() error {
+	l.mu.RLock()
+	addr := strings.TrimSpace(l.lease.Address)
+	l.mu.RUnlock()
+	if addr == "" {
+		return fmt.Errorf("lease address is empty; cannot re-register")
+	}
+	return l.registerWithRelay(addr)
 }
 
 func (l *Listener) postJSON(path string, body any) error {
@@ -437,7 +449,36 @@ func (l *Listener) postJSON(path string, body any) error {
 		data, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
+
+	data, _ := io.ReadAll(resp.Body)
+	if len(data) == 0 {
+		return nil
+	}
+
+	var apiResp struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(data, &apiResp); err != nil {
+		// Non-JSON success payloads are treated as successful.
+		return nil
+	}
+	if apiResp.Success != nil && !*apiResp.Success {
+		msg := strings.TrimSpace(apiResp.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(string(data))
+		}
+		return fmt.Errorf("POST %s rejected: %s", path, msg)
+	}
+
 	return nil
+}
+
+func isLeaseNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "lease not found")
 }
 
 func normalizeRelayAPIURL(raw string) (string, error) {
