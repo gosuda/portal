@@ -1,99 +1,65 @@
-
 # Architecture
 
-## System Architecture
+## Overview
 
-```mermaid
-graph TB
-    subgraph "Client A"
-        CA[Client A]
-        CA --> CA_ID[Identity: Ed25519]
-        CA --> CA_LEASE[Lease Manager]
-    end
+Portal connects local applications to web users through a secure relay layer with end-to-end encryption.
 
-    subgraph "Client B"
-        CB[Client B]
-        CB --> CB_ID[Identity: Ed25519]
-        CB --> CB_LEASE[Lease Manager]
-    end
-
-    subgraph "Relay Server"
-        RS[Relay Server]
-        RS --> RS_ID[Server Identity]
-        RS --> LM[Lease Manager]
-        RS --> CM[Connection Manager]
-        RS --> FH[Forwarding Handler]
-    end
-
-    CA -.->|1. Register Lease| RS
-    CB -.->|2. Register Lease| RS
-    CB -.->|3. Request Connection| RS
-    RS -.->|4. Forward Request| CA
-    CA -.->|5. Accept Connection| RS
-    RS -.->|6. Establish E2EE| CB
-
-    CA <-->|7. Encrypted Data| CB
+```
+┌─────────────┐      ┌──────────────┐      ┌─────────────┐
+│   Browser   │◄────►│ Relay Server │◄────►│  App/Tunnel │
+│  (WASM SW)  │  WS  │  (:4017)     │  WS  │  (SDK/CLI)  │
+└─────────────┘      └──────────────┘      └─────────────┘
+                            │
+                            ▼
+                     ┌──────────────┐
+                     │  Local HTTP  │
+                     │  (:3000 etc) │
+                     └──────────────┘
 ```
 
-## Component Architecture
+## Components
 
-```mermaid
-graph LR
-    subgraph "Client Components"
-        C[RelayClient]
-        C --> H[Handshaker]
-        C --> LM[LeaseManager]
-        C --> SC[SecureConnection]
-    end
+### Relay Server (`cmd/relay-server`)
 
-    subgraph "Server Components"
-        S[RelayServer]
-        S --> LH[LeaseHandler]
-        S --> CH[ConnectionHandler]
-        S --> FH[ForwardingHandler]
-        S --> LM2[LeaseManager]
-    end
+- **HTTP Server**: Static files, admin UI, API endpoints
+- **WebSocket Relay**: `/api/connect` for reverse tunnel connections
+- **Lease Manager**: Registration, TTL, banning
+- **SNI Router**: TLS passthrough routing
 
-    subgraph "Crypto Operations"
-        CO[CryptoOps]
-        CO --> CRED[Credential]
-        CO --> SIG[Signature]
-        CO --> E2EE[End-to-End Encryption]
-    end
+### SDK (`sdk/`)
 
-    C <-->|Protocol Messages| S
-    H --> CO
-    SC --> CO
-    LH --> LM2
-    CH --> FH
-```
+- **Client**: Bootstrap, health checks, reconnection
+- **Listener**: `net.Listener` implementation over WebSocket
+- **Types**: Shared API types (`RegisterRequest`, `Metadata`, etc.)
+
+### Tunnel (`cmd/portal-tunnel`)
+
+- TCP proxy between relay and local service
+- No code changes required to expose existing services
+
+### WebClient (`cmd/webclient`)
+
+- WASM-based Service Worker proxy
+- Runs in browser for E2EE communication
 
 ## Connection Flow
 
-```mermaid
-sequenceDiagram
-    participant C1 as Client 1
-    participant RS as Relay Server
-    participant C2 as Client 2
+1. **Register**: App/Tunnel → Relay (`POST /api/register`)
+2. **Reverse Connect**: App/Tunnel ← Relay (`WS /api/connect`)
+3. **Client Request**: Browser → Relay (`GET *.localhost:4017`)
+4. **Proxy**: Relay ↔ App/Tunnel ↔ Local Service
 
-    Note over C1,C2: Lease Registration Phase
-    C1->>RS: Register Lease (Identity, ALPN)
-    RS->>C1: Lease Confirmation
+## Security
 
-    C2->>RS: Register Lease (Identity, ALPN)
-    RS->>C2: Lease Confirmation
+- **RDSEC**: X25519 key exchange + ChaCha20-Poly1305 encryption
+- **Tokens**: Per-lease reverse connection tokens
+- **SNI Routing**: TLS passthrough without termination
 
-    Note over C1,C2: Connection Establishment Phase
-    C2->>RS: Request Connection (to Client 1)
-    RS->>C1: Forward Connection Request
-    C1->>RS: Accept Connection
-    RS->>C2: Connection Accepted
+## Protocol Stack
 
-    Note over C1,C2: Secure Handshake Phase
-    C2->>C1: X25519 Handshake (via relay)
-    C1->>C2: X25519 Response (via relay)
-
-    Note over C1,C2: End-to-End Encrypted Communication
-    C2->>C1: Encrypted Data (ChaCha20-Poly1305)
-    C1->>C2: Encrypted Data (ChaCha20-Poly1305)
+```
+HTTP/WebSocket
+    └── yamux (multiplexing)
+        └── RDSEC (E2EE)
+            └── Application Data
 ```
