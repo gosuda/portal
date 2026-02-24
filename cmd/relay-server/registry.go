@@ -4,13 +4,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/sdk"
@@ -69,13 +67,6 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if registerReq.Address == "" {
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: "address is required",
-		})
-		return
-	}
 	if strings.TrimSpace(registerReq.ReverseToken) == "" {
 		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
@@ -84,20 +75,10 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	resolvedAddr, err := resolveLeaseAddress(req, registerReq.Address)
-	if err != nil {
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: err.Error(),
-		})
-		return
-	}
-
 	// Create lease
 	lease := &portal.Lease{
 		ID:           registerReq.LeaseID,
 		Name:         registerReq.Name,
-		Address:      resolvedAddr,
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(30 * time.Second),
 		TLSEnabled:   registerReq.TLSEnabled,
@@ -113,7 +94,10 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if err := r.registerSNIRoute(registerReq.LeaseID, registerReq.Name, resolvedAddr); err != nil {
+	// Clear dropped state in case this is a re-registration after disconnect
+	r.server.GetReverseHub().ClearDropped(registerReq.LeaseID)
+
+	if err := r.registerSNIRoute(registerReq.LeaseID, registerReq.Name); err != nil {
 		// Keep lease and route state consistent on partial failure.
 		r.server.GetLeaseManager().DeleteLease(registerReq.LeaseID)
 		writeJSON(w, sdk.RegisterResponse{
@@ -126,8 +110,6 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	log.Info().
 		Str("lease_id", registerReq.LeaseID).
 		Str("name", registerReq.Name).
-		Str("address", resolvedAddr).
-		Str("address_advertised", registerReq.Address).
 		Bool("tls_enabled", registerReq.TLSEnabled).
 		Msg("[Registry] Lease registered")
 
@@ -249,7 +231,7 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
-	if err := r.registerSNIRoute(entry.Lease.ID, entry.Lease.Name, entry.Lease.Address); err != nil {
+	if err := r.registerSNIRoute(entry.Lease.ID, entry.Lease.Name); err != nil {
 		log.Warn().
 			Err(err).
 			Str("lease_id", entry.Lease.ID).
@@ -262,7 +244,7 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (r *SDKRegistry) registerSNIRoute(leaseID, name, address string) error {
+func (r *SDKRegistry) registerSNIRoute(leaseID, name string) error {
 	if r.sniRouter == nil {
 		return nil
 	}
@@ -270,39 +252,7 @@ func (r *SDKRegistry) registerSNIRoute(leaseID, name, address string) error {
 		return fmt.Errorf("invalid app domain configuration")
 	}
 	sniName := strings.ToLower(strings.TrimSpace(name)) + "." + r.baseHost
-	return r.sniRouter.RegisterRoute(sniName, address, leaseID, name)
-}
-
-func resolveLeaseAddress(req *http.Request, advertisedAddr string) (string, error) {
-	advertisedAddr = strings.TrimSpace(advertisedAddr)
-	host, port, err := net.SplitHostPort(advertisedAddr)
-	if err != nil {
-		return "", fmt.Errorf("invalid address: %q", advertisedAddr)
-	}
-
-	if isLoopbackOrLocalHost(host) {
-		clientIP := strings.TrimSpace(manager.ExtractClientIP(req))
-		if clientIP == "" {
-			return "", fmt.Errorf("cannot resolve client IP for address: %q", advertisedAddr)
-		}
-		host = clientIP
-	}
-
-	return net.JoinHostPort(host, port), nil
-}
-
-func isLoopbackOrLocalHost(host string) bool {
-	h := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
-	if h == "" || h == "localhost" {
-		return true
-	}
-
-	ip := net.ParseIP(h)
-	if ip == nil {
-		return false
-	}
-
-	return ip.IsLoopback() || ip.IsUnspecified()
+	return r.sniRouter.RegisterRoute(sniName, leaseID, name)
 }
 
 func (r *SDKRegistry) unregisterSNIRoute(leaseID string) {

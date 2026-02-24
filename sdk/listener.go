@@ -24,9 +24,7 @@ import (
 const (
 	relayKeepaliveInterval    = 10 * time.Second
 	reverseReadTimeout        = 1 * time.Second
-	reverseStartMarker        = byte(0x01)
-	defaultReverseWorkers     = 2
-	maxReverseWorkers         = 16
+	defaultReverseWorkers     = 16
 	defaultReverseDialTimeout = 5 * time.Second
 )
 
@@ -39,7 +37,6 @@ type Listener struct {
 	httpClient *http.Client
 
 	mu                 sync.RWMutex
-	listener           net.Listener
 	closed             bool
 	acceptCh           chan net.Conn
 	reverseWorkers     int
@@ -80,9 +77,6 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, a
 	if reverseWorkers <= 0 {
 		reverseWorkers = defaultReverseWorkers
 	}
-	if reverseWorkers > maxReverseWorkers {
-		reverseWorkers = maxReverseWorkers
-	}
 	if reverseDialTimeout <= 0 {
 		reverseDialTimeout = defaultReverseDialTimeout
 	}
@@ -102,51 +96,21 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, a
 	}, nil
 }
 
-// Start initializes the local listener, then registers it to relay.
+// Start registers the lease with relay and starts reverse workers.
 func (l *Listener) Start() error {
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()
 		return net.ErrClosed
 	}
-	if l.listener != nil {
-		l.mu.Unlock()
-		return nil
-	}
 	l.mu.Unlock()
 
-	rawListener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		return fmt.Errorf("listen local tunnel socket: %w", err)
-	}
-
-	addr, ok := rawListener.Addr().(*net.TCPAddr)
-	if !ok {
-		rawListener.Close()
-		return fmt.Errorf("unexpected listener address type: %T", rawListener.Addr())
-	}
-
-	// Use localhost for local development. For production/Docker, this should be configurable.
-	tunnelAddr := fmt.Sprintf("127.0.0.1:%d", addr.Port)
-	if err := l.registerWithRelay(tunnelAddr); err != nil {
-		rawListener.Close()
+	if err := l.registerWithRelay(); err != nil {
 		return fmt.Errorf("register lease with relay: %w", err)
 	}
 
-	l.mu.Lock()
-	if l.closed {
-		l.mu.Unlock()
-		rawListener.Close()
-		return net.ErrClosed
-	}
-	l.lease.Address = tunnelAddr
-	l.listener = rawListener
-	l.mu.Unlock()
-
 	l.wg.Add(1)
 	go l.keepaliveLoop()
-	l.wg.Add(1)
-	go l.localAcceptLoop(rawListener)
 	for i := 0; i < l.reverseWorkers; i++ {
 		l.wg.Add(1)
 		go l.reverseAcceptWorker(i)
@@ -156,7 +120,6 @@ func (l *Listener) Start() error {
 		Str("lease_id", l.lease.ID).
 		Str("name", l.lease.Name).
 		Str("relay", l.relayAddr).
-		Str("tunnel_addr", tunnelAddr).
 		Int("reverse_workers", l.reverseWorkers).
 		Msg("[SDK] Relay listener started")
 
@@ -197,7 +160,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-// Close unregisters lease from relay and closes local listener.
+// Close unregisters lease from relay.
 func (l *Listener) Close() error {
 	var retErr error
 	l.closeOnce.Do(func() {
@@ -205,35 +168,22 @@ func (l *Listener) Close() error {
 
 		l.mu.Lock()
 		l.closed = true
-		listener := l.listener
-		l.listener = nil
 		l.mu.Unlock()
-
-		if listener != nil {
-			retErr = listener.Close()
-		}
 
 		l.wg.Wait()
 
 		if err := l.unregisterFromRelay(); err != nil {
 			log.Warn().Err(err).Str("lease_id", l.lease.ID).Msg("[SDK] Failed to unregister lease")
-			if retErr == nil {
-				retErr = err
-			}
+			retErr = err
 		}
 	})
 
 	return retErr
 }
 
-// Addr returns local listener address.
+// Addr returns a dummy address (connections come via reverse tunnel).
 func (l *Listener) Addr() net.Addr {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	if l.listener != nil {
-		return l.listener.Addr()
-	}
-	return nil
+	return &net.TCPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0}
 }
 
 // LeaseID returns lease ID registered to relay.
@@ -269,30 +219,6 @@ func (l *Listener) keepaliveLoop() {
 				}
 				log.Warn().Err(err).Str("lease_id", l.lease.ID).Msg("[SDK] Relay keepalive failed")
 			}
-		}
-	}
-}
-
-func (l *Listener) localAcceptLoop(listener net.Listener) {
-	defer l.wg.Done()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			select {
-			case <-l.stopCh:
-				return
-			default:
-				log.Warn().Err(err).Str("lease_id", l.lease.ID).Msg("[SDK] Local accept error")
-				continue
-			}
-		}
-
-		select {
-		case <-l.stopCh:
-			conn.Close()
-			return
-		case l.acceptCh <- conn:
 		}
 	}
 }
@@ -370,7 +296,7 @@ func (l *Listener) waitForReverseStart(conn net.Conn) error {
 		_, err := io.ReadFull(conn, marker[:])
 		if err == nil {
 			_ = conn.SetReadDeadline(time.Time{})
-			if marker[0] != reverseStartMarker {
+			if marker[0] != portal.ReverseStartMarker {
 				return fmt.Errorf("invalid reverse marker: %d", marker[0])
 			}
 			return nil
@@ -394,11 +320,10 @@ func (l *Listener) waitForReverseStart(conn net.Conn) error {
 	}
 }
 
-func (l *Listener) registerWithRelay(tunnelAddr string) error {
+func (l *Listener) registerWithRelay() error {
 	reqBody := RegisterRequest{
 		LeaseID:      l.lease.ID,
 		Name:         l.lease.Name,
-		Address:      tunnelAddr,
 		Metadata:     l.lease.Metadata,
 		TLSEnabled:   l.lease.TLSEnabled,
 		ReverseToken: l.lease.ReverseToken,
@@ -423,13 +348,7 @@ func (l *Listener) sendKeepalive() error {
 }
 
 func (l *Listener) reRegisterLease() error {
-	l.mu.RLock()
-	addr := strings.TrimSpace(l.lease.Address)
-	l.mu.RUnlock()
-	if addr == "" {
-		return fmt.Errorf("lease address is empty; cannot re-register")
-	}
-	return l.registerWithRelay(addr)
+	return l.registerWithRelay()
 }
 
 func (l *Listener) postJSON(path string, body any) error {

@@ -32,7 +32,7 @@ type Client struct {
 func NewClient(opt ...ClientOption) (*Client, error) {
 	config := &ClientConfig{
 		BootstrapServers:   []string{},
-		ReverseWorkers:     2,
+		ReverseWorkers:     0, // uses defaultReverseWorkers from listener
 		ReverseDialTimeout: 5 * time.Second,
 	}
 
@@ -81,7 +81,6 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	lease := &portal.Lease{
 		ID:           generateID(),
 		Name:         name,
-		Address:      "",
 		TLSEnabled:   c.config.TLSEnabled,
 		ReverseToken: reverseToken,
 		Metadata: portal.Metadata{

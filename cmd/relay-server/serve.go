@@ -260,7 +260,7 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		log.Error().
 			Err(err).
 			Str("lease", leaseName).
-			Str("target", entry.Lease.Address).
+			Str("lease_id", entry.Lease.ID).
 			Msg("[proxy] failed to connect to backend")
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return

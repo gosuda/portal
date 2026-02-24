@@ -28,10 +28,9 @@ const (
 
 // Route represents a registered route
 type Route struct {
-	SNI        string
-	TargetAddr string
-	LeaseID    string
-	LeaseName  string
+	SNI       string
+	LeaseID   string
+	LeaseName string
 }
 
 // Router handles SNI-based TCP routing
@@ -66,7 +65,7 @@ func (r *Router) SetConnectionCallback(cb func(conn net.Conn, route *Route)) {
 }
 
 // RegisterRoute registers a new route for an SNI
-func (r *Router) RegisterRoute(sni, targetAddr, leaseID, leaseName string) error {
+func (r *Router) RegisterRoute(sni, leaseID, leaseName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -81,20 +80,25 @@ func (r *Router) RegisterRoute(sni, targetAddr, leaseID, leaseName string) error
 		return fmt.Errorf("sni is required")
 	}
 
-	route := &Route{
-		SNI:        sni,
-		TargetAddr: targetAddr,
-		LeaseID:    leaseID,
-		LeaseName:  leaseName,
-	}
-
 	// Remove previous SNI entry when a lease is re-registered with a new name.
 	if oldRoute, ok := r.leases[leaseID]; ok && oldRoute.SNI != sni {
 		delete(r.routes, oldRoute.SNI)
 	}
-	// Keep lease index consistent when SNI is reassigned to another lease.
-	if oldRoute, ok := r.routes[sni]; ok && oldRoute.LeaseID != leaseID {
-		delete(r.leases, oldRoute.LeaseID)
+
+	// Warn if SNI is already registered to a different lease (should not happen if lease manager is consistent)
+	if existingRoute, ok := r.routes[sni]; ok && existingRoute.LeaseID != leaseID {
+		log.Warn().
+			Str("sni", sni).
+			Str("existing_lease_id", existingRoute.LeaseID).
+			Str("new_lease_id", leaseID).
+			Msg("[SNI] SNI already registered to different lease; overwriting")
+		delete(r.leases, existingRoute.LeaseID)
+	}
+
+	route := &Route{
+		SNI:       sni,
+		LeaseID:   leaseID,
+		LeaseName: leaseName,
 	}
 
 	r.routes[sni] = route
@@ -102,7 +106,6 @@ func (r *Router) RegisterRoute(sni, targetAddr, leaseID, leaseName string) error
 
 	log.Info().
 		Str("sni", sni).
-		Str("target", targetAddr).
 		Str("lease_id", leaseID).
 		Msg("[SNI] Route registered")
 
@@ -153,10 +156,13 @@ func (r *Router) GetRoute(sni string) (*Route, bool) {
 		return route, true
 	}
 
-	// Try wildcard match (e.g., *.example.com)
+	// Try wildcard match (e.g., *.example.com matches foo.example.com)
+	// TLS wildcards only match a single DNS label, so for "foo.bar.example.com"
+	// we only check "*.bar.example.com", not "*.example.com"
 	parts := strings.Split(sni, ".")
-	for i := 1; i < len(parts); i++ {
-		wildcard := "*." + strings.Join(parts[i:], ".")
+	if len(parts) >= 2 {
+		// Only check the immediate parent wildcard
+		wildcard := "*." + strings.Join(parts[1:], ".")
 		if route, ok := r.routes[wildcard]; ok {
 			return route, true
 		}
@@ -290,7 +296,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 
 	log.Debug().
 		Str("sni", sni).
-		Str("target", route.TargetAddr).
+		Str("lease_id", route.LeaseID).
 		Str("remote", clientConn.RemoteAddr().String()).
 		Msg("[SNI] Route found")
 
@@ -310,56 +316,11 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 		return
 	}
 
-	// Default behavior: proxy to target
-	r.proxyConnection(clientConn, peekedReader, route)
-}
-
-// proxyConnection proxies data between client and target
-func (r *Router) proxyConnection(clientConn net.Conn, clientReader io.Reader, route *Route) {
-	defer clientConn.Close()
-
-	// Connect to target
-	targetConn, err := net.DialTimeout("tcp", route.TargetAddr, 10*time.Second)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("target", route.TargetAddr).
-			Str("sni", route.SNI).
-			Msg("[SNI] Failed to connect to target")
-		return
-	}
-	defer targetConn.Close()
-
-	log.Info().
-		Str("sni", route.SNI).
-		Str("target", route.TargetAddr).
-		Str("client", clientConn.RemoteAddr().String()).
-		Msg("[SNI] Connection established")
-
-	// Create error channels
-	errCh := make(chan error, 2)
-
-	// Client -> Target
-	go func() {
-		_, err := io.Copy(targetConn, clientReader)
-		errCh <- err
-		targetConn.Close()
-	}()
-
-	// Target -> Client
-	go func() {
-		_, err := io.Copy(clientConn, targetConn)
-		errCh <- err
-		clientConn.Close()
-	}()
-
-	// Wait for either direction to close
-	<-errCh
-
-	log.Debug().
-		Str("sni", route.SNI).
-		Str("target", route.TargetAddr).
-		Msg("[SNI] Connection closed")
+	// No callback configured - close connection
+	log.Warn().
+		Str("sni", sni).
+		Msg("[SNI] No connection callback configured, closing connection")
+	clientConn.Close()
 }
 
 // BridgeConnections bridges two connections

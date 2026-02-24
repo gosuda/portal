@@ -26,7 +26,7 @@ type ClientConfig struct {
 	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
 	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
 	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
-	ReverseWorkers      int           // Number of reverse websocket workers per listener (default: 2)
+	ReverseWorkers      int           // Number of reverse websocket workers per listener (default: 16)
 	ReverseDialTimeout  time.Duration // Reverse websocket dial timeout (default: 5 seconds)
 
 	// TLS configuration for tunnel server mode
@@ -150,7 +150,6 @@ func WithHide(hide bool) MetadataOption {
 type RegisterRequest struct {
 	LeaseID      string          `json:"lease_id"`
 	Name         string          `json:"name"`
-	Address      string          `json:"address"` // Backend address for TCP connection
 	Metadata     portal.Metadata `json:"metadata"`
 	TLSEnabled   bool            `json:"tls_enabled"` // Whether the backend handles TLS termination
 	ReverseToken string          `json:"reverse_token"`

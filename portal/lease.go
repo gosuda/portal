@@ -21,7 +21,6 @@ type ParsedMetadata struct {
 type Lease struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	Address      string    `json:"address"` // Tunnel client address for TCP connection
 	Metadata     Metadata  `json:"metadata"`
 	Expires      time.Time `json:"expires"`
 	TLSEnabled   bool      `json:"tls_enabled"` // Whether the tunnel client handles TLS termination

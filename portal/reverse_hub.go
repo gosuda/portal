@@ -47,18 +47,25 @@ func (c *ReverseConn) Wait() {
 type ReverseHub struct {
 	mu         sync.RWMutex
 	pending    map[string]chan *ReverseConn
+	dropped    map[string]struct{} // leases that have been dropped and should reject offers
 	authorizer func(string, string) bool
 }
 
 func NewReverseHub() *ReverseHub {
 	return &ReverseHub{
 		pending: make(map[string]chan *ReverseConn),
+		dropped: make(map[string]struct{}),
 	}
 }
 
 func (h *ReverseHub) getOrCreate(leaseID string) chan *ReverseConn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Don't create channels for dropped leases
+	if _, dropped := h.dropped[leaseID]; dropped {
+		return nil
+	}
 
 	ch, ok := h.pending[leaseID]
 	if ok {
@@ -94,6 +101,10 @@ func (h *ReverseHub) isAuthorized(leaseID, token string) bool {
 
 func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
 	ch := h.getOrCreate(leaseID)
+	if ch == nil {
+		// Lease was dropped, reject the offer
+		return false
+	}
 	select {
 	case ch <- conn:
 		return true
@@ -164,12 +175,15 @@ func (h *ReverseHub) DropLease(leaseID string) {
 	if ok {
 		delete(h.pending, leaseID)
 	}
+	// Mark as dropped to prevent new offers from creating channels
+	h.dropped[leaseID] = struct{}{}
 	h.mu.Unlock()
 
 	if !ok {
 		return
 	}
 
+	// Drain and close any pending connections
 	for {
 		select {
 		case conn := <-ch:
@@ -180,6 +194,14 @@ func (h *ReverseHub) DropLease(leaseID string) {
 			return
 		}
 	}
+}
+
+// ClearDropped removes a lease from the dropped set, allowing it to be re-registered.
+// This should be called when a lease is re-registered after being dropped.
+func (h *ReverseHub) ClearDropped(leaseID string) {
+	h.mu.Lock()
+	delete(h.dropped, leaseID)
+	h.mu.Unlock()
 }
 
 func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {

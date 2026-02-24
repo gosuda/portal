@@ -17,6 +17,8 @@ var (
 	ErrNotClientHello = errors.New("not a ClientHello message")
 	// ErrNoSNI is returned when the ClientHello doesn't contain SNI
 	ErrNoSNI = errors.New("no SNI found in ClientHello")
+	// ErrInvalidSNI is returned when the SNI hostname is invalid
+	ErrInvalidSNI = errors.New("invalid SNI hostname")
 )
 
 // ExtractSNI extracts the SNI hostname from a TLS ClientHello message.
@@ -207,13 +209,60 @@ func parseSNIExtension(data []byte) (string, error) {
 			if nameLen == 0 {
 				return "", ErrNoSNI
 			}
-			return string(data[offset : offset+nameLen]), nil
+			hostname := string(data[offset : offset+nameLen])
+			if !isValidSNIHostname(hostname) {
+				return "", ErrInvalidSNI
+			}
+			return hostname, nil
 		}
 
 		offset += nameLen
 	}
 
 	return "", ErrNoSNI
+}
+
+// isValidSNIHostname validates that a hostname is a valid DNS name per RFC 1035 and RFC 1123.
+// - Total length must not exceed 253 characters
+// - Labels must be 1-63 characters
+// - Labels can contain a-z, A-Z, 0-9, and hyphen
+// - Labels cannot start or end with hyphen
+// - No null bytes or other control characters
+func isValidSNIHostname(hostname string) bool {
+	if len(hostname) == 0 || len(hostname) > 253 {
+		return false
+	}
+
+	// Check for null bytes and other control characters
+	for i := 0; i < len(hostname); i++ {
+		if hostname[i] < 0x20 || hostname[i] > 0x7E {
+			return false
+		}
+	}
+
+	start := 0
+	for i := 0; i <= len(hostname); i++ {
+		if i == len(hostname) || hostname[i] == '.' {
+			label := hostname[start:i]
+			if len(label) == 0 || len(label) > 63 {
+				return false
+			}
+			// Check label characters
+			for j, c := range []byte(label) {
+				// Allow a-z, A-Z, 0-9, and hyphen
+				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+					return false
+				}
+				// Label cannot start or end with hyphen
+				if c == '-' && (j == 0 || j == len(label)-1) {
+					return false
+				}
+			}
+			start = i + 1
+		}
+	}
+
+	return true
 }
 
 // PeekSNI peeks at the SNI from a connection without consuming the data.

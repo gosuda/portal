@@ -17,7 +17,6 @@ func TestLeaseManagerDeleteLeaseInvokesCallback(t *testing.T) {
 	lease := &Lease{
 		ID:      "lease-1",
 		Name:    "app-1",
-		Address: "127.0.0.1:10001",
 		Expires: time.Now().Add(30 * time.Second),
 	}
 	if !lm.UpdateLease(lease) {
@@ -44,7 +43,6 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 		Lease: &Lease{
 			ID:      "expired-1",
 			Name:    "expired",
-			Address: "127.0.0.1:10002",
 			Expires: time.Now().Add(-1 * time.Second),
 		},
 		Expires: time.Now().Add(-1 * time.Second),
@@ -53,7 +51,6 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 		Lease: &Lease{
 			ID:      "active-1",
 			Name:    "active",
-			Address: "127.0.0.1:10003",
 			Expires: time.Now().Add(30 * time.Second),
 		},
 		Expires: time.Now().Add(30 * time.Second),
