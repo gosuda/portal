@@ -112,42 +112,35 @@ func WithTLSAutocertDir(dir string) ClientOption {
 	}
 }
 
-type Metadata struct {
-	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
-	Thumbnail   string   `json:"thumbnail"`
-	Owner       string   `json:"owner"`
-	Hide        bool     `json:"hide"`
-}
-
-type MetadataOption func(*Metadata)
+// MetadataOption configures Metadata
+type MetadataOption func(*portal.Metadata)
 
 func WithDescription(description string) MetadataOption {
-	return func(m *Metadata) {
+	return func(m *portal.Metadata) {
 		m.Description = description
 	}
 }
 
 func WithTags(tags []string) MetadataOption {
-	return func(m *Metadata) {
+	return func(m *portal.Metadata) {
 		m.Tags = tags
 	}
 }
 
 func WithThumbnail(thumbnail string) MetadataOption {
-	return func(m *Metadata) {
+	return func(m *portal.Metadata) {
 		m.Thumbnail = thumbnail
 	}
 }
 
 func WithOwner(owner string) MetadataOption {
-	return func(m *Metadata) {
+	return func(m *portal.Metadata) {
 		m.Owner = owner
 	}
 }
 
 func WithHide(hide bool) MetadataOption {
-	return func(m *Metadata) {
+	return func(m *portal.Metadata) {
 		m.Hide = hide
 	}
 }

@@ -62,7 +62,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		return nil, ErrInvalidName
 	}
 
-	var metadata Metadata
+	var metadata portal.Metadata
 	for _, option := range options {
 		option(&metadata)
 	}

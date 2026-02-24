@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -22,7 +23,7 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -100,10 +101,9 @@ func serveHTTP(addr string, serv *portal.RelayServer, sniRouter *sni.Router, adm
 				proxyToHTTP(w, r, serv)
 				return
 			}
-			// TLS is enabled, redirect to HTTPS
-			// The SNI router handles TLS passthrough on :443.
+			// TLS is enabled, redirect to HTTPS.
 			log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
-			redirectToHTTPS(w, r)
+			redirectToHTTPS(w, r, sniListenAddr)
 			return
 		}
 		appMux.ServeHTTP(w, r)
@@ -155,9 +155,10 @@ func leaseNameFromHost(host, appURL string) (string, bool) {
 	return leaseName, true
 }
 
-// redirectToHTTPS redirects the request to HTTPS on port 443
-func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
-	target := "https://" + r.Host + r.URL.Path
+// redirectToHTTPS redirects the request to HTTPS using configured SNI port.
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
+	targetHost := hostForHTTPSRedirect(r.Host, sniListenAddr)
+	target := "https://" + targetHost + r.URL.Path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
@@ -166,6 +167,47 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
 		Str("to", target).
 		Msg("[server] redirecting to HTTPS")
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+func hostForHTTPSRedirect(requestHost, sniListenAddr string) string {
+	host := strings.TrimSpace(requestHost)
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+
+	port := tlsPortForRedirect(sniListenAddr)
+	if port == "443" {
+		return host
+	}
+
+	return net.JoinHostPort(host, port)
+}
+
+func tlsPortForRedirect(sniListenAddr string) string {
+	raw := strings.TrimSpace(sniListenAddr)
+	if raw == "" {
+		return "443"
+	}
+
+	port := ""
+	switch {
+	case strings.HasPrefix(raw, ":"):
+		port = strings.TrimPrefix(raw, ":")
+	case strings.Count(raw, ":") == 0:
+		port = raw
+	default:
+		_, parsedPort, err := net.SplitHostPort(raw)
+		if err != nil {
+			return "443"
+		}
+		port = parsedPort
+	}
+
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "443"
+	}
+	return port
 }
 
 // shouldProxyHTTP checks if the request should be proxied via HTTP

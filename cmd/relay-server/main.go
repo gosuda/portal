@@ -118,27 +118,20 @@ func runServer() error {
 		// Get BPS manager for rate limiting
 		bpsManager := admin.GetBPSManager()
 
-		// Prefer reverse tunnel (NAT-friendly) if available.
-		if reverseConn, err := serv.GetReverseHub().AcquireStarted(route.LeaseID, portal.ReverseSNIAcquireWait); err == nil {
-			defer reverseConn.Close()
-			manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, route.LeaseID, bpsManager)
-			return
-		}
-
-		// Connect to tunnel backend
-		tunnelConn, err := net.DialTimeout("tcp", route.TargetAddr, 10*time.Second)
+		reverseConn, err := serv.GetReverseHub().AcquireStarted(route.LeaseID, portal.ReverseSNIAcquireWait)
 		if err != nil {
-			log.Error().
+			log.Warn().
 				Err(err).
-				Str("target", route.TargetAddr).
+				Str("lease_id", route.LeaseID).
 				Str("sni", route.SNI).
-				Msg("[SNI] Failed to connect to tunnel backend")
+				Msg("[SNI] Reverse tunnel unavailable")
 			clientConn.Close()
 			return
 		}
+		defer reverseConn.Close()
 
-		// Establish relay with BPS limiting
-		manager.EstablishRelayWithBPS(clientConn, tunnelConn, route.LeaseID, bpsManager)
+		// SNI path is reverse-only (NAT-friendly): relay never dials app directly.
+		manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, route.LeaseID, bpsManager)
 	})
 
 	// Start SNI router on port 443 (or configurable port)
@@ -158,7 +151,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, sniRouter, admin, frontend, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), sniPort, serv, sniRouter, admin, frontend, flagNoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
