@@ -25,6 +25,7 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
+RUN rm -rf bin/
 COPY --from=frontend-builder /src/cmd/relay-server/dist/app ./cmd/relay-server/dist/app
 
 ARG TARGETOS
