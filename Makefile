@@ -1,86 +1,71 @@
-.PHONY: help fmt vet lint test tidy build release clean
+.PHONY: help fmt vet lint test vuln tidy all run build build-frontend build-tunnel build-server clean
 
 .DEFAULT_GOAL := help
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -s -w -X main.version=$(VERSION)
-
 help:
 	@echo "Available targets:"
-	@echo "  make build       - Build relay-server and portal-tunnel for current platform"
-	@echo "  make build-all   - Build all binaries for all platforms (linux/darwin/windows, amd64/arm64)"
-	@echo "  make release     - Create release archives in dist/"
-	@echo "  make test        - Run tests"
-	@echo "  make lint        - Run linter"
-	@echo "  make fmt         - Format code"
-	@echo "  make clean       - Remove build artifacts"
-	@echo "  make run         - Run relay server locally"
+	@echo "  make build             - Build everything (frontend, tunnel, server)"
+	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
+	@echo "  make build-tunnel      - Build portal-tunnel binaries"
+	@echo "  make build-server      - Build Go relay server (includes frontend build)"
+	@echo "  make run               - Run relay server"
+	@echo "  make clean             - Remove build artifacts"
 
 fmt:
-	@gofmt -w .
-	@echo "Formatted"
+	gofmt -w .
+	goimports -w .
 
 vet:
-	@go vet ./...
-	@echo "Vet passed"
+	go vet ./...
 
 lint:
-	@golangci-lint run
+	golangci-lint run
 
 test:
-	@go test -v -race ./...
+	go test -v -race -coverprofile=coverage.out ./...
+
+vuln:
+	govulncheck ./...
 
 tidy:
-	@go mod tidy
-	@go mod verify
+	go mod tidy
+	go mod verify
 
-build:
-	@mkdir -p bin
-	@echo "Building relay-server..."
-	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/relay-server ./cmd/relay-server
-	@echo "Building portal-tunnel..."
-	@CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/portal-tunnel ./cmd/portal-tunnel
-	@echo "Build complete: bin/"
+all: fmt vet lint test vuln build
 
-build-all:
-	@mkdir -p dist
-	@echo "Building for all platforms..."
-	@for os in linux darwin windows; do \
-		for arch in amd64 arm64; do \
+run:
+	./bin/relay-server
+
+# Convenience target
+build: build-frontend build-tunnel build-server
+
+# Build React frontend with Tailwind CSS 4
+build-frontend:
+	@echo "[frontend] building React frontend..."
+	@mkdir -p cmd/relay-server/dist/app
+	@cd cmd/relay-server/frontend && npm i && npm run build
+	@echo "[frontend] build complete"
+
+# Build portal-tunnel binaries for distribution
+build-tunnel:
+	@echo "[tunnel] building portal-tunnel binaries..."
+	@mkdir -p cmd/relay-server/dist/tunnel
+	@for GOOS in linux darwin windows; do \
+		for GOARCH in amd64 arm64; do \
 			EXT=""; \
-			if [ "$$os" = "windows" ]; then EXT=".exe"; fi; \
-			echo "  $$os/$$arch..."; \
-			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o "dist/relay-server-$$os-$$arch$$EXT" ./cmd/relay-server; \
-			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags "$(LDFLAGS)" -o "dist/portal-tunnel-$$os-$$arch$$EXT" ./cmd/portal-tunnel; \
+			if [ "$${GOOS}" = "windows" ]; then EXT=".exe"; fi; \
+			OUT="cmd/relay-server/dist/tunnel/portal-tunnel-$${GOOS}-$${GOARCH}$${EXT}"; \
+			echo " - $${OUT}"; \
+			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \
 	done
-	@echo "All builds complete: dist/"
 
-release: clean build-all
-	@echo "Creating release archives..."
-	@mkdir -p dist/release
-	@for os in linux darwin windows; do \
-		for arch in amd64 arm64; do \
-			EXT=""; \
-			if [ "$$os" = "windows" ]; then EXT=".exe"; fi; \
-			DIR="portal-$(VERSION)-$$os-$$arch"; \
-			mkdir -p "dist/release/$$DIR"; \
-			cp "dist/relay-server-$$os-$$arch$$EXT" "dist/release/$$DIR/relay-server$$EXT"; \
-			cp "dist/portal-tunnel-$$os-$$arch$$EXT" "dist/release/$$DIR/portal-tunnel$$EXT"; \
-			cp README.md LICENSE "dist/release/$$DIR/"; \
-			if [ "$$os" = "windows" ]; then \
-				(cd dist/release && zip -q "$$DIR.zip" "$$DIR"/*); \
-			else \
-				(cd dist/release && tar -czf "$$DIR.tar.gz" "$$DIR"); \
-			fi; \
-			rm -rf "dist/release/$$DIR"; \
-		done; \
-	done
-	@echo "Release archives created: dist/release/"
-
-run: build
-	@./bin/relay-server
+# Build Go relay server
+build-server:
+	@echo "[server] building Go portal..."
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/relay-server ./cmd/relay-server
 
 clean:
-	@rm -rf bin dist
-	@echo "Cleaned"
+	rm -rf bin
+	rm -rf cmd/relay-server/dist/app
+	rm -rf cmd/relay-server/dist/tunnel
