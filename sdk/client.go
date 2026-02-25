@@ -114,7 +114,12 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		return nil, fmt.Errorf("create relay listener: %w", err)
 	}
 
-	// For TLS mode, initialize certificate after listener is created but before Start
+	// Register lease with relay BEFORE requesting certificate
+	if err := listener.Start(); err != nil {
+		return nil, fmt.Errorf("start relay listener: %w", err)
+	}
+
+	// For TLS mode, initialize certificate after lease is registered
 	if c.config.TLSEnabled {
 		autoMgr := NewAutoCertManager(relayAddr, name, lease.ID, reverseToken)
 		if err := autoMgr.Initialize(context.Background()); err != nil {
@@ -123,10 +128,6 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		}
 		listener.SetAutoCertManager(autoMgr)
 		autoMgr.StartRenewal()
-	}
-
-	if err := listener.Start(); err != nil {
-		return nil, fmt.Errorf("start relay listener: %w", err)
 	}
 
 	c.leases[lease.ID] = lease

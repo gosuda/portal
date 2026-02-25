@@ -34,6 +34,7 @@ var (
 	flagTags      string
 	flagOwner     string
 	flagHide      bool
+	flagTLS       bool
 )
 
 func main() {
@@ -44,6 +45,7 @@ func main() {
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
+	flag.BoolVar(&flagTLS, "tls", true, "enable TLS (end-to-end encryption via ACME DNS-01)")
 
 	flag.Parse()
 
@@ -54,7 +56,11 @@ func main() {
 
 func runDemo() error {
 	// 1) Create SDK client and connect to relay(s)
-	client, err := sdk.NewClient(sdk.WithBootstrapServers([]string{flagServerURL}))
+	opts := []sdk.ClientOption{sdk.WithBootstrapServers([]string{flagServerURL})}
+	if flagTLS {
+		opts = append(opts, sdk.WithTLS())
+	}
+	client, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}

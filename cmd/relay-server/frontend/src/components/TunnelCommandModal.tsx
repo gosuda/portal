@@ -229,11 +229,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </div>
           </div>
 
-          {/*  className="text-xs text-text-muted">
-              Press Enter to add. Multiple relay servers for redundancy.
-            </p>
-          </div>
-
           {/* Generated Command */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">

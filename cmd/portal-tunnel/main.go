@@ -25,7 +25,7 @@ type Config struct {
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
 
 	// TLS Mode
-	TLSEnable bool `flag:"tls" env:"TLS_ENABLE" about:"Enable TLS termination on tunnel client (uses relay ACME DNS-01)"`
+	TLSEnable bool `flag:"tls" env:"TLS_ENABLE" default:"true" about:"Enable TLS termination on tunnel client (uses relay ACME DNS-01)"`
 
 	// Metadata
 	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
