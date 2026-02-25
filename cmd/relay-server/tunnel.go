@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/utils"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
@@ -112,7 +110,7 @@ try {
 `
 
 func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -153,7 +151,7 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

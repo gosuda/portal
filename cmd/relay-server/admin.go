@@ -15,7 +15,6 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
 )
 
 const adminCookieName = "portal_admin"
@@ -645,7 +644,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.PortalHostPort(flagPortalURL))
+		link := fmt.Sprintf("//%s.%s/", lease.Name, portalHostPort(flagPortalURL))
 
 		var bps int64
 		if a.bpsManager != nil {

@@ -2,19 +2,29 @@
 package sdk
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/acme/autocert"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
 )
+
+var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
+
+// isURLSafeName checks if a name contains only URL-safe characters.
+func isURLSafeName(name string) bool {
+	if name == "" {
+		return true
+	}
+	return urlSafeNameRegex.MatchString(name)
+}
 
 // Client is a minimal client for lease registration with the relay.
 type Client struct {
@@ -58,7 +68,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
-	if !utils.IsURLSafeName(name) {
+	if !isURLSafeName(name) {
 		return nil, ErrInvalidName
 	}
 
@@ -95,19 +105,26 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 
 	// Build TLS config if enabled
 	var tlsConfig *tls.Config
-	var autocertMgr *autocert.Manager
-
 	if c.config.TLSEnabled {
-		tlsConfig, autocertMgr, err = buildTLSConfig(c.config)
-		if err != nil {
-			return nil, fmt.Errorf("build TLS config: %w", err)
-		}
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 
-	listener, err := NewListener(relayAddr, lease, tlsConfig, autocertMgr, c.config.ReverseWorkers, c.config.ReverseDialTimeout)
+	listener, err := NewListener(relayAddr, lease, tlsConfig, c.config.ReverseWorkers, c.config.ReverseDialTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("create relay listener: %w", err)
 	}
+
+	// For TLS mode, initialize certificate after listener is created but before Start
+	if c.config.TLSEnabled {
+		autoMgr := NewAutoCertManager(relayAddr, name, lease.ID, reverseToken)
+		if err := autoMgr.Initialize(context.Background()); err != nil {
+			listener.Close()
+			return nil, fmt.Errorf("initialize auto certificate: %w", err)
+		}
+		listener.SetAutoCertManager(autoMgr)
+		autoMgr.StartRenewal()
+	}
+
 	if err := listener.Start(); err != nil {
 		return nil, fmt.Errorf("start relay listener: %w", err)
 	}
@@ -128,54 +145,6 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	}
 
 	return listener, nil
-}
-
-// buildTLSConfig builds TLS configuration from client config
-func buildTLSConfig(config *ClientConfig) (*tls.Config, *autocert.Manager, error) {
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-
-	var autocertMgr *autocert.Manager
-
-	if config.TLSAutocert {
-		// Use Let's Encrypt autocert
-		if config.TLSDomain == "" {
-			return nil, nil, fmt.Errorf("TLS domain is required for autocert")
-		}
-
-		autocertDir := config.TLSAutocertDir
-		if autocertDir == "" {
-			autocertDir = "autocert-cache"
-		}
-
-		autocertMgr = &autocert.Manager{
-			Cache:      autocert.DirCache(autocertDir),
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(config.TLSDomain),
-		}
-
-		tlsConfig.GetCertificate = autocertMgr.GetCertificate
-		log.Info().
-			Str("domain", config.TLSDomain).
-			Str("cache_dir", autocertDir).
-			Msg("[SDK] Using Let's Encrypt autocert for TLS")
-	} else if config.TLSCert != "" && config.TLSKey != "" {
-		// Use provided certificate
-		cert, err := tls.LoadX509KeyPair(config.TLSCert, config.TLSKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load TLS certificate: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-		log.Info().
-			Str("cert", config.TLSCert).
-			Str("key", config.TLSKey).
-			Msg("[SDK] Using custom TLS certificate")
-	} else {
-		return nil, nil, fmt.Errorf("TLS enabled but no certificate source configured (set TLSAutocert=true or provide TLSCert/TLSKey)")
-	}
-
-	return tlsConfig, autocertMgr, nil
 }
 
 // Close closes the client.

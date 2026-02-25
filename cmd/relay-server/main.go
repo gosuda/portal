@@ -18,8 +18,8 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/utils/cert"
 	"gosuda.org/portal/portal/utils/sni"
-	"gosuda.org/portal/utils"
 )
 
 var (
@@ -31,6 +31,11 @@ var (
 	flagLeaseBPS       int
 	flagNoIndex        bool
 	flagAdminSecretKey string
+
+	// ACME DNS-01 flags for TLSAuto support
+	flagACMEDNSProvider string
+	flagACMEEmail       string
+	flagACMEDirectory   string
 )
 
 func main() {
@@ -43,7 +48,7 @@ func main() {
 	}
 	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
 	if defaultBootstraps == "" {
-		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
+		defaultBootstraps = defaultBootstrapFrom(defaultPortalURL)
 	}
 
 	var flagBootstrapsCSV string
@@ -59,9 +64,15 @@ func main() {
 
 	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
 	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+
+	// ACME DNS-01 flags
+	flag.StringVar(&flagACMEDNSProvider, "acme-dns-provider", os.Getenv("ACME_DNS_PROVIDER"), "DNS provider for ACME DNS-01 challenge (cloudflare, route53)")
+	flag.StringVar(&flagACMEEmail, "acme-email", os.Getenv("ACME_EMAIL"), "email for ACME account registration")
+	flag.StringVar(&flagACMEDirectory, "acme-directory", os.Getenv("ACME_DIRECTORY"), "ACME directory URL (default: Let's Encrypt production)")
+
 	flag.Parse()
 
-	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
+	flagBootstraps = parseURLs(flagBootstrapsCSV)
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -91,6 +102,32 @@ func runServer() error {
 		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
 	}
 	authManager := manager.NewAuthManager(flagAdminSecretKey)
+
+	// Create certificate manager if ACME DNS provider is configured
+	var certManager cert.Manager
+	if flagACMEDNSProvider != "" && flagACMEEmail != "" {
+		baseDomain := extractBaseDomain(flagPortalURL)
+		if baseDomain == "" {
+			log.Warn().Msg("[server] could not extract base domain from PORTAL_URL, ACME disabled")
+		} else {
+			acmeCfg := &cert.ACMEConfig{
+				BaseDomain:      baseDomain,
+				DNSProviderType: flagACMEDNSProvider,
+				Email:           flagACMEEmail,
+				DirectoryURL:    flagACMEDirectory,
+			}
+			var err error
+			certManager, err = cert.NewACMEManager(ctx, acmeCfg)
+			if err != nil {
+				log.Error().Err(err).Msg("[server] failed to create ACME manager, TLSAuto disabled")
+			} else {
+				log.Info().
+					Str("dns_provider", flagACMEDNSProvider).
+					Str("base_domain", baseDomain).
+					Msg("[server] ACME certificate manager initialized")
+			}
+		}
+	}
 
 	// Create Frontend first, then Admin, then attach Admin back to Frontend.
 	frontend := NewFrontend()
@@ -151,7 +188,7 @@ func runServer() error {
 	serv.Start()
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), sniPort, serv, sniRouter, admin, frontend, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), sniPort, serv, sniRouter, admin, frontend, flagNoIndex, certManager, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

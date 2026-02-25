@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/net/websocket"
 	"gosuda.org/portal/portal"
 )
@@ -44,7 +43,7 @@ type Listener struct {
 
 	// TLS configuration
 	tlsConfig   *tls.Config
-	autocertMgr *autocert.Manager
+	autoCertMgr *AutoCertManager
 
 	stopCh    chan struct{}
 	closeOnce sync.Once
@@ -55,7 +54,7 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener creates a relay-backed listener.
 // If tlsConfig is provided, the listener will perform TLS handshake on incoming connections.
-func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, autocertMgr *autocert.Manager, reverseWorkers int, reverseDialTimeout time.Duration) (*Listener, error) {
+func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, reverseWorkers int, reverseDialTimeout time.Duration) (*Listener, error) {
 	if lease == nil {
 		return nil, fmt.Errorf("lease is required")
 	}
@@ -88,7 +87,6 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, a
 			Timeout: 10 * time.Second,
 		},
 		tlsConfig:          tlsConfig,
-		autocertMgr:        autocertMgr,
 		stopCh:             make(chan struct{}),
 		acceptCh:           make(chan net.Conn, 128),
 		reverseWorkers:     reverseWorkers,
@@ -172,6 +170,11 @@ func (l *Listener) Close() error {
 
 		l.wg.Wait()
 
+		// Stop auto cert manager if running
+		if l.autoCertMgr != nil {
+			l.autoCertMgr.Stop()
+		}
+
 		if err := l.unregisterFromRelay(); err != nil {
 			log.Warn().Err(err).Str("lease_id", l.lease.ID).Msg("[SDK] Failed to unregister lease")
 			retErr = err
@@ -189,6 +192,20 @@ func (l *Listener) Addr() net.Addr {
 // LeaseID returns lease ID registered to relay.
 func (l *Listener) LeaseID() string {
 	return l.lease.ID
+}
+
+// SetAutoCertManager sets the auto certificate manager for TLSAuto mode.
+// It also updates the TLS config to use the manager's GetCertificate function.
+func (l *Listener) SetAutoCertManager(mgr *AutoCertManager) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.autoCertMgr = mgr
+
+	// Update TLS config to use the manager's GetCertificate
+	if l.tlsConfig != nil {
+		l.tlsConfig.GetCertificate = mgr.GetCertificate()
+	}
 }
 
 func (l *Listener) keepaliveLoop() {

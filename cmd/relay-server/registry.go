@@ -10,25 +10,27 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/utils/cert"
 	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
 // SDKRegistry handles HTTP API for SDK lease registration
 // Used by both tunnel clients and native applications
 type SDKRegistry struct {
-	server    *portal.RelayServer
-	sniRouter *sni.Router
-	baseHost  string
+	server      *portal.RelayServer
+	sniRouter   *sni.Router
+	baseHost    string
+	certManager cert.Manager
 }
 
 // NewSDKRegistry creates a new SDK registry
-func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router) *SDKRegistry {
+func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router, certManager cert.Manager) *SDKRegistry {
 	return &SDKRegistry{
-		server:    server,
-		sniRouter: sniRouter,
-		baseHost:  utils.PortalBaseHostNoPort(flagPortalURL),
+		server:      server,
+		sniRouter:   sniRouter,
+		baseHost:    portalBaseHostNoPort(flagPortalURL),
+		certManager: certManager,
 	}
 }
 
@@ -114,7 +116,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
-	publicURL := utils.ServicePublicURL(flagPortalURL, registerReq.Name)
+	publicURL := servicePublicURL(flagPortalURL, registerReq.Name)
 
 	writeJSON(w, sdk.RegisterResponse{
 		Success:   true,
@@ -260,4 +262,139 @@ func (r *SDKRegistry) unregisterSNIRoute(leaseID string) {
 		return
 	}
 	r.sniRouter.UnregisterRouteByLeaseID(leaseID)
+}
+
+// HandleCSR handles Certificate Signing Request submissions
+// The tunnel client submits a CSR, and the relay issues a certificate via ACME DNS-01
+func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if certificate manager is available
+	if r.certManager == nil {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "certificate issuance not configured on this relay",
+		})
+		return
+	}
+
+	var csrReq sdk.CSRRequest
+	if err := json.NewDecoder(req.Body).Decode(&csrReq); err != nil {
+		log.Error().Err(err).Msg("[Registry] Failed to decode CSR request")
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "invalid request body",
+		})
+		return
+	}
+
+	// Validate request
+	if csrReq.LeaseID == "" {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "lease_id is required",
+		})
+		return
+	}
+	if csrReq.ReverseToken == "" {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "reverse_token is required",
+		})
+		return
+	}
+	if len(csrReq.CSR) == 0 {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "csr is required",
+		})
+		return
+	}
+
+	// Authenticate via lease
+	entry, ok := r.server.GetLeaseManager().GetLeaseByID(csrReq.LeaseID)
+	if !ok {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "lease not found",
+		})
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(strings.TrimSpace(csrReq.ReverseToken))) != 1 {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: "unauthorized",
+		})
+		return
+	}
+
+	// Parse CSR to extract and validate domain
+	csrDomain, err := cert.ParseCSRDomain(csrReq.CSR)
+	if err != nil {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: fmt.Sprintf("invalid CSR: %v", err),
+		})
+		return
+	}
+
+	// Validate domain matches lease name + base host
+	expectedDomain := strings.ToLower(entry.Lease.Name) + "." + r.baseHost
+	if strings.ToLower(csrDomain) != expectedDomain {
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: fmt.Sprintf("domain mismatch: expected %s", expectedDomain),
+		})
+		return
+	}
+
+	// Issue certificate
+	certReq := &cert.CSRRequest{
+		Domain: csrDomain,
+		CSR:    csrReq.CSR,
+	}
+
+	cert, err := r.certManager.IssueCertificate(req.Context(), certReq)
+	if err != nil {
+		log.Error().Err(err).
+			Str("lease_id", csrReq.LeaseID).
+			Str("domain", csrDomain).
+			Msg("[Registry] Failed to issue certificate")
+		writeJSON(w, sdk.CSRResponse{
+			Success: false,
+			Message: fmt.Sprintf("certificate issuance failed: %v", err),
+		})
+		return
+	}
+
+	log.Info().
+		Str("lease_id", csrReq.LeaseID).
+		Str("domain", csrDomain).
+		Time("expires", cert.ExpiresAt).
+		Msg("[Registry] Certificate issued")
+
+	writeJSON(w, sdk.CSRResponse{
+		Success:     true,
+		Certificate: cert.Certificate,
+		ExpiresAt:   cert.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
+// HandleDomain returns the relay's base domain for TLS certificate construction.
+func (r *SDKRegistry) HandleDomain(w http.ResponseWriter, req *http.Request) {
+	if r.baseHost == "" {
+		writeJSON(w, map[string]any{
+			"success": false,
+			"message": "base domain not configured",
+		})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"success":     true,
+		"base_domain": r.baseHost,
+	})
 }

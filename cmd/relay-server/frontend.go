@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
 )
 
 type readDirFileFS interface {
@@ -66,7 +65,7 @@ func (f *Frontend) ServeAsset(mux *http.ServeMux, route, assetPath, contentType 
 
 // servePortalHTMLWithSSR serves portal.html with SSR data injection.
 func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 
 	// Initialize cache on first use
 	f.cachedPortalHTMLOnce.Do(func() {
@@ -249,7 +248,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRo
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.PortalHostPort(flagPortalURL))
+		link := fmt.Sprintf("//%s.%s/", lease.Name, portalHostPort(flagPortalURL))
 
 		var bps int64
 		if bpsMgr := admin.GetBPSManager(); bpsMgr != nil {
@@ -297,7 +296,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 		return
 	}
 
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 
 	// If path is empty or "/", serve portal.html with SSR
 	if appPath == "" || appPath == "/" {
@@ -317,7 +316,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 	// Set content type based on extension
 	ext := path.Ext(appPath)
-	contentType := utils.GetContentType(ext)
+	contentType := getContentType(ext)
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}

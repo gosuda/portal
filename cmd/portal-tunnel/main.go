@@ -15,8 +15,24 @@ import (
 	"github.com/rs/zerolog/log"
 	"gopkg.eu.org/broccoli"
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
+
+// parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
+func parseURLs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
 // per-copy allocations and reduce GC pressure under high concurrency.
@@ -36,11 +52,7 @@ type Config struct {
 	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
 
 	// TLS Mode
-	TLSEnable   bool   `flag:"tls" env:"TLS_ENABLE" about:"Enable TLS termination on tunnel client (requires TLS cert)"`
-	TLSDomain   string `flag:"tls-domain" env:"TLS_DOMAIN" about:"Domain for TLS certificate (e.g., tunnel.example.com)"`
-	TLSCert     string `flag:"tls-cert" env:"TLS_CERT" about:"Path to TLS certificate file (optional, uses autocert if not set)"`
-	TLSKey      string `flag:"tls-key" env:"TLS_KEY" about:"Path to TLS key file (optional, uses autocert if not set)"`
-	TLSAutocert bool   `flag:"tls-autocert" env:"TLS_AUTOCERT" about:"Use Let's Encrypt autocert for TLS (default: true if TLS enabled)"`
+	TLSEnable bool `flag:"tls" env:"TLS_ENABLE" about:"Enable TLS termination on tunnel client (uses relay ACME DNS-01)"`
 
 	// Metadata
 	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
@@ -75,7 +87,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	relayURLs := utils.ParseURLs(cfg.RelayURLs)
+	relayURLs := parseURLs(cfg.RelayURLs)
 	if len(relayURLs) == 0 {
 		log.Error().Msg("--relay must include at least one non-empty URL")
 		os.Exit(1)
@@ -118,21 +130,8 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 
 	// Configure TLS if enabled
 	if cfg.TLSEnable {
-		if cfg.TLSDomain == "" {
-			return fmt.Errorf("TLS enabled but domain not specified")
-		}
-
-		if cfg.TLSCert != "" && cfg.TLSKey != "" {
-			// Use custom certificate
-			clientOpts = append(clientOpts, sdk.WithTLSCert(cfg.TLSCert, cfg.TLSKey))
-			log.Info().Str("service", cfg.Name).Msg("TLS: Using custom certificate")
-		} else if cfg.TLSAutocert {
-			// Use Let's Encrypt autocert
-			clientOpts = append(clientOpts, sdk.WithTLS(cfg.TLSDomain))
-			log.Info().Str("service", cfg.Name).Str("domain", cfg.TLSDomain).Msg("TLS: Using Let's Encrypt autocert")
-		} else {
-			return fmt.Errorf("TLS enabled but no certificate source configured (set --tls-autocert or provide --tls-cert and --tls-key)")
-		}
+		clientOpts = append(clientOpts, sdk.WithTLS())
+		log.Info().Str("service", cfg.Name).Msg("TLS: Using relay ACME DNS-01 (E2EE)")
 	}
 
 	client, err := sdk.NewClient(clientOpts...)
@@ -169,7 +168,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		log.Info().Str("service", cfg.Name).Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
 	if cfg.TLSEnable {
-		log.Info().Str("service", cfg.Name).Msgf("- TLS:      Enabled (%s)", cfg.TLSDomain)
+		log.Info().Str("service", cfg.Name).Msg("- TLS:      Enabled")
 	}
 
 	log.Info().Str("service", cfg.Name).Msg("")

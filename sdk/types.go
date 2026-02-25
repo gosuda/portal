@@ -30,13 +30,7 @@ type ClientConfig struct {
 	ReverseDialTimeout  time.Duration // Reverse websocket dial timeout (default: 5 seconds)
 
 	// TLS configuration for tunnel server mode
-	TLSEnabled     bool   // Enable TLS listener
-	TLSDomain      string // Domain for TLS certificate
-	TLSCert        string // Path to TLS certificate file (optional)
-	TLSKey         string // Path to TLS key file (optional)
-	TLSAutocert    bool   // Use Let's Encrypt autocert
-	TLSListenAddr  string // Listen address for TLS (default: ":443")
-	TLSAutocertDir string // Directory for autocert cache
+	TLSEnabled bool // Enable TLS listener
 }
 
 type ClientOption func(*ClientConfig)
@@ -83,32 +77,12 @@ func WithReverseDialTimeout(timeout time.Duration) ClientOption {
 	}
 }
 
-// TLS configuration options
-func WithTLS(domain string) ClientOption {
+// WithTLS enables TLS with certificate issued via relay's ACME DNS-01.
+// The domain is derived from the lease name and relay's base domain.
+// The private key is generated locally and never leaves the tunnel.
+func WithTLS() ClientOption {
 	return func(c *ClientConfig) {
 		c.TLSEnabled = true
-		c.TLSDomain = domain
-		c.TLSAutocert = true
-	}
-}
-
-func WithTLSCert(certPath, keyPath string) ClientOption {
-	return func(c *ClientConfig) {
-		c.TLSCert = certPath
-		c.TLSKey = keyPath
-		c.TLSAutocert = false
-	}
-}
-
-func WithTLSListenAddr(addr string) ClientOption {
-	return func(c *ClientConfig) {
-		c.TLSListenAddr = addr
-	}
-}
-
-func WithTLSAutocertDir(dir string) ClientOption {
-	return func(c *ClientConfig) {
-		c.TLSAutocertDir = dir
 	}
 }
 
@@ -174,4 +148,19 @@ type RenewRequest struct {
 type APIResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+}
+
+// CSRRequest represents a Certificate Signing Request submission
+type CSRRequest struct {
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
+	CSR          []byte `json:"csr"` // PEM-encoded Certificate Signing Request
+}
+
+// CSRResponse represents the response to a CSR submission
+type CSRResponse struct {
+	Success     bool   `json:"success"`
+	Message     string `json:"message,omitempty"`
+	Certificate []byte `json:"certificate,omitempty"` // PEM-encoded certificate chain
+	ExpiresAt   string `json:"expires_at,omitempty"`  // ISO 8601 timestamp
 }

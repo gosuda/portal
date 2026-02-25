@@ -4,26 +4,23 @@ import (
 	"bufio"
 	"context"
 	"embed"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/utils/cert"
 	"gosuda.org/portal/portal/utils/sni"
-	"gosuda.org/portal/utils"
 )
 
 //go:embed dist/*
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, certManager cert.Manager, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -59,10 +56,12 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 	})
 
 	// SDK Registry API for lease registration (used by SDK and tunnel clients)
-	registry := NewSDKRegistry(serv, sniRouter)
+	registry := NewSDKRegistry(serv, sniRouter, certManager)
 	appMux.HandleFunc("/api/register", registry.HandleRegister)
 	appMux.HandleFunc("/api/unregister", registry.HandleUnregister)
 	appMux.HandleFunc("/api/renew", registry.HandleRenew)
+	appMux.HandleFunc("/api/csr", registry.HandleCSR)
+	appMux.HandleFunc("/api/domain", registry.HandleDomain)
 	appMux.Handle("/api/connect", websocket.Server{
 		Handshake: func(*websocket.Config, *http.Request) error { return nil },
 		Handler:   websocket.Handler(serv.GetReverseHub().HandleConnect),
@@ -86,10 +85,10 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 	})
 
 	// Create the main handler
-	appDomain := utils.DefaultAppPattern(flagPortalURL)
+	appDomain := defaultAppPattern(flagPortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle subdomain requests
-		if utils.IsSubdomain(appDomain, r.Host) {
+		if isSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
@@ -125,96 +124,11 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 	return srv
 }
 
-// leaseNameFromHost extracts the lease name from a subdomain host.
-// It returns the lease name and true if the host is a valid subdomain of appURL.
-func leaseNameFromHost(host, appURL string) (string, bool) {
-	if !utils.IsSubdomain(appURL, host) {
-		return "", false
-	}
-
-	normalizedHost := strings.ToLower(strings.TrimSpace(utils.StripPort(host)))
-	baseHost := strings.ToLower(strings.TrimSpace(
-		utils.StripPort(utils.StripWildCard(utils.StripScheme(appURL))),
-	))
-
-	if normalizedHost == "" || baseHost == "" || normalizedHost == baseHost {
-		return "", false
-	}
-
-	suffix := "." + baseHost
-	if !strings.HasSuffix(normalizedHost, suffix) {
-		return "", false
-	}
-
-	leaseName := strings.TrimSuffix(normalizedHost, suffix)
-	if leaseName == "" || strings.Contains(leaseName, ".") {
-		// Lease names do not include dots; avoid ambiguous nested subdomains.
-		return "", false
-	}
-
-	return leaseName, true
-}
-
-// redirectToHTTPS redirects the request to HTTPS using configured SNI port.
-func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
-	targetHost := hostForHTTPSRedirect(r.Host, sniListenAddr)
-	target := "https://" + targetHost + r.URL.Path
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
-	}
-	log.Debug().
-		Str("from", r.URL.String()).
-		Str("to", target).
-		Msg("[server] redirecting to HTTPS")
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
-}
-
-func hostForHTTPSRedirect(requestHost, sniListenAddr string) string {
-	host := strings.TrimSpace(requestHost)
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
-	}
-
-	port := tlsPortForRedirect(sniListenAddr)
-	if port == "443" {
-		return host
-	}
-
-	return net.JoinHostPort(host, port)
-}
-
-func tlsPortForRedirect(sniListenAddr string) string {
-	raw := strings.TrimSpace(sniListenAddr)
-	if raw == "" {
-		return "443"
-	}
-
-	port := ""
-	switch {
-	case strings.HasPrefix(raw, ":"):
-		port = strings.TrimPrefix(raw, ":")
-	case strings.Count(raw, ":") == 0:
-		port = raw
-	default:
-		_, parsedPort, err := net.SplitHostPort(raw)
-		if err != nil {
-			return "443"
-		}
-		port = parsedPort
-	}
-
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return "443"
-	}
-	return port
-}
-
 // shouldProxyHTTP checks if the request should be proxied via HTTP
 // based on the lease's TLSEnabled setting.
 // Returns true if TLS is NOT enabled (can proxy via HTTP).
 func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
-	leaseName, ok := leaseNameFromHost(host, utils.DefaultAppPattern(flagPortalURL))
+	leaseName, ok := leaseNameFromHost(host, defaultAppPattern(flagPortalURL))
 	if !ok {
 		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
 		return false
@@ -237,7 +151,7 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 }
 
 func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	leaseName, ok := leaseNameFromHost(r.Host, utils.DefaultAppPattern(flagPortalURL))
+	leaseName, ok := leaseNameFromHost(r.Host, defaultAppPattern(flagPortalURL))
 	if !ok {
 		http.Error(w, "invalid subdomain", http.StatusBadRequest)
 		return
@@ -296,25 +210,6 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 	// Copy body
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		log.Debug().Err(err).Msg("[proxy] error copying response body")
-	}
-}
-
-func openLeaseConnection(leaseID string, serv *portal.RelayServer) (net.Conn, func(), error) {
-	reverseConn, err := serv.GetReverseHub().AcquireStarted(leaseID, portal.ReverseHTTPWait)
-	if err != nil {
-		return nil, nil, fmt.Errorf("no reverse connection available for lease %s: %w", leaseID, err)
-	}
-	return reverseConn.Conn, reverseConn.Close, nil
-}
-
-func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		h(w, r)
 	}
 }
 
