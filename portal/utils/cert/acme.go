@@ -6,9 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -17,7 +15,6 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/providers/dns/route53"
@@ -82,8 +79,7 @@ func NewACMEManager(ctx context.Context, cfg *ACMEConfig) (*ACMEManager, error) 
 	}
 
 	// Set up DNS-01 challenge
-	provider := &dnsProviderAdapter{dnsProvider: dnsProvider}
-	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
+	if err := client.Challenge.SetDNS01Provider(dnsProvider); err != nil {
 		return nil, fmt.Errorf("set DNS01 provider: %w", err)
 	}
 
@@ -274,51 +270,17 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey {
 	return u.key
 }
 
-// dnsProviderAdapter adapts our DNSProvider to lego's challenge.Provider interface
-type dnsProviderAdapter struct {
-	dnsProvider DNSProvider
-}
-
-func (a *dnsProviderAdapter) Present(domain, token, keyAuth string) error {
-	fqdn, value := extractDNS01Record(domain, keyAuth)
-	return a.dnsProvider.Present(context.Background(), fqdn, value)
-}
-
-func (a *dnsProviderAdapter) CleanUp(domain, token, keyAuth string) error {
-	fqdn, value := extractDNS01Record(domain, keyAuth)
-	return a.dnsProvider.CleanUp(context.Background(), fqdn, value)
-}
-
-func (a *dnsProviderAdapter) Timeout() (timeout, interval time.Duration) {
-	return a.dnsProvider.Timeout()
-}
-
-// extractDNS01Record computes the FQDN and value for DNS-01 challenge
-func extractDNS01Record(domain, keyAuth string) (fqdn, value string) {
-	// DNS-01 challenge uses _acme-challenge subdomain
-	fqdn = "_acme-challenge." + domain
-
-	// Value is base64url-encoded SHA256 of keyAuth
-	h := sha256.Sum256([]byte(keyAuth))
-	value = base64.RawURLEncoding.EncodeToString(h[:])
-
-	return fqdn, value
-}
-
-// Ensure dnsProviderAdapter implements challenge.Provider
-var _ challenge.Provider = (*dnsProviderAdapter)(nil)
-
 // cloudflareProviderAdapter adapts cloudflare provider to our DNSProvider interface
 type cloudflareProviderAdapter struct {
 	provider *cloudflare.DNSProvider
 }
 
-func (a *cloudflareProviderAdapter) Present(ctx context.Context, fqdn, value string) error {
-	return a.provider.Present(fqdn, "", value)
+func (a *cloudflareProviderAdapter) Present(domain, token, keyAuth string) error {
+	return a.provider.Present(domain, token, keyAuth)
 }
 
-func (a *cloudflareProviderAdapter) CleanUp(ctx context.Context, fqdn, value string) error {
-	return a.provider.CleanUp(fqdn, "", value)
+func (a *cloudflareProviderAdapter) CleanUp(domain, token, keyAuth string) error {
+	return a.provider.CleanUp(domain, token, keyAuth)
 }
 
 func (a *cloudflareProviderAdapter) Timeout() (timeout, interval time.Duration) {
@@ -330,12 +292,12 @@ type route53ProviderAdapter struct {
 	provider *route53.DNSProvider
 }
 
-func (a *route53ProviderAdapter) Present(ctx context.Context, fqdn, value string) error {
-	return a.provider.Present(fqdn, "", value)
+func (a *route53ProviderAdapter) Present(domain, token, keyAuth string) error {
+	return a.provider.Present(domain, token, keyAuth)
 }
 
-func (a *route53ProviderAdapter) CleanUp(ctx context.Context, fqdn, value string) error {
-	return a.provider.CleanUp(fqdn, "", value)
+func (a *route53ProviderAdapter) CleanUp(domain, token, keyAuth string) error {
+	return a.provider.CleanUp(domain, token, keyAuth)
 }
 
 func (a *route53ProviderAdapter) Timeout() (timeout, interval time.Duration) {

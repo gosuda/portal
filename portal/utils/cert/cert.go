@@ -29,15 +29,14 @@ type Manager interface {
 	GetCACertificate(ctx context.Context) ([]byte, error)
 }
 
-// DNSProvider handles DNS record management for ACME DNS-01 challenges.
+// DNSProvider handles DNS-01 challenge lifecycle.
+// Signature matches lego's challenge.Provider.
 type DNSProvider interface {
 	// Present creates a TXT record for the DNS-01 challenge.
-	// fqdn is the full domain name (e.g., "_acme-challenge.app1.portal.com")
-	// value is the challenge token.
-	Present(ctx context.Context, fqdn, value string) error
+	Present(domain, token, keyAuth string) error
 
 	// CleanUp removes the TXT record after the challenge is complete.
-	CleanUp(ctx context.Context, fqdn, value string) error
+	CleanUp(domain, token, keyAuth string) error
 
 	// Timeout returns the timeout and interval for DNS propagation checking.
 	Timeout() (timeout time.Duration, interval time.Duration)
