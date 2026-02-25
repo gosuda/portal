@@ -17,6 +17,27 @@ You can run the tunnel using command-line flags or a configuration file.
   --thumbnail https://example.com/thumb.png
 ```
 
+### TLS Mode (End-to-End Encryption)
+
+Enable TLS for end-to-end encryption from client to your local service:
+
+```bash
+./bin/portal-tunnel --host localhost:8080 \
+  --relay https://portal.example.com \
+  --name myapp \
+  --tls
+```
+
+When `--tls` is enabled:
+- Tunnel generates a private key and CSR locally
+- Relay issues certificate via ACME DNS-01 (if configured)
+- TLS is terminated at the tunnel, then proxied to your local service via TCP
+- Access via `https://myapp.example.com` directly on port 443
+
+**Requirements:**
+- Relay must have ACME DNS-01 configured (`ACME_DNS_PROVIDER`, `ACME_EMAIL`)
+- DNS provider credentials must be set on the relay server
+
 ## Flags
 
 ```text
@@ -27,6 +48,7 @@ Options:
         --relay           Portal relay server API URLs (comma-separated, http/https) [default: http://localhost:4017] [env: RELAYS]
         --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
         --name            Service name  [env: APP_NAME]
+        --tls             Enable TLS termination on tunnel client (uses relay ACME DNS-01) [env: TLS_ENABLE]
         --protocols       ALPN protocols (comma-separated) [default: http/1.1,h2] [env: APP_PROTOCOLS]
         --description     Service description metadata  [env: APP_DESCRIPTION]
         --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
@@ -34,4 +56,37 @@ Options:
         --owner           Service owner metadata  [env: APP_OWNER]
         --hide            Hide service from discovery (metadata)  [env: APP_HIDE]
         -h, --help        Print this help message and exit
+```
+
+## Examples
+
+### Quick Start (HTTP)
+
+```bash
+# macOS/Linux
+curl -fsSL https://portal.example.com/tunnel | HOST=localhost:3000 NAME=myapp sh
+
+# Windows PowerShell
+$env:HOST="localhost:3000"; $env:NAME="myapp"; irm https://portal.example.com/tunnel | iex
+```
+
+### Production (TLS)
+
+```bash
+export RELAYS=https://portal.example.com
+export APP_HOST=localhost:3000
+export APP_NAME=myapp
+export TLS_ENABLE=true
+
+./bin/portal-tunnel
+```
+
+### Multiple Relays (High Availability)
+
+```bash
+./bin/portal-tunnel \
+  --host localhost:3000 \
+  --name myapp \
+  --relay https://portal1.example.com,https://portal2.example.com \
+  --tls
 ```

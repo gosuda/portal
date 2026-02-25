@@ -118,7 +118,7 @@ func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, 
 }
 
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
-// In the new TLS passthrough architecture, this uses net.Conn instead of yamux.Stream.
+// In the new TLS passthrough architecture, this uses net.Conn
 func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *BPSManager) {
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().

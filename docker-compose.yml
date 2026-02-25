@@ -9,9 +9,24 @@ services:
       - "--port"
       - "${PORTAL_PORT:-4017}"
     environment:
+      # Core configuration
       PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
       BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-http://localhost:${PORTAL_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      NOINDEX: ${NOINDEX:-}
+
+      # SNI router port (for TLS passthrough)
+      SNI_PORT: ${SNI_PORT:-:443}
+
+      # ACME certificate management (optional)
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_DIRECTORY: ${ACME_DIRECTORY:-}
+
+      # DNS provider credentials (set as needed)
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
     ports:
-      - "4017:4017"
+      - "${PORTAL_PORT:-4017}:${PORTAL_PORT:-4017}"
+      - "80:80"
+      - "443:443"
     restart: unless-stopped

@@ -22,7 +22,6 @@ cmd/
   relay-server/    # Relay server entrypoint
   portal-tunnel/   # Tunnel CLI client
   demo-app/        # Demo application
-  webclient/       # WASM browser client
 portal/            # Core relay logic
 sdk/               # Go SDK for apps
 utils/             # Shared utilities
@@ -47,6 +46,6 @@ utils/             # Shared utilities
 
 ## Architecture Decisions
 
-- **E2EE**: RDSEC protocol (X25519 + ChaCha20-Poly1305)
-- **Multiplexing**: yamux over WebSocket
+- **E2EE**: TLS passthrough with ACME certificates
+- **SNI Routing**: TLS routed by hostname without termination
 - **No CGO**: pure Go for cross-platform builds

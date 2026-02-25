@@ -5,6 +5,7 @@
 </p>
 
 Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [Learn more.](https://gosuda.org/portal/)
+
 ## Overview
 
 Portal connects local applications to web users through a secure relay layer.
@@ -14,9 +15,8 @@ This enables developers to publish local services globally without managing serv
 ## Features
 
 - 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network
-- 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication via RDSEC protocol
+- 🔐 **End-to-End Encryption**: TLS passthrough with ACME DNS-01 certificates
 - 🕊️ **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
-- 🚀 **High Performance**: Multiplexed connections using yamux
 - ⚙️ **Simple Setup**: Quick start with Tunnel client or Go SDK
 
 ## Quick Start
@@ -59,10 +59,9 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
 ## Architecture
 
-- **Relay Server**: HTTP/WebSocket relay, admin UI, lease management
+- **Relay Server**: TLS passthrough relay with SNI routing, admin UI, lease management
 - **SDK**: Go library for native app integration
 - **Tunnel**: CLI client for exposing local services without code changes
-- **WebClient**: WASM-based browser client (served by relay)
 
 For details, see [docs/architecture.md](docs/architecture.md).
 
