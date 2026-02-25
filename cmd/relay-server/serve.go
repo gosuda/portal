@@ -89,6 +89,17 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 	// Create the main handler
 	appDomain := defaultAppPattern(flagPortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Compatibility endpoints for legacy webclient deployments.
+		// Handle before host-based routing so stale service workers can recover.
+		if r.URL.Path == "/service-worker.js" {
+			frontend.ServeLegacyServiceWorkerCleanup(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/frontend/") {
+			frontend.ServeLegacyFrontendCompat(w, r)
+			return
+		}
+
 		// Handle subdomain requests
 		if isSubdomain(appDomain, r.Host) {
 			log.Debug().

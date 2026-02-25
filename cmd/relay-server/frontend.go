@@ -82,6 +82,9 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	// Inject OG metadata (defaults for main app)
 	injectedHTML = f.injectOGMetadata(injectedHTML, "", "", "")
 
+	// Force one-time cleanup of legacy service workers/caches before app boot.
+	injectedHTML = strings.Replace(injectedHTML, "</head>", legacyCleanupBootstrapJS+"\n</head>", 1)
+
 	// Set headers
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -91,6 +94,121 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 	w.Write([]byte(injectedHTML))
 
 	log.Debug().Msg("Served portal.html with SSR data")
+}
+
+const legacyServiceWorkerCleanupJS = `/* Portal legacy SW cleanup worker */
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    } catch (_) {}
+
+    await self.clients.claim();
+    await self.registration.unregister();
+
+    const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const client of clients) {
+      client.navigate(client.url);
+    }
+  })());
+});
+
+self.addEventListener("fetch", (event) => {
+  event.respondWith(fetch(event.request));
+});
+`
+
+const legacyCleanupBootstrapJS = `<script>
+(function () {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  var marker = "portal-sw-cleanup-v2";
+  try {
+    if (sessionStorage.getItem(marker) === "1") {
+      return;
+    }
+    sessionStorage.setItem(marker, "1");
+  } catch (_) {}
+
+  var unregister = navigator.serviceWorker.getRegistrations().then(function (regs) {
+    return Promise.all(
+      regs.map(function (reg) {
+        return reg.unregister();
+      })
+    );
+  });
+
+  var clearCaches = typeof caches === "undefined"
+    ? Promise.resolve()
+    : caches.keys().then(function (keys) {
+      return Promise.all(
+        keys.map(function (k) {
+          return caches.delete(k);
+        })
+      );
+    });
+
+  Promise.all([unregister, clearCaches]).finally(function () {
+    location.reload();
+  });
+})();
+</script>`
+
+// ServeLegacyServiceWorkerCleanup serves a compatibility service worker
+// that unregisters itself and clears caches from legacy webclient deployments.
+func (f *Frontend) ServeLegacyServiceWorkerCleanup(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/javascript")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write([]byte(legacyServiceWorkerCleanupJS))
+	}
+}
+
+// ServeLegacyFrontendCompat handles removed /frontend/* endpoints from legacy webclient.
+func (f *Frontend) ServeLegacyFrontendCompat(w http.ResponseWriter, r *http.Request) {
+	setCORSHeaders(w)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	p := strings.TrimPrefix(r.URL.Path, "/frontend/")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	if p == "manifest.json" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"success":false,"message":"legacy webclient removed; refresh required"}`))
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusGone)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write([]byte("legacy webclient assets removed; refresh required"))
+	}
 }
 
 // injectOGMetadata replaces OG placeholders with actual values.
