@@ -1,64 +1,20 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strconv"
 	"strings"
+	"time"
 
+	"github.com/rs/zerolog/log"
+
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 )
-
-// URL-safe name validation regex
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
-
-// isURLSafeName checks if a name contains only URL-safe characters.
-func isURLSafeName(name string) bool {
-	if name == "" {
-		return true
-	}
-	return urlSafeNameRegex.MatchString(name)
-}
-
-// normalizePortalURL takes various user-friendly server inputs and
-// converts them into a relay API base URL.
-func normalizePortalURL(raw string) (string, error) {
-	server := strings.TrimSpace(raw)
-	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
-	}
-
-	if !strings.Contains(server, "://") {
-		server = "http://" + server
-	}
-
-	u, err := url.Parse(server)
-	if err != nil {
-		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
-	}
-
-	switch u.Scheme {
-	case "http", "https":
-	default:
-		return "", fmt.Errorf("invalid bootstrap server %q: unsupported scheme %q (use http/https)", raw, u.Scheme)
-	}
-
-	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
-		return "", fmt.Errorf("invalid bootstrap server %q: path is not allowed", raw)
-	}
-
-	u.Path = ""
-	u.RawQuery = ""
-	u.Fragment = ""
-	return strings.TrimSuffix(u.String(), "/"), nil
-}
 
 // parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
 func parseURLs(raw string) []string {
@@ -75,16 +31,6 @@ func parseURLs(raw string) []string {
 		}
 	}
 	return out
-}
-
-// isHexString reports whether s contains only hexadecimal characters
-func isHexString(s string) bool {
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
 }
 
 // isSubdomain reports whether host matches the given domain pattern.
@@ -164,17 +110,22 @@ func defaultBootstrapFrom(base string) string {
 	if base == "" {
 		return "http://localhost:4017"
 	}
-	if u, err := normalizePortalURL(base); err == nil && u != "" {
-		return u
+
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
 	}
 
-	if strings.Contains(base, "://") {
-		return "http://localhost:4017"
-	}
-	u, err := url.Parse("http://" + strings.TrimSuffix(base, "/"))
+	u, err := url.Parse(strings.TrimSuffix(base, "/"))
 	if err != nil || u.Host == "" {
 		return "http://localhost:4017"
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "http://localhost:4017"
+	}
+	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
+		return "http://localhost:4017"
+	}
+
 	u.Path = ""
 	u.RawQuery = ""
 	u.Fragment = ""
@@ -226,18 +177,6 @@ func servicePublicURL(portalURL, serviceName string) string {
 	return fmt.Sprintf("%s://%s.%s", scheme, serviceName, host)
 }
 
-// isHTMLContentType checks if the Content-Type header indicates HTML content
-func isHTMLContentType(contentType string) bool {
-	if contentType == "" {
-		return false
-	}
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return strings.HasPrefix(strings.ToLower(contentType), "text/html")
-	}
-	return mediaType == "text/html"
-}
-
 // getContentType returns the MIME type for a file extension
 func getContentType(ext string) string {
 	switch ext {
@@ -271,31 +210,6 @@ func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
 
-func isLocalhost(r *http.Request) bool {
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-
-	if strings.EqualFold(host, "host.docker.internal") {
-		return true
-	}
-
-	ip := net.ParseIP(host)
-	if ip == nil {
-		if addrs, err := net.LookupIP(host); err == nil {
-			for _, a := range addrs {
-				if a.IsLoopback() || a.IsPrivate() {
-					return true
-				}
-			}
-		}
-		return false
-	}
-
-	return ip.IsLoopback() || ip.IsPrivate()
-}
-
 // extractBaseDomain extracts the base domain from a URL.
 // For example, "https://app.portal.com" -> "portal.com"
 func extractBaseDomain(portalURL string) string {
@@ -304,7 +218,6 @@ func extractBaseDomain(portalURL string) string {
 		return ""
 	}
 
-	// Remove scheme if present
 	for _, prefix := range []string{"https://", "http://"} {
 		if strings.HasPrefix(strings.ToLower(portalURL), prefix) {
 			portalURL = portalURL[len(prefix):]
@@ -312,31 +225,25 @@ func extractBaseDomain(portalURL string) string {
 		}
 	}
 
-	// Remove port if present
 	if idx := strings.Index(portalURL, ":"); idx > 0 {
 		portalURL = portalURL[:idx]
 	}
 
-	// Remove path if present
 	if idx := strings.Index(portalURL, "/"); idx > 0 {
 		portalURL = portalURL[:idx]
 	}
 
-	// Remove wildcard if present
 	portalURL = strings.TrimPrefix(portalURL, "*.")
 
-	// Extract base domain (last two parts)
 	parts := strings.Split(portalURL, ".")
 	if len(parts) < 2 {
 		return ""
 	}
 
-	// Return last two parts
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
 // leaseNameFromHost extracts the lease name from a subdomain host.
-// It returns the lease name and true if the host is a valid subdomain of appURL.
 func leaseNameFromHost(host, appURL string) (string, bool) {
 	if !isSubdomain(appURL, host) {
 		return "", false
@@ -358,62 +265,10 @@ func leaseNameFromHost(host, appURL string) (string, bool) {
 
 	leaseName := strings.TrimSuffix(normalizedHost, suffix)
 	if leaseName == "" || strings.Contains(leaseName, ".") {
-		// Lease names do not include dots; avoid ambiguous nested subdomains.
 		return "", false
 	}
 
 	return leaseName, true
-}
-
-// redirectToHTTPS redirects the request to HTTPS using configured SNI port.
-func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
-	targetHost := hostForHTTPSRedirect(r.Host, sniListenAddr)
-	target := "https://" + targetHost + r.URL.Path
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
-	}
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
-}
-
-func hostForHTTPSRedirect(requestHost, sniListenAddr string) string {
-	host := strings.TrimSpace(requestHost)
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		host = parsedHost
-	}
-
-	port := tlsPortForRedirect(sniListenAddr)
-	if port == "443" {
-		return host
-	}
-
-	return net.JoinHostPort(host, port)
-}
-
-func tlsPortForRedirect(sniListenAddr string) string {
-	raw := strings.TrimSpace(sniListenAddr)
-	if raw == "" {
-		return "443"
-	}
-
-	port := ""
-	switch {
-	case strings.HasPrefix(raw, ":"):
-		port = strings.TrimPrefix(raw, ":")
-	case strings.Count(raw, ":") == 0:
-		port = raw
-	default:
-		_, parsedPort, err := net.SplitHostPort(raw)
-		if err != nil {
-			return "443"
-		}
-		port = parsedPort
-	}
-
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return "443"
-	}
-	return port
 }
 
 // openLeaseConnection acquires a reverse connection for the given lease ID.
@@ -435,4 +290,199 @@ func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
 		}
 		h(w, r)
 	}
+}
+
+// leaseRow represents a lease entry for display in admin UI and frontend.
+type leaseRow struct {
+	Peer         string
+	Name         string
+	Kind         string
+	Connected    bool
+	DNS          string
+	LastSeen     string
+	LastSeenISO  string
+	FirstSeenISO string
+	TTL          string
+	Link         string
+	StaleRed     bool
+	Hide         bool
+	Metadata     string
+	BPS          int64  // bytes-per-second limit (0 = unlimited)
+	IsApproved   bool   // whether lease is approved (for manual mode)
+	IsDenied     bool   // whether lease is denied (for manual mode)
+	IP           string // client IP address (for IP-based ban)
+	IsIPBanned   bool   // whether the IP is banned
+}
+
+// formatDuration formats a duration for TTL display.
+func (leaseRow) formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d > time.Hour {
+		return fmt.Sprintf("%.0fh", d.Hours())
+	}
+	if d > time.Minute {
+		return fmt.Sprintf("%.0fm", d.Minutes())
+	}
+	return fmt.Sprintf("%.0fs", d.Seconds())
+}
+
+// formatLastSeen formats a duration since last seen.
+func (leaseRow) formatLastSeen(d time.Duration) string {
+	if d >= time.Hour {
+		h := int(d / time.Hour)
+		m := int((d % time.Hour) / time.Minute)
+		if m > 0 {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+	if d >= time.Minute {
+		m := int(d / time.Minute)
+		s := int((d % time.Minute) / time.Second)
+		if s > 0 {
+			return fmt.Sprintf("%dm %ds", m, s)
+		}
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
+}
+
+// isConnected returns true if the lease was seen recently.
+func (leaseRow) isConnected(since time.Duration) bool {
+	return since < 15*time.Second
+}
+
+// fromLeaseEntry populates the leaseRow from a LeaseEntry with common fields.
+func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portalURL string) {
+	lease := entry.Lease
+	identityID := lease.ID
+	since := max(time.Since(entry.LastSeen), 0)
+	connected := r.isConnected(since)
+
+	name := lease.Name
+	if name == "" {
+		name = "(unnamed)"
+	}
+
+	kind := "http"
+	if lease.TLSEnabled {
+		kind = "https"
+	}
+
+	dnsLabel := identityID
+	if len(dnsLabel) > 8 {
+		dnsLabel = dnsLabel[:8] + "..."
+	}
+
+	var bps int64
+	if admin != nil {
+		if bpsMgr := admin.GetBPSManager(); bpsMgr != nil {
+			bps = bpsMgr.GetBPSLimit(identityID)
+		}
+	}
+
+	metadata := lease.Metadata
+	metadataStr := ""
+	if b, err := json.Marshal(metadata); err == nil {
+		metadataStr = string(b)
+	} else {
+		log.Warn().Err(err).Str("lease_id", identityID).Msg("[leaseRow] Failed to marshal lease metadata")
+	}
+
+	r.Peer = identityID
+	r.Name = name
+	r.Kind = kind
+	r.Connected = connected
+	r.DNS = dnsLabel
+	r.LastSeen = r.formatLastSeen(since)
+	r.LastSeenISO = entry.LastSeen.UTC().Format(time.RFC3339)
+	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
+	r.TTL = r.formatDuration(time.Until(entry.Expires))
+	r.Link = fmt.Sprintf("//%s.%s/", lease.Name, portalHostPort(portalURL))
+	r.StaleRed = !connected && since >= 15*time.Second
+	r.Hide = entry.ParsedMetadata != nil && entry.ParsedMetadata.Hide
+	r.Metadata = metadataStr
+	r.BPS = bps
+
+	if admin != nil {
+		r.IsApproved = admin.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || admin.approveManager.IsLeaseApproved(identityID)
+		r.IsDenied = admin.approveManager.IsLeaseDenied(identityID)
+
+		if admin.ipManager != nil {
+			r.IP = admin.ipManager.GetLeaseIP(identityID)
+			if r.IP != "" {
+				r.IsIPBanned = admin.ipManager.IsIPBanned(r.IP)
+			}
+		}
+	}
+}
+
+// convertLeaseEntriesToRows converts LeaseEntry data to leaseRow format.
+// If forAdmin is true, includes all leases with admin-only fields.
+// If forAdmin is false, filters out banned, unapproved, hidden, and stale leases.
+func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin bool) []leaseRow {
+	leaseEntries := serv.GetAllLeaseEntries()
+	rows := []leaseRow{}
+	now := time.Now()
+
+	bannedList := serv.GetLeaseManager().GetBannedLeases()
+	bannedMap := make(map[string]struct{}, len(bannedList))
+	for _, b := range bannedList {
+		bannedMap[string(b)] = struct{}{}
+	}
+
+	for _, entry := range leaseEntries {
+		if now.After(entry.Expires) {
+			continue
+		}
+
+		identityID := entry.Lease.ID
+		metadata := entry.Lease.Metadata
+
+		if !forAdmin {
+			if _, banned := bannedMap[identityID]; banned {
+				continue
+			}
+			if admin != nil {
+				approveManager := admin.GetApproveManager()
+				if approveManager.GetApprovalMode() == manager.ApprovalModeManual && !approveManager.IsLeaseApproved(identityID) {
+					continue
+				}
+			}
+			if metadata.Hide {
+				continue
+			}
+			since := max(now.Sub(entry.LastSeen), 0)
+			connected := (&leaseRow{}).isConnected(since)
+			if !connected && since >= 3*time.Minute {
+				continue
+			}
+		}
+
+		var row leaseRow
+		row.fromLeaseEntry(entry, admin, flagPortalURL)
+		rows = append(rows, row)
+	}
+
+	return rows
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Error().Err(err).Msg("[HTTP] Failed to encode response")
+	}
+}
+
+func decodeLeaseID(encoded string) (string, bool) {
+	idBytes, err := base64.URLEncoding.DecodeString(encoded)
+	if err != nil {
+		idBytes, err = base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			return "", false
+		}
+	}
+	return string(idBytes), true
 }

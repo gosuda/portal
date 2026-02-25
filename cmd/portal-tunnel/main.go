@@ -17,33 +17,6 @@ import (
 	"gosuda.org/portal/sdk"
 )
 
-// parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
-func parseURLs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
-// per-copy allocations and reduce GC pressure under high concurrency.
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
-}
-
 type Config struct {
 	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
@@ -212,6 +185,23 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 	}
 }
 
+// parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
+func parseURLs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func splitCSV(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
@@ -222,6 +212,16 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
+// per-copy allocations and reduce GC pressure under high concurrency.
+// Using *[]byte to avoid interface boxing allocation in sync.Pool.
+var bufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
 }
 
 // proxyConnection proxies data between relay and local service using raw TCP.

@@ -2,17 +2,14 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"html"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 )
 
@@ -127,7 +124,7 @@ func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer
 	// Get server data from lease manager
 	rows := []leaseRow{}
 	if f.admin != nil {
-		rows = convertLeaseEntriesToRows(serv, f.admin)
+		rows = convertLeaseEntriesToRows(serv, f.admin, false)
 	}
 
 	// Marshal to JSON
@@ -149,142 +146,6 @@ func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer
 		Msg("Injected SSR data into HTML")
 
 	return injected
-}
-
-// convertLeaseEntriesToRows converts LeaseEntry data from LeaseManager to leaseRow format for the app page.
-func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin) []leaseRow {
-	leaseEntries := serv.GetAllLeaseEntries()
-	rows := []leaseRow{}
-	now := time.Now()
-
-	bannedList := serv.GetLeaseManager().GetBannedLeases()
-	bannedMap := make(map[string]struct{}, len(bannedList))
-	for _, b := range bannedList {
-		bannedMap[string(b)] = struct{}{}
-	}
-
-	for _, leaseEntry := range leaseEntries {
-		if now.After(leaseEntry.Expires) {
-			continue
-		}
-
-		lease := leaseEntry.Lease
-		identityID := lease.ID
-
-		metadata := lease.Metadata
-
-		if _, banned := bannedMap[identityID]; banned {
-			continue
-		}
-
-		if admin != nil {
-			approveManager := admin.GetApproveManager()
-			if approveManager.GetApprovalMode() == manager.ApprovalModeManual && !approveManager.IsLeaseApproved(identityID) {
-				continue
-			}
-		}
-
-		if metadata.Hide {
-			continue
-		}
-
-		ttl := time.Until(leaseEntry.Expires)
-		ttlStr := ""
-		if ttl > 0 {
-			if ttl > time.Hour {
-				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
-			} else if ttl > time.Minute {
-				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
-			} else {
-				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
-			}
-		}
-
-		since := now.Sub(leaseEntry.LastSeen)
-		if since < 0 {
-			since = 0
-		}
-		lastSeenStr := func(d time.Duration) string {
-			if d >= time.Hour {
-				h := int(d / time.Hour)
-				m := int((d % time.Hour) / time.Minute)
-				if m > 0 {
-					return fmt.Sprintf("%dh %dm", h, m)
-				}
-				return fmt.Sprintf("%dh", h)
-			}
-			if d >= time.Minute {
-				m := int(d / time.Minute)
-				s := int((d % time.Minute) / time.Second)
-				if s > 0 {
-					return fmt.Sprintf("%dm %ds", m, s)
-				}
-				return fmt.Sprintf("%dm", m)
-			}
-			return fmt.Sprintf("%ds", int(d/time.Second))
-		}(since)
-		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
-		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
-
-		connected := since < 15*time.Second
-
-		if !connected && since >= 3*time.Minute {
-			continue
-		}
-
-		name := lease.Name
-		if name == "" {
-			name = "(unnamed)"
-		}
-
-		// Determine protocol based on TLS setting
-		kind := "http"
-		if lease.TLSEnabled {
-			kind = "https"
-		}
-
-		dnsLabel := identityID
-		if len(dnsLabel) > 8 {
-			dnsLabel = dnsLabel[:8] + "..."
-		}
-
-		link := fmt.Sprintf("//%s.%s/", lease.Name, portalHostPort(flagPortalURL))
-
-		var bps int64
-		if bpsMgr := admin.GetBPSManager(); bpsMgr != nil {
-			bps = bpsMgr.GetBPSLimit(identityID)
-		}
-
-		metadataStr := ""
-		if b, err := json.Marshal(metadata); err == nil {
-			metadataStr = string(b)
-		} else {
-			log.Warn().Err(err).Str("lease_id", identityID).Msg("[Frontend] Failed to marshal lease metadata")
-		}
-
-		row := leaseRow{
-			Peer:         identityID,
-			Name:         name,
-			Kind:         kind,
-			Connected:    connected,
-			DNS:          dnsLabel,
-			LastSeen:     lastSeenStr,
-			LastSeenISO:  lastSeenISO,
-			FirstSeenISO: firstSeenISO,
-			TTL:          ttlStr,
-			Link:         link,
-			StaleRed:     !connected && since >= 15*time.Second,
-			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:     metadataStr,
-			BPS:          bps,
-		}
-
-		if !metadata.Hide {
-			rows = append(rows, row)
-		}
-	}
-
-	return rows
 }
 
 // ServeAppStatic serves static files for app UI (React app) from embedded FS.

@@ -5,7 +5,9 @@ import (
 	"context"
 	"embed"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -213,23 +215,38 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 	}
 }
 
-type leaseRow struct {
-	Peer         string
-	Name         string
-	Kind         string
-	Connected    bool
-	DNS          string
-	LastSeen     string
-	LastSeenISO  string
-	FirstSeenISO string
-	TTL          string
-	Link         string
-	StaleRed     bool
-	Hide         bool
-	Metadata     string
-	BPS          int64  // bytes-per-second limit (0 = unlimited)
-	IsApproved   bool   // whether lease is approved (for manual mode)
-	IsDenied     bool   // whether lease is denied (for manual mode)
-	IP           string // client IP address (for IP-based ban)
-	IsIPBanned   bool   // whether the IP is banned
+// redirectToHTTPS redirects the request to HTTPS using the configured SNI port.
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
+	host := strings.TrimSpace(r.Host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+
+	// Extract port from sniListenAddr (e.g., ":443", "443", "example.com:443")
+	port := "443"
+	if raw := strings.TrimSpace(sniListenAddr); raw != "" {
+		switch {
+		case strings.HasPrefix(raw, ":"):
+			port = strings.TrimPrefix(raw, ":")
+		case strings.Count(raw, ":") == 0:
+			port = raw
+		default:
+			if _, p, err := net.SplitHostPort(raw); err == nil {
+				port = p
+			}
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			port = "443"
+		}
+	}
+
+	if port != "443" {
+		host = net.JoinHostPort(host, port)
+	}
+
+	target := "https://" + host + r.URL.Path
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
