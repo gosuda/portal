@@ -26,7 +26,7 @@ type CertificateClient struct {
 func NewCertificateClient(relayAPIURL string) *CertificateClient {
 	return &CertificateClient{
 		relayAPIURL: relayAPIURL,
-		httpClient:  &http.Client{Timeout: 60 * time.Second},
+		httpClient:  &http.Client{Timeout: 600 * time.Second},
 	}
 }
 

@@ -251,12 +251,15 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	}
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
-	if err := registerSNIRoute(serv, entry.Lease.ID, entry.Lease.Name); err != nil {
-		log.Warn().
-			Err(err).
-			Str("lease_id", entry.Lease.ID).
-			Str("name", entry.Lease.Name).
-			Msg("[Registry] Failed to refresh SNI route on renew")
+	// Only TLS-enabled leases need SNI routes.
+	if entry.Lease.TLSEnabled {
+		if err := registerSNIRoute(serv, entry.Lease.ID, entry.Lease.Name); err != nil {
+			log.Warn().
+				Err(err).
+				Str("lease_id", entry.Lease.ID).
+				Str("name", entry.Lease.Name).
+				Msg("[Registry] Failed to refresh SNI route on renew")
+		}
 	}
 
 	writeJSON(w, map[string]any{
@@ -270,7 +273,7 @@ func registerSNIRoute(serv *portal.RelayServer, leaseID, name string) error {
 		return nil
 	}
 	if serv.BaseHost == "" {
-		return nil
+		return fmt.Errorf("base domain not configured (set PORTAL_URL)")
 	}
 	sniName := strings.ToLower(strings.TrimSpace(name)) + "." + serv.BaseHost
 	return sniRouter.RegisterRoute(sniName, leaseID, name)

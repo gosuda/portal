@@ -152,6 +152,38 @@ func TestWaitForReverseStart_TLSMode(t *testing.T) {
 	}
 }
 
+func TestWaitForReverseStart_IgnoresKeepaliveMarker(t *testing.T) {
+	t.Parallel()
+
+	l := &Listener{stopCh: make(chan struct{})}
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- l.waitForReverseStart(local, portal.HTTPStartMarker)
+	}()
+
+	_, err := peer.Write([]byte{portal.ReverseKeepaliveMarker})
+	if err != nil {
+		t.Fatalf("write keepalive marker: %v", err)
+	}
+	_, err = peer.Write([]byte{portal.HTTPStartMarker})
+	if err != nil {
+		t.Fatalf("write start marker: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForReverseStart failed: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for marker")
+	}
+}
+
 func TestWaitForReverseStart_TLSRejectsHTTPMarker(t *testing.T) {
 	t.Parallel()
 

@@ -270,6 +270,9 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			if errors.Is(err, io.EOF) {
+				continue
+			}
 			log.Debug().
 				Err(err).
 				Str("lease_id", l.lease.ID).
@@ -318,6 +321,9 @@ func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error
 		_, err := io.ReadFull(conn, marker[:])
 		if err == nil {
 			_ = conn.SetReadDeadline(time.Time{})
+			if marker[0] == portal.ReverseKeepaliveMarker {
+				continue
+			}
 			if marker[0] == expectedMarker {
 				return nil
 			}

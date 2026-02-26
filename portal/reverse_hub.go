@@ -3,6 +3,7 @@ package portal
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,10 @@ import (
 )
 
 const (
+	// ReverseKeepaliveMarker keeps idle reverse websocket connections alive
+	// before they are activated for a real client request.
+	ReverseKeepaliveMarker = byte(0x00)
+
 	// HTTPStartMarker is sent by the relay to activate a reverse connection
 	// for HTTP proxy mode.
 	HTTPStartMarker = byte(0x01)
@@ -35,13 +40,22 @@ const (
 
 	// AuthFailureDelay is the delay before closing unauthorized connections (rate limiting).
 	AuthFailureDelay = 2 * time.Second
+
+	// ReverseIdleKeepaliveInterval sends an idle keepalive byte to reduce
+	// reverse websocket disconnections from intermediate idle timeouts.
+	ReverseIdleKeepaliveInterval = 25 * time.Second
 )
 
 // ReverseConn wraps a net.Conn with lifecycle management for the connection pool.
 type ReverseConn struct {
-	Conn net.Conn
-	done chan struct{}
-	once sync.Once
+	Conn   net.Conn
+	done   chan struct{}
+	active chan struct{}
+	once   sync.Once
+	// activateOnce ensures active channel is closed exactly once.
+	activateOnce sync.Once
+	// writeMu serializes writes while the connection is idle.
+	writeMu sync.Mutex
 	// closed tracks local close to help queue consumers skip stale entries.
 	closed atomic.Bool
 }
@@ -49,8 +63,9 @@ type ReverseConn struct {
 // NewReverseConn creates a new pooled connection.
 func NewReverseConn(conn net.Conn) *ReverseConn {
 	return &ReverseConn{
-		Conn: conn,
-		done: make(chan struct{}),
+		Conn:   conn,
+		done:   make(chan struct{}),
+		active: make(chan struct{}),
 	}
 }
 
@@ -70,6 +85,30 @@ func (c *ReverseConn) Wait() {
 
 func (c *ReverseConn) IsClosed() bool {
 	return c == nil || c.closed.Load()
+}
+
+func (c *ReverseConn) Activate() {
+	if c == nil {
+		return
+	}
+	c.activateOnce.Do(func() {
+		close(c.active)
+	})
+}
+
+func (c *ReverseConn) WriteControlByte(marker byte, timeout time.Duration) error {
+	if c == nil || c.Conn == nil {
+		return net.ErrClosed
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	if timeout > 0 {
+		_ = c.Conn.SetWriteDeadline(time.Now().Add(timeout))
+		defer c.Conn.SetWriteDeadline(time.Time{})
+	}
+	_, err := c.Conn.Write([]byte{marker})
+	return err
 }
 
 type ReverseHub struct {
@@ -195,10 +234,9 @@ func (h *ReverseHub) acquireWithStartMarker(leaseID string, timeout time.Duratio
 			if conn == nil || conn.IsClosed() {
 				continue
 			}
-			// Signal tunnel worker to release this connection to application Accept().
-			_ = conn.Conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-			_, err := conn.Conn.Write([]byte{marker})
-			_ = conn.Conn.SetWriteDeadline(time.Time{})
+			// Stop idle keepalive and signal tunnel worker to release this connection.
+			conn.Activate()
+			err := conn.WriteControlByte(marker, 2*time.Second)
 			if err == nil {
 				return conn, nil
 			}
@@ -251,15 +289,12 @@ func (h *ReverseHub) ClearDropped(leaseID string) {
 }
 
 func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
+	if ws == nil {
+		return
+	}
 	ws.PayloadType = websocket.BinaryFrame
 
-	req := ws.Request()
-	leaseID := ""
-	token := ""
-	if req != nil {
-		leaseID = strings.TrimSpace(req.URL.Query().Get("lease_id"))
-		token = strings.TrimSpace(req.URL.Query().Get("token"))
-	}
+	leaseID, token := parseReverseConnectCredentials(ws.Request())
 
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
@@ -282,6 +317,40 @@ func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
 		return
 	}
 
+	h.keepAliveWhileIdle(conn, leaseID)
+
 	// Wait until the connection is used and closed
 	conn.Wait()
+}
+
+func parseReverseConnectCredentials(req *http.Request) (leaseID, token string) {
+	if req == nil || req.URL == nil {
+		return "", ""
+	}
+	leaseID = strings.TrimSpace(req.URL.Query().Get("lease_id"))
+	token = strings.TrimSpace(req.URL.Query().Get("token"))
+	return leaseID, token
+}
+
+func (h *ReverseHub) keepAliveWhileIdle(conn *ReverseConn, leaseID string) {
+	ticker := time.NewTicker(ReverseIdleKeepaliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-conn.done:
+			return
+		case <-conn.active:
+			return
+		case <-ticker.C:
+			if err := conn.WriteControlByte(ReverseKeepaliveMarker, 2*time.Second); err != nil {
+				log.Debug().
+					Err(err).
+					Str("lease_id", leaseID).
+					Msg("[ReverseHub] Idle keepalive write failed")
+				conn.Close()
+				return
+			}
+		}
+	}
 }
