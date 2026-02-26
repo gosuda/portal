@@ -95,18 +95,18 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 		return fmt.Errorf("no relay URLs provided")
 	}
 
-	log.Info().Str("service", flagName).Msgf("Local service is reachable at %s", flagHost)
-	log.Info().Str("service", flagName).Msg("Starting Portal Tunnel...")
-	log.Info().Str("service", flagName).Msgf("  Local:    %s", flagHost)
-	log.Info().Str("service", flagName).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Str("service", flagName).Msgf("  TLS Mode: %v", flagTLSEnable)
+	log.Info().Msgf("Local service is reachable at %s", flagHost)
+	log.Info().Msg("Starting Portal Tunnel...")
+	log.Info().Msgf("  Local:    %s", flagHost)
+	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
+	log.Info().Msgf("  TLS Mode: %v", flagTLSEnable)
 
 	var clientOpts []sdk.ClientOption
 	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
 
 	if flagTLSEnable {
 		clientOpts = append(clientOpts, sdk.WithTLS())
-		log.Info().Str("service", flagName).Msg("TLS: Using relay ACME DNS-01 (E2EE)")
+		log.Info().Msg("TLS: Using relay ACME DNS-01 (E2EE)")
 	}
 
 	client, err := sdk.NewClient(clientOpts...)
@@ -134,14 +134,14 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 		_ = listener.Close()
 	}()
 
-	log.Info().Str("service", flagName).Msg("")
-	log.Info().Str("service", flagName).Msg("Access via:")
-	log.Info().Str("service", flagName).Msgf("- Relay:    %s", relayURLs[0])
+	log.Info().Msg("")
+	log.Info().Msg("Access via:")
+	log.Info().Msgf("- Relay:    %s", relayURLs[0])
 	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
-		log.Info().Str("service", flagName).Msgf("- Lease ID: %s", leaseAware.LeaseID())
+		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
 	if flagTLSEnable {
-		log.Info().Str("service", flagName).Msg("- TLS:      Enabled")
+		log.Info().Msg("- TLS:      Enabled")
 	}
 
 	log.Info().Str("service", flagName).Msg("")
@@ -162,13 +162,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 			case <-ctx.Done():
 				return nil
 			default:
-				log.Error().Str("service", flagName).Err(err).Msg("Failed to accept connection")
+				log.Error().Err(err).Msg("Failed to accept connection")
 				continue
 			}
 		}
 
 		connCount++
-		log.Info().Str("service", flagName).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
+		log.Info().Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
 
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
@@ -178,9 +178,9 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 				proxyType = "TLS→TCP"
 			}
 			if err := proxyConnection(ctx, flagHost, relayConn, flagTLSEnable); err != nil {
-				log.Error().Str("service", flagName).Str("proxy", proxyType).Err(err).Msg("Proxy error")
+				log.Error().Str("proxy", proxyType).Err(err).Msg("Proxy error")
 			}
-			log.Info().Str("service", flagName).Str("proxy", proxyType).Msg("Connection closed")
+			log.Info().Str("proxy", proxyType).Msg("Connection closed")
 		}(relayConn)
 	}
 }

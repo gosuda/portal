@@ -34,6 +34,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
+  const [tlsEnabled, setTlsEnabled] = useState(true);
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   const addRelayUrl = (url: string) => {
@@ -75,11 +76,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+      const tlsEnv = tlsEnabled ? "" : "$env:TLS=\"false\"; ";
+      return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
-    return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
-  }, [currentOrigin, host, name, relayUrls, os]);
+    const tlsEnv = tlsEnabled ? "" : "TLS=false ";
+    return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
+  }, [currentOrigin, host, name, relayUrls, os, tlsEnabled]);
 
   const handleCopy = async () => {
     try {
@@ -227,6 +230,26 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 Windows (PowerShell)
               </button>
             </div>
+          </div>
+
+          {/* TLS Mode */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={tlsEnabled}
+                onChange={(e) => setTlsEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-input cursor-pointer"
+              />
+              <span className="text-sm font-medium text-foreground">
+                TLS Mode (End-to-End Encryption)
+              </span>
+            </label>
+            <p className="text-xs text-text-muted">
+              {tlsEnabled
+                ? "End-to-end encryption with relay ACME DNS-01 certificates"
+                : "HTTP proxy mode without TLS termination"}
+            </p>
           </div>
 
           {/* Generated Command */}
