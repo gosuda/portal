@@ -85,7 +85,7 @@ func (c *CertificateClient) RequestCertificate(ctx context.Context, leaseID, rev
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := c.relayAPIURL + "/api/csr"
+	url := c.relayAPIURL + "/sdk/csr"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -117,7 +117,7 @@ func (c *CertificateClient) RequestCertificate(ctx context.Context, leaseID, rev
 
 // GetBaseDomain fetches the relay's base domain for TLS certificate construction.
 func (c *CertificateClient) GetBaseDomain(ctx context.Context) (string, error) {
-	url := c.relayAPIURL + "/api/domain"
+	url := c.relayAPIURL + "/sdk/domain"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
@@ -135,16 +135,20 @@ func (c *CertificateClient) GetBaseDomain(ctx context.Context) (string, error) {
 	}
 
 	var domainResp struct {
+		Success    bool   `json:"success"`
 		BaseDomain string `json:"base_domain"`
+		Message    string `json:"message"`
 	}
 	if err := json.Unmarshal(respBody, &domainResp); err != nil {
 		return "", fmt.Errorf("parse response: %w", err)
 	}
-
-	if domainResp.BaseDomain == "" {
-		return "", fmt.Errorf("relay did not return base domain")
+	if !domainResp.Success {
+		msg := domainResp.Message
+		if msg == "" {
+			msg = "base domain not configured"
+		}
+		return "", fmt.Errorf("get base domain: %s", msg)
 	}
-
 	return domainResp.BaseDomain, nil
 }
 

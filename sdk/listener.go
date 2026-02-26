@@ -260,7 +260,12 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 			continue
 		}
 
-		if err := l.waitForReverseStart(conn); err != nil {
+		expectedMarker := portal.HTTPStartMarker
+		if l.tlsConfig != nil {
+			expectedMarker = portal.TLSStartMarker
+		}
+
+		if err := l.waitForReverseStart(conn, expectedMarker); err != nil {
 			conn.Close()
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -306,17 +311,17 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 	return conn, nil
 }
 
-func (l *Listener) waitForReverseStart(conn net.Conn) error {
+func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error {
 	var marker [1]byte
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(reverseReadTimeout))
 		_, err := io.ReadFull(conn, marker[:])
 		if err == nil {
 			_ = conn.SetReadDeadline(time.Time{})
-			if marker[0] != portal.ReverseStartMarker {
-				return fmt.Errorf("invalid reverse marker: %d", marker[0])
+			if marker[0] == expectedMarker {
+				return nil
 			}
-			return nil
+			return fmt.Errorf("invalid reverse marker: %d", marker[0])
 		}
 
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -346,14 +351,14 @@ func (l *Listener) registerWithRelay() error {
 		ReverseToken: l.lease.ReverseToken,
 	}
 
-	return l.postJSON("/api/register", reqBody)
+	return l.postJSON("/sdk/register", reqBody)
 }
 
 func (l *Listener) unregisterFromRelay() error {
 	reqBody := UnregisterRequest{
 		LeaseID: l.lease.ID,
 	}
-	return l.postJSON("/api/unregister", reqBody)
+	return l.postJSON("/sdk/unregister", reqBody)
 }
 
 func (l *Listener) sendKeepalive() error {
@@ -361,7 +366,7 @@ func (l *Listener) sendKeepalive() error {
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
-	return l.postJSON("/api/renew", reqBody)
+	return l.postJSON("/sdk/renew", reqBody)
 }
 
 func (l *Listener) reRegisterLease() error {
@@ -482,7 +487,7 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported relay URL scheme: %q", u.Scheme)
 	}
-	u.Path = "/api/connect"
+	u.Path = "/sdk/connect"
 	q := u.Query()
 	q.Set("lease_id", leaseID)
 	q.Set("token", token)

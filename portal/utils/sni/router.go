@@ -39,6 +39,7 @@ type Router struct {
 	routes   map[string]*Route // SNI -> Route
 	leases   map[string]*Route // LeaseID -> Route
 	listener net.Listener
+	addr     string
 
 	// Callback for new connections
 	onConnection func(conn net.Conn, route *Route)
@@ -49,12 +50,18 @@ type Router struct {
 }
 
 // NewRouter creates a new SNI router
-func NewRouter() *Router {
+func NewRouter(addr string) *Router {
 	return &Router{
+		addr:   addr,
 		routes: make(map[string]*Route),
 		leases: make(map[string]*Route),
 		stopCh: make(chan struct{}),
 	}
+}
+
+// GetAddr returns the listen address.
+func (r *Router) GetAddr() string {
+	return r.addr
 }
 
 // SetConnectionCallback sets the callback for new connections
@@ -192,11 +199,11 @@ func (r *Router) GetAllRoutes() []*Route {
 	return routes
 }
 
-// Start starts the SNI router on the given address
-func (r *Router) Start(addr string) error {
-	listener, err := net.Listen("tcp", addr)
+// Start starts the SNI router on the configured address.
+func (r *Router) Start() error {
+	listener, err := net.Listen("tcp", r.addr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", addr, err)
+		return fmt.Errorf("failed to listen on %s: %w", r.addr, err)
 	}
 
 	r.mu.Lock()
@@ -204,7 +211,7 @@ func (r *Router) Start(addr string) error {
 	r.mu.Unlock()
 
 	log.Info().
-		Str("addr", addr).
+		Str("addr", r.addr).
 		Msg("[SNI] Router started")
 
 	r.wg.Add(1)

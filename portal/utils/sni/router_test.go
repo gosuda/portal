@@ -5,7 +5,7 @@ import (
 )
 
 func TestRouter_RegisterRoute(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	// Test basic registration
 	err := router.RegisterRoute("example.com", "lease-1", "test")
@@ -29,7 +29,7 @@ func TestRouter_RegisterRoute(t *testing.T) {
 }
 
 func TestRouter_UnregisterRoute(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	err := router.RegisterRoute("example.com", "lease-1", "test")
 	if err != nil {
@@ -45,7 +45,7 @@ func TestRouter_UnregisterRoute(t *testing.T) {
 }
 
 func TestRouter_UnregisterRouteByLeaseID(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	err := router.RegisterRoute("example.com", "lease-1", "test")
 	if err != nil {
@@ -61,7 +61,7 @@ func TestRouter_UnregisterRouteByLeaseID(t *testing.T) {
 }
 
 func TestRouter_GetRoute_Wildcard(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	// Register wildcard route
 	err := router.RegisterRoute("*.example.com", "lease-1", "test")
@@ -96,7 +96,7 @@ func TestRouter_GetRoute_Wildcard(t *testing.T) {
 }
 
 func TestRouter_GetRoute_ExactBeforeWildcard(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	// Register both exact and wildcard routes
 	err := router.RegisterRoute("*.example.com", "lease-1", "wildcard")
@@ -129,7 +129,7 @@ func TestRouter_GetRoute_ExactBeforeWildcard(t *testing.T) {
 }
 
 func TestRouter_GetRouteByLeaseID(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	err := router.RegisterRoute("example.com", "lease-1", "test")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestRouter_GetRouteByLeaseID(t *testing.T) {
 }
 
 func TestRouter_GetAllRoutes(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	_ = router.RegisterRoute("example.com", "lease-1", "test1")
 	_ = router.RegisterRoute("other.com", "lease-2", "test2")
@@ -163,7 +163,7 @@ func TestRouter_GetAllRoutes(t *testing.T) {
 }
 
 func TestRouter_CaseInsensitive(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	err := router.RegisterRoute("Example.COM", "lease-1", "test")
 	if err != nil {
@@ -181,7 +181,7 @@ func TestRouter_CaseInsensitive(t *testing.T) {
 }
 
 func TestRouter_LeaseRename(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	// Register with name1
 	err := router.RegisterRoute("name1.example.com", "lease-1", "name1")
@@ -212,7 +212,7 @@ func TestRouter_LeaseRename(t *testing.T) {
 }
 
 func TestRouter_Stop(t *testing.T) {
-	router := NewRouter()
+	router := NewRouter("")
 
 	err := router.RegisterRoute("example.com", "lease-1", "test")
 	if err != nil {

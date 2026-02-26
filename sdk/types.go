@@ -119,7 +119,7 @@ func WithHide(hide bool) MetadataOption {
 	}
 }
 
-// API Types for /api/ endpoints
+// API Types for /sdk/ endpoints
 // These types are shared between SDK and relay server
 type RegisterRequest struct {
 	LeaseID      string          `json:"lease_id"`

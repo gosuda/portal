@@ -1,8 +1,13 @@
 package sdk
 
 import (
+	"crypto/tls"
+	"net"
 	"strings"
 	"testing"
+	"time"
+
+	"gosuda.org/portal/portal"
 )
 
 func TestNormalizeRelayAPIURL(t *testing.T) {
@@ -70,7 +75,7 @@ func TestRelayConnectURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.HasPrefix(got, "ws://localhost:4017/api/connect?") {
+	if !strings.HasPrefix(got, "ws://localhost:4017/sdk/connect?") {
 		t.Fatalf("unexpected URL prefix: %q", got)
 	}
 	if !strings.Contains(got, "lease_id=lease-1") {
@@ -85,5 +90,123 @@ func TestRelayConnectURL(t *testing.T) {
 	}
 	if _, err := relayConnectURL("http://localhost:4017", "lease-1", ""); err == nil {
 		t.Fatal("expected error for empty token")
+	}
+}
+
+func TestWaitForReverseStart_HTTPMode(t *testing.T) {
+	t.Parallel()
+
+	l := &Listener{stopCh: make(chan struct{})}
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- l.waitForReverseStart(local, portal.HTTPStartMarker)
+	}()
+
+	_, err := peer.Write([]byte{portal.HTTPStartMarker})
+	if err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForReverseStart failed: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for marker")
+	}
+}
+
+func TestWaitForReverseStart_TLSMode(t *testing.T) {
+	t.Parallel()
+
+	l := &Listener{
+		stopCh:    make(chan struct{}),
+		tlsConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+	}()
+
+	_, err := peer.Write([]byte{portal.TLSStartMarker})
+	if err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForReverseStart failed: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for marker")
+	}
+}
+
+func TestWaitForReverseStart_TLSRejectsHTTPMarker(t *testing.T) {
+	t.Parallel()
+
+	l := &Listener{
+		stopCh:    make(chan struct{}),
+		tlsConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+	}
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+	}()
+
+	_, err := peer.Write([]byte{portal.HTTPStartMarker})
+	if err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected invalid marker error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for marker")
+	}
+}
+
+func TestWaitForReverseStart_HTTPRejectsTLSMarker(t *testing.T) {
+	t.Parallel()
+
+	l := &Listener{stopCh: make(chan struct{})}
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- l.waitForReverseStart(local, portal.HTTPStartMarker)
+	}()
+
+	_, err := peer.Write([]byte{portal.TLSStartMarker})
+	if err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected invalid marker error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for marker")
 	}
 }

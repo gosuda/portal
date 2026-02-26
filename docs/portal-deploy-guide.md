@@ -134,7 +134,7 @@ portal-tunnel --host localhost:3000 --name myapp --relay https://example.com --t
 
 How it works:
 1. Tunnel generates private key and CSR locally
-2. Sends CSR to relay via `/api/csr`
+2. Sends CSR to relay via `/sdk/csr`
 3. Relay issues certificate via ACME DNS-01
 4. TLS connections go directly to tunnel on port 443
 
@@ -166,7 +166,7 @@ curl https://example.com/healthz
 # Expected: {"status":"ok"}
 
 # Domain API
-curl https://example.com/api/domain
+curl https://example.com/sdk/domain
 # Expected: {"success":true,"base_domain":"example.com"}
 
 # Tunnel script
@@ -194,7 +194,7 @@ curl -fsSL https://example.com/tunnel | HOST=localhost:3000 NAME=test sh
                     │         ▼                                           │
                     │  ┌─────────────┐    ┌─────────────┐                 │
                     │  │  Admin UI   │    │    API      │                 │
-                    │  │  /admin     │    │   /api/*    │                 │
+                    │  │  /admin     │    │   /sdk/*    │                 │
                     │  └─────────────┘    └─────────────┘                 │
                     │                                                     │
                     └─────────────────────────────────────────────────────┘

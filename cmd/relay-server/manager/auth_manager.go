@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -29,6 +31,19 @@ type loginAttempt struct {
 
 // NewAuthManager creates a new AuthManager with the given secret key
 func NewAuthManager(secretKey string) *AuthManager {
+	// Create AuthManager for admin authentication
+	// Auto-generate secret key if not provided
+	if secretKey == "" {
+		randomBytes := make([]byte, 16)
+		if _, err := rand.Read(randomBytes); err != nil {
+			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
+		}
+		secretKey = hex.EncodeToString(randomBytes)
+		log.Warn().Str("key", secretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
+	} else {
+		log.Info().Str("key", secretKey).Msg("[server] admin authentication enabled")
+	}
+
 	return &AuthManager{
 		secretKey:    secretKey,
 		failedLogins: make(map[string]*loginAttempt),

@@ -39,7 +39,7 @@ Portal connects local applications to web users through a secure relay layer wit
 
 ## Connection Flow
 
-1. **Register**: App/Tunnel → Relay (`POST /api/register`)
+1. **Register**: App/Tunnel → Relay (`POST /sdk/register`)
 2. **Reverse Connect**: App/Tunnel ← Relay (`TCP reverse tunnel`)
 3. **Client Request**: Browser → Relay (`GET *.localhost:4017`)
 4. **Proxy**: Relay ↔ App/Tunnel ↔ Local Service

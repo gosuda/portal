@@ -11,18 +11,15 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/utils/cert"
-	"gosuda.org/portal/portal/utils/sni"
 )
 
 //go:embed dist/*
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *sni.Router, admin *Admin, frontend *Frontend, noIndex bool, certManager cert.Manager, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -44,10 +41,15 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 	}
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
-	appMux.HandleFunc("/app/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
 		frontend.ServeAppStatic(w, r, p, serv)
-	}))
+	})
 
 	// Tunnel installer script and binaries
 	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -57,16 +59,10 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 		serveTunnelBinary(w, r)
 	})
 
-	// SDK Registry API for lease registration (used by SDK and tunnel clients)
-	registry := NewSDKRegistry(serv, sniRouter, certManager)
-	appMux.HandleFunc("/api/register", registry.HandleRegister)
-	appMux.HandleFunc("/api/unregister", registry.HandleUnregister)
-	appMux.HandleFunc("/api/renew", registry.HandleRenew)
-	appMux.HandleFunc("/api/csr", registry.HandleCSR)
-	appMux.HandleFunc("/api/domain", registry.HandleDomain)
-	appMux.Handle("/api/connect", websocket.Server{
-		Handshake: func(*websocket.Config, *http.Request) error { return nil },
-		Handler:   websocket.Handler(serv.GetReverseHub().HandleConnect),
+	// SDK Registry API for lease registration
+	registry := &SDKRegistry{}
+	appMux.HandleFunc("/sdk/", func(w http.ResponseWriter, r *http.Request) {
+		registry.HandleSDKRequest(w, r, serv)
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
@@ -115,7 +111,7 @@ func serveHTTP(addr, sniListenAddr string, serv *portal.RelayServer, sniRouter *
 			}
 			// TLS is enabled, redirect to HTTPS.
 			log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
-			redirectToHTTPS(w, r, sniListenAddr)
+			redirectToHTTPS(w, r, serv.GetSNIRouter().GetAddr())
 			return
 		}
 		appMux.ServeHTTP(w, r)
@@ -158,8 +154,7 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 	log.Debug().
 		Str("lease_name", leaseName).
 		Bool("tls_enabled", entry.Lease.TLSEnabled).
-		Bool("should_proxy_http", shouldProxy).
-		Msg("[proxy] shouldProxyHTTP check")
+		Msg("[proxy] shouldProxyHTTP")
 	return shouldProxy
 }
 
@@ -181,7 +176,7 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		return
 	}
 
-	targetConn, releaseConn, err := openLeaseConnection(entry.Lease.ID, serv)
+	reverseConn, err := serv.GetReverseHub().AcquireForHTTP(entry.Lease.ID, portal.HTTPProxyWait)
 	if err != nil {
 		log.Error().
 			Err(err).
@@ -191,7 +186,8 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	defer releaseConn()
+	defer reverseConn.Close()
+	targetConn := reverseConn.Conn
 
 	// Write the HTTP request to the tunnel
 	if err := r.Write(targetConn); err != nil {

@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -12,20 +13,40 @@ import (
 )
 
 const (
-	ReverseStartMarker        = byte(0x01)
-	ReverseQueueSize          = 64
-	ReverseAcquireWait        = 2 * time.Second
-	ReverseHTTPWait           = 1500 * time.Millisecond
-	ReverseSNIAcquireWait     = 2 * time.Second
-	ReverseHandleConnectDelay = 2 * time.Second
+	// HTTPStartMarker is sent by the relay to activate a reverse connection
+	// for HTTP proxy mode.
+	HTTPStartMarker = byte(0x01)
+
+	// TLSStartMarker is sent by the relay to activate a reverse connection
+	// for TLS passthrough mode.
+	TLSStartMarker = byte(0x02)
+
+	// QueueSize is the maximum number of pending reverse connections per lease.
+	QueueSize = 64
+
+	// DefaultAcquireTimeout is the default timeout for acquiring a reverse connection.
+	DefaultAcquireTimeout = 2 * time.Second
+
+	// HTTPProxyWait is the timeout for HTTP proxy connections (shorter for better UX).
+	HTTPProxyWait = 1500 * time.Millisecond
+
+	// TLSAcquireWait is the timeout for TLS passthrough connections.
+	TLSAcquireWait = 2 * time.Second
+
+	// AuthFailureDelay is the delay before closing unauthorized connections (rate limiting).
+	AuthFailureDelay = 2 * time.Second
 )
 
+// ReverseConn wraps a net.Conn with lifecycle management for the connection pool.
 type ReverseConn struct {
 	Conn net.Conn
 	done chan struct{}
 	once sync.Once
+	// closed tracks local close to help queue consumers skip stale entries.
+	closed atomic.Bool
 }
 
+// NewReverseConn creates a new pooled connection.
 func NewReverseConn(conn net.Conn) *ReverseConn {
 	return &ReverseConn{
 		Conn: conn,
@@ -33,57 +54,64 @@ func NewReverseConn(conn net.Conn) *ReverseConn {
 	}
 }
 
+// Close closes the connection and signals completion.
 func (c *ReverseConn) Close() {
+	c.closed.Store(true)
 	c.Conn.Close()
 	c.once.Do(func() {
 		close(c.done)
 	})
 }
 
+// Wait blocks until the connection is closed.
 func (c *ReverseConn) Wait() {
 	<-c.done
 }
 
-type ReverseHub struct {
-	mu         sync.RWMutex
-	pending    map[string]chan *ReverseConn
-	dropped    map[string]struct{} // leases that have been dropped and should reject offers
-	authorizer func(string, string) bool
+func (c *ReverseConn) IsClosed() bool {
+	return c == nil || c.closed.Load()
 }
 
+type ReverseHub struct {
+	mu         sync.RWMutex
+	pools      map[string]chan *ReverseConn
+	dropped    map[string]struct{}
+	authorizer func(leaseID, token string) bool
+}
+
+// NewReverseHub creates a new reverse connection hub.
 func NewReverseHub() *ReverseHub {
 	return &ReverseHub{
-		pending: make(map[string]chan *ReverseConn),
+		pools:   make(map[string]chan *ReverseConn),
 		dropped: make(map[string]struct{}),
 	}
 }
 
-func (h *ReverseHub) getOrCreate(leaseID string) chan *ReverseConn {
+func (h *ReverseHub) getOrCreatePool(leaseID string) chan *ReverseConn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	// Don't create channels for dropped leases
 	if _, dropped := h.dropped[leaseID]; dropped {
 		return nil
 	}
 
-	ch, ok := h.pending[leaseID]
-	if ok {
-		return ch
+	if pool, ok := h.pools[leaseID]; ok {
+		return pool
 	}
-	ch = make(chan *ReverseConn, ReverseQueueSize)
-	h.pending[leaseID] = ch
-	return ch
+	pool := make(chan *ReverseConn, QueueSize)
+	h.pools[leaseID] = pool
+	return pool
 }
 
-func (h *ReverseHub) get(leaseID string) (chan *ReverseConn, bool) {
+func (h *ReverseHub) getPool(leaseID string) (chan *ReverseConn, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	ch, ok := h.pending[leaseID]
-	return ch, ok
+	pool, ok := h.pools[leaseID]
+	return pool, ok
 }
 
-func (h *ReverseHub) SetAuthorizer(authorizer func(string, string) bool) {
+// SetAuthorizer sets the authentication function for new connections.
+func (h *ReverseHub) SetAuthorizer(authorizer func(leaseID, token string) bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.authorizer = authorizer
@@ -100,82 +128,100 @@ func (h *ReverseHub) isAuthorized(leaseID, token string) bool {
 }
 
 func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
-	ch := h.getOrCreate(leaseID)
-	if ch == nil {
-		// Lease was dropped, reject the offer
+	pool := h.getOrCreatePool(leaseID)
+	if pool == nil {
 		return false
 	}
-	select {
-	case ch <- conn:
-		return true
-	default:
-		return false
+
+	for i := 0; i < QueueSize+1; i++ {
+		select {
+		case pool <- conn:
+			return true
+		default:
+		}
+
+		// Pool full: evict one oldest entry and retry.
+		select {
+		case old := <-pool:
+			if old != nil {
+				old.Close()
+			}
+		default:
+		}
 	}
+
+	return false
 }
 
-func (h *ReverseHub) Acquire(leaseID string, timeout time.Duration) (*ReverseConn, error) {
-	ch, ok := h.get(leaseID)
+func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*ReverseConn, error) {
+	return h.acquireWithStartMarker(leaseID, timeout, TLSStartMarker, "TLS")
+}
+
+// AcquireForHTTP retrieves a connection for HTTP proxy mode.
+// A mode-specific start marker is sent before returning the connection.
+func (h *ReverseHub) AcquireForHTTP(leaseID string, timeout time.Duration) (*ReverseConn, error) {
+	return h.acquireWithStartMarker(leaseID, timeout, HTTPStartMarker, "HTTP")
+}
+
+func (h *ReverseHub) acquireWithStartMarker(leaseID string, timeout time.Duration, marker byte, mode string) (*ReverseConn, error) {
+	pool, ok := h.getPool(leaseID)
 	if !ok {
-		return nil, fmt.Errorf("no reverse tunnel for lease %s", leaseID)
+		return nil, fmt.Errorf("no tunnel available for lease %s", leaseID)
 	}
 
 	if timeout <= 0 {
-		timeout = ReverseAcquireWait
+		timeout = DefaultAcquireTimeout
 	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
-	select {
-	case conn := <-ch:
-		if conn == nil {
-			return nil, fmt.Errorf("reverse tunnel unavailable for lease %s", leaseID)
-		}
-		return conn, nil
-	case <-timer.C:
-		return nil, fmt.Errorf("reverse tunnel timeout for lease %s", leaseID)
-	}
-}
-
-func (h *ReverseHub) AcquireStarted(leaseID string, timeout time.Duration) (*ReverseConn, error) {
-	if timeout <= 0 {
-		timeout = ReverseAcquireWait
-	}
-
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return nil, fmt.Errorf("reverse tunnel timeout for lease %s", leaseID)
+			return nil, fmt.Errorf("tunnel acquisition timeout for lease %s", leaseID)
 		}
-
-		conn, err := h.Acquire(leaseID, remaining)
-		if err != nil {
-			return nil, err
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
 		}
+		timer.Reset(remaining)
 
-		_ = conn.Conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-		_, err = conn.Conn.Write([]byte{ReverseStartMarker})
-		_ = conn.Conn.SetWriteDeadline(time.Time{})
-		if err == nil {
-			return conn, nil
+		select {
+		case conn := <-pool:
+			if conn == nil || conn.IsClosed() {
+				continue
+			}
+			// Signal tunnel worker to release this connection to application Accept().
+			_ = conn.Conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, err := conn.Conn.Write([]byte{marker})
+			_ = conn.Conn.SetWriteDeadline(time.Time{})
+			if err == nil {
+				return conn, nil
+			}
+
+			log.Warn().
+				Err(err).
+				Str("lease_id", leaseID).
+				Str("mode", mode).
+				Msg("[ReverseHub] Failed to send start marker; retrying with new connection")
+			conn.Close()
+			continue
+		case <-timer.C:
+			return nil, fmt.Errorf("tunnel acquisition timeout for lease %s", leaseID)
 		}
-
-		log.Warn().
-			Err(err).
-			Str("lease_id", leaseID).
-			Msg("[ReverseHub] Failed to start reverse stream; retrying")
-		conn.Close()
 	}
 }
 
 func (h *ReverseHub) DropLease(leaseID string) {
 	h.mu.Lock()
-	ch, ok := h.pending[leaseID]
+	pool, ok := h.pools[leaseID]
 	if ok {
-		delete(h.pending, leaseID)
+		delete(h.pools, leaseID)
 	}
-	// Mark as dropped to prevent new offers from creating channels
 	h.dropped[leaseID] = struct{}{}
 	h.mu.Unlock()
 
@@ -183,10 +229,10 @@ func (h *ReverseHub) DropLease(leaseID string) {
 		return
 	}
 
-	// Drain and close any pending connections
+	// Drain and close pending connections
 	for {
 		select {
-		case conn := <-ch:
+		case conn := <-pool:
 			if conn != nil {
 				conn.Close()
 			}
@@ -214,25 +260,28 @@ func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
 		leaseID = strings.TrimSpace(req.URL.Query().Get("lease_id"))
 		token = strings.TrimSpace(req.URL.Query().Get("token"))
 	}
+
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
-		time.Sleep(ReverseHandleConnectDelay)
+		time.Sleep(AuthFailureDelay)
 		ws.Close()
 		return
 	}
+
 	if !h.isAuthorized(leaseID, token) {
 		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Unauthorized reverse connect")
-		time.Sleep(ReverseHandleConnectDelay)
+		time.Sleep(AuthFailureDelay)
 		ws.Close()
 		return
 	}
 
 	conn := NewReverseConn(ws)
 	if !h.Offer(leaseID, conn) {
-		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Reverse queue full")
+		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Connection pool full for lease")
 		conn.Close()
 		return
 	}
 
+	// Wait until the connection is used and closed
 	conn.Wait()
 }

@@ -9,33 +9,48 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/websocket"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/utils/cert"
-	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/sdk"
 )
 
 // SDKRegistry handles HTTP API for SDK lease registration
-// Used by both tunnel clients and native applications
-type SDKRegistry struct {
-	server      *portal.RelayServer
-	sniRouter   *sni.Router
-	baseHost    string
-	certManager cert.Manager
-}
+type SDKRegistry struct{}
 
-// NewSDKRegistry creates a new SDK registry
-func NewSDKRegistry(server *portal.RelayServer, sniRouter *sni.Router, certManager cert.Manager) *SDKRegistry {
-	return &SDKRegistry{
-		server:      server,
-		sniRouter:   sniRouter,
-		baseHost:    portalBaseHostNoPort(flagPortalURL),
-		certManager: certManager,
+// HandleSDKRequest routes /sdk/* requests.
+func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
+	route := strings.Trim(strings.TrimPrefix(req.URL.Path, "/sdk"), "/")
+
+	switch route {
+	case "register":
+		r.handleRegister(w, req, serv)
+	case "unregister":
+		r.handleUnregister(w, req, serv)
+	case "renew":
+		r.handleRenew(w, req, serv)
+	case "csr":
+		r.handleCSR(w, req, serv)
+	case "domain":
+		r.handleDomain(w, req, serv)
+	case "connect":
+		r.handleConnect(w, req, serv)
+	default:
+		http.NotFound(w, req)
 	}
 }
 
-// HandleRegister handles SDK lease registration requests
-func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
+func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
+	wsHandler := websocket.Server{
+		Handshake: func(*websocket.Config, *http.Request) error { return nil },
+		Handler:   websocket.Handler(serv.GetReverseHub().HandleConnect),
+	}
+	wsHandler.ServeHTTP(w, req)
+}
+
+// handleRegister handles SDK lease registration requests
+func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -88,7 +103,7 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Register with lease manager
-	if !r.server.GetLeaseManager().UpdateLease(lease) {
+	if !serv.GetLeaseManager().UpdateLease(lease) {
 		writeJSON(w, sdk.RegisterResponse{
 			Success: false,
 			Message: "failed to register lease (name conflict or policy violation)",
@@ -97,16 +112,19 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Clear dropped state in case this is a re-registration after disconnect
-	r.server.GetReverseHub().ClearDropped(registerReq.LeaseID)
+	serv.GetReverseHub().ClearDropped(registerReq.LeaseID)
 
-	if err := r.registerSNIRoute(registerReq.LeaseID, registerReq.Name); err != nil {
-		// Keep lease and route state consistent on partial failure.
-		r.server.GetLeaseManager().DeleteLease(registerReq.LeaseID)
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: fmt.Sprintf("failed to register SNI route: %v", err),
-		})
-		return
+	// Only register SNI route for TLS-enabled leases
+	if registerReq.TLSEnabled {
+		if err := registerSNIRoute(serv, registerReq.LeaseID, registerReq.Name); err != nil {
+			// Keep lease and route state consistent on partial failure.
+			serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
+			writeJSON(w, sdk.RegisterResponse{
+				Success: false,
+				Message: fmt.Sprintf("failed to register SNI route: %v", err),
+			})
+			return
+		}
 	}
 
 	log.Info().
@@ -125,8 +143,8 @@ func (r *SDKRegistry) HandleRegister(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// HandleUnregister handles SDK lease unregistration requests
-func (r *SDKRegistry) HandleUnregister(w http.ResponseWriter, req *http.Request) {
+// handleUnregister handles SDK lease unregistration requests
+func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -139,7 +157,7 @@ func (r *SDKRegistry) HandleUnregister(w http.ResponseWriter, req *http.Request)
 
 	if err := json.NewDecoder(req.Body).Decode(&unregisterReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode unregistration request")
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "invalid request body",
 		})
@@ -147,7 +165,7 @@ func (r *SDKRegistry) HandleUnregister(w http.ResponseWriter, req *http.Request)
 	}
 
 	if unregisterReq.LeaseID == "" {
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "lease_id is required",
 		})
@@ -155,21 +173,21 @@ func (r *SDKRegistry) HandleUnregister(w http.ResponseWriter, req *http.Request)
 	}
 
 	// Delete from lease manager
-	if r.server.GetLeaseManager().DeleteLease(unregisterReq.LeaseID) {
+	if serv.GetLeaseManager().DeleteLease(unregisterReq.LeaseID) {
 		log.Info().
 			Str("lease_id", unregisterReq.LeaseID).
 			Msg("[Registry] Lease unregistered")
 	}
-	r.unregisterSNIRoute(unregisterReq.LeaseID)
-	r.server.GetReverseHub().DropLease(unregisterReq.LeaseID)
+	unregisterSNIRoute(serv, unregisterReq.LeaseID)
+	serv.GetReverseHub().DropLease(unregisterReq.LeaseID)
 
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"success": true,
 	})
 }
 
-// HandleRenew handles SDK lease renewal requests (keepalive)
-func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
+// handleRenew handles SDK lease renewal requests (keepalive)
+func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -183,7 +201,7 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 
 	if err := json.NewDecoder(req.Body).Decode(&renewReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode renewal request")
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "invalid request body",
 		})
@@ -191,14 +209,14 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if renewReq.LeaseID == "" {
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "lease_id is required",
 		})
 		return
 	}
 	if strings.TrimSpace(renewReq.ReverseToken) == "" {
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "reverse_token is required",
 		})
@@ -206,16 +224,16 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Get existing lease
-	entry, ok := r.server.GetLeaseManager().GetLeaseByID(renewReq.LeaseID)
+	entry, ok := serv.GetLeaseManager().GetLeaseByID(renewReq.LeaseID)
 	if !ok {
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "lease not found",
 		})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(strings.TrimSpace(renewReq.ReverseToken))) != 1 {
-		writeJSON(w, map[string]interface{}{
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "unauthorized lease renewal",
 		})
@@ -224,8 +242,8 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 
 	// Update expiration
 	entry.Lease.Expires = time.Now().Add(30 * time.Second)
-	if !r.server.GetLeaseManager().UpdateLease(entry.Lease) {
-		writeJSON(w, map[string]interface{}{
+	if !serv.GetLeaseManager().UpdateLease(entry.Lease) {
+		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "failed to renew lease",
 		})
@@ -233,7 +251,7 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
-	if err := r.registerSNIRoute(entry.Lease.ID, entry.Lease.Name); err != nil {
+	if err := registerSNIRoute(serv, entry.Lease.ID, entry.Lease.Name); err != nil {
 		log.Warn().
 			Err(err).
 			Str("lease_id", entry.Lease.ID).
@@ -241,32 +259,34 @@ func (r *SDKRegistry) HandleRenew(w http.ResponseWriter, req *http.Request) {
 			Msg("[Registry] Failed to refresh SNI route on renew")
 	}
 
-	writeJSON(w, map[string]interface{}{
+	writeJSON(w, map[string]any{
 		"success": true,
 	})
 }
 
-func (r *SDKRegistry) registerSNIRoute(leaseID, name string) error {
-	if r.sniRouter == nil {
+func registerSNIRoute(serv *portal.RelayServer, leaseID, name string) error {
+	sniRouter := serv.GetSNIRouter()
+	if sniRouter == nil {
 		return nil
 	}
-	if r.baseHost == "" {
-		return fmt.Errorf("invalid app domain configuration")
+	if serv.BaseHost == "" {
+		return nil
 	}
-	sniName := strings.ToLower(strings.TrimSpace(name)) + "." + r.baseHost
-	return r.sniRouter.RegisterRoute(sniName, leaseID, name)
+	sniName := strings.ToLower(strings.TrimSpace(name)) + "." + serv.BaseHost
+	return sniRouter.RegisterRoute(sniName, leaseID, name)
 }
 
-func (r *SDKRegistry) unregisterSNIRoute(leaseID string) {
-	if r.sniRouter == nil {
+func unregisterSNIRoute(serv *portal.RelayServer, leaseID string) {
+	sniRouter := serv.GetSNIRouter()
+	if sniRouter == nil {
 		return
 	}
-	r.sniRouter.UnregisterRouteByLeaseID(leaseID)
+	sniRouter.UnregisterRouteByLeaseID(leaseID)
 }
 
-// HandleCSR handles Certificate Signing Request submissions
+// handleCSR handles Certificate Signing Request submissions
 // The tunnel client submits a CSR, and the relay issues a certificate via ACME DNS-01
-func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
+func (r *SDKRegistry) handleCSR(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if req.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -274,7 +294,7 @@ func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Check if certificate manager is available
-	if r.certManager == nil {
+	if serv.GetCertManager() == nil {
 		writeJSON(w, sdk.CSRResponse{
 			Success: false,
 			Message: "certificate issuance not configured on this relay",
@@ -316,7 +336,7 @@ func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Authenticate via lease
-	entry, ok := r.server.GetLeaseManager().GetLeaseByID(csrReq.LeaseID)
+	entry, ok := serv.GetLeaseManager().GetLeaseByID(csrReq.LeaseID)
 	if !ok {
 		writeJSON(w, sdk.CSRResponse{
 			Success: false,
@@ -343,7 +363,7 @@ func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Validate domain matches lease name + base host
-	expectedDomain := strings.ToLower(entry.Lease.Name) + "." + r.baseHost
+	expectedDomain := strings.ToLower(entry.Lease.Name) + "." + serv.BaseHost
 	if strings.ToLower(csrDomain) != expectedDomain {
 		writeJSON(w, sdk.CSRResponse{
 			Success: false,
@@ -358,7 +378,7 @@ func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
 		CSR:    csrReq.CSR,
 	}
 
-	cert, err := r.certManager.IssueCertificate(req.Context(), certReq)
+	cert, err := serv.GetCertManager().IssueCertificate(req.Context(), certReq)
 	if err != nil {
 		log.Error().Err(err).
 			Str("lease_id", csrReq.LeaseID).
@@ -384,9 +404,9 @@ func (r *SDKRegistry) HandleCSR(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-// HandleDomain returns the relay's base domain for TLS certificate construction.
-func (r *SDKRegistry) HandleDomain(w http.ResponseWriter, req *http.Request) {
-	if r.baseHost == "" {
+// handleDomain returns the relay's base domain for TLS certificate construction.
+func (r *SDKRegistry) handleDomain(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
+	if serv.BaseHost == "" {
 		writeJSON(w, map[string]any{
 			"success": false,
 			"message": "base domain not configured",
@@ -395,6 +415,6 @@ func (r *SDKRegistry) HandleDomain(w http.ResponseWriter, req *http.Request) {
 	}
 	writeJSON(w, map[string]any{
 		"success":     true,
-		"base_domain": r.baseHost,
+		"base_domain": serv.BaseHost,
 	})
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -139,11 +138,6 @@ func portalHostPort(portalURL string) string {
 	))
 }
 
-// portalBaseHostNoPort returns host without port from a portal URL-like input.
-func portalBaseHostNoPort(portalURL string) string {
-	return strings.ToLower(strings.TrimSpace(stripPort(portalHostPort(portalURL))))
-}
-
 // servicePublicURL returns a service URL derived from portalURL and service name.
 func servicePublicURL(portalURL, serviceName string) string {
 	serviceName = strings.TrimSpace(serviceName)
@@ -210,39 +204,6 @@ func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
 }
 
-// extractBaseDomain extracts the base domain from a URL.
-// For example, "https://app.portal.com" -> "portal.com"
-func extractBaseDomain(portalURL string) string {
-	portalURL = strings.TrimSpace(portalURL)
-	if portalURL == "" {
-		return ""
-	}
-
-	for _, prefix := range []string{"https://", "http://"} {
-		if strings.HasPrefix(strings.ToLower(portalURL), prefix) {
-			portalURL = portalURL[len(prefix):]
-			break
-		}
-	}
-
-	if idx := strings.Index(portalURL, ":"); idx > 0 {
-		portalURL = portalURL[:idx]
-	}
-
-	if idx := strings.Index(portalURL, "/"); idx > 0 {
-		portalURL = portalURL[:idx]
-	}
-
-	portalURL = strings.TrimPrefix(portalURL, "*.")
-
-	parts := strings.Split(portalURL, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
-}
-
 // leaseNameFromHost extracts the lease name from a subdomain host.
 func leaseNameFromHost(host, appURL string) (string, bool) {
 	if !isSubdomain(appURL, host) {
@@ -269,27 +230,6 @@ func leaseNameFromHost(host, appURL string) (string, bool) {
 	}
 
 	return leaseName, true
-}
-
-// openLeaseConnection acquires a reverse connection for the given lease ID.
-func openLeaseConnection(leaseID string, serv *portal.RelayServer) (net.Conn, func(), error) {
-	reverseConn, err := serv.GetReverseHub().AcquireStarted(leaseID, portal.ReverseHTTPWait)
-	if err != nil {
-		return nil, nil, fmt.Errorf("no reverse connection available for lease %s: %w", leaseID, err)
-	}
-	return reverseConn.Conn, reverseConn.Close, nil
-}
-
-// withCORSMiddleware wraps a handler with CORS headers.
-func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		setCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		h(w, r)
-	}
 }
 
 // leaseRow represents a lease entry for display in admin UI and frontend.
