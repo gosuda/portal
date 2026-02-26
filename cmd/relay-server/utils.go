@@ -423,7 +423,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 // If forAdmin is true, includes all leases with admin-only fields.
 // If forAdmin is false, filters out banned, unapproved, hidden, and stale leases.
 func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin bool) []leaseRow {
-	leaseEntries := serv.GetAllLeaseEntries()
+	leaseEntries := serv.GetLeaseManager().GetAllLeaseEntries()
 	rows := []leaseRow{}
 	now := time.Now()
 

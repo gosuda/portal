@@ -170,7 +170,6 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		return
 	}
 
-	// Find lease by name
 	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
 	if !ok {
 		http.Error(w, "service not found", http.StatusNotFound)

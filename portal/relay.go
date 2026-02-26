@@ -47,21 +47,6 @@ func (g *RelayServer) GetLeaseManager() *LeaseManager {
 	return g.leaseManager
 }
 
-// GetLeaseByName returns a lease entry by its name.
-func (g *RelayServer) GetLeaseByName(name string) (*LeaseEntry, bool) {
-	return g.leaseManager.GetLeaseByName(name)
-}
-
-// GetLeaseByNameFold returns a lease entry by name using case-insensitive matching.
-func (g *RelayServer) GetLeaseByNameFold(name string) (*LeaseEntry, bool) {
-	return g.leaseManager.GetLeaseByNameFold(name)
-}
-
-// GetAllLeaseEntries returns all lease entries from the lease manager.
-func (g *RelayServer) GetAllLeaseEntries() []*LeaseEntry {
-	return g.leaseManager.GetAllLeaseEntries()
-}
-
 // GetReverseHub returns the reverse hub instance.
 func (g *RelayServer) GetReverseHub() *ReverseHub {
 	return g.reverseHub

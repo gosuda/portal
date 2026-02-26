@@ -243,7 +243,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 		writeJSON(w, serv.GetLeaseManager().GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
 		writeJSON(w, map[string]interface{}{
-			"leases_count": len(serv.GetAllLeaseEntries()),
+			"leases_count": len(serv.GetLeaseManager().GetAllLeaseEntries()),
 			"uptime":       "TODO",
 		})
 	case route == "settings" && r.Method == http.MethodGet:
