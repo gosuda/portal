@@ -20,22 +20,21 @@ import (
 )
 
 var (
-	flagPortalURL      string
-	flagBootstraps     []string
-	flagALPN           string
+	// Server
 	flagPort           int
-	flagMaxLease       int
-	flagLeaseBPS       int
-	flagNoIndex        bool
 	flagAdminSecretKey string
+	flagNoIndex        bool
+	flagLeaseBPS       int
 
-	// ACME DNS-01 flags for TLSAuto support
+	// Portal
+	flagPortalURL  string
+	flagBootstraps []string
+
+	// TLS
+	flagSNIPort         string
 	flagACMEDNSProvider string
 	flagACMEEmail       string
 	flagACMEDirectory   string
-
-	// SNI router
-	flagSNIPort string
 )
 
 func main() {
@@ -50,25 +49,27 @@ func main() {
 	if defaultBootstraps == "" {
 		defaultBootstraps = defaultBootstrapFrom(defaultPortalURL)
 	}
+	defaultSNIPort := os.Getenv("SNI_PORT")
+	if defaultSNIPort == "" {
+		defaultSNIPort = ":443"
+	}
 
+	// Server flags
+	flag.IntVar(&flagPort, "port", 4017, "HTTP server port")
+	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", os.Getenv("ADMIN_SECRET_KEY"), "admin auth secret (env: ADMIN_SECRET_KEY)")
+	flag.BoolVar(&flagNoIndex, "noindex", os.Getenv("NOINDEX") == "true", "disallow crawlers (env: NOINDEX)")
+	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
+
+	// Portal flags
 	var flagBootstrapsCSV string
-	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
-	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
-	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
+	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "portal base URL (env: PORTAL_URL)")
+	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 
-	defaultNoIndex := os.Getenv("NOINDEX") == "true"
-	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
-	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", os.Getenv("ADMIN_SECRET_KEY"), "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
-
-	// ACME DNS-01 flags
-	flag.StringVar(&flagACMEDNSProvider, "acme-dns-provider", os.Getenv("ACME_DNS_PROVIDER"), "DNS provider for ACME DNS-01 challenge (cloudflare, route53)")
-	flag.StringVar(&flagACMEEmail, "acme-email", os.Getenv("ACME_EMAIL"), "email for ACME account registration")
-	flag.StringVar(&flagACMEDirectory, "acme-directory", os.Getenv("ACME_DIRECTORY"), "ACME directory URL (default: Let's Encrypt production)")
-
-	flag.StringVar(&flagSNIPort, "sni-port", os.Getenv("SNI_PORT"), "SNI router port for TLS passthrough (env: SNI_PORT)")
+	// TLS flags
+	flag.StringVar(&flagSNIPort, "sni-port", defaultSNIPort, "SNI router port (env: SNI_PORT)")
+	flag.StringVar(&flagACMEDNSProvider, "acme-dns-provider", os.Getenv("ACME_DNS_PROVIDER"), "ACME DNS provider (env: ACME_DNS_PROVIDER)")
+	flag.StringVar(&flagACMEEmail, "acme-email", os.Getenv("ACME_EMAIL"), "ACME account email (env: ACME_EMAIL)")
+	flag.StringVar(&flagACMEDirectory, "acme-directory", os.Getenv("ACME_DIRECTORY"), "ACME directory URL (env: ACME_DIRECTORY)")
 
 	flag.Parse()
 
@@ -84,12 +85,9 @@ func runServer() error {
 
 	log.Info().
 		Str("portal_base_url", flagPortalURL).
-		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
+		Strs("bootstrap_uris", flagBootstraps).
 		Msg("[server] frontend configuration")
 
-	if flagSNIPort == "" {
-		flagSNIPort = ":443"
-	}
 	serv := portal.NewRelayServer(ctx, flagBootstraps, flagSNIPort, flagPortalURL, flagACMEDNSProvider, flagACMEEmail, flagACMEDirectory)
 
 	frontend := NewFrontend()
