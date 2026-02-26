@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,14 +40,15 @@ func (m *BPSManager) SetBPSLimit(leaseID string, bps int64) {
 	delete(m.bpsBuckets, leaseID)
 }
 
-// GetBPSLimit returns the BPS limit for a lease (0 = unlimited)
+// GetBPSLimit returns the effective BPS limit for a lease (0 = unlimited).
+// Falls back to the server-wide default if no per-lease limit is set.
 func (m *BPSManager) GetBPSLimit(leaseID string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v, ok := m.bpsLimits[leaseID]; ok {
 		return v
 	}
-	return 0
+	return m.defaultBPS
 }
 
 // GetAllBPSLimits returns a copy of all BPS limits
@@ -79,14 +79,18 @@ func (m *BPSManager) GetDefaultBPS() int64 {
 	return m.defaultBPS
 }
 
-// GetBucket returns a rate limit bucket for a lease, creating one if needed
+// GetBucket returns a rate limit bucket for a lease, creating one if needed.
+// Falls back to the server-wide default BPS if no per-lease limit is set.
 func (m *BPSManager) GetBucket(leaseID string) *Bucket {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	bps, ok := m.bpsLimits[leaseID]
 	if !ok || bps <= 0 {
-		return nil // No limit
+		bps = m.defaultBPS
+		if bps <= 0 {
+			return nil // No limit
+		}
 	}
 
 	if bucket, exists := m.bpsBuckets[leaseID]; exists {
@@ -109,47 +113,6 @@ func (m *BPSManager) CleanupLease(leaseID string) {
 	defer m.mu.Unlock()
 	delete(m.bpsLimits, leaseID)
 	delete(m.bpsBuckets, leaseID)
-}
-
-// Copy copies data with rate limiting
-func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, error) {
-	bucket := m.GetBucket(leaseID)
-	return Copy(dst, src, bucket)
-}
-
-// EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
-// Connection tracking is handled by RelayServer's event loop (cmdCheckAndIncLimit/cmdDecLimit).
-func EstablishRelayWithBPS(clientStream, leaseStream *yamux.Stream, leaseID string, bpsManager *BPSManager) {
-	bpsLimit := bpsManager.GetBPSLimit(leaseID)
-	log.Info().
-		Str("lease_id", leaseID).
-		Int64("bps_limit", bpsLimit).
-		Msg("[Relay] Starting relay connection")
-
-	defer func() {
-		log.Info().
-			Str("lease_id", leaseID).
-			Msg("[Relay] Relay connection closed")
-	}()
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Client -> Lease
-	go func() {
-		defer wg.Done()
-		bpsManager.Copy(leaseStream, clientStream, leaseID)
-		leaseStream.Close()
-	}()
-
-	// Lease -> Client
-	go func() {
-		defer wg.Done()
-		bpsManager.Copy(clientStream, leaseStream, leaseID)
-		clientStream.Close()
-	}()
-
-	wg.Wait()
 }
 
 // Bucket is a thread-safe rate limiter that supports multiple concurrent connections
@@ -240,94 +203,6 @@ func (b *Bucket) Take(n int64) {
 			time.Sleep(waitTime)
 		}
 	}
-}
-
-// TakeWithTimeout requests n bytes but returns false if it would take longer
-// than maxWait to acquire them. Returns true if tokens were acquired.
-func (b *Bucket) TakeWithTimeout(n int64, maxWait time.Duration) bool {
-	if b == nil || n <= 0 {
-		return true
-	}
-
-	deadline := time.Now().Add(maxWait)
-	needed := float64(n)
-
-	for {
-		b.mu.Lock()
-
-		// Refill tokens
-		now := time.Now()
-		elapsed := now.Sub(b.lastRefill).Seconds()
-		b.tokens += elapsed * float64(b.rateBps)
-		if b.tokens > b.maxTokens {
-			b.tokens = b.maxTokens
-		}
-		b.lastRefill = now
-
-		if b.tokens >= needed {
-			b.tokens -= needed
-			b.mu.Unlock()
-			atomic.AddInt64(&b.totalBytes, n)
-			return true
-		}
-
-		// Check if we have time to wait
-		deficit := needed - b.tokens
-		waitTime := time.Duration(deficit / float64(b.rateBps) * float64(time.Second))
-
-		if now.Add(waitTime).After(deadline) {
-			b.mu.Unlock()
-			return false // Would take too long
-		}
-
-		if b.tokens > 0 {
-			needed -= b.tokens
-			b.tokens = 0
-		}
-
-		b.mu.Unlock()
-
-		if waitTime > 0 {
-			atomic.AddInt64(&b.throttleHits, 1)
-			atomic.AddInt64(&b.totalWaited, int64(waitTime))
-			time.Sleep(waitTime)
-		}
-	}
-}
-
-// Available returns the current number of available tokens (bytes)
-func (b *Bucket) Available() float64 {
-	if b == nil {
-		return 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// Refill first
-	now := time.Now()
-	elapsed := now.Sub(b.lastRefill).Seconds()
-	b.tokens += elapsed * float64(b.rateBps)
-	if b.tokens > b.maxTokens {
-		b.tokens = b.maxTokens
-	}
-	b.lastRefill = now
-
-	return b.tokens
-}
-
-// Rate returns the configured rate in bytes per second
-func (b *Bucket) Rate() int64 {
-	if b == nil {
-		return 0
-	}
-	return b.rateBps
-}
-
-// Stats returns current statistics
-func (b *Bucket) Stats() (totalBytes, throttleHits int64, totalWaited time.Duration) {
-	return atomic.LoadInt64(&b.totalBytes),
-		atomic.LoadInt64(&b.throttleHits),
-		time.Duration(atomic.LoadInt64(&b.totalWaited))
 }
 
 // internal buffer pool for Copy - 64KB reduces Take() call frequency and lock contention

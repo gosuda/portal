@@ -13,20 +13,14 @@ type IPManager struct {
 	bannedIPs  map[string]struct{} // set of banned IPs
 	leaseToIP  map[string]string   // lease ID -> IP address
 	ipToLeases map[string][]string // IP -> list of lease IDs (for lookup)
-
-	// pendingIPs stores recent connection IPs in a circular buffer for lease association
-	pendingIPsMu    sync.Mutex
-	pendingIPsQueue []string
-	pendingIPsMax   int // Keep last N IPs
 }
 
 // NewIPManager creates a new IP manager
 func NewIPManager() *IPManager {
 	return &IPManager{
-		bannedIPs:     make(map[string]struct{}),
-		leaseToIP:     make(map[string]string),
-		ipToLeases:    make(map[string][]string),
-		pendingIPsMax: 100,
+		bannedIPs:  make(map[string]struct{}),
+		leaseToIP:  make(map[string]string),
+		ipToLeases: make(map[string][]string),
 	}
 }
 
@@ -108,15 +102,6 @@ func (m *IPManager) GetLeaseIP(leaseID string) string {
 	return m.leaseToIP[leaseID]
 }
 
-// GetIPLeases returns all lease IDs for an IP
-func (m *IPManager) GetIPLeases(ip string) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, len(m.ipToLeases[ip]))
-	copy(result, m.ipToLeases[ip])
-	return result
-}
-
 // ExtractClientIP extracts the client IP from an HTTP request
 func ExtractClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header first (for proxied requests)
@@ -138,30 +123,5 @@ func ExtractClientIP(r *http.Request) string {
 	if err != nil {
 		return r.RemoteAddr
 	}
-	return ip
-}
-
-// StorePendingIP stores a client IP for later association with a lease.
-func (m *IPManager) StorePendingIP(ip string) {
-	if ip == "" {
-		return
-	}
-	m.pendingIPsMu.Lock()
-	defer m.pendingIPsMu.Unlock()
-	m.pendingIPsQueue = append(m.pendingIPsQueue, ip)
-	if len(m.pendingIPsQueue) > m.pendingIPsMax {
-		m.pendingIPsQueue = m.pendingIPsQueue[1:]
-	}
-}
-
-// PopPendingIP retrieves and removes the oldest pending IP.
-func (m *IPManager) PopPendingIP() string {
-	m.pendingIPsMu.Lock()
-	defer m.pendingIPsMu.Unlock()
-	if len(m.pendingIPsQueue) == 0 {
-		return ""
-	}
-	ip := m.pendingIPsQueue[0]
-	m.pendingIPsQueue = m.pendingIPsQueue[1:]
 	return ip
 }

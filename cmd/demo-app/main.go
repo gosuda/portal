@@ -14,11 +14,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
 //go:embed static
@@ -28,23 +27,25 @@ var staticFiles embed.FS
 var thumbnailPNG []byte
 
 var (
-	flagServerURL string
-	flagPort      int
-	flagName      string
-	flagDesc      string
-	flagTags      string
-	flagOwner     string
-	flagHide      bool
+	flagRelayURL      string
+	flagPort          int
+	flagName          string
+	flagDesc          string
+	flagTags          string
+	flagOwner         string
+	flagHide          bool
+	flagFunnelWorkers int
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	flag.StringVar(&flagRelayURL, "relay-url", "http://localhost:4017", "relay HTTP base URL")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
+	flag.IntVar(&flagFunnelWorkers, "funnel-workers", 4, "number of reverse connection workers")
 
 	flag.Parse()
 
@@ -55,72 +56,41 @@ func main() {
 
 // handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
 func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := utils.UpgradeWebSocket(w, r, nil)
+	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		log.Error().Err(err).Msg("upgrade websocket")
+		log.Error().Err(err).Msg("accept websocket")
 		return
 	}
-	defer conn.Close()
+	defer conn.CloseNow()
 
+	ctx := r.Context()
 	for {
-		messageType, data, err := conn.ReadMessage()
+		msgType, data, err := conn.Read(ctx)
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
 				log.Error().Err(err).Msg("read websocket message")
 			}
-			break
+			return
 		}
-
-		if err := conn.WriteMessage(messageType, data); err != nil {
+		if err := conn.Write(ctx, msgType, data); err != nil {
 			log.Error().Err(err).Msg("write websocket message")
-			break
+			return
 		}
 	}
 }
 
-func runDemo() error {
-	// 1) Create credential for this demo app
-	cred := sdk.NewCredential()
-
-	// 2) Create SDK client and connect to relay(s)
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = []string{flagServerURL}
-	})
-	if err != nil {
-		return fmt.Errorf("new client: %w", err)
-	}
-	defer client.Close()
-
-	// 3) Register lease
-	// Create base64 data URI from embedded thumbnail
-	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
-
-	listener, err := client.Listen(
-		cred,
-		flagName,
-		[]string{"http/1.1"},
-		sdk.WithDescription(flagDesc),
-		sdk.WithTags(strings.Split(flagTags, ",")),
-		sdk.WithOwner(flagOwner),
-		sdk.WithThumbnail(thumbnailDataURI),
-		sdk.WithHide(flagHide),
-	)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	defer listener.Close()
-
-	// 4) Setup HTTP handler
+// buildMux creates the shared HTTP handler.
+func buildMux() (http.Handler, error) {
 	mux := http.NewServeMux()
 
-	// Serve static files from embedded filesystem
+	// Serve static files from embedded filesystem.
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		return fmt.Errorf("create static fs: %w", err)
+		return nil, fmt.Errorf("create static fs: %w", err)
 	}
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	// Simple HTTP ping endpoint for connectivity checks
+	// Simple HTTP ping endpoint for connectivity checks.
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
@@ -132,11 +102,10 @@ func runDemo() error {
 		}
 	})
 
-	// WebSocket echo endpoint for bidirectional test
+	// WebSocket echo endpoint for bidirectional test.
 	mux.HandleFunc("/ws", handleWS)
 
-	// Test endpoint for multiple Set-Cookie headers
-	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)
+	// Test endpoint for multiple Set-Cookie headers.
 	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:   "session_id",
@@ -168,17 +137,85 @@ func runDemo() error {
 		})
 	})
 
-	// 5) Serve HTTP over relay listener
-	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
+	return mux, nil
+}
 
-	// Also serve on local port for direct testing
+func runDemo() error {
+	mux, err := buildMux()
+	if err != nil {
+		return err
+	}
+
+	localAddr := fmt.Sprintf(":%d", flagPort)
+
+	// Local-only mode: skip SDK registration when relay-url is empty.
+	if flagRelayURL == "" {
+		log.Info().Msgf("[demo] serving on local port %s (local-only mode, no relay)", localAddr)
+
+		srvErr := make(chan error, 1)
+		go func() {
+			srvErr <- http.ListenAndServe(localAddr, mux)
+		}()
+
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+		select {
+		case <-sig:
+			log.Info().Msg("[demo] shutting down...")
+		case err := <-srvErr:
+			if err != nil {
+				log.Error().Err(err).Msg("[demo] http serve error")
+			}
+		}
+
+		log.Info().Msg("[demo] shutdown complete")
+		return nil
+	}
+
+	// Serve on local port for direct testing alongside funnel.
 	go func() {
-		localAddr := fmt.Sprintf(":%d", flagPort)
 		log.Info().Msgf("[demo] also serving on local port %s for direct testing", localAddr)
 		if err := http.ListenAndServe(localAddr, mux); err != nil {
 			log.Error().Err(err).Msg("local http serve error")
 		}
 	}()
+
+	// Register via funnel SDK and serve HTTP over TLS-terminated reverse connections.
+	client := sdk.NewFunnelClient(flagRelayURL)
+
+	// Create base64 data URI from embedded thumbnail.
+	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
+
+	var opts []sdk.FunnelOption
+	if flagDesc != "" {
+		opts = append(opts, sdk.WithFunnelDescription(flagDesc))
+	}
+	if flagTags != "" {
+		opts = append(opts, sdk.WithFunnelTags(strings.Split(flagTags, ",")...))
+	}
+	opts = append(opts, sdk.WithFunnelThumbnail(thumbnailDataURI))
+	if flagOwner != "" {
+		opts = append(opts, sdk.WithFunnelOwner(flagOwner))
+	}
+	if flagHide {
+		opts = append(opts, sdk.WithFunnelHide(flagHide))
+	}
+	if flagFunnelWorkers > 0 {
+		opts = append(opts, sdk.WithFunnelWorkers(flagFunnelWorkers))
+	}
+
+	listener, err := client.Register(flagName, opts...)
+	if err != nil {
+		return fmt.Errorf("funnel register: %w", err)
+	}
+	defer listener.Close()
+
+	log.Info().
+		Str("name", flagName).
+		Str("public_url", listener.PublicURL()).
+		Str("lease_id", listener.LeaseID()).
+		Msg("[demo] serving HTTP over funnel (SNI throughpass)")
 
 	srvErr := make(chan error, 1)
 	go func() {

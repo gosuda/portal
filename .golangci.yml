@@ -173,6 +173,7 @@ linters:
       excludes:
         - G104
         - G304
+        - G704
 
     perfsprint:
       strconcat: true

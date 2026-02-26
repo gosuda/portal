@@ -1,103 +1,8 @@
 package utils
 
 import (
-	"fmt"
-	"net/url"
-	"regexp"
 	"strings"
 )
-
-// URL-safe name validation regex
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
-
-// IsURLSafeName checks if a name contains only URL-safe characters.
-// Disallows: spaces, special characters like /, ?, &, =, %, etc.
-// Note: Browsers will automatically URL-encode non-ASCII characters.
-func IsURLSafeName(name string) bool {
-	if name == "" {
-		return true // Empty name is allowed (will be treated as unnamed)
-	}
-	return urlSafeNameRegex.MatchString(name)
-}
-
-// NormalizePortalURL takes various user-friendly server inputs and
-// converts them into a proper WebSocket URL.
-// Examples:
-//   - "wss://localhost:4017/relay" -> unchanged
-//   - "ws://localhost:4017/relay"  -> unchanged
-//   - "http://example.com"        -> "ws://example.com/relay"
-//   - "https://example.com"       -> "wss://example.com/relay"
-//   - "localhost:4017"            -> "wss://localhost:4017/relay"
-//   - "example.com"               -> "wss://example.com/relay"
-func NormalizePortalURL(raw string) (string, error) {
-	server := strings.TrimSpace(raw)
-	if server == "" {
-		return "", fmt.Errorf("bootstrap server is empty")
-	}
-
-	// Already a WebSocket URL
-	if strings.HasPrefix(server, "ws://") || strings.HasPrefix(server, "wss://") {
-		return server, nil
-	}
-
-	// HTTP/HTTPS -> WS/WSS with default /relay path
-	if strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://") {
-		u, err := url.Parse(server)
-		if err != nil {
-			return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-		}
-		switch u.Scheme {
-		case "http":
-			u.Scheme = "ws"
-		case "https":
-			u.Scheme = "wss"
-		}
-		if u.Path == "" || u.Path == "/" {
-			u.Path = "/relay"
-		}
-		return u.String(), nil
-	}
-
-	// Bare host[:port][/path] -> assume WSS and /relay if no path
-	u, err := url.Parse("wss://" + server)
-	if err != nil {
-		return "", fmt.Errorf("invalid bootstrap server %q: %w", raw, err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("invalid bootstrap server %q: missing host", raw)
-	}
-	if u.Path == "" || u.Path == "/" {
-		u.Path = "/relay"
-	}
-	return u.String(), nil
-}
-
-// ParseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
-func ParseURLs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// IsHexString reports whether s contains only hexadecimal characters
-func IsHexString(s string) bool {
-	for _, c := range s {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
-}
 
 // IsSubdomain reports whether host matches the given domain pattern.
 // Supports patterns like:
@@ -181,26 +86,4 @@ func DefaultAppPattern(base string) string {
 		return host
 	}
 	return "*." + host
-}
-
-// DefaultBootstrapFrom derives a websocket bootstrap URL from a base portal URL or host.
-// It prefers NormalizePortalURL for consistent mapping and falls back to localhost.
-// Examples:
-//   - "https://portal.example.com" -> "wss://portal.example.com/relay"
-//   - "http://portal.example.com"  -> "ws://portal.example.com/relay"
-//   - "localhost:4017"             -> "wss://localhost:4017/relay"
-//   - ""                           -> "ws://localhost:4017/relay"
-func DefaultBootstrapFrom(base string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return "ws://localhost:4017/relay"
-	}
-	if u, err := NormalizePortalURL(base); err == nil && u != "" {
-		return u
-	}
-	host := StripScheme(strings.TrimSuffix(base, "/"))
-	if host == "" {
-		return "ws://localhost:4017/relay"
-	}
-	return "ws://" + host + "/relay"
 }

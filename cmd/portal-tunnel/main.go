@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,34 +14,27 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gopkg.eu.org/broccoli"
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
-)
 
-// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
-// per-copy allocations and reduce GC pressure under high concurrency.
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
-}
+	"gosuda.org/portal/portal/utils/pool"
+	"gosuda.org/portal/sdk"
+)
 
 type Config struct {
 	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
 
-	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
-	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
-	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
+	RelayURL string `flag:"relay" env:"RELAY_URL" default:"http://localhost:4017" about:"Portal relay server URL"`
+	Host     string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
+	Name     string `flag:"name" env:"APP_NAME" about:"Service name"`
 
-	// Metadata
-	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
+	// Metadata.
 	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
 	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
 	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
 	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
 	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
+
+	// Funnel workers.
+	FunnelWorkers int `flag:"funnel-workers" env:"FUNNEL_WORKERS" default:"4" about:"Number of reverse connection workers"`
 }
 
 func main() {
@@ -52,7 +46,7 @@ func main() {
 	}
 
 	if _, _, err = app.Bind(&cfg, os.Args[1:]); err != nil {
-		if err == broccoli.ErrHelp {
+		if errors.Is(err, broccoli.ErrHelp) {
 			fmt.Println(app.Help())
 			os.Exit(0)
 		}
@@ -67,11 +61,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	relayURLs := utils.ParseURLs(cfg.RelayURLs)
-	if len(relayURLs) == 0 {
-		log.Error().Msg("--relay must include at least one non-empty URL")
-		os.Exit(1)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -85,7 +74,7 @@ func main() {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, cfg, "flags"); err != nil {
+	if err := runFunnelTunnel(ctx, cfg); err != nil {
 		log.Error().Err(err).Msg("Exited with error")
 		os.Exit(1)
 	}
@@ -93,44 +82,41 @@ func main() {
 	log.Info().Msg("Tunnel stopped")
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string) error {
-	if len(relayURLs) == 0 {
-		return fmt.Errorf("no relay URLs provided")
+func runFunnelTunnel(ctx context.Context, cfg Config) error {
+	// Normalize relay URL to HTTP base.
+	baseURL := strings.TrimSuffix(cfg.RelayURL, "/relay")
+	baseURL = strings.Replace(baseURL, "ws://", "http://", 1)
+	baseURL = strings.Replace(baseURL, "wss://", "https://", 1)
+
+	log.Info().Str("service", cfg.Name).Msg("Starting Portal Tunnel...")
+	log.Info().Str("service", cfg.Name).Msgf("  Local:  %s", cfg.Host)
+	log.Info().Str("service", cfg.Name).Msgf("  Relay:  %s", baseURL)
+
+	client := sdk.NewFunnelClient(baseURL)
+
+	var funnelOpts []sdk.FunnelOption
+	if cfg.Description != "" {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelDescription(cfg.Description))
 	}
-	protocols := strings.Split(cfg.Protocols, ",")
-	if len(protocols) == 0 {
-		protocols = []string{"http/1.1", "h2"}
+	if cfg.Tags != "" {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelTags(strings.Split(cfg.Tags, ",")...))
+	}
+	if cfg.Thumbnail != "" {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelThumbnail(cfg.Thumbnail))
+	}
+	if cfg.Owner != "" {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelOwner(cfg.Owner))
+	}
+	if cfg.Hide {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelHide(cfg.Hide))
+	}
+	if cfg.FunnelWorkers > 0 {
+		funnelOpts = append(funnelOpts, sdk.WithFunnelWorkers(cfg.FunnelWorkers))
 	}
 
-	cred := sdk.NewCredential()
-	leaseID := cred.ID()
-	if cfg.Name == "" {
-		cfg.Name = fmt.Sprintf("tunnel-%s", leaseID[:8])
-		log.Info().Str("service", cfg.Name).Msg("No service name provided; generated automatically")
-	}
-	log.Info().Str("service", cfg.Name).Msgf("Local service is reachable at %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("Starting Portal Tunnel (%s)...", origin)
-	log.Info().Str("service", cfg.Name).Msgf("  Local:    %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Str("service", cfg.Name).Msgf("  Lease ID: %s", leaseID)
-
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = relayURLs
-	})
+	listener, err := client.Register(cfg.Name, funnelOpts...)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to connect to relay: %w", cfg.Name, err)
-	}
-	defer client.Close()
-
-	listener, err := client.Listen(cred, cfg.Name, protocols,
-		sdk.WithDescription(cfg.Description),
-		sdk.WithTags(strings.Split(cfg.Tags, ",")),
-		sdk.WithOwner(cfg.Owner),
-		sdk.WithThumbnail(cfg.Thumbnail),
-		sdk.WithHide(cfg.Hide),
-	)
-	if err != nil {
-		return fmt.Errorf("service %s: failed to register service: %w", cfg.Name, err)
+		return fmt.Errorf("service %s: registration failed: %w", cfg.Name, err)
 	}
 	defer listener.Close()
 
@@ -141,15 +127,14 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 
 	log.Info().Str("service", cfg.Name).Msg("")
 	log.Info().Str("service", cfg.Name).Msg("Access via:")
-	log.Info().Str("service", cfg.Name).Msgf("- Name:     /peer/%s", cfg.Name)
-	log.Info().Str("service", cfg.Name).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", cfg.Name).Msgf("- Example:  %s/peer/%s", relayURLs[0], cfg.Name)
-
+	log.Info().Str("service", cfg.Name).Msgf("- HTTPS: %s", listener.PublicURL())
 	log.Info().Str("service", cfg.Name).Msg("")
 
 	connCount := 0
 	var connWG sync.WaitGroup
 	defer connWG.Wait()
+
+	var relayConn net.Conn
 	for {
 		select {
 		case <-ctx.Done():
@@ -157,7 +142,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		default:
 		}
 
-		relayConn, err := listener.Accept()
+		relayConn, err = listener.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -169,13 +154,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		}
 
 		connCount++
-		log.Info().Str("service", cfg.Name).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
+		log.Info().Str("service", cfg.Name).Msgf("→ [#%d] New connection", connCount)
 
 		connWG.Add(1)
-		go func(relayConn net.Conn) {
+		go func(rc net.Conn) {
 			defer connWG.Done()
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Proxy error")
+			if proxyErr := proxyConnection(ctx, cfg.Host, rc); proxyErr != nil {
+				log.Error().Err(proxyErr).Str("service", cfg.Name).Msg("Proxy error")
 			}
 			log.Info().Str("service", cfg.Name).Msg("Connection closed")
 		}(relayConn)
@@ -197,29 +182,29 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	go func() {
 		select {
 		case <-ctx.Done():
-			relayConn.Close()
-			localConn.Close()
+			_ = relayConn.Close()
+			_ = localConn.Close()
 		case <-stopCh:
 		}
 	}()
 
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
-		errCh <- err
+		buf := *pool.Buffer64K.Get().(*[]byte)
+		defer pool.Buffer64K.Put(&buf)
+		_, copyErr := io.CopyBuffer(localConn, relayConn, buf)
+		errCh <- copyErr
 	}()
 
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
-		errCh <- err
+		buf := *pool.Buffer64K.Get().(*[]byte)
+		defer pool.Buffer64K.Put(&buf)
+		_, copyErr := io.CopyBuffer(relayConn, localConn, buf)
+		errCh <- copyErr
 	}()
 
 	err = <-errCh
 	close(stopCh)
-	relayConn.Close()
+	_ = relayConn.Close()
 	<-errCh
 
 	return err

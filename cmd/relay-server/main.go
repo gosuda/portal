@@ -3,35 +3,42 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/portal/utils/sni"
 	"gosuda.org/portal/utils"
 )
 
 var (
 	flagPortalURL      string
 	flagPortalAppURL   string
-	flagBootstraps     []string
-	flagALPN           string
 	flagPort           int
-	flagMaxLease       int
-	flagLeaseBPS       int
 	flagNoIndex        bool
+	flagLeaseBPS       int
 	flagAdminSecretKey string
+
+	// Funnel (TLS SNI passthrough) flags
+	flagFunnelPort   int
+	flagTLSCert      string
+	flagTLSKey       string
+	flagFunnelDomain string
 )
 
 func main() {
@@ -46,18 +53,10 @@ func main() {
 	if defaultAppURL == "" {
 		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
 	}
-	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
-	if defaultBootstraps == "" {
-		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
-	}
 
-	var flagBootstrapsCSV string
 	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
 	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
-	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
-	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
 	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
 	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
 
 	defaultNoIndex := os.Getenv("NOINDEX") == "true"
@@ -65,9 +64,24 @@ func main() {
 
 	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
 	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+
+	// Funnel flags
+	defaultFunnelPort := 443
+	if envFunnelPort := os.Getenv("FUNNEL_PORT"); envFunnelPort != "" {
+		if v, err := strconv.Atoi(envFunnelPort); err == nil {
+			defaultFunnelPort = v
+		}
+	}
+	flag.IntVar(&flagFunnelPort, "funnel-port", defaultFunnelPort, "TCP port for SNI router (env: FUNNEL_PORT)")
+	flag.StringVar(&flagTLSCert, "tls-cert", os.Getenv("TLS_CERT"), "path to wildcard TLS certificate PEM file (env: TLS_CERT)")
+	flag.StringVar(&flagTLSKey, "tls-key", os.Getenv("TLS_KEY"), "path to wildcard TLS private key PEM file (env: TLS_KEY)")
+	defaultFunnelDomain := os.Getenv("FUNNEL_DOMAIN")
+	if defaultFunnelDomain == "" {
+		defaultFunnelDomain = "localhost"
+	}
+	flag.StringVar(&flagFunnelDomain, "funnel-domain", defaultFunnelDomain, "base domain for funnel subdomains, e.g. portal.example.com (env: FUNNEL_DOMAIN)")
 	flag.Parse()
 
-	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
 	if err := runServer(); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -80,15 +94,12 @@ func runServer() error {
 	log.Info().
 		Str("portal_base_url", flagPortalURL).
 		Str("app_url", flagPortalAppURL).
-		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
 		Msg("[server] frontend configuration")
 
-	cred := sdk.NewCredential()
-
-	serv := portal.NewRelayServer(cred, flagBootstraps)
-	if flagMaxLease > 0 {
-		serv.SetMaxRelayedPerLease(flagMaxLease)
-	}
+	// Create LeaseManager directly (no more RelayServer wrapper).
+	lm := portal.NewLeaseManager(30 * time.Second)
+	lm.Start()
+	defer lm.Stop()
 
 	// Create AuthManager for admin authentication
 	// Auto-generate secret key if not provided
@@ -100,7 +111,13 @@ func runServer() error {
 		flagAdminSecretKey = hex.EncodeToString(randomBytes)
 		log.Warn().Str("key", flagAdminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
 	} else {
-		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
+		preview := flagAdminSecretKey
+		if len(preview) > 4 {
+			preview = preview[:4] + "****"
+		} else {
+			preview = "****"
+		}
+		log.Info().Str("key_prefix", preview).Msg("[server] admin authentication enabled with provided secret key")
 	}
 	authManager := manager.NewAuthManager(flagAdminSecretKey)
 
@@ -110,25 +127,109 @@ func runServer() error {
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
-	admin.LoadSettings(serv)
+	admin.LoadSettings(lm)
 
-	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		// Associate pending IP with this lease
-		ipManager := admin.GetIPManager()
-		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
+	// Initialize funnel components.
+	// If TLS cert+key files are provided, use them. Otherwise auto-generate a
+	// self-signed wildcard certificate for the funnel domain.
+	var funnelRegistry *Registry
+	{
+		var certPEM, keyPEM []byte
+
+		if flagTLSCert != "" && flagTLSKey != "" {
+			var err error
+			certPEM, err = os.ReadFile(flagTLSCert)
+			if err != nil {
+				log.Fatal().Err(err).Str("path", flagTLSCert).Msg("[funnel] failed to read TLS certificate")
 			}
+			keyPEM, err = os.ReadFile(flagTLSKey)
+			if err != nil {
+				log.Fatal().Err(err).Str("path", flagTLSKey).Msg("[funnel] failed to read TLS key")
+			}
+			if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
+				log.Fatal().Err(err).Msg("[funnel] invalid TLS certificate/key pair")
+			}
+		} else {
+			var err error
+			certPEM, keyPEM, err = generateSelfSignedCert(flagFunnelDomain)
+			if err != nil {
+				log.Fatal().Err(err).Msg("[funnel] failed to generate self-signed certificate")
+			}
+			log.Warn().Str("domain", "*."+flagFunnelDomain).Msg("[funnel] using auto-generated self-signed certificate (provide --tls-cert/--tls-key for production)")
 		}
-		bpsManager := admin.GetBPSManager()
-		manager.EstablishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
-	})
 
-	serv.Start()
-	defer serv.Stop()
+		hub := portal.NewReverseHub()
+		defer hub.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+		router := sni.NewRouter(fmt.Sprintf(":%d", flagFunnelPort))
+
+		funnelRegistry = NewRegistry(lm, router, hub, admin.GetIPManager(), certPEM, keyPEM, flagFunnelDomain)
+
+		// Wire ReverseHub authorizer: validate token against lease
+		hub.SetAuthorizer(func(leaseID, token string) bool {
+			entry, ok := lm.GetLeaseByID(leaseID)
+			if !ok {
+				return false
+			}
+			return len(entry.ReverseToken) > 0 &&
+				subtle.ConstantTimeCompare([]byte(entry.ReverseToken), []byte(token)) == 1
+		})
+
+		// Wire cleanup callback: when a lease is deleted, clean up SNI route + ReverseHub + BPS
+		lm.SetOnLeaseDeleted(func(leaseID string) {
+			router.UnregisterRouteByLeaseID(leaseID)
+			hub.DropLease(leaseID)
+			if bpsMgr := admin.GetBPSManager(); bpsMgr != nil {
+				bpsMgr.CleanupLease(leaseID)
+			}
+		})
+
+		// Wire SNI router -> ReverseHub: when a browser connects via TLS, acquire a reverse connection
+		router.SetConnectionCallback(func(conn net.Conn, route *sni.Route) {
+			// Enforce approval mode: reject connections to unapproved leases
+			if approveManager := admin.GetApproveManager(); approveManager != nil {
+				if approveManager.GetApprovalMode() == manager.ApprovalModeManual &&
+					!approveManager.IsLeaseApproved(route.LeaseID) {
+					log.Debug().Str("lease_id", route.LeaseID).Str("sni", route.SNI).Msg("[funnel] connection rejected: lease not approved")
+					_ = conn.Close()
+					return
+				}
+			}
+
+			reverseConn, err := hub.AcquireStarted(route.LeaseID, 10*time.Second)
+			if err != nil {
+				log.Debug().Err(err).Str("lease_id", route.LeaseID).Str("sni", route.SNI).Msg("[funnel] no reverse connection available")
+				_ = conn.Close()
+				return
+			}
+			defer reverseConn.Close()
+
+			if bpsManager := admin.GetBPSManager(); bpsManager != nil {
+				if bucket := bpsManager.GetBucket(route.LeaseID); bucket != nil {
+					sni.BridgeConnectionsWithCopy(conn, reverseConn.Conn, func(dst io.Writer, src io.Reader) (int64, error) {
+						return manager.Copy(dst, src, bucket)
+					})
+					return
+				}
+			}
+			sni.BridgeConnections(conn, reverseConn.Conn)
+		})
+
+		// Start SNI router
+		go func() {
+			if err := router.ListenAndServe(); err != nil {
+				log.Error().Err(err).Msg("[funnel] SNI router error")
+				stop()
+			}
+		}()
+
+		log.Info().
+			Int("port", flagFunnelPort).
+			Str("domain", flagFunnelDomain).
+			Msg("[funnel] TLS SNI passthrough enabled")
+	}
+
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), lm, admin, frontend, flagNoIndex, funnelRegistry, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

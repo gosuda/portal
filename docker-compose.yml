@@ -11,8 +11,12 @@ services:
     environment:
       PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
       PORTAL_APP_URL: ${PORTAL_APP_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      FUNNEL_DOMAIN: ${FUNNEL_DOMAIN:-localhost}
+      FUNNEL_PORT: ${FUNNEL_PORT:-443}
+      TLS_CERT: ${TLS_CERT:-}
+      TLS_KEY: ${TLS_KEY:-}
     ports:
-      - "4017:4017"
+      - "${PORTAL_PORT:-4017}:4017"
+      - "${FUNNEL_PORT:-443}:443"
     restart: unless-stopped

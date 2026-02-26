@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"embed"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/utils"
 )
@@ -17,14 +18,9 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(addr string, lm *portal.LeaseManager, admin *Admin, frontend *Frontend, noIndex bool, registry *Registry, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
-	}
-
-	// Initialize WASM cache used by content handlers
-	if err := frontend.InitWasmCache(); err != nil {
-		log.Error().Err(err).Msg("failed to initialize WASM cache")
 	}
 
 	// Create app UI mux
@@ -46,18 +42,7 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	// Portal app assets (JS, CSS, etc.) - served from /app/
 	appMux.HandleFunc("/app/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/app/")
-		frontend.ServeAppStatic(w, r, p, serv)
-	}))
-
-	// Portal frontend files (for unified caching)
-	appMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
-
-		frontend.ServePortalStaticFile(w, r, p)
+		frontend.ServeAppStatic(w, r, p, lm)
 	}))
 
 	// Tunnel installer script and binaries
@@ -68,45 +53,11 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		serveTunnelBinary(w, r)
 	})
 
-	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Check if IP is banned
-		clientIP := manager.ExtractClientIP(r)
-		ipManager := admin.GetIPManager()
-		if ipManager != nil && ipManager.IsIPBanned(clientIP) {
-			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
-		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] websocket upgrade failed")
-			return
-		}
-
-		// Store pending IP for lease association (will be linked when lease is registered)
-		if ipManager != nil && clientIP != "" {
-			ipManager.StorePendingIP(clientIP)
-		}
-
-		if err := serv.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[server] websocket relay connection error")
-			wsConn.Close()
-			return
-		}
-	})
-
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
 	appMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// serveAppStatic handles both "/" and 404 fallback with SSR
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		frontend.ServeAppStatic(w, r, p, serv)
+		frontend.ServeAppStatic(w, r, p, lm)
 	})
 
 	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -116,61 +67,20 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 
 	// Admin API
 	appMux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
-		admin.HandleAdminRequest(w, r, serv)
+		admin.HandleAdminRequest(w, r, lm)
 	})
 
-	// Create portal frontend mux (routes only)
-	portalMux := http.NewServeMux()
-
-	// Static file handler for /frontend/ (for unified caching)
-	portalMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
-			return
-		}
-		frontend.ServePortalStaticFile(w, r, p)
-	}))
-
-	// Service worker for portal subdomains (serve from dist/wasm)
-	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
-		frontend.ServeDynamicServiceWorker(w, r)
-	})
-
-	// Create HTTP reverse proxy for subdomain tunneling (same-origin cookie support)
-	httpProxy := NewHTTPProxy(serv)
-
-	// Root handler: try server-side reverse proxy first, then fall back to portal HTML
-	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Try server-side reverse proxy to tunnel backend
-		if httpProxy.TryProxy(w, r) {
-			return
-		}
-
-		// Fallback: serve portal frontend (Service Worker based proxy)
-		withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/" {
-				frontend.ServePortalHTMLWithSSR(w, r, serv)
-				return
-			}
-			frontend.ServePortalStatic(w, r)
-		})(w, r)
-	})
-
-	// routes based on host and path
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Route subdomain requests (e.g., *.example.com) to portalMux
-		// and everything else to the app UI mux.
-		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
-			portalMux.ServeHTTP(w, r)
-		} else {
-			appMux.ServeHTTP(w, r)
-		}
-	})
+	// Funnel REST API (only when registry is configured)
+	if registry != nil {
+		appMux.HandleFunc("/api/register", registry.HandleRegister)
+		appMux.HandleFunc("/api/renew", registry.HandleRenew)
+		appMux.HandleFunc("/api/unregister", registry.HandleUnregister)
+		appMux.HandleFunc("/api/connect", registry.HandleConnect)
+	}
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: appMux,
 	}
 
 	go func() {
@@ -214,4 +124,25 @@ type leaseRow struct {
 	IsDenied     bool   // whether lease is denied (for manual mode)
 	IP           string // client IP address (for IP-based ban)
 	IsIPBanned   bool   // whether the IP is banned
+}
+
+// formatDuration converts a duration to a compact human-readable string.
+func formatDuration(d time.Duration) string {
+	if d >= time.Hour {
+		h := int(d / time.Hour)
+		m := int((d % time.Hour) / time.Minute)
+		if m > 0 {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+	if d >= time.Minute {
+		m := int(d / time.Minute)
+		s := int((d % time.Minute) / time.Second)
+		if s > 0 {
+			return fmt.Sprintf("%dm %ds", m, s)
+		}
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
 }

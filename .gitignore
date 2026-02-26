@@ -30,6 +30,9 @@ profile.cov
 # env file
 .env
 
+# Local TLS certificates
+.certs/
+
 # Editor/IDE
 # .idea/
 # .vscode/

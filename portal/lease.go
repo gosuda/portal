@@ -2,14 +2,16 @@ package portal
 
 import (
 	"encoding/json"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
-
-	"gosuda.org/portal/portal/core/proto/rdsec"
-	"gosuda.org/portal/portal/core/proto/rdverb"
 )
+
+// Lease represents a registered service in the portal.
+type Lease struct {
+	ID       string
+	Name     string
+	Metadata string
+}
 
 // ParsedMetadata holds struct-parsed metadata for better access
 type ParsedMetadata struct {
@@ -22,25 +24,27 @@ type ParsedMetadata struct {
 
 // LeaseEntry represents a registered lease with expiration tracking.
 type LeaseEntry struct {
-	Lease          *rdverb.Lease
+	Lease          *Lease
 	Expires        time.Time
 	LastSeen       time.Time
 	FirstSeen      time.Time
-	ConnectionID   int64
 	ParsedMetadata *ParsedMetadata // Cached parsed metadata
+	ReverseToken   string          `json:"-"` // Authentication token for funnel reverse connections — never serialize.
 }
 
 type LeaseManager struct {
-	leases      map[string]*LeaseEntry // Key: identity ID
+	leases      map[string]*LeaseEntry // Key: lease ID
 	leasesLock  sync.RWMutex
 	stopCh      chan struct{}
 	ttlInterval time.Duration
 
 	// policy controls
 	bannedLeases map[string]struct{}
-	namePattern  *regexp.Regexp
-	minTTL       time.Duration // 0 = no bound
-	maxTTL       time.Duration // 0 = no bound
+
+	// onLeaseDeleted is called when a lease is removed (TTL expiry or explicit deletion).
+	// MUST be invoked OUTSIDE the write lock to prevent deadlocks with
+	// ReverseHub/SNI Router cleanup.
+	onLeaseDeleted func(leaseID string)
 }
 
 func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
@@ -75,132 +79,25 @@ func (lm *LeaseManager) ttlWorker() {
 }
 
 func (lm *LeaseManager) cleanupExpiredLeases() {
+	// Collect expired IDs under lock
 	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-
+	var expired []string
 	now := time.Now()
+	callback := lm.onLeaseDeleted
 	for id, lease := range lm.leases {
 		if now.After(lease.Expires) {
 			delete(lm.leases, id)
+			expired = append(expired, id)
 		}
 	}
-}
+	lm.leasesLock.Unlock()
 
-func (lm *LeaseManager) UpdateLease(lease *rdverb.Lease, connectionID int64) bool {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-
-	identityID := string(lease.Identity.Id)
-	expires := time.Unix(lease.Expires, 0)
-
-	// Check if lease is already expired
-	if time.Now().After(expires) {
-		return false
-	}
-
-	// policy checks
-	if _, banned := lm.bannedLeases[identityID]; banned {
-		return false
-	}
-	if lm.namePattern != nil && lease.Name != "" && !lm.namePattern.MatchString(lease.Name) {
-		return false
-	}
-	// reserved prefix check removed
-	if lm.minTTL > 0 || lm.maxTTL > 0 {
-		ttl := time.Until(expires)
-		if lm.minTTL > 0 && ttl < lm.minTTL {
-			return false
-		}
-		if lm.maxTTL > 0 && ttl > lm.maxTTL {
-			return false
+	// Invoke callback OUTSIDE lock to prevent deadlocks
+	if callback != nil {
+		for _, id := range expired {
+			callback(id)
 		}
 	}
-
-	// Check for name conflicts (only if name is not empty)
-	if lease.Name != "" && lease.Name != "(unnamed)" {
-		for existingID, existingEntry := range lm.leases {
-			// Skip if it's the same identity (updating own lease)
-			if existingID == identityID {
-				continue
-			}
-			// Check if another identity is using the same name
-			if existingEntry.Lease.Name == lease.Name {
-				// Name conflict with a different identity
-				return false
-			}
-		}
-	}
-
-	// Parse metadata once for cached access
-	var parsedMeta *ParsedMetadata
-	if lease.Metadata != "" {
-		var meta struct {
-			Description string   `json:"description"`
-			Tags        []string `json:"tags"`
-			Thumbnail   string   `json:"thumbnail"`
-			Owner       string   `json:"owner"`
-			Hide        bool     `json:"hide"`
-		}
-		if err := json.Unmarshal([]byte(lease.Metadata), &meta); err == nil {
-			parsedMeta = &ParsedMetadata{
-				Description: meta.Description,
-				Tags:        meta.Tags,
-				Thumbnail:   meta.Thumbnail,
-				Owner:       meta.Owner,
-				Hide:        meta.Hide,
-			}
-		}
-	}
-
-	var firstSeen time.Time
-	if existing, exists := lm.leases[identityID]; exists {
-		firstSeen = existing.FirstSeen
-	}
-	if firstSeen.IsZero() {
-		firstSeen = time.Now()
-	}
-
-	lm.leases[identityID] = &LeaseEntry{
-		Lease:          lease,
-		Expires:        expires,
-		LastSeen:       time.Now(),
-		FirstSeen:      firstSeen,
-		ConnectionID:   connectionID,
-		ParsedMetadata: parsedMeta,
-	}
-
-	return true
-}
-
-func (lm *LeaseManager) DeleteLease(identity *rdsec.Identity) bool {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-
-	identityID := string(identity.Id)
-	if _, exists := lm.leases[identityID]; exists {
-		delete(lm.leases, identityID)
-		return true
-	}
-	return false
-}
-
-func (lm *LeaseManager) GetLease(identity *rdsec.Identity) (*LeaseEntry, bool) {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	identityID := string(identity.Id)
-
-	lease, exists := lm.leases[identityID]
-	if !exists {
-		return nil, false
-	}
-
-	// Check if lease is expired
-	if time.Now().After(lease.Expires) {
-		return nil, false
-	}
-
-	return lease, true
 }
 
 func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
@@ -225,70 +122,21 @@ func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
 	return lease, true
 }
 
-func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
+// GetAllLeaseEntries returns all non-expired lease entries.
+func (lm *LeaseManager) GetAllLeaseEntries() []*LeaseEntry {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
-	if name == "" {
-		return nil, false
-	}
-
+	var entries []*LeaseEntry
 	now := time.Now()
-	for _, lease := range lm.leases {
-		if lease.Lease.Name == name {
-			// Check if banned
-			if _, banned := lm.bannedLeases[string(lease.Lease.Identity.Id)]; banned {
-				continue
-			}
-			// Check if expired
-			if now.After(lease.Expires) {
-				continue
-			}
-			return lease, true
-		}
-	}
-	return nil, false
-}
 
-// GetLeaseByNameFold returns a lease entry by name using case-insensitive matching.
-// This is needed because DNS subdomains are case-insensitive.
-func (lm *LeaseManager) GetLeaseByNameFold(name string) (*LeaseEntry, bool) {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	if name == "" {
-		return nil, false
-	}
-
-	now := time.Now()
-	for _, lease := range lm.leases {
-		if strings.EqualFold(lease.Lease.Name, name) {
-			if _, banned := lm.bannedLeases[string(lease.Lease.Identity.Id)]; banned {
-				continue
-			}
-			if now.After(lease.Expires) {
-				continue
-			}
-			return lease, true
-		}
-	}
-	return nil, false
-}
-
-func (lm *LeaseManager) GetAllLeases() []*rdverb.Lease {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	now := time.Now()
-	var validLeases []*rdverb.Lease
-
-	for _, lease := range lm.leases {
-		if now.Before(lease.Expires) {
-			validLeases = append(validLeases, lease.Lease)
+	for _, entry := range lm.leases {
+		if now.Before(entry.Expires) {
+			entries = append(entries, entry)
 		}
 	}
 
-	return validLeases
+	return entries
 }
 
 // Lease policy configuration helpers
@@ -304,51 +152,113 @@ func (lm *LeaseManager) UnbanLease(leaseID string) {
 	lm.leasesLock.Unlock()
 }
 
-func (lm *LeaseManager) GetBannedLeases() [][]byte {
+func (lm *LeaseManager) GetBannedLeases() []string {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
-	banned := make([][]byte, 0, len(lm.bannedLeases))
+	banned := make([]string, 0, len(lm.bannedLeases))
 	for id := range lm.bannedLeases {
-		banned = append(banned, []byte(id))
+		banned = append(banned, id)
 	}
 	return banned
 }
 
-func (lm *LeaseManager) SetNamePattern(pattern string) error {
+// SetOnLeaseDeleted sets the callback invoked when a lease is removed.
+// The callback is always invoked outside the LeaseManager write lock.
+func (lm *LeaseManager) SetOnLeaseDeleted(fn func(leaseID string)) {
 	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-	if pattern == "" {
-		lm.namePattern = nil
-		return nil
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-	lm.namePattern = re
-	return nil
-}
-
-// SetReservedPrefixes removed: reserved prefix policy no longer supported
-
-func (lm *LeaseManager) SetTTLBounds(min, max time.Duration) {
-	lm.leasesLock.Lock()
-	lm.minTTL = min
-	lm.maxTTL = max
+	lm.onLeaseDeleted = fn
 	lm.leasesLock.Unlock()
 }
 
-func (lm *LeaseManager) CleanupLeasesByConnectionID(connectionID int64) []string {
+// UpdateLeaseSimple registers or renews a funnel lease using simple string IDs.
+// Used by the REST API registry.
+func (lm *LeaseManager) UpdateLeaseSimple(leaseID, name, reverseToken string, ttl time.Duration, metadata string) bool {
 	lm.leasesLock.Lock()
 	defer lm.leasesLock.Unlock()
 
-	var cleanedLeaseIDs []string
-	for leaseID, lease := range lm.leases {
-		if lease.ConnectionID == connectionID {
-			delete(lm.leases, leaseID)
-			cleanedLeaseIDs = append(cleanedLeaseIDs, leaseID)
+	if _, banned := lm.bannedLeases[leaseID]; banned {
+		return false
+	}
+
+	// Name conflict check
+	if name != "" && name != "(unnamed)" {
+		for existingID, existingEntry := range lm.leases {
+			if existingID == leaseID {
+				continue
+			}
+			if existingEntry.Lease != nil && existingEntry.Lease.Name == name {
+				return false
+			}
 		}
 	}
 
-	return cleanedLeaseIDs
+	var parsedMeta *ParsedMetadata
+	if metadata != "" {
+		var meta ParsedMetadata
+		if err := json.Unmarshal([]byte(metadata), &meta); err == nil {
+			parsedMeta = &meta
+		}
+	}
+
+	expires := time.Now().Add(ttl)
+	var firstSeen time.Time
+	if existing, exists := lm.leases[leaseID]; exists {
+		firstSeen = existing.FirstSeen
+	}
+	if firstSeen.IsZero() {
+		firstSeen = time.Now()
+	}
+
+	lm.leases[leaseID] = &LeaseEntry{
+		Lease: &Lease{
+			ID:       leaseID,
+			Name:     name,
+			Metadata: metadata,
+		},
+		Expires:        expires,
+		LastSeen:       time.Now(),
+		FirstSeen:      firstSeen,
+		ParsedMetadata: parsedMeta,
+		ReverseToken:   reverseToken,
+	}
+
+	return true
+}
+
+// RenewLeaseByID extends the TTL of an existing lease by the given duration.
+// Returns false if the lease doesn't exist or is banned.
+func (lm *LeaseManager) RenewLeaseByID(leaseID string, ttl time.Duration) bool {
+	lm.leasesLock.Lock()
+	defer lm.leasesLock.Unlock()
+
+	if _, banned := lm.bannedLeases[leaseID]; banned {
+		return false
+	}
+
+	entry, exists := lm.leases[leaseID]
+	if !exists {
+		return false
+	}
+
+	entry.Expires = time.Now().Add(ttl)
+	entry.LastSeen = time.Now()
+	return true
+}
+
+// DeleteLeaseByID removes a lease by its string ID.
+// The onLeaseDeleted callback is invoked outside the lock.
+func (lm *LeaseManager) DeleteLeaseByID(leaseID string) bool {
+	lm.leasesLock.Lock()
+	_, exists := lm.leases[leaseID]
+	if exists {
+		delete(lm.leases, leaseID)
+	}
+	callback := lm.onLeaseDeleted
+	lm.leasesLock.Unlock()
+
+	if exists && callback != nil {
+		callback(leaseID)
+	}
+
+	return exists
 }

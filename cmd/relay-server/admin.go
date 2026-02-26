@@ -22,6 +22,7 @@ const adminCookieName = "portal_admin"
 
 // Admin manages approval state and persistence for relay-server.
 type Admin struct {
+	startTime    time.Time
 	settingsPath string
 	settingsMu   sync.Mutex
 
@@ -39,6 +40,7 @@ func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.Au
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
 	}
 	return &Admin{
+		startTime:      time.Now(),
 		settingsPath:   "admin_settings.json",
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
@@ -73,23 +75,11 @@ type adminSettings struct {
 	BannedIPs      []string             `json:"banned_ips,omitempty"`
 }
 
-func (a *Admin) SetSettingsPath(path string) {
-	a.settingsMu.Lock()
-	defer a.settingsMu.Unlock()
-	a.settingsPath = path
-}
-
-func (a *Admin) SaveSettings(serv *portal.RelayServer) {
+func (a *Admin) SaveSettings(lm *portal.LeaseManager) {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 
-	lm := serv.GetLeaseManager()
-
-	bannedBytes := lm.GetBannedLeases()
-	banned := make([]string, len(bannedBytes))
-	for i, b := range bannedBytes {
-		banned[i] = string(b)
-	}
+	banned := lm.GetBannedLeases()
 
 	bpsLimits := map[string]int64{}
 	if a.bpsManager != nil {
@@ -132,7 +122,7 @@ func (a *Admin) SaveSettings(serv *portal.RelayServer) {
 	log.Debug().Str("path", a.settingsPath).Msg("[Admin] Saved admin settings")
 }
 
-func (a *Admin) LoadSettings(serv *portal.RelayServer) {
+func (a *Admin) LoadSettings(lm *portal.LeaseManager) {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 
@@ -151,8 +141,6 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 		log.Error().Err(err).Msg("[Admin] Failed to parse admin settings")
 		return
 	}
-
-	lm := serv.GetLeaseManager()
 
 	for _, leaseID := range settings.BannedLeases {
 		lm.BanLease(leaseID)
@@ -206,7 +194,7 @@ func (a *Admin) isAuthenticated(r *http.Request) bool {
 }
 
 // HandleAdminRequest routes /admin/* requests.
-func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager) {
 	route := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin"), "/")
 
 	// Public routes (no authentication required)
@@ -216,7 +204,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 		return
 	case route == "login":
 		// Serve login page (GET)
-		a.frontend.ServeAppStatic(w, r, "", serv)
+		a.frontend.ServeAppStatic(w, r, "", lm)
 		return
 	case route == "logout" && r.Method == http.MethodPost:
 		a.handleLogout(w, r)
@@ -230,7 +218,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	if !a.isAuthenticated(r) {
 		// For page requests (no specific route), show login page
 		if route == "" {
-			a.frontend.ServeAppStatic(w, r, "", serv)
+			a.frontend.ServeAppStatic(w, r, "", lm)
 			return
 		}
 		// For API requests, return 401
@@ -240,30 +228,32 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 
 	switch {
 	case route == "":
-		a.frontend.ServeAppStatic(w, r, "", serv)
+		a.frontend.ServeAppStatic(w, r, "", lm)
 	case route == "leases" && r.Method == http.MethodGet:
-		writeJSON(w, a.convertLeaseEntriesToAdminRows(serv))
+		writeJSON(w, a.convertLeaseEntriesToAdminRows(lm))
 	case route == "leases/banned" && r.Method == http.MethodGet:
-		writeJSON(w, serv.GetLeaseManager().GetBannedLeases())
+		writeJSON(w, lm.GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
+		uptime := time.Since(a.startTime)
 		writeJSON(w, map[string]interface{}{
-			"leases_count": len(serv.GetAllLeaseEntries()),
-			"uptime":       "TODO",
+			"leases_count":   len(lm.GetAllLeaseEntries()),
+			"uptime":         uptime.Truncate(time.Second).String(),
+			"uptime_seconds": int64(uptime.Seconds()),
 		})
 	case route == "settings" && r.Method == http.MethodGet:
 		a.handleGetSettings(w)
 	case route == "settings/approval-mode":
-		a.handleApprovalModeRequest(w, r, serv)
+		a.handleApprovalModeRequest(w, r, lm)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/ban"):
-		a.handleLeaseBanRequest(w, r, serv, route)
+		a.handleLeaseBanRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/bps"):
-		a.handleLeaseBPSRequest(w, r, serv, route)
+		a.handleLeaseBPSRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/approve"):
-		a.handleLeaseApproveRequest(w, r, serv, route)
+		a.handleLeaseApproveRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/deny"):
-		a.handleLeaseDenyRequest(w, r, serv, route)
+		a.handleLeaseDenyRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "ips/") && strings.HasSuffix(route, "/ban"):
-		a.handleIPBanRequest(w, r, serv, route)
+		a.handleIPBanRequest(w, r, lm, route)
 	default:
 		http.NotFound(w, r)
 	}
@@ -316,13 +306,15 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	a.authManager.ResetFailedLogin(clientIP)
 	token := a.authManager.CreateSession()
 
+	secureCookie := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    token,
 		Path:     "/admin",
 		HttpOnly: true,
+		Secure:   secureCookie,
 		SameSite: http.SameSiteStrictMode,
-		MaxAge:   86400, // 24 hours
+		MaxAge:   86400,
 	})
 
 	log.Info().Str("ip", clientIP).Msg("[Admin] Successful login")
@@ -337,13 +329,14 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		a.authManager.DeleteSession(cookie.Value)
 	}
-
 	// Clear the cookie
+	secureCookie := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    "",
 		Path:     "/admin",
 		HttpOnly: true,
+		Secure:   secureCookie,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1, // Delete cookie
 	})
@@ -366,7 +359,7 @@ func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -381,12 +374,12 @@ func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, se
 
 	switch r.Method {
 	case http.MethodPost:
-		serv.GetLeaseManager().BanLease(leaseID)
-		a.SaveSettings(serv)
+		lm.BanLease(leaseID)
+		a.SaveSettings(lm)
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
-		serv.GetLeaseManager().UnbanLease(leaseID)
-		a.SaveSettings(serv)
+		lm.UnbanLease(leaseID)
+		a.SaveSettings(lm)
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -401,7 +394,7 @@ func (a *Admin) handleGetSettings(w http.ResponseWriter) {
 	})
 }
 
-func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager) {
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, map[string]interface{}{
@@ -421,7 +414,7 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 			return
 		}
 		a.approveManager.SetApprovalMode(mode)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
 		writeJSON(w, map[string]interface{}{
 			"approval_mode": mode,
@@ -431,7 +424,7 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -448,12 +441,13 @@ func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request
 	case http.MethodPost:
 		a.approveManager.ApproveLease(leaseID)
 		a.approveManager.UndenyLease(leaseID) // Remove from denied if exists
-		a.SaveSettings(serv)
+
+		a.SaveSettings(lm)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approved")
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		a.approveManager.RevokeLease(leaseID)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approval revoked")
 		w.WriteHeader(http.StatusOK)
 	default:
@@ -461,7 +455,7 @@ func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -477,12 +471,12 @@ func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, s
 	switch r.Method {
 	case http.MethodPost:
 		a.approveManager.DenyLease(leaseID)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denied")
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		a.approveManager.UndenyLease(leaseID)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denial removed")
 		w.WriteHeader(http.StatusOK)
 	default:
@@ -490,7 +484,7 @@ func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, s
 	}
 }
 
-func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -523,7 +517,7 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 			Int64("old_bps", oldBPS).
 			Int64("new_bps", req.BPS).
 			Msg("[Admin] BPS limit updated")
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		if a.bpsManager == nil {
@@ -536,15 +530,14 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 			Str("lease_id", leaseID).
 			Int64("old_bps", oldBPS).
 			Msg("[Admin] BPS limit removed (now unlimited)")
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		w.WriteHeader(http.StatusOK)
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
-	// Route format: ips/{ip}/ban
+func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
 		http.NotFound(w, r)
@@ -565,12 +558,12 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 	switch r.Method {
 	case http.MethodPost:
 		a.ipManager.BanIP(ip)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("ip", ip).Msg("[Admin] IP banned")
 		w.WriteHeader(http.StatusOK)
 	case http.MethodDelete:
 		a.ipManager.UnbanIP(ip)
-		a.SaveSettings(serv)
+		a.SaveSettings(lm)
 		log.Info().Str("ip", ip).Msg("[Admin] IP unbanned")
 		w.WriteHeader(http.StatusOK)
 	default:
@@ -579,8 +572,8 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 }
 
 // convertLeaseEntriesToAdminRows converts LeaseEntry data to leaseRow format for admin API
-func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
-	leaseEntries := serv.GetAllLeaseEntries()
+func (a *Admin) convertLeaseEntriesToAdminRows(lm *portal.LeaseManager) []leaseRow {
+	leaseEntries := lm.GetAllLeaseEntries()
 	rows := []leaseRow{}
 	now := time.Now()
 
@@ -590,7 +583,7 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		}
 
 		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
+		leaseID := lease.ID
 
 		ttl := time.Until(leaseEntry.Expires)
 		ttlStr := ""
@@ -608,68 +601,57 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 		if since < 0 {
 			since = 0
 		}
-		lastSeenStr := func(d time.Duration) string {
-			if d >= time.Hour {
-				h := int(d / time.Hour)
-				m := int((d % time.Hour) / time.Minute)
-				if m > 0 {
-					return fmt.Sprintf("%dh %dm", h, m)
-				}
-				return fmt.Sprintf("%dh", h)
-			}
-			if d >= time.Minute {
-				m := int(d / time.Minute)
-				s := int((d % time.Minute) / time.Second)
-				if s > 0 {
-					return fmt.Sprintf("%dm %ds", m, s)
-				}
-				return fmt.Sprintf("%dm", m)
-			}
-			return fmt.Sprintf("%ds", int(d/time.Second))
-		}(since)
+		lastSeenStr := formatDuration(since)
 		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
 		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
 
-		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
+		// Funnel leases are considered connected if not expired and recently seen
+		connected := since < 60*time.Second
 
 		name := lease.Name
 		if name == "" {
 			name = "(unnamed)"
 		}
 
-		kind := "client"
-		if len(lease.Alpn) > 0 {
-			kind = lease.Alpn[0]
-		}
+		kind := "funnel"
 
-		dnsLabel := identityID
+		dnsLabel := leaseID
 		if len(dnsLabel) > 8 {
 			dnsLabel = dnsLabel[:8] + "..."
 		}
 
-		base := flagPortalAppURL
-		if base == "" {
-			base = flagPortalURL
+		var link string
+		if leaseEntry.ReverseToken != "" && flagFunnelDomain != "" {
+			if flagFunnelPort == 443 {
+				link = fmt.Sprintf("https://%s.%s/", lease.Name, flagFunnelDomain)
+			} else {
+				link = fmt.Sprintf("https://%s.%s:%d/", lease.Name, flagFunnelDomain, flagFunnelPort)
+			}
+		} else {
+			base := flagPortalAppURL
+			if base == "" {
+				base = flagPortalURL
+			}
+			link = fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 		}
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
 
 		var bps int64
 		if a.bpsManager != nil {
-			bps = a.bpsManager.GetBPSLimit(identityID)
+			bps = a.bpsManager.GetBPSLimit(leaseID)
 		}
 
 		// Get IP info for this lease
 		var ip string
 		var isIPBanned bool
 		if a.ipManager != nil {
-			ip = a.ipManager.GetLeaseIP(identityID)
+			ip = a.ipManager.GetLeaseIP(leaseID)
 			if ip != "" {
 				isIPBanned = a.ipManager.IsIPBanned(ip)
 			}
 		}
 
 		rows = append(rows, leaseRow{
-			Peer:         identityID,
+			Peer:         leaseID,
 			Name:         name,
 			Kind:         kind,
 			Connected:    connected,
@@ -683,8 +665,8 @@ func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []lease
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:     lease.Metadata,
 			BPS:          bps,
-			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(identityID),
-			IsDenied:     a.approveManager.IsLeaseDenied(identityID),
+			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(leaseID),
+			IsDenied:     a.approveManager.IsLeaseDenied(leaseID),
 			IP:           ip,
 			IsIPBanned:   isIPBanned,
 		})
