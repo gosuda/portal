@@ -6,7 +6,6 @@ require (
 	github.com/go-acme/lego/v4 v4.32.0
 	github.com/rs/zerolog v1.34.0
 	golang.org/x/net v0.50.0
-	gopkg.eu.org/broccoli v1.2.4
 )
 
 require (
