@@ -177,7 +177,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 			if cfg.TLSEnable {
 				proxyType = "TLS→TCP"
 			}
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
+			if err := proxyConnection(ctx, cfg.Host, relayConn, cfg.TLSEnable); err != nil {
 				log.Error().Str("service", cfg.Name).Str("proxy", proxyType).Err(err).Msg("Proxy error")
 			}
 			log.Info().Str("service", cfg.Name).Str("proxy", proxyType).Msg("Connection closed")
@@ -226,7 +226,7 @@ var bufferPool = sync.Pool{
 
 // proxyConnection proxies data between relay and local service using raw TCP.
 // It ensures complete data transfer before closing connections.
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
+func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, tlsEnabled bool) error {
 	defer relayConn.Close()
 
 	// Try to connect to local service (no retry)
@@ -236,7 +236,10 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		log.Debug().
 			Str("local_addr", localAddr).
 			Err(err).
-			Msg("Local service unavailable, returning service unavailable page")
+			Msg("Local service unavailable")
+		if tlsEnabled {
+			return fmt.Errorf("local service unavailable: %w", err)
+		}
 		return writeEmptyHTTPResponse(relayConn)
 	}
 	defer localConn.Close()
@@ -259,9 +262,9 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	// Relay -> Local
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		_, err := io.CopyBuffer(localConn, relayConn, *bufPtr)
 		if err != nil {
 			log.Debug().Err(err).Msg("relay->local copy ended")
 		}
@@ -274,9 +277,9 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	// Local -> Relay
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		_, err := io.CopyBuffer(relayConn, localConn, *bufPtr)
 		if err != nil {
 			log.Debug().Err(err).Msg("local->relay copy ended")
 		}
