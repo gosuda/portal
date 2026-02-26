@@ -76,11 +76,11 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      const tlsEnv = tlsEnabled ? "" : "$env:TLS=\"false\"; ";
+      const tlsEnv = tlsEnabled ? "$env:TLS_ENABLE=\"true\"; " : "$env:TLS_ENABLE=\"false\"; ";
       return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
-    const tlsEnv = tlsEnabled ? "" : "TLS=false ";
+    const tlsEnv = tlsEnabled ? "TLS_ENABLE=true " : "TLS_ENABLE=false ";
     return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
   }, [currentOrigin, host, name, relayUrls, os, tlsEnabled]);
 

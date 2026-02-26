@@ -54,7 +54,7 @@ set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost:3000}"
 if [ "${HIDE:-}" = "1" ] || [ "${HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
-if [ "${TLS:-}" = "0" ] || [ "${TLS:-}" = "false" ]; then
+if [ "${TLS_ENABLE:-}" = "0" ] || [ "${TLS_ENABLE:-}" = "false" ]; then
   set -- "$@" --tls=false
 fi
 
@@ -101,7 +101,7 @@ if ($env:TAGS) { $ArgsList += "--tags", $env:TAGS }
 if ($env:THUMBNAIL) { $ArgsList += "--thumbnail", $env:THUMBNAIL }
 if ($env:OWNER) { $ArgsList += "--owner", $env:OWNER }
 if ($env:HIDE -eq "1" -or $env:HIDE -eq "true") { $ArgsList += "--hide" }
-if ($env:TLS -eq "0" -or $env:TLS -eq "false") { $ArgsList += "--tls=false" }
+if ($env:TLS_ENABLE -eq "0" -or $env:TLS_ENABLE -eq "false") { $ArgsList += "--tls=false" }
 
 Write-Host "Starting portal-tunnel..."
 try {
