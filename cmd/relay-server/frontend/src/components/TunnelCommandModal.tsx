@@ -308,59 +308,52 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </p>
           </div>
 
-          <div
-            className={cn(
-              "space-y-3 rounded-md border border-input/80 p-3 transition-opacity",
-              tlsMode === "self" ? "opacity-100" : "opacity-60"
-            )}
-          >
-            <p className="text-xs font-medium text-foreground">Self TLS Files</p>
-            <div className="space-y-2">
-              <label
-                htmlFor="tls-cert-file"
-                className="text-sm font-medium text-foreground"
-              >
-                TLS Cert File
-              </label>
-              <div className="flex items-center rounded-md bg-border">
-                <span className="px-3 text-sm text-text-muted">TLS_CERT_FILE=</span>
-                <Input
-                  id="tls-cert-file"
-                  type="text"
-                  value={tlsCertFile}
-                  onChange={(e) => setTlsCertFile(e.target.value)}
-                  placeholder="/path/to/fullchain.pem"
-                  className="rounded-l-none"
-                  disabled={tlsMode !== "self"}
-                />
+          {tlsMode === "self" && (
+            <div className="space-y-3 rounded-md border border-input/80 p-3">
+              <p className="text-xs font-medium text-foreground">Self TLS Files</p>
+              <div className="space-y-2">
+                <label
+                  htmlFor="tls-cert-file"
+                  className="text-sm font-medium text-foreground"
+                >
+                  TLS Cert File
+                </label>
+                <div className="flex items-center rounded-md bg-border">
+                  <span className="px-3 text-sm text-text-muted">TLS_CERT_FILE=</span>
+                  <Input
+                    id="tls-cert-file"
+                    type="text"
+                    value={tlsCertFile}
+                    onChange={(e) => setTlsCertFile(e.target.value)}
+                    placeholder="/path/to/fullchain.pem"
+                    className="rounded-l-none"
+                  />
+                </div>
               </div>
-            </div>
-            <div className="space-y-2">
-              <label
-                htmlFor="tls-key-file"
-                className="text-sm font-medium text-foreground"
-              >
-                TLS Key File
-              </label>
-              <div className="flex items-center rounded-md bg-border">
-                <span className="px-3 text-sm text-text-muted">TLS_KEY_FILE=</span>
-                <Input
-                  id="tls-key-file"
-                  type="text"
-                  value={tlsKeyFile}
-                  onChange={(e) => setTlsKeyFile(e.target.value)}
-                  placeholder="/path/to/privkey.pem"
-                  className="rounded-l-none"
-                  disabled={tlsMode !== "self"}
-                />
+              <div className="space-y-2">
+                <label
+                  htmlFor="tls-key-file"
+                  className="text-sm font-medium text-foreground"
+                >
+                  TLS Key File
+                </label>
+                <div className="flex items-center rounded-md bg-border">
+                  <span className="px-3 text-sm text-text-muted">TLS_KEY_FILE=</span>
+                  <Input
+                    id="tls-key-file"
+                    type="text"
+                    value={tlsKeyFile}
+                    onChange={(e) => setTlsKeyFile(e.target.value)}
+                    placeholder="/path/to/privkey.pem"
+                    className="rounded-l-none"
+                  />
+                </div>
               </div>
+              <p className="text-xs text-text-muted">
+                Self TLS selected. These files are included in the command.
+              </p>
             </div>
-            <p className="text-xs text-text-muted">
-              {tlsMode === "self"
-                ? "Self TLS selected. These files are included in the command."
-                : "This section is used only when TLS mode is self tls."}
-            </p>
-          </div>
+          )}
 
           {/* Generated Command */}
           <div className="space-y-2">
