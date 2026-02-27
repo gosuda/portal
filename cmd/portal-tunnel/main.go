@@ -23,8 +23,9 @@ var (
 	flagRelayURLs   string
 	flagHost        string
 	flagName        string
-	flagTLSEnable   bool
-	flagProtocols   string
+	flagTLSMode     string
+	flagTLSCertFile string
+	flagTLSKeyFile  string
 	flagDescription string
 	flagTags        string
 	flagThumbnail   string
@@ -44,10 +45,14 @@ func main() {
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
 
-	defaultTLS := os.Getenv("TLS_ENABLE") != "false"
-	flag.BoolVar(&flagTLSEnable, "tls", defaultTLS, "Enable TLS termination on tunnel client (uses relay ACME DNS-01) [env: TLS_ENABLE]")
+	defaultTLSMode := strings.ToLower(strings.TrimSpace(os.Getenv("TLS_MODE")))
+	if defaultTLSMode == "" {
+		defaultTLSMode = string(sdk.TLSModeNoTLS)
+	}
+	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
+	flag.StringVar(&flagTLSCertFile, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]")
+	flag.StringVar(&flagTLSKeyFile, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "PEM private key for --tls-mode self [env: TLS_KEY_FILE]")
 
-	flag.StringVar(&flagProtocols, "protocols", os.Getenv("APP_PROTOCOLS"), "ALPN protocols (comma-separated) [env: APP_PROTOCOLS]")
 	flag.StringVar(&flagDescription, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
 	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")
@@ -60,6 +65,13 @@ func main() {
 
 	if flagHost == "" || flagName == "" {
 		flag.Usage()
+		os.Exit(1)
+	}
+	flagTLSMode = strings.ToLower(strings.TrimSpace(flagTLSMode))
+	if flagTLSMode != string(sdk.TLSModeNoTLS) &&
+		flagTLSMode != string(sdk.TLSModeSelf) &&
+		flagTLSMode != string(sdk.TLSModeKeyless) {
+		log.Error().Str("tls_mode", flagTLSMode).Msg("--tls-mode must be one of: no-tls, self, keyless")
 		os.Exit(1)
 	}
 
@@ -99,14 +111,36 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	log.Info().Msg("Starting Portal Tunnel...")
 	log.Info().Msgf("  Local:    %s", flagHost)
 	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Msgf("  TLS Mode: %v", flagTLSEnable)
+	tlsEnabled := flagTLSMode != string(sdk.TLSModeNoTLS)
+	log.Info().Msgf("  TLS:      %v", tlsEnabled)
+	if tlsEnabled {
+		log.Info().Msgf("  TLS Mode: %s", flagTLSMode)
+	}
 
 	var clientOpts []sdk.ClientOption
 	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
 
-	if flagTLSEnable {
-		clientOpts = append(clientOpts, sdk.WithTLS())
-		log.Info().Msg("TLS: Using relay ACME DNS-01 (E2EE)")
+	if tlsEnabled {
+		if flagTLSMode == string(sdk.TLSModeSelf) {
+			certFile := strings.TrimSpace(flagTLSCertFile)
+			keyFile := strings.TrimSpace(flagTLSKeyFile)
+			clientOpts = append(clientOpts, sdk.WithTLSSelfCertificateFiles(certFile, keyFile))
+			log.Info().
+				Str("cert_file", certFile).
+				Str("key_file", keyFile).
+				Msg("TLS: Using self-managed local certificate")
+		} else if flagTLSMode == string(sdk.TLSModeKeyless) {
+			certFile := strings.TrimSpace(flagTLSCertFile)
+			if certFile != "" {
+				log.Warn().
+					Str("cert_file", certFile).
+					Msg("Ignoring --tls-cert-file in keyless mode (SDK auto configuration only)")
+			}
+			clientOpts = append(clientOpts, sdk.WithTLSKeylessDefaults())
+			log.Info().Msg("TLS: Using keyless remote signer (SDK auto configuration)")
+		} else {
+			return fmt.Errorf("unsupported TLS mode: %s", flagTLSMode)
+		}
 	}
 
 	client, err := sdk.NewClient(clientOpts...)
@@ -140,7 +174,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
 		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
-	if flagTLSEnable {
+	if tlsEnabled {
 		log.Info().Msg("- TLS:      Enabled")
 	}
 
@@ -174,10 +208,10 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
 			proxyType := "TCP"
-			if flagTLSEnable {
+			if tlsEnabled {
 				proxyType = "TLS→TCP"
 			}
-			if err := proxyConnection(ctx, flagHost, relayConn, flagTLSEnable); err != nil {
+			if err := proxyConnection(ctx, flagHost, relayConn, tlsEnabled); err != nil {
 				log.Error().Str("proxy", proxyType).Err(err).Msg("Proxy error")
 			}
 			log.Info().Str("proxy", proxyType).Msg("Connection closed")

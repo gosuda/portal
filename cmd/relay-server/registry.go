@@ -12,7 +12,6 @@ import (
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/utils/cert"
 	"gosuda.org/portal/sdk"
 )
 
@@ -30,8 +29,6 @@ func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request,
 		r.handleUnregister(w, req, serv)
 	case "renew":
 		r.handleRenew(w, req, serv)
-	case "csr":
-		r.handleCSR(w, req, serv)
 	case "domain":
 		r.handleDomain(w, req, serv)
 	case "connect":
@@ -91,6 +88,16 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		})
 		return
 	}
+	tlsMode := normalizeTLSMode(registerReq.TLSMode)
+	switch tlsMode {
+	case sdk.TLSModeNoTLS, sdk.TLSModeSelf, sdk.TLSModeKeyless:
+	default:
+		writeJSON(w, sdk.RegisterResponse{
+			Success: false,
+			Message: "tls_mode must be one of: no-tls, self, keyless",
+		})
+		return
+	}
 
 	// Create lease
 	lease := &portal.Lease{
@@ -98,7 +105,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		Name:         registerReq.Name,
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(30 * time.Second),
-		TLSEnabled:   registerReq.TLSEnabled,
+		TLSMode:      string(tlsMode),
 		ReverseToken: strings.TrimSpace(registerReq.ReverseToken),
 	}
 
@@ -114,8 +121,8 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	// Clear dropped state in case this is a re-registration after disconnect
 	serv.GetReverseHub().ClearDropped(registerReq.LeaseID)
 
-	// Only register SNI route for TLS-enabled leases
-	if registerReq.TLSEnabled {
+	// Only register SNI route for TLS leases.
+	if normalizeTLSMode(tlsMode) != sdk.TLSModeNoTLS {
 		if err := registerSNIRoute(serv, registerReq.LeaseID, registerReq.Name); err != nil {
 			// Keep lease and route state consistent on partial failure.
 			serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
@@ -130,7 +137,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	log.Info().
 		Str("lease_id", registerReq.LeaseID).
 		Str("name", registerReq.Name).
-		Bool("tls_enabled", registerReq.TLSEnabled).
+		Str("tls_mode", string(tlsMode)).
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
@@ -251,8 +258,8 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	}
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
-	// Only TLS-enabled leases need SNI routes.
-	if entry.Lease.TLSEnabled {
+	// Only TLS leases need SNI routes.
+	if normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) != sdk.TLSModeNoTLS {
 		if err := registerSNIRoute(serv, entry.Lease.ID, entry.Lease.Name); err != nil {
 			log.Warn().
 				Err(err).
@@ -287,124 +294,12 @@ func unregisterSNIRoute(serv *portal.RelayServer, leaseID string) {
 	sniRouter.UnregisterRouteByLeaseID(leaseID)
 }
 
-// handleCSR handles Certificate Signing Request submissions
-// The tunnel client submits a CSR, and the relay issues a certificate via ACME DNS-01
-func (r *SDKRegistry) handleCSR(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
-	if req.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+func normalizeTLSMode(mode sdk.TLSMode) sdk.TLSMode {
+	normalized := sdk.TLSMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	if normalized == "" {
+		return sdk.TLSModeNoTLS
 	}
-
-	// Check if certificate manager is available
-	if serv.GetCertManager() == nil {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "certificate issuance not configured on this relay",
-		})
-		return
-	}
-
-	var csrReq sdk.CSRRequest
-	if err := json.NewDecoder(req.Body).Decode(&csrReq); err != nil {
-		log.Error().Err(err).Msg("[Registry] Failed to decode CSR request")
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "invalid request body",
-		})
-		return
-	}
-
-	// Validate request
-	if csrReq.LeaseID == "" {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "lease_id is required",
-		})
-		return
-	}
-	if csrReq.ReverseToken == "" {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "reverse_token is required",
-		})
-		return
-	}
-	if len(csrReq.CSR) == 0 {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "csr is required",
-		})
-		return
-	}
-
-	// Authenticate via lease
-	entry, ok := serv.GetLeaseManager().GetLeaseByID(csrReq.LeaseID)
-	if !ok {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "lease not found",
-		})
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(strings.TrimSpace(csrReq.ReverseToken))) != 1 {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: "unauthorized",
-		})
-		return
-	}
-
-	// Parse CSR to extract and validate domain
-	csrDomain, err := cert.ParseCSRDomain(csrReq.CSR)
-	if err != nil {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: fmt.Sprintf("invalid CSR: %v", err),
-		})
-		return
-	}
-
-	// Validate domain matches lease name + base host
-	expectedDomain := strings.ToLower(entry.Lease.Name) + "." + serv.BaseHost
-	if strings.ToLower(csrDomain) != expectedDomain {
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: fmt.Sprintf("domain mismatch: expected %s", expectedDomain),
-		})
-		return
-	}
-
-	// Issue certificate
-	certReq := &cert.CSRRequest{
-		Domain: csrDomain,
-		CSR:    csrReq.CSR,
-	}
-
-	cert, err := serv.GetCertManager().IssueCertificate(req.Context(), certReq)
-	if err != nil {
-		log.Error().Err(err).
-			Str("lease_id", csrReq.LeaseID).
-			Str("domain", csrDomain).
-			Msg("[Registry] Failed to issue certificate")
-		writeJSON(w, sdk.CSRResponse{
-			Success: false,
-			Message: fmt.Sprintf("certificate issuance failed: %v", err),
-		})
-		return
-	}
-
-	log.Info().
-		Str("lease_id", csrReq.LeaseID).
-		Str("domain", csrDomain).
-		Time("expires", cert.ExpiresAt).
-		Msg("[Registry] Certificate issued")
-
-	writeJSON(w, sdk.CSRResponse{
-		Success:     true,
-		Certificate: cert.Certificate,
-		ExpiresAt:   cert.ExpiresAt.Format(time.RFC3339),
-	})
+	return normalized
 }
 
 // handleDomain returns the relay's base domain for TLS certificate construction.

@@ -46,14 +46,14 @@ Portal connects local applications to web users through a secure relay layer wit
 
 ## Security
 
-- **E2EE**: TLS passthrough with ACME certificates - relay routes TLS by SNI without termination
+- **E2EE**: TLS passthrough with keyless wildcard certificates - relay routes TLS by SNI without termination
 - **Tokens**: Per-lease reverse connection tokens
 - **SNI Routing**: TLS passthrough without decryption
 
 ## Protocol Stack
 
 ```
-TLS (E2EE via ACME certificate)
+TLS (E2EE via keyless certificate)
     └── TCP
         └── Application Data
 ```

@@ -46,6 +46,6 @@ utils/             # Shared utilities
 
 ## Architecture Decisions
 
-- **E2EE**: TLS passthrough with ACME certificates
+- **E2EE**: TLS passthrough with keyless certificates
 - **SNI Routing**: TLS routed by hostname without termination
 - **No CGO**: pure Go for cross-platform builds

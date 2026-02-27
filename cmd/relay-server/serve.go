@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/sdk"
 )
 
 //go:embed dist/*
@@ -133,9 +134,8 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	return srv
 }
 
-// shouldProxyHTTP checks if the request should be proxied via HTTP
-// based on the lease's TLSEnabled setting.
-// Returns true if TLS is NOT enabled (can proxy via HTTP).
+// shouldProxyHTTP checks if the request should be proxied via HTTP.
+// Returns true if TLS mode is no-tls.
 func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 	leaseName, ok := leaseNameFromHost(host, defaultAppPattern(flagPortalURL))
 	if !ok {
@@ -149,11 +149,11 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 		return true
 	}
 
-	// If TLS is NOT enabled, we can proxy via HTTP
-	shouldProxy := !entry.Lease.TLSEnabled
+	// If TLS mode is no-tls, we can proxy via HTTP.
+	shouldProxy := normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) == sdk.TLSModeNoTLS
 	log.Debug().
 		Str("lease_name", leaseName).
-		Bool("tls_enabled", entry.Lease.TLSEnabled).
+		Str("tls_mode", entry.Lease.TLSMode).
 		Msg("[proxy] shouldProxyHTTP")
 	return shouldProxy
 }
@@ -171,7 +171,7 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		return
 	}
 
-	if entry.Lease.TLSEnabled {
+	if normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) != sdk.TLSModeNoTLS {
 		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
 		return
 	}

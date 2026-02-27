@@ -25,18 +25,20 @@ Enable TLS for end-to-end encryption from client to your local service:
 ./bin/portal-tunnel --host localhost:8080 \
   --relay https://portal.example.com \
   --name myapp \
-  --tls
+  --tls-mode keyless
 ```
 
-When `--tls` is enabled:
-- Tunnel generates a private key and CSR locally
-- Relay issues certificate via ACME DNS-01 (if configured)
+TLS modes:
+- No TLS mode (`--tls-mode no-tls`): plain TCP/HTTP proxying without TLS termination
+- Self mode (`--tls-mode self`): tunnel uses local certificate and key files
+- Keyless mode (`--tls-mode keyless`): tunnel auto-discovers certificate chain and delegates signing to external signer API
 - TLS is terminated at the tunnel, then proxied to your local service via TCP
 - Access via `https://myapp.example.com` directly on port 443
 
 **Requirements:**
-- Relay must have ACME DNS-01 configured (`ACME_DNS_PROVIDER`, `ACME_EMAIL`)
-- DNS provider credentials must be set on the relay server
+- Self mode: set `TLS_CERT_FILE` and `TLS_KEY_FILE` (or use `--tls-cert-file`, `--tls-key-file`)
+- Keyless mode: no local cert/key required in default mode (SDK auto-discovers signer certificate chain)
+- Keyless auto-discovery expects an HTTPS signer endpoint.
 
 ## Flags
 
@@ -48,8 +50,9 @@ Options:
         --relay           Portal relay server API URLs (comma-separated, http/https) [default: http://localhost:4017] [env: RELAYS]
         --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
         --name            Service name  [env: APP_NAME]
-        --tls             Enable TLS termination on tunnel client (uses relay ACME DNS-01) [env: TLS_ENABLE]
-        --protocols       ALPN protocols (comma-separated) [default: http/1.1,h2] [env: APP_PROTOCOLS]
+        --tls-mode        TLS mode: no-tls, self, or keyless [default: no-tls] [env: TLS_MODE]
+        --tls-cert-file   PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]
+        --tls-key-file    PEM private key for --tls-mode self [env: TLS_KEY_FILE]
         --description     Service description metadata  [env: APP_DESCRIPTION]
         --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
         --thumbnail       Service thumbnail URL metadata  [env: APP_THUMBNAIL]
@@ -76,9 +79,53 @@ $env:HOST="localhost:3000"; $env:NAME="myapp"; irm https://portal.example.com/tu
 export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
-export TLS_ENABLE=true
+export TLS_MODE=keyless
 
 ./bin/portal-tunnel
+```
+
+### Production (Self TLS)
+
+```bash
+export RELAYS=https://portal.example.com
+export APP_HOST=localhost:3000
+export APP_NAME=myapp
+export TLS_MODE=self
+export TLS_CERT_FILE=/etc/ssl/myapp/fullchain.pem
+export TLS_KEY_FILE=/etc/ssl/myapp/privkey.pem
+
+./bin/portal-tunnel
+```
+
+### Production (Keyless TLS)
+
+```bash
+export RELAYS=https://portal.example.com
+export APP_HOST=localhost:3000
+export APP_NAME=myapp
+export TLS_MODE=keyless
+
+./bin/portal-tunnel
+```
+
+Expected signer API contract (`/v1/sign`):
+
+```json
+{
+  "key_id": "relay-cert",
+  "algorithm": "RSA_PSS_SHA256",
+  "digest": "<base64>",
+  "timestamp_unix": 1735628400,
+  "nonce": "c4d76ad40f5d8f95a1fe4b2f1c922f4a"
+}
+```
+
+```json
+{
+  "key_id": "relay-cert",
+  "algorithm": "RSA_PSS_SHA256",
+  "signature": "<base64>"
+}
 ```
 
 ### Multiple Relays (High Availability)
@@ -88,5 +135,5 @@ export TLS_ENABLE=true
   --host localhost:3000 \
   --name myapp \
   --relay https://portal1.example.com,https://portal2.example.com \
-  --tls
+  --tls-mode keyless
 ```

@@ -15,7 +15,7 @@ This enables developers to publish local services globally without managing serv
 ## Features
 
 - 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network
-- 🔐 **End-to-End Encryption**: TLS passthrough with ACME DNS-01 certificates
+- 🔐 **End-to-End Encryption**: TLS passthrough with relay keyless certificates
 - 🕊️ **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
 - ⚙️ **Simple Setup**: Quick start with Tunnel client or Go SDK
 

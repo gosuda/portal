@@ -23,8 +23,8 @@ type Lease struct {
 	Name         string    `json:"name"`
 	Metadata     Metadata  `json:"metadata"`
 	Expires      time.Time `json:"expires"`
-	TLSEnabled   bool      `json:"tls_enabled"` // Whether the tunnel client handles TLS termination
-	ReverseToken string    `json:"-"`           // shared secret for reverse connect authentication
+	TLSMode      string    `json:"tls_mode"` // no-tls, self, keyless
+	ReverseToken string    `json:"-"`        // shared secret for reverse connect authentication
 }
 
 // Metadata holds service metadata

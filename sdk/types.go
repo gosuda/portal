@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"time"
@@ -20,6 +21,24 @@ var (
 	ErrInvalidMetadata      = errors.New("invalid metadata")
 )
 
+type TLSMode string
+
+const (
+	TLSModeNoTLS   TLSMode = "no-tls"
+	TLSModeSelf    TLSMode = "self"
+	TLSModeKeyless TLSMode = "keyless"
+)
+
+type TLSKeylessConfig struct {
+	Endpoint      string
+	ServerName    string
+	KeyID         string
+	RootCAPEM     []byte
+	EnableMTLS    bool
+	ClientCertPEM []byte
+	ClientKeyPEM  []byte
+}
+
 type ClientConfig struct {
 	BootstrapServers    []string
 	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
@@ -30,7 +49,16 @@ type ClientConfig struct {
 	ReverseDialTimeout  time.Duration // Reverse websocket dial timeout (default: 5 seconds)
 
 	// TLS configuration for tunnel server mode
-	TLSEnabled bool // Enable TLS listener
+	TLSMode TLSMode
+
+	// Optional local certificate used in self TLS mode.
+	TLSCertificate  *tls.Certificate
+	TLSSelfCertFile string
+	TLSSelfKeyFile  string
+
+	// Optional certificate chain and remote signer config used by keyless mode.
+	TLSKeylessCertificatePEM []byte
+	TLSKeyless               TLSKeylessConfig
 }
 
 type ClientOption func(*ClientConfig)
@@ -77,12 +105,46 @@ func WithReverseDialTimeout(timeout time.Duration) ClientOption {
 	}
 }
 
-// WithTLS enables TLS with certificate issued via relay's ACME DNS-01.
-// The domain is derived from the lease name and relay's base domain.
-// The private key is generated locally and never leaves the tunnel.
-func WithTLS() ClientOption {
+// WithTLSSelfCertificate enables TLS with a locally managed certificate/key pair.
+func WithTLSSelfCertificate(cert tls.Certificate) ClientOption {
 	return func(c *ClientConfig) {
-		c.TLSEnabled = true
+		c.TLSMode = TLSModeSelf
+		copy := cert
+		c.TLSCertificate = &copy
+	}
+}
+
+// WithTLSSelfCertificateFiles enables self TLS mode using certificate/key file paths.
+func WithTLSSelfCertificateFiles(certFile, keyFile string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSMode = TLSModeSelf
+		c.TLSSelfCertFile = certFile
+		c.TLSSelfKeyFile = keyFile
+	}
+}
+
+// WithTLSKeyless enables TLS with a local certificate chain and remote keyless signer.
+func WithTLSKeyless(certPEM []byte, cfg TLSKeylessConfig) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSMode = TLSModeKeyless
+		c.TLSKeylessCertificatePEM = append([]byte(nil), certPEM...)
+		c.TLSKeyless = TLSKeylessConfig{
+			Endpoint:      cfg.Endpoint,
+			ServerName:    cfg.ServerName,
+			KeyID:         cfg.KeyID,
+			RootCAPEM:     append([]byte(nil), cfg.RootCAPEM...),
+			EnableMTLS:    cfg.EnableMTLS,
+			ClientCertPEM: append([]byte(nil), cfg.ClientCertPEM...),
+			ClientKeyPEM:  append([]byte(nil), cfg.ClientKeyPEM...),
+		}
+	}
+}
+
+// WithTLSKeylessDefaults enables keyless TLS mode with SDK-managed defaults.
+// Certificate chain and signer trust are auto-discovered from signer endpoint when not explicitly provided.
+func WithTLSKeylessDefaults() ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSMode = TLSModeKeyless
 	}
 }
 
@@ -125,7 +187,7 @@ type RegisterRequest struct {
 	LeaseID      string          `json:"lease_id"`
 	Name         string          `json:"name"`
 	Metadata     portal.Metadata `json:"metadata"`
-	TLSEnabled   bool            `json:"tls_enabled"` // Whether the backend handles TLS termination
+	TLSMode      TLSMode         `json:"tls_mode"` // no-tls, self, keyless
 	ReverseToken string          `json:"reverse_token"`
 }
 
@@ -148,19 +210,4 @@ type RenewRequest struct {
 type APIResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
-}
-
-// CSRRequest represents a Certificate Signing Request submission
-type CSRRequest struct {
-	LeaseID      string `json:"lease_id"`
-	ReverseToken string `json:"reverse_token"`
-	CSR          []byte `json:"csr"` // PEM-encoded Certificate Signing Request
-}
-
-// CSRResponse represents the response to a CSR submission
-type CSRResponse struct {
-	Success     bool   `json:"success"`
-	Message     string `json:"message,omitempty"`
-	Certificate []byte `json:"certificate,omitempty"` // PEM-encoded certificate chain
-	ExpiresAt   string `json:"expires_at,omitempty"`  // ISO 8601 timestamp
 }

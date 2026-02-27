@@ -17,14 +17,6 @@ services:
 
       # SNI router port (for TLS passthrough)
       SNI_PORT: ${SNI_PORT:-:443}
-
-      # ACME certificate management (optional)
-      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
-      ACME_EMAIL: ${ACME_EMAIL:-}
-      ACME_DIRECTORY: ${ACME_DIRECTORY:-}
-
-      # DNS provider credentials (set as needed)
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
     ports:
       - "${PORTAL_PORT:-4017}:${PORTAL_PORT:-4017}"
       - "80:80"

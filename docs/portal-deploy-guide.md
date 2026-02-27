@@ -1,15 +1,19 @@
 # Portal Deploy Guide
 
-How to run a public Portal relay with TLS Passthrough and ACME DNS-01.
+How to run a public Portal relay with TLS passthrough.
 
 ## Overview
 
-Portal uses SNI-based TLS passthrough: the relay routes TLS connections by SNI to tunnel backends, and each tunnel gets its own certificate via ACME DNS-01.
+Portal uses SNI-based TLS passthrough: the relay routes TLS by SNI to tunnel backends.
+
+TLS certificate mode:
+- `self`: tunnel uses locally managed certificate and key files.
+- `keyless`: tunnel uses a local certificate chain and delegates signing to an external signer API (relay does not hold private key).
 
 ```
 Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Backend (TLS mode)
                        │
-                       └── ACME DNS-01 issues cert for each tunnel
+                       └── Self or keyless mode at tunnel
 ```
 
 ## Prerequisites
@@ -20,7 +24,7 @@ Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Back
 - DNS A/AAAA records pointing to your server:
   - `example.com -> <server IP>`
   - `*.example.com -> <server IP>`
-- DNS provider API credentials (Cloudflare or Route53) for ACME DNS-01
+- Wildcard TLS certificate and private key for `*.example.com`
 
 ## Quick Start
 
@@ -42,11 +46,6 @@ example.com.             AAAA   2001:db8::1
 # Core
 PORTAL_URL=https://example.com
 ADMIN_SECRET_KEY=your-secure-key-here
-
-# ACME (Cloudflare example)
-ACME_DNS_PROVIDER=cloudflare
-ACME_EMAIL=admin@example.com
-CLOUDFLARE_API_TOKEN=your-cloudflare-api-token
 ```
 
 ### 3. Run Portal
@@ -58,7 +57,7 @@ docker compose up -d
 ### 4. Run Tunnel
 
 ```bash
-portal-tunnel --host localhost:3000 --name myapp --relay https://example.com --tls
+portal-tunnel --host localhost:3000 --name myapp --relay https://example.com --tls-mode keyless
 ```
 
 ### 5. Access
@@ -78,28 +77,6 @@ https://myapp.example.com
 | `ADMIN_SECRET_KEY` | (auto-generated) | Admin authentication key |
 | `SNI_PORT` | `:443` | SNI router port |
 
-### ACME Certificate Management
-
-| Variable | Description |
-|----------|-------------|
-| `ACME_DNS_PROVIDER` | `cloudflare` or `route53` |
-| `ACME_EMAIL` | Email for ACME registration |
-| `ACME_DIRECTORY` | ACME directory URL (default: Let's Encrypt) |
-
-### DNS Provider Credentials
-
-**Cloudflare:**
-```bash
-CLOUDFLARE_API_TOKEN=your-api-token
-```
-
-**Route53:**
-```bash
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
-AWS_REGION=us-east-1
-```
-
 ## docker-compose.yml
 
 ```yaml
@@ -109,9 +86,6 @@ services:
     environment:
       PORTAL_URL: ${PORTAL_URL}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY}
-      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER}
-      ACME_EMAIL: ${ACME_EMAIL}
-      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
     ports:
       - "4017:4017"
       - "443:443"
@@ -124,19 +98,68 @@ services:
 ### TLS Mode (Production)
 
 ```bash
-portal-tunnel --host localhost:3000 --name myapp --relay https://example.com --tls
+portal-tunnel --host localhost:3000 --name myapp --relay https://example.com --tls-mode keyless
 ```
 
 - `--host`: Local service address
 - `--name`: Subdomain name (becomes `myapp.example.com`)
 - `--relay`: Portal relay URL
-- `--tls`: Enable TLS
+- `--tls-mode`: `no-tls`, `self`, or `keyless`
 
 How it works:
-1. Tunnel generates private key and CSR locally
-2. Sends CSR to relay via `/sdk/csr`
-3. Relay issues certificate via ACME DNS-01
+1. Tunnel performs TLS handshake on reverse tunnel connections
+2. In `self` mode, tunnel signs locally with certificate key
+3. In `keyless` mode, tunnel requests signatures from external signer API
 4. TLS connections go directly to tunnel on port 443
+
+### TLS Self Mode (Tunnel-Managed Certificate)
+
+```bash
+portal-tunnel \
+  --host localhost:3000 \
+  --name myapp \
+  --relay https://example.com \
+  --tls-mode self \
+  --tls-cert-file /etc/ssl/myapp/fullchain.pem \
+  --tls-key-file /etc/ssl/myapp/privkey.pem
+```
+
+- Relay keyless endpoints are not used in self mode.
+- Tunnel must have direct access to certificate and key files.
+
+### TLS Keyless Mode (External Signer)
+
+```bash
+portal-tunnel \
+  --host localhost:3000 \
+  --name myapp \
+  --relay https://example.com \
+  --tls-mode keyless
+```
+
+- Keyless signer endpoint, key id, trust roots, and certificate chain are auto-configured by SDK defaults.
+- Auto-discovery expects an HTTPS signer endpoint.
+- External signer API must return TLS signature responses for the requested digest.
+
+Signer API request/response example:
+
+```json
+{
+  "key_id": "relay-cert",
+  "algorithm": "RSA_PSS_SHA256",
+  "digest": "<base64>",
+  "timestamp_unix": 1735628400,
+  "nonce": "c4d76ad40f5d8f95a1fe4b2f1c922f4a"
+}
+```
+
+```json
+{
+  "key_id": "relay-cert",
+  "algorithm": "RSA_PSS_SHA256",
+  "signature": "<base64>"
+}
+```
 
 ### Non-TLS Mode (Development Only)
 
@@ -181,7 +204,7 @@ curl -fsSL https://example.com/tunnel | HOST=localhost:3000 NAME=test sh
                     │                                                     │
     :443 TLS ──────►│  ┌─────────────┐    ┌─────────────────────────────┐ │
                     │  │ SNI Router  │───►│ Tunnel Backend              │ │
-                    │  │             │    │ w/ ACME certificate         │ │
+                    │  │             │    │ w/ keyless certificate     │ │
                     │  └─────────────┘    └─────────────────────────────┘ │
                     │                                                     │
                     ├─────────────────────────────────────────────────────┤
@@ -212,15 +235,14 @@ sudo netstat -tlnp | grep :443
 sudo setcap 'cap_net_bind_service=+ep' ./bin/relay-server
 ```
 
-### ACME Certificate Issuance Fails
+### TLS Certificate Load Fails
 
 ```bash
-# Verify credentials
-echo $CLOUDFLARE_API_TOKEN
-echo $ACME_EMAIL
+# Verify self TLS certificate files
+ls -l /etc/ssl/myapp/fullchain.pem /etc/ssl/myapp/privkey.pem
 
 # Check logs
-docker compose logs portal | grep -i acme
+docker compose logs portal
 ```
 
 ### Tunnel Cannot Connect
@@ -230,5 +252,5 @@ docker compose logs portal | grep -i acme
 curl https://example.com/healthz
 
 # Run tunnel with verbose logging
-portal-tunnel --host localhost:3000 --name test --relay https://example.com --tls
+portal-tunnel --host localhost:3000 --name test --relay https://example.com --tls-mode keyless
 ```

@@ -31,10 +31,7 @@ var (
 	flagBootstraps []string
 
 	// TLS
-	flagSNIPort         string
-	flagACMEDNSProvider string
-	flagACMEEmail       string
-	flagACMEDirectory   string
+	flagSNIPort string
 )
 
 func main() {
@@ -67,9 +64,6 @@ func main() {
 
 	// TLS flags
 	flag.StringVar(&flagSNIPort, "sni-port", defaultSNIPort, "SNI router port (env: SNI_PORT)")
-	flag.StringVar(&flagACMEDNSProvider, "acme-dns-provider", os.Getenv("ACME_DNS_PROVIDER"), "ACME DNS provider (env: ACME_DNS_PROVIDER)")
-	flag.StringVar(&flagACMEEmail, "acme-email", os.Getenv("ACME_EMAIL"), "ACME account email (env: ACME_EMAIL)")
-	flag.StringVar(&flagACMEDirectory, "acme-directory", os.Getenv("ACME_DIRECTORY"), "ACME directory URL (env: ACME_DIRECTORY)")
 
 	flag.Parse()
 
@@ -88,7 +82,12 @@ func runServer() error {
 		Strs("bootstrap_uris", flagBootstraps).
 		Msg("[server] frontend configuration")
 
-	serv := portal.NewRelayServer(ctx, flagBootstraps, flagSNIPort, flagPortalURL, flagACMEDNSProvider, flagACMEEmail, flagACMEDirectory)
+	serv := portal.NewRelayServer(
+		ctx,
+		flagBootstraps,
+		flagSNIPort,
+		flagPortalURL,
+	)
 
 	frontend := NewFrontend()
 	authManager := manager.NewAuthManager(flagAdminSecretKey)

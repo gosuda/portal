@@ -10,7 +10,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/utils/cert"
 	"gosuda.org/portal/portal/utils/sni"
 )
 
@@ -21,7 +20,6 @@ type RelayServer struct {
 	leaseManager *LeaseManager
 	reverseHub   *ReverseHub
 	sniRouter    *sni.Router
-	certManager  cert.Manager
 
 	stopch    chan struct{}
 	waitgroup sync.WaitGroup
@@ -33,28 +31,10 @@ func NewRelayServer(
 	address []string,
 	sniPort string,
 	portalURL string,
-	acmeDNSProvider string,
-	acmeEmail string,
-	acmeDirectory string,
 ) *RelayServer {
-	var certManager cert.Manager
 	baseDomain := extractBaseDomain(portalURL)
 	if baseDomain == "" {
 		log.Warn().Msg("[RelayServer] Could not extract base domain from portal URL")
-	}
-
-	acmeCfg := buildACMEConfig(baseDomain, acmeDNSProvider, acmeEmail, acmeDirectory)
-	if acmeCfg != nil {
-		var err error
-		certManager, err = cert.NewACMEManager(ctx, acmeCfg)
-		if err != nil {
-			log.Error().Err(err).Msg("[RelayServer] Failed to create ACME manager, TLSAuto disabled")
-		} else {
-			log.Info().
-				Str("dns_provider", acmeCfg.DNSProviderType).
-				Str("base_domain", acmeCfg.BaseDomain).
-				Msg("[RelayServer] ACME certificate manager initialized")
-		}
 	}
 
 	server := &RelayServer{
@@ -63,7 +43,6 @@ func NewRelayServer(
 		leaseManager: NewLeaseManager(30 * time.Second),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
-		certManager:  certManager,
 		stopch:       make(chan struct{}),
 	}
 	server.leaseManager.SetOnLeaseDeleted(server.reverseHub.DropLease)
@@ -79,21 +58,6 @@ func NewRelayServer(
 		return subtle.ConstantTimeCompare([]byte(expected), []byte(strings.TrimSpace(token))) == 1
 	})
 	return server
-}
-
-func buildACMEConfig(baseDomain, dnsProvider, email, directory string) *cert.ACMEConfig {
-	dnsProvider = strings.TrimSpace(dnsProvider)
-	email = strings.TrimSpace(email)
-	if dnsProvider == "" || email == "" {
-		return nil
-	}
-
-	return &cert.ACMEConfig{
-		BaseDomain:      baseDomain,
-		DNSProviderType: dnsProvider,
-		Email:           email,
-		DirectoryURL:    strings.TrimSpace(directory),
-	}
 }
 
 func extractBaseDomain(rawURL string) string {
@@ -131,11 +95,6 @@ func (g *RelayServer) GetReverseHub() *ReverseHub {
 // GetSNIRouter returns the SNI router instance.
 func (g *RelayServer) GetSNIRouter() *sni.Router {
 	return g.sniRouter
-}
-
-// GetCertManager returns the certificate manager instance.
-func (g *RelayServer) GetCertManager() cert.Manager {
-	return g.certManager
 }
 
 // Start starts the relay server.

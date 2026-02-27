@@ -13,6 +13,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/sdk"
 )
 
 // parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
@@ -307,7 +308,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	}
 
 	kind := "http"
-	if lease.TLSEnabled {
+	if normalizeTLSMode(sdk.TLSMode(lease.TLSMode)) != sdk.TLSModeNoTLS {
 		kind = "https"
 	}
 
