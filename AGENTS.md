@@ -35,19 +35,21 @@ Frontend dev:
 Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
 
 Core components:
-- Relay server: `cmd/relay-server` (HTTP + TCP relay, admin UI serving)
-- Relay core logic: `portal/` (lease manager, connection handlers, forwarding)
-- Crypto + protocols: `portal/core/`
+- Relay server: `cmd/relay-server` (HTTP API/admin + SNI router)
+- Relay core logic: `portal/` (lease manager, reverse connection hub, forwarding)
+- SNI router package: `portal/sni/`
 - SDK for Apps: `sdk/`
 - Tunnel client: `cmd/portal-tunnel/` (exposes local services)
 - Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
 
 ## Connection Flow (High Level)
 
-1. App registers a Lease with the relay (identity, ALPN, metadata).
-2. Client requests connection by Lease ID or name.
-3. Relay routes TLS connection by SNI to the appropriate tunnel backend.
-4. TLS provides end-to-end encryption (relay does not decrypt).
+1. App/Tunnel registers a Lease with relay via `/sdk/register` (name, metadata, TLS mode, reverse token).
+2. Tunnel maintains reverse WebSocket workers to relay via `/sdk/connect`.
+3. Client traffic enters relay:
+   - TLS traffic on SNI port is routed by SNI.
+   - Non-TLS traffic can use HTTP proxy mode.
+4. Relay acquires a reverse tunnel connection and forwards bytes end-to-end.
 
 ## Key Terms
 
@@ -58,8 +60,9 @@ Core components:
 
 ## Where to Look
 
-- `cmd/relay-server/` (entrypoint and HTTP/WS relay)
-- `portal/` (core relay logic)
+- `cmd/relay-server/` (entrypoint, HTTP APIs, SNI callback wiring)
+- `portal/reverse_hub.go` (reverse WebSocket connection pool)
+- `portal/sni/` (SNI parser/router)
 - `sdk/` (App integration)
 - `cmd/portal-tunnel/` (tunnel client)
 - `docs/architecture.md` and `docs/glossary.md`
@@ -77,29 +80,29 @@ Portal uses environment variables for domain and TLS configuration:
 | `SNI_PORT` | SNI router port (default `:443`) |
 | `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
 
-### ACME Certificate Management
-
-For TLS passthrough with automatic certificates:
+### Tunnel Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `ACME_DNS_PROVIDER` | `cloudflare` or `route53` |
-| `ACME_EMAIL` | Email for ACME registration |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token (if using cloudflare) |
+| `RELAYS` | Relay API URLs for tunnel client (comma-separated) |
+| `TLS_MODE` | `no-tls`, `self`, or `keyless` |
+| `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
+| `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
 
 ### Domain Derivation
 
 - Service URL: `{name}.{base_domain}` (e.g., `myapp.example.com`)
 - Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
-- SNI routes registered in `portal/utils/sni/router.go`
+- SNI routes registered in `portal/sni/router.go`
 
 ### TLS Modes
 
-1. **HTTP Proxy**: No TLS, relay proxies HTTP to tunnel
-2. **TLS Passthrough**: Relay routes TLS by SNI to tunnel backend
-   - Tunnel client sends CSR to relay
-   - Relay issues certificate via ACME DNS-01
-   - End-to-end TLS encryption
+1. **`no-tls`**: HTTP proxy mode for development.
+2. **`self`**: Tunnel uses locally provided certificate and key (`TLS_CERT_FILE` + `TLS_KEY_FILE`).
+3. **`keyless`**: Tunnel uses SDK keyless mode with auto defaults.
+   - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
+   - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
+   - Auto-discovery requires an HTTPS signer endpoint.
 
 See `docs/portal-deploy-guide.md` for full deployment documentation.
 

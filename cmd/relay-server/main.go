@@ -16,7 +16,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/utils/sni"
+	"gosuda.org/portal/portal/sni"
 )
 
 var (

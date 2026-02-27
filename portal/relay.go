@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/utils/sni"
+	"gosuda.org/portal/portal/sni"
 )
 
 type RelayServer struct {
