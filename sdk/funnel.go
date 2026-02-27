@@ -357,6 +357,14 @@ func (l *FunnelListener) renew() error {
 	if !result.Success {
 		return fmt.Errorf("renew: %s", result.Message)
 	}
+
+	// Rotate TLS cert if the relay provided an updated one (e.g. ACME renewal).
+	if result.TLSCert != "" && result.TLSKey != "" {
+		if certErr := l.updateCert(result.TLSCert, result.TLSKey); certErr != nil {
+			log.Warn().Err(certErr).Msg("[FunnelSDK] TLS cert rotation via renew failed")
+		}
+	}
+
 	return nil
 }
 

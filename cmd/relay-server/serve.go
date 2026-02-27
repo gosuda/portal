@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"fmt"
 	"net/http"
@@ -17,13 +18,8 @@ import (
 //go:embed dist/*
 var distFS embed.FS
 
-// serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, lm *portal.LeaseManager, admin *Admin, frontend *Frontend, noIndex bool, registry *Registry, cancel context.CancelFunc) *http.Server {
-	if addr == "" {
-		addr = ":0"
-	}
-
-	// Create app UI mux
+// buildMux creates the shared HTTP handler (mux) for admin UI, REST API, and assets.
+func buildMux(lm *portal.LeaseManager, admin *Admin, frontend *Frontend, noIndex bool, registry *Registry) http.Handler {
 	appMux := http.NewServeMux()
 
 	// Serve favicons (ico/png/svg) from dist/app
@@ -78,15 +74,49 @@ func serveHTTP(addr string, lm *portal.LeaseManager, admin *Admin, frontend *Fro
 		appMux.HandleFunc("/api/connect", registry.HandleConnect)
 	}
 
+	return appMux
+}
+
+// serveHTTP starts a plain HTTP server and returns it.
+func serveHTTP(addr string, lm *portal.LeaseManager, admin *Admin, frontend *Frontend, noIndex bool, registry *Registry, cancel context.CancelFunc) *http.Server {
+	if addr == "" {
+		addr = ":0"
+	}
+
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: appMux,
+		Handler: buildMux(lm, admin, frontend, noIndex, registry),
 	}
 
 	go func() {
 		log.Info().Msgf("[server] http: %s", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[server] http error")
+			cancel()
+		}
+	}()
+
+	return srv
+}
+
+// serveHTTPS starts an HTTPS server using the provided TLS config.
+// It serves the same admin UI and API as serveHTTP, accessible via
+// the base funnel domain over HTTPS (e.g. https://portal.example.com).
+func serveHTTPS(addr string, tlsConfig *tls.Config, lm *portal.LeaseManager, admin *Admin, frontend *Frontend, noIndex bool, registry *Registry, cancel context.CancelFunc) *http.Server {
+	if addr == "" {
+		addr = ":0"
+	}
+
+	srv := &http.Server{
+		Addr:      addr,
+		Handler:   buildMux(lm, admin, frontend, noIndex, registry),
+		TLSConfig: tlsConfig,
+	}
+
+	go func() {
+		log.Info().Msgf("[server] https: %s", addr)
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("[server] https error")
 			cancel()
 		}
 	}()
@@ -120,6 +150,8 @@ type leaseRow struct {
 	Hide         bool
 	Metadata     string
 	BPS          int64  // bytes-per-second limit (0 = unlimited)
+	MaxConns     int64  // max concurrent connections (0 = unlimited)
+	ActiveConns  int64  // current active connections
 	IsApproved   bool   // whether lease is approved (for manual mode)
 	IsDenied     bool   // whether lease is denied (for manual mode)
 	IP           string // client IP address (for IP-based ban)

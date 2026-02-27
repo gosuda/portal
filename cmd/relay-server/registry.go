@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -28,8 +29,7 @@ type Registry struct {
 	sniRouter    *sni.Router
 	reverseHub   *portal.ReverseHub
 	ipManager    *manager.IPManager
-	tlsCertPEM   []byte
-	tlsKeyPEM    []byte
+	certManager  *CertManager
 	funnelDomain string
 }
 
@@ -39,7 +39,7 @@ func NewRegistry(
 	sniRouter *sni.Router,
 	reverseHub *portal.ReverseHub,
 	ipManager *manager.IPManager,
-	tlsCertPEM, tlsKeyPEM []byte,
+	certManager *CertManager,
 	funnelDomain string,
 ) *Registry {
 	return &Registry{
@@ -47,8 +47,7 @@ func NewRegistry(
 		sniRouter:    sniRouter,
 		reverseHub:   reverseHub,
 		ipManager:    ipManager,
-		tlsCertPEM:   tlsCertPEM,
-		tlsKeyPEM:    tlsKeyPEM,
+		certManager:  certManager,
 		funnelDomain: funnelDomain,
 	}
 }
@@ -139,16 +138,29 @@ func (reg *Registry) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		Str("remote", r.RemoteAddr).
 		Msg("[Registry] lease registered")
 
-	// NOTE: The shared wildcard certificate is sent to all registrants. This is a
-	// trust-model trade-off — per-lease certificates would require a CA or ACME
-	// integration. In production, ensure this endpoint is served over HTTPS.
+	// Provision TLS certificate for this subdomain (ACME if enabled, fallback otherwise).
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	certPEM, keyPEM, certErr := reg.certManager.GetCertPEM(ctx, req.Name)
+	if certErr != nil {
+		log.Error().Err(certErr).Str("name", req.Name).Msg("[Registry] certificate provisioning failed")
+		// Clean up: lease was already created but is unusable without a cert.
+		reg.leaseManager.DeleteLeaseByID(leaseID)
+		writeJSONStatus(w, http.StatusServiceUnavailable, api.RegisterResponse{
+			Success: false,
+			Message: "certificate provisioning failed, try again later",
+		})
+		return
+	}
+
 	writeJSONStatus(w, http.StatusOK, api.RegisterResponse{
 		Success:      true,
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
 		PublicURL:    publicURL,
-		TLSCert:      string(reg.tlsCertPEM),
-		TLSKey:       string(reg.tlsKeyPEM),
+		TLSCert:      string(certPEM),
+		TLSKey:       string(keyPEM),
 	})
 }
 
@@ -210,7 +222,18 @@ func (reg *Registry) HandleRenew(w http.ResponseWriter, r *http.Request) {
 		reg.ipManager.RegisterLeaseIP(req.LeaseID, manager.ExtractClientIP(r))
 	}
 
-	writeJSONStatus(w, http.StatusOK, api.RenewResponse{Success: true})
+	// Include latest cert in renewal response to enable cert rotation.
+	// If ACME renewed the cert, the tunnel client picks it up here.
+	resp := api.RenewResponse{Success: true}
+	if entry.Lease != nil {
+		certPEM, keyPEM, err := reg.certManager.GetCertPEM(r.Context(), entry.Lease.Name)
+		if err == nil {
+			resp.TLSCert = string(certPEM)
+			resp.TLSKey = string(keyPEM)
+		}
+	}
+
+	writeJSONStatus(w, http.StatusOK, resp)
 }
 
 // HandleUnregister handles POST /api/unregister.

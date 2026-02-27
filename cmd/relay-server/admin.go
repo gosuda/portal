@@ -26,27 +26,33 @@ type Admin struct {
 	settingsPath string
 	settingsMu   sync.Mutex
 
-	approveManager *manager.ApproveManager
-	bpsManager     *manager.BPSManager
-	ipManager      *manager.IPManager
-	authManager    *manager.AuthManager
+	approveManager   *manager.ApproveManager
+	bpsManager       *manager.BPSManager
+	connLimitManager *manager.ConnLimitManager
+	ipManager        *manager.IPManager
+	authManager      *manager.AuthManager
 
 	frontend *Frontend
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
+func NewAdmin(defaultLeaseBPS int64, defaultMaxConns int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
 	}
+	connLimitManager := manager.NewConnLimitManager()
+	if defaultMaxConns > 0 {
+		connLimitManager.SetDefaultLimit(defaultMaxConns)
+	}
 	return &Admin{
-		startTime:      time.Now(),
-		settingsPath:   "admin_settings.json",
-		approveManager: manager.NewApproveManager(),
-		bpsManager:     bpsManager,
-		ipManager:      manager.NewIPManager(),
-		authManager:    authManager,
-		frontend:       frontend,
+		startTime:        time.Now(),
+		settingsPath:     "admin_settings.json",
+		approveManager:   manager.NewApproveManager(),
+		bpsManager:       bpsManager,
+		connLimitManager: connLimitManager,
+		ipManager:        manager.NewIPManager(),
+		authManager:      authManager,
+		frontend:         frontend,
 	}
 }
 
@@ -60,6 +66,11 @@ func (a *Admin) GetBPSManager() *manager.BPSManager {
 	return a.bpsManager
 }
 
+// GetConnLimitManager exposes the connection limit manager.
+func (a *Admin) GetConnLimitManager() *manager.ConnLimitManager {
+	return a.connLimitManager
+}
+
 // GetIPManager exposes the IP manager.
 func (a *Admin) GetIPManager() *manager.IPManager {
 	return a.ipManager
@@ -69,6 +80,7 @@ func (a *Admin) GetIPManager() *manager.IPManager {
 type adminSettings struct {
 	BannedLeases   []string             `json:"banned_leases"`
 	BPSLimits      map[string]int64     `json:"bps_limits"`
+	ConnLimits     map[string]int64     `json:"conn_limits,omitempty"`
 	ApprovalMode   manager.ApprovalMode `json:"approval_mode"`
 	ApprovedLeases []string             `json:"approved_leases,omitempty"`
 	DeniedLeases   []string             `json:"denied_leases,omitempty"`
@@ -86,6 +98,11 @@ func (a *Admin) SaveSettings(lm *portal.LeaseManager) {
 		bpsLimits = a.bpsManager.GetAllBPSLimits()
 	}
 
+	connLimits := map[string]int64{}
+	if a.connLimitManager != nil {
+		connLimits = a.connLimitManager.GetAllLimits()
+	}
+
 	var bannedIPs []string
 	if a.ipManager != nil {
 		bannedIPs = a.ipManager.GetBannedIPs()
@@ -94,6 +111,7 @@ func (a *Admin) SaveSettings(lm *portal.LeaseManager) {
 	settings := adminSettings{
 		BannedLeases:   banned,
 		BPSLimits:      bpsLimits,
+		ConnLimits:     connLimits,
 		ApprovalMode:   a.approveManager.GetApprovalMode(),
 		ApprovedLeases: a.approveManager.GetApprovedLeases(),
 		DeniedLeases:   a.approveManager.GetDeniedLeases(),
@@ -152,6 +170,12 @@ func (a *Admin) LoadSettings(lm *portal.LeaseManager) {
 		}
 	}
 
+	for leaseID, limit := range settings.ConnLimits {
+		if a.connLimitManager != nil {
+			a.connLimitManager.SetLimit(leaseID, limit)
+		}
+	}
+
 	if settings.ApprovalMode != "" {
 		a.approveManager.SetApprovalMode(settings.ApprovalMode)
 	}
@@ -171,6 +195,7 @@ func (a *Admin) LoadSettings(lm *portal.LeaseManager) {
 	log.Info().
 		Int("banned_count", len(settings.BannedLeases)).
 		Int("bps_limits_count", len(settings.BPSLimits)).
+		Int("conn_limits_count", len(settings.ConnLimits)).
 		Str("approval_mode", string(a.approveManager.GetApprovalMode())).
 		Int("approved_count", len(settings.ApprovedLeases)).
 		Int("denied_count", len(settings.DeniedLeases)).
@@ -248,6 +273,8 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, lm *p
 		a.handleLeaseBanRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/bps"):
 		a.handleLeaseBPSRequest(w, r, lm, route)
+	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/max-conns"):
+		a.handleLeaseConnLimitRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/approve"):
 		a.handleLeaseApproveRequest(w, r, lm, route)
 	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/deny"):
@@ -537,6 +564,56 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, lm
 	}
 }
 
+func (a *Admin) handleLeaseConnLimitRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
+	parts := strings.Split(route, "/")
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+
+	leaseID, ok := decodeLeaseID(parts[1])
+	if !ok {
+		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		return
+	}
+
+	if a.connLimitManager == nil {
+		http.Error(w, "Connection limit manager not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			MaxConns int64 `json:"max_conns"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		oldLimit := a.connLimitManager.GetLimit(leaseID)
+		a.connLimitManager.SetLimit(leaseID, req.MaxConns)
+		log.Info().
+			Str("lease_id", leaseID).
+			Int64("old_limit", oldLimit).
+			Int64("new_limit", req.MaxConns).
+			Msg("[Admin] Connection limit updated")
+		a.SaveSettings(lm)
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		oldLimit := a.connLimitManager.GetLimit(leaseID)
+		a.connLimitManager.SetLimit(leaseID, 0)
+		log.Info().
+			Str("lease_id", leaseID).
+			Int64("old_limit", oldLimit).
+			Msg("[Admin] Connection limit removed (now using default)")
+		a.SaveSettings(lm)
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, lm *portal.LeaseManager, route string) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 {
@@ -640,6 +717,12 @@ func (a *Admin) convertLeaseEntriesToAdminRows(lm *portal.LeaseManager) []leaseR
 			bps = a.bpsManager.GetBPSLimit(leaseID)
 		}
 
+		var maxConns, activeConns int64
+		if a.connLimitManager != nil {
+			maxConns = a.connLimitManager.GetLimit(leaseID)
+			activeConns = a.connLimitManager.ActiveCount(leaseID)
+		}
+
 		// Get IP info for this lease
 		var ip string
 		var isIPBanned bool
@@ -665,6 +748,8 @@ func (a *Admin) convertLeaseEntriesToAdminRows(lm *portal.LeaseManager) []leaseR
 			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
 			Metadata:     lease.Metadata,
 			BPS:          bps,
+			MaxConns:     maxConns,
+			ActiveConns:  activeConns,
 			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(leaseID),
 			IsDenied:     a.approveManager.IsLeaseDenied(leaseID),
 			IP:           ip,

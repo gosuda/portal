@@ -28,6 +28,8 @@ type RenewRequest struct {
 type RenewResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+	TLSCert string `json:"tls_cert,omitempty"`
+	TLSKey  string `json:"tls_key,omitempty"`
 }
 
 // UnregisterRequest is the body for POST /api/unregister.
