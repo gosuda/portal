@@ -135,3 +135,10 @@ fabric.properties
 !.idea/runConfigurations
 
 # End of https://www.toptal.com/developers/gitignore/api/goland+all
+
+# Windows reserved-name cache artifacts
+NUL
+nul
+
+# Local reference-only docs
+references_read_only/

@@ -8,9 +8,7 @@ Build:
 - `make build` (all artifacts)
 - `make build-server` (relay server binary)
 - `make build-frontend` (React admin UI)
-- `make build-wasm` (webclient WASM)
 - `make build-tunnel` (portal-tunnel binaries)
-- `make build-protoc` (protobufs)
 
 Run:
 - `make run` (run `./bin/relay-server`)
@@ -37,38 +35,82 @@ Frontend dev:
 Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
 
 Core components:
-- Relay server: `cmd/relay-server` (HTTP + WS relay, admin UI serving)
+- Relay server: `cmd/relay-server` (HTTP + TCP relay, admin UI serving)
 - Relay core logic: `portal/` (lease manager, connection handlers, forwarding)
-- Crypto + protocols: `portal/core/` and `portal/core/proto/` (RDSEC/RDVERB)
+- Crypto + protocols: `portal/core/`
 - SDK for Apps: `sdk/`
 - Tunnel client: `cmd/portal-tunnel/` (exposes local services)
-- Webclient: `cmd/webclient/` (WASM + service worker served by relay)
 - Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
 
 ## Connection Flow (High Level)
 
 1. App registers a Lease with the relay (identity, ALPN, metadata).
 2. Client requests connection by Lease ID or name.
-3. Relay forwards the request to the App and brokers the connection.
-4. RDSEC handshake establishes end-to-end encryption (X25519 + ChaCha20-Poly1305).
-5. Yamux multiplexes multiple streams over one relay connection.
+3. Relay routes TLS connection by SNI to the appropriate tunnel backend.
+4. TLS provides end-to-end encryption (relay does not decrypt).
 
 ## Key Terms
 
 - Portal / Relay: central mediator; never decrypts payloads.
 - App: service publisher using SDK or tunnel to register Leases.
-- Client: consumer (often browser + WASM) connecting via relay.
+- Client: consumer connecting via relay.
 - Lease: advertising unit; one Lease maps to one public endpoint.
 
 ## Where to Look
 
 - `cmd/relay-server/` (entrypoint and HTTP/WS relay)
 - `portal/` (core relay logic)
-- `portal/core/proto/` (protocol definitions)
 - `sdk/` (App integration)
 - `cmd/portal-tunnel/` (tunnel client)
-- `cmd/webclient/` (WASM client)
 - `docs/architecture.md` and `docs/glossary.md`
+
+## Domain Configuration
+
+Portal uses environment variables for domain and TLS configuration:
+
+### Core Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PORTAL_URL` | Base URL (e.g., `https://portal.example.com`) |
+| `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
+| `SNI_PORT` | SNI router port (default `:443`) |
+| `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
+
+### Keyless Signer Configuration
+
+For keyless TLS signing:
+
+| Variable | Description |
+|----------|-------------|
+| `SIGNER_TLS_CERT_FILE` | Signer HTTPS server certificate PEM path |
+| `SIGNER_TLS_KEY_FILE` | Signer HTTPS server private key PEM path |
+| `SIGNER_SIGNING_KEY_FILE` | Keyless signing private key PEM path |
+| `SIGNER_CERT_CHAIN_FILE` | Public cert chain PEM delivered to tunnel SDK |
+| `SIGNER_ROOT_CA_FILE` | Root CA PEM distributed to tunnel SDK |
+| `SIGNER_ENDPOINT` | Public signer endpoint for tunnel SDK |
+| `SIGNER_SERVER_NAME` | TLS server name for signer verification |
+| `SIGNER_KEY_ID` | Signer key identifier |
+
+### Domain Derivation
+
+- Service URL: `{name}.{base_domain}` (e.g., `myapp.example.com`)
+- Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
+- SNI routes registered in `portal/utils/sni/router.go`
+
+### TLS Modes
+
+1. **HTTP Proxy**: No TLS, relay proxies HTTP to tunnel
+2. **TLS Passthrough**: Relay routes TLS by SNI to tunnel backend
+   - Tunnel keeps cert chain only
+   - Relay signer keeps private key and signs remotely
+   - End-to-end TLS encryption
+
+## Read-only references
+
+- `references_read_only/keyless_tls` is reference-only. Do not modify files in this directory.
+
+See `docs/portal-deploy-guide.md` for full deployment documentation.
 
 ## Repo Basics
 

@@ -4,16 +4,7 @@
   <img src="/portal.jpg" alt="Portal logo" width="540" />
 </p>
 
-Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [See more.](https://gosuda.org/portal/)
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [License](#license)
+Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [Learn more.](https://gosuda.org/portal/)
 
 ## Overview
 
@@ -23,55 +14,57 @@ This enables developers to publish local services globally without managing serv
 
 ## Features
 
-- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network.
-- 🔐 **End-to-End Encryption**: Fully encrypted client-to-client communication, including browser sessions via a WASM-based Service Worker proxy.
-- 🕊️ **Permissionless Hosting**: Anyone can open or choose their own Portal — no approval, no central authority.
-- 🚀 **High Performance**: Multiplexed connections using yamux
-- ⚙️ **Simple Setup**: Build and bootstrap apps quickly using the Portal SDK or Tunnel client.
+- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network
+- 🔐 **End-to-End Encryption**: keyless TLS (tunnel keeps cert chain, relay signer keeps private key)
+- 🕊️ **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
+- ⚙️ **Simple Setup**: Quick start with Tunnel client or Go SDK
 
 ## Quick Start
-You can run **Portal** to host relay services, or run **App** to publish your own application through portal.
 
-### Running the Portal Network
-Run Portal with Docker Compose:
+### Run Portal Relay
 
 ```bash
-# 1. Start services
+# Start with Docker Compose
 docker compose up
 
-# 2. Open in browser
-http://localhost:4017
-
-# 3. Access admin panel at http://localhost:4017/admin
-# If ADMIN_SECRET_KEY is not set, a random key will be auto-generated and shown in logs
-# To use your own key:
+# Access at http://localhost:4017
+# Admin panel at http://localhost:4017/admin
+# Auto-generated admin key shown in logs, or set your own:
 ADMIN_SECRET_KEY=your-secret-key docker compose up
 ```
 
-For a public deployment guide (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
+For production deployment (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
 
-### Running a Portal App using Tunnel
+### Expose Local Service via Tunnel
 
 ```bash
-# 1. Start your local service
-
-# 2. Run the tunnel client to expose
-## If you use it in windows
+# Windows PowerShell
 $env:HOST="localhost:3000"; $env:NAME="myapp"; irm http://localhost:4017/tunnel | iex
-## Else
+
+# macOS/Linux
 curl -fsSL http://localhost:4017/tunnel | HOST=localhost:3000 NAME=myapp sh
 ```
 
-### Running a Portal App using the SDK
-See [portal-toys](https://github.com/gosuda/portal-toys)
+### Use Go SDK
+
+```go
+import "gosuda.org/portal/sdk"
+
+client, _ := sdk.NewClient(sdk.WithBootstrapServers([]string{"http://localhost:4017"}))
+listener, _ := client.Listen("myapp")
+http.Serve(listener, handler)
+```
+
+See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
 ## Architecture
 
-For a detailed overview of system components and data flow, see the [architecture documentation](docs/architecture.md).
+- **Relay Server**: TLS passthrough relay with SNI routing, keyless signer, admin UI, lease management
+- **SDK**: Go library for native app integration
+- **Tunnel**: CLI client for exposing local services without code changes
 
-## Glossary
+For details, see [docs/architecture.md](docs/architecture.md).
 
-If you need Portal-specific terminology, check the [Portal glossary](docs/glossary.md)
 ## Contributing
 
 We welcome contributions from the community!
@@ -84,7 +77,6 @@ Before getting started, please check the [development guide](docs/development.md
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
-
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License — see [LICENSE](LICENSE)

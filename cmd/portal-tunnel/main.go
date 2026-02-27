@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -10,68 +11,64 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"gopkg.eu.org/broccoli"
+
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
-// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
-// per-copy allocations and reduce GC pressure under high concurrency.
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
-}
-
-type Config struct {
-	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
-
-	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
-	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
-	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
-
-	// Metadata
-	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
-	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
-	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
-	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
-	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
-	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
-}
+var (
+	flagRelayURLs   string
+	flagHost        string
+	flagName        string
+	flagTLSEnable   bool
+	flagProtocols   string
+	flagDescription string
+	flagTags        string
+	flagThumbnail   string
+	flagOwner       string
+	flagHide        bool
+)
 
 func main() {
-	var cfg Config
-	app, err := broccoli.NewApp(&cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create app")
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+
+	defaultRelayURLs := os.Getenv("RELAYS")
+	if defaultRelayURLs == "" {
+		defaultRelayURLs = "http://localhost:4017"
+	}
+
+	flag.StringVar(&flagRelayURLs, "relay", defaultRelayURLs, "Portal relay server API URLs (comma-separated, http/https) [env: RELAYS]")
+	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
+	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
+
+	defaultTLS := os.Getenv("TLS_ENABLE") != "false"
+	flag.BoolVar(&flagTLSEnable, "tls", defaultTLS, "Enable keyless TLS termination on tunnel client (private key stays on relay signer) [env: TLS_ENABLE]")
+
+	flag.StringVar(&flagProtocols, "protocols", os.Getenv("APP_PROTOCOLS"), "ALPN protocols (comma-separated) [env: APP_PROTOCOLS]")
+	flag.StringVar(&flagDescription, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
+	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
+	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")
+	flag.StringVar(&flagOwner, "owner", os.Getenv("APP_OWNER"), "Service owner metadata [env: APP_OWNER]")
+
+	defaultHide := os.Getenv("APP_HIDE") == "true"
+	flag.BoolVar(&flagHide, "hide", defaultHide, "Hide service from discovery (metadata) [env: APP_HIDE]")
+
+	flag.Parse()
+
+	if flagHost == "" || flagName == "" {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	if _, _, err = app.Bind(&cfg, os.Args[1:]); err != nil {
-		if err == broccoli.ErrHelp {
-			fmt.Println(app.Help())
-			os.Exit(0)
-		}
-
-		fmt.Println(app.Help())
-		log.Error().Err(err).Msg("Failed to bind CLI arguments")
-		os.Exit(1)
-	}
-
-	if cfg.Host == "" || cfg.Name == "" {
-		fmt.Println(app.Help())
-		os.Exit(1)
-	}
-
-	relayURLs := utils.ParseURLs(cfg.RelayURLs)
+	relayURLs := parseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		log.Error().Msg("--relay must include at least one non-empty URL")
 		os.Exit(1)
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -85,7 +82,7 @@ func main() {
 		cancel()
 	}()
 
-	if err := runServiceTunnel(ctx, relayURLs, cfg, "flags"); err != nil {
+	if err := runServiceTunnel(ctx, relayURLs); err != nil {
 		log.Error().Err(err).Msg("Exited with error")
 		os.Exit(1)
 	}
@@ -93,44 +90,42 @@ func main() {
 	log.Info().Msg("Tunnel stopped")
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string) error {
+func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
-	protocols := strings.Split(cfg.Protocols, ",")
-	if len(protocols) == 0 {
-		protocols = []string{"http/1.1", "h2"}
+
+	log.Info().Msgf("Local service is reachable at %s", flagHost)
+	log.Info().Msg("Starting Portal Tunnel...")
+	log.Info().Msgf("  Local:    %s", flagHost)
+	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
+	log.Info().Msgf("  TLS Mode: %v", flagTLSEnable)
+
+	var clientOpts []sdk.ClientOption
+	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
+
+	if flagTLSEnable {
+		clientOpts = append(clientOpts, sdk.WithTLS())
+		log.Info().Msg("TLS: Using relay keyless signer (private key never leaves relay)")
 	}
 
-	cred := sdk.NewCredential()
-	leaseID := cred.ID()
-	if cfg.Name == "" {
-		cfg.Name = fmt.Sprintf("tunnel-%s", leaseID[:8])
-		log.Info().Str("service", cfg.Name).Msg("No service name provided; generated automatically")
-	}
-	log.Info().Str("service", cfg.Name).Msgf("Local service is reachable at %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("Starting Portal Tunnel (%s)...", origin)
-	log.Info().Str("service", cfg.Name).Msgf("  Local:    %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Str("service", cfg.Name).Msgf("  Lease ID: %s", leaseID)
-
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = relayURLs
-	})
+	client, err := sdk.NewClient(clientOpts...)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to connect to relay: %w", cfg.Name, err)
+		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
 	}
 	defer client.Close()
 
-	listener, err := client.Listen(cred, cfg.Name, protocols,
-		sdk.WithDescription(cfg.Description),
-		sdk.WithTags(strings.Split(cfg.Tags, ",")),
-		sdk.WithOwner(cfg.Owner),
-		sdk.WithThumbnail(cfg.Thumbnail),
-		sdk.WithHide(cfg.Hide),
-	)
+	metadataOptions := []sdk.MetadataOption{
+		sdk.WithDescription(flagDescription),
+		sdk.WithTags(splitCSV(flagTags)),
+		sdk.WithOwner(flagOwner),
+		sdk.WithThumbnail(flagThumbnail),
+		sdk.WithHide(flagHide),
+	}
+
+	listener, err := client.Listen(flagName, metadataOptions...)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to register service: %w", cfg.Name, err)
+		return fmt.Errorf("service %s: failed to register service: %w", flagName, err)
 	}
 	defer listener.Close()
 
@@ -139,13 +134,17 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 		_ = listener.Close()
 	}()
 
-	log.Info().Str("service", cfg.Name).Msg("")
-	log.Info().Str("service", cfg.Name).Msg("Access via:")
-	log.Info().Str("service", cfg.Name).Msgf("- Name:     /peer/%s", cfg.Name)
-	log.Info().Str("service", cfg.Name).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", cfg.Name).Msgf("- Example:  %s/peer/%s", relayURLs[0], cfg.Name)
+	log.Info().Msg("")
+	log.Info().Msg("Access via:")
+	log.Info().Msgf("- Relay:    %s", relayURLs[0])
+	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
+		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
+	}
+	if flagTLSEnable {
+		log.Info().Msg("- TLS:      Enabled")
+	}
 
-	log.Info().Str("service", cfg.Name).Msg("")
+	log.Info().Str("service", flagName).Msg("")
 
 	connCount := 0
 	var connWG sync.WaitGroup
@@ -163,37 +162,86 @@ func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origi
 			case <-ctx.Done():
 				return nil
 			default:
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Failed to accept connection")
+				log.Error().Err(err).Msg("Failed to accept connection")
 				continue
 			}
 		}
 
 		connCount++
-		log.Info().Str("service", cfg.Name).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
+		log.Info().Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
 
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Proxy error")
+			proxyType := "TCP"
+			if flagTLSEnable {
+				proxyType = "TLS→TCP"
 			}
-			log.Info().Str("service", cfg.Name).Msg("Connection closed")
+			if err := proxyConnection(ctx, flagHost, relayConn, flagTLSEnable); err != nil {
+				log.Error().Str("proxy", proxyType).Err(err).Msg("Proxy error")
+			}
+			log.Info().Str("proxy", proxyType).Msg("Connection closed")
 		}(relayConn)
 	}
 }
 
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
+func parseURLs(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 64*1024)
+		return &b
+	},
+}
+
+func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, tlsEnabled bool) error {
 	defer relayConn.Close()
 
-	dialer := new(net.Dialer)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
-		return fmt.Errorf("failed to connect to local service %s: %w", localAddr, err)
+		log.Debug().
+			Str("local_addr", localAddr).
+			Err(err).
+			Msg("Local service unavailable")
+		if tlsEnabled {
+			return fmt.Errorf("local service unavailable: %w", err)
+		}
+		return writeEmptyHTTPResponse(relayConn)
 	}
 	defer localConn.Close()
 
+	log.Info().Str("local_addr", localAddr).Msg("Connected to local service")
+
 	errCh := make(chan error, 2)
 	stopCh := make(chan struct{})
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -204,23 +252,54 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 	}()
 
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		_, err := io.CopyBuffer(localConn, relayConn, *bufPtr)
+		if err != nil {
+			log.Debug().Err(err).Msg("relay->local copy ended")
+		}
+		if tcpConn, ok := localConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
 		errCh <- err
 	}()
 
 	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
+		bufPtr := bufferPool.Get().(*[]byte)
+		defer bufferPool.Put(bufPtr)
+		_, err := io.CopyBuffer(relayConn, localConn, *bufPtr)
+		if err != nil {
+			log.Debug().Err(err).Msg("local->relay copy ended")
+		}
 		errCh <- err
 	}()
 
-	err = <-errCh
-	close(stopCh)
-	relayConn.Close()
-	<-errCh
+	var firstErr error
+	for range 2 {
+		if err := <-errCh; err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 
+	close(stopCh)
+	return firstErr
+}
+
+func writeEmptyHTTPResponse(conn net.Conn) error {
+	htmlBody := `<!DOCTYPE html>
+<html>
+<head><title>Service Unavailable</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px;">
+<h1>🔌 Service Unavailable</h1>
+<p>The local service is not currently running.</p>
+<p>Please start your local application and refresh this page.</p>
+</body>
+</html>`
+	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\n"+
+		"Content-Type: text/html; charset=utf-8\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n"+
+		"\r\n%s", len(htmlBody), htmlBody)
+	_, err := conn.Write([]byte(response))
 	return err
 }
