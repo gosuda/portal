@@ -1,7 +1,7 @@
 github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSVTIJ3seZv2GcEnc=
 github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
-github.com/gosuda/keyless_tls v0.0.0-20260227040929-641e56ad6610 h1:P29C9M4t/LHIiEkwTZ96ohlPb3qmzwxLdhNai878LMQ=
-github.com/gosuda/keyless_tls v0.0.0-20260227040929-641e56ad6610/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
+github.com/gosuda/keyless_tls v0.0.1-0.20260227054723-d699441f3834 h1:P+oEVDMGuhFxU3pBMvStOPbDLin8GO9pv7+iA/xaYMs=
+github.com/gosuda/keyless_tls v0.0.1-0.20260227054723-d699441f3834/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
 github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=
 github.com/mattn/go-colorable v0.1.14/go.mod h1:6LmQG8QLFO4G5z1gPvYEzlUgJ2wF+stgPZH1UqBm1s8=

@@ -19,79 +19,84 @@ import (
 	"gosuda.org/portal/portal/sni"
 )
 
-var (
-	// Server
-	flagPort           int
-	flagAdminSecretKey string
-	flagNoIndex        bool
-	flagLeaseBPS       int
-
-	// Portal
-	flagPortalURL  string
-	flagBootstraps []string
-
-	// TLS
-	flagSNIPort string
+const (
+	defaultHTTPPort       = 4017
+	defaultPortalURL      = "http://localhost:4017"
+	defaultSNIPort        = ":443"
+	defaultKeylessKeyFile = "/etc/portal/keyless/privkey.pem"
 )
+
+// flagPortalURL is kept for package-level consumers in other files.
+var flagPortalURL string
+
+type relayServerConfig struct {
+	Port           int
+	AdminSecretKey string
+	NoIndex        bool
+	LeaseBPS       int
+	PortalURL      string
+	Bootstraps     []string
+	SNIPort        string
+	KeylessKeyFile string
+}
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	defaultPortalURL := strings.TrimSuffix(os.Getenv("PORTAL_URL"), "/")
-	if defaultPortalURL == "" {
-		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
-		defaultPortalURL = "http://localhost:4017"
+	cfg := relayServerConfig{}
+
+	portalURL := strings.TrimSuffix(strings.TrimSpace(os.Getenv("PORTAL_URL")), "/")
+	if portalURL == "" {
+		// Prefer explicit scheme for localhost so downstream URL building is unambiguous.
+		portalURL = defaultPortalURL
 	}
-	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
-	if defaultBootstraps == "" {
-		defaultBootstraps = defaultBootstrapFrom(defaultPortalURL)
+	bootstrapsCSV := strings.TrimSpace(os.Getenv("BOOTSTRAP_URIS"))
+	if bootstrapsCSV == "" {
+		bootstrapsCSV = defaultBootstrapFrom(portalURL)
 	}
-	defaultSNIPort := os.Getenv("SNI_PORT")
-	if defaultSNIPort == "" {
-		defaultSNIPort = ":443"
+	sniPort := strings.TrimSpace(os.Getenv("SNI_PORT"))
+	if sniPort == "" {
+		sniPort = defaultSNIPort
+	}
+	keylessKey := strings.TrimSpace(os.Getenv("KEYLESS_KEY_FILE"))
+	if keylessKey == "" {
+		keylessKey = defaultKeylessKeyFile
 	}
 
-	// Server flags
-	flag.IntVar(&flagPort, "port", 4017, "HTTP server port")
-	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", os.Getenv("ADMIN_SECRET_KEY"), "admin auth secret (env: ADMIN_SECRET_KEY)")
-	flag.BoolVar(&flagNoIndex, "noindex", os.Getenv("NOINDEX") == "true", "disallow crawlers (env: NOINDEX)")
-	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
-
-	// Portal flags
-	var flagBootstrapsCSV string
-	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "portal base URL (env: PORTAL_URL)")
-	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
-
-	// TLS flags
-	flag.StringVar(&flagSNIPort, "sni-port", defaultSNIPort, "SNI router port (env: SNI_PORT)")
-
+	flag.IntVar(&cfg.Port, "port", defaultHTTPPort, "HTTP server port")
+	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY")), "admin auth secret (env: ADMIN_SECRET_KEY)")
+	flag.BoolVar(&cfg.NoIndex, "noindex", strings.EqualFold(strings.TrimSpace(os.Getenv("NOINDEX")), "true"), "disallow crawlers (env: NOINDEX)")
+	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
+	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
+	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
+	flag.StringVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port (env: SNI_PORT)")
+	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessKey, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
 	flag.Parse()
 
-	flagBootstraps = parseURLs(flagBootstrapsCSV)
-	if err := runServer(); err != nil {
+	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	flagPortalURL = cfg.PortalURL
+	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
-func runServer() error {
+func runServer(cfg relayServerConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	log.Info().
-		Str("portal_base_url", flagPortalURL).
-		Strs("bootstrap_uris", flagBootstraps).
+		Str("portal_base_url", cfg.PortalURL).
+		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	serv := portal.NewRelayServer(
-		ctx,
-		flagBootstraps,
-		flagSNIPort,
-		flagPortalURL,
-	)
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, cfg.SNIPort, cfg.PortalURL, cfg.KeylessKeyFile)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
 
 	frontend := NewFrontend()
-	authManager := manager.NewAuthManager(flagAdminSecretKey)
-	admin := NewAdmin(int64(flagLeaseBPS), frontend, authManager)
+	authManager := manager.NewAuthManager(cfg.AdminSecretKey)
+	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
@@ -129,11 +134,11 @@ func runServer() error {
 	})
 
 	if err := serv.Start(); err != nil {
-		log.Fatal().Err(err).Msg("[server] Failed to start relay server")
+		return fmt.Errorf("start relay server: %w", err)
 	}
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.Port), serv, admin, frontend, cfg.NoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/sni"
 )
 
@@ -17,9 +19,10 @@ type RelayServer struct {
 	address  []string
 	BaseHost string
 
-	leaseManager *LeaseManager
-	reverseHub   *ReverseHub
-	sniRouter    *sni.Router
+	leaseManager  *LeaseManager
+	reverseHub    *ReverseHub
+	sniRouter     *sni.Router
+	keylessSigner *keyless.Signer
 
 	stopch    chan struct{}
 	waitgroup sync.WaitGroup
@@ -31,7 +34,8 @@ func NewRelayServer(
 	address []string,
 	sniPort string,
 	portalURL string,
-) *RelayServer {
+	keylessKey string,
+) (*RelayServer, error) {
 	baseDomain := extractBaseDomain(portalURL)
 	if baseDomain == "" {
 		log.Warn().Msg("[RelayServer] Could not extract base domain from portal URL")
@@ -45,6 +49,20 @@ func NewRelayServer(
 		sniRouter:    sni.NewRouter(sniPort),
 		stopch:       make(chan struct{}),
 	}
+
+	signer, err := keyless.NewSigner(keyless.Config{
+		KeyFile: keylessKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure keyless signer: %w", err)
+	}
+	server.keylessSigner = signer
+	if signer != nil {
+		log.Info().
+			Str("key_id", signer.KeyID()).
+			Msg("[signer] keyless signer enabled at /v1/sign")
+	}
+
 	server.leaseManager.SetOnLeaseDeleted(server.reverseHub.DropLease)
 	server.reverseHub.SetAuthorizer(func(leaseID, token string) bool {
 		entry, ok := server.leaseManager.GetLeaseByID(strings.TrimSpace(leaseID))
@@ -57,7 +75,7 @@ func NewRelayServer(
 		}
 		return subtle.ConstantTimeCompare([]byte(expected), []byte(strings.TrimSpace(token))) == 1
 	})
-	return server
+	return server, nil
 }
 
 func extractBaseDomain(rawURL string) string {
@@ -95,6 +113,11 @@ func (g *RelayServer) GetReverseHub() *ReverseHub {
 // GetSNIRouter returns the SNI router instance.
 func (g *RelayServer) GetSNIRouter() *sni.Router {
 	return g.sniRouter
+}
+
+// GetKeylessSigner returns relay keyless signer when configured.
+func (g *RelayServer) GetKeylessSigner() *keyless.Signer {
+	return g.keylessSigner
 }
 
 // Start starts the relay server.

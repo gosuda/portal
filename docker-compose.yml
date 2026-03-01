@@ -17,6 +17,7 @@ services:
 
       # SNI router port (for TLS passthrough)
       SNI_PORT: ${SNI_PORT:-:443}
+      KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
     ports:
       - "${PORTAL_PORT:-4017}:${PORTAL_PORT:-4017}"
       - "80:80"

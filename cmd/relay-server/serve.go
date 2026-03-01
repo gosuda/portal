@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"embed"
+	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/sdk"
 )
 
@@ -20,7 +23,14 @@ import (
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(
+	addr string,
+	serv *portal.RelayServer,
+	admin *Admin,
+	frontend *Frontend,
+	noIndex bool,
+	cancel context.CancelFunc,
+) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -64,6 +74,11 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	registry := &SDKRegistry{}
 	appMux.HandleFunc("/sdk/", func(w http.ResponseWriter, r *http.Request) {
 		registry.HandleSDKRequest(w, r, serv)
+	})
+
+	// Keyless signer endpoint.
+	appMux.HandleFunc("/v1/sign", func(w http.ResponseWriter, r *http.Request) {
+		handleKeylessSign(w, r, serv.GetKeylessSigner())
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
@@ -132,6 +147,59 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	}()
 
 	return srv
+}
+
+func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.Signer) {
+	if signer == nil {
+		writeSignError(w, http.StatusNotFound, "keyless signer is disabled")
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeSignError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeSignError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var req keyless.SignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSignError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	resp, err := signer.Sign(r.Context(), &req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, keyless.ErrSignerDisabled):
+			status = http.StatusNotFound
+		case errors.Is(err, keyless.ErrInvalidArgument):
+			status = http.StatusBadRequest
+		case errors.Is(err, keyless.ErrPermissionDenied):
+			status = http.StatusForbidden
+		}
+		writeSignError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("[signer] failed to encode sign response")
+		writeSignError(w, http.StatusInternalServerError, "failed to encode response")
+	}
+}
+
+func writeSignError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(keyless.ErrorResponse{Error: message})
 }
 
 // shouldProxyHTTP checks if the request should be proxied via HTTP.
