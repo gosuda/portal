@@ -119,6 +119,29 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     }
   };
 
+  const isNoTLS = tlsMode === "no-tls";
+  const isSelfTLS = tlsMode === "self";
+
+  const onNoTLSToggle = (checked: boolean) => {
+    if (checked) {
+      setTlsMode("no-tls");
+      return;
+    }
+    if (tlsMode === "no-tls") {
+      setTlsMode("keyless");
+    }
+  };
+
+  const onSelfTLSToggle = (checked: boolean) => {
+    if (checked) {
+      setTlsMode("self");
+      return;
+    }
+    if (tlsMode === "self") {
+      setTlsMode("keyless");
+    }
+  };
+
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -261,50 +284,42 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             <label className="text-sm font-medium text-foreground">
               TLS Mode
             </label>
-            <div className="flex p-1 bg-border rounded-md">
-              <button
-                type="button"
-                onClick={() => setTlsMode("keyless")}
-                className={cn(
-                  "flex-1 px-3 py-1.5 text-sm font-medium rounded-sm transition-all",
-                  tlsMode === "keyless"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                keyless
-              </button>
-              <button
-                type="button"
-                onClick={() => setTlsMode("no-tls")}
-                className={cn(
-                  "flex-1 px-3 py-1.5 text-sm font-medium rounded-sm transition-all",
-                  tlsMode === "no-tls"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                no tls
-              </button>
-              <button
-                type="button"
-                onClick={() => setTlsMode("self")}
-                className={cn(
-                  "flex-1 px-3 py-1.5 text-sm font-medium rounded-sm transition-all",
-                  tlsMode === "self"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                self tls
-              </button>
+            <div className="space-y-2 rounded-md border border-input/80 px-3 py-2">
+              <label className="flex items-center justify-between gap-3 text-sm text-foreground">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isNoTLS}
+                    onChange={(e) => onNoTLSToggle(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  No TLS
+                </span>
+                <span className="text-xs text-text-muted text-right">
+                  Local-only testing mode.
+                </span>
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-foreground">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSelfTLS}
+                    onChange={(e) => onSelfTLSToggle(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Self TLS
+                </span>
+                <span className="text-xs text-text-muted text-right">
+                  Bring your own cert and key.
+                </span>
+              </label>
             </div>
             <p className="text-xs text-text-muted">
               {tlsMode === "no-tls"
-                ? "No TLS"
+                ? "Local testing only (no TLS)."
                 : tlsMode === "keyless"
-                  ? "Keyless (auto)"
-                  : "Self TLS (manual cert/key)"}
+                  ? "Recommended: Keyless TLS."
+                  : "Advanced: Self-managed TLS cert/key."}
             </p>
           </div>
 
