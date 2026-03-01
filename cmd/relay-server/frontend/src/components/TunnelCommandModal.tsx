@@ -16,6 +16,8 @@ interface TunnelCommandModalProps {
   trigger?: React.ReactNode;
 }
 
+type TLSMode = "no-tls" | "self" | "keyless";
+
 export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const defaultHost = "localhost:3000";
   const defaultName = "your-app-name";
@@ -34,6 +36,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
+  const [tlsMode, setTlsMode] = useState<TLSMode>("keyless");
+  const [tlsCertFile, setTlsCertFile] = useState("");
+  const [tlsKeyFile, setTlsKeyFile] = useState("");
   const urlInputRef = useRef<HTMLInputElement>(null);
 
   const addRelayUrl = (url: string) => {
@@ -75,11 +80,34 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
 
     if (os === "windows") {
-      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+      let tlsEnv = `$env:TLS_MODE="${tlsMode}"; `;
+      if (tlsMode === "self" && tlsCertFile.trim() !== "") {
+        tlsEnv += `$env:TLS_CERT_FILE="${tlsCertFile}"; `;
+      }
+      if (tlsMode === "self" && tlsKeyFile.trim() !== "") {
+        tlsEnv += `$env:TLS_KEY_FILE="${tlsKeyFile}"; `;
+      }
+      return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
-    return `curl -fsSL ${currentOrigin}/tunnel | HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
-  }, [currentOrigin, host, name, relayUrls, os]);
+    let tlsEnv = `TLS_MODE=${tlsMode} `;
+    if (tlsMode === "self" && tlsCertFile.trim() !== "") {
+      tlsEnv += `TLS_CERT_FILE="${tlsCertFile}" `;
+    }
+    if (tlsMode === "self" && tlsKeyFile.trim() !== "") {
+      tlsEnv += `TLS_KEY_FILE="${tlsKeyFile}" `;
+    }
+    return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
+  }, [
+    currentOrigin,
+    host,
+    name,
+    relayUrls,
+    os,
+    tlsMode,
+    tlsCertFile,
+    tlsKeyFile,
+  ]);
 
   const handleCopy = async () => {
     try {
@@ -88,6 +116,29 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
       console.error("Failed to copy:", err);
+    }
+  };
+
+  const isNoTLS = tlsMode === "no-tls";
+  const isSelfTLS = tlsMode === "self";
+
+  const onNoTLSToggle = (checked: boolean) => {
+    if (checked) {
+      setTlsMode("no-tls");
+      return;
+    }
+    if (tlsMode === "no-tls") {
+      setTlsMode("keyless");
+    }
+  };
+
+  const onSelfTLSToggle = (checked: boolean) => {
+    if (checked) {
+      setTlsMode("self");
+      return;
+    }
+    if (tlsMode === "self") {
+      setTlsMode("keyless");
     }
   };
 
@@ -100,15 +151,14 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px] rounded-sm">
+      <DialogContent className="sm:max-w-[500px] rounded-sm max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
             Tunnel Setup Command
           </DialogTitle>
           <DialogDescription>
-            Configure your tunnel settings and copy the command to start
-            exposing your local server.
+            Set options and copy the command.
           </DialogDescription>
         </DialogHeader>
 
@@ -229,10 +279,96 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </div>
           </div>
 
-          {/*  className="text-xs text-text-muted">
-              Press Enter to add. Multiple relay servers for redundancy.
+          {/* TLS Mode */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">
+              TLS Mode
+            </label>
+            <div className="space-y-2 rounded-md border border-input/80 px-3 py-2">
+              <label className="flex items-center justify-between gap-3 text-sm text-foreground">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isNoTLS}
+                    onChange={(e) => onNoTLSToggle(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  No TLS
+                </span>
+                <span className="text-xs text-text-muted text-right">
+                  Local-only testing mode.
+                </span>
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-foreground">
+                <span className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSelfTLS}
+                    onChange={(e) => onSelfTLSToggle(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Self TLS
+                </span>
+                <span className="text-xs text-text-muted text-right">
+                  Bring your own cert and key.
+                </span>
+              </label>
+            </div>
+            <p className="text-xs text-text-muted">
+              {tlsMode === "no-tls"
+                ? "Local testing only (no TLS)."
+                : tlsMode === "keyless"
+                  ? "Recommended: Keyless TLS."
+                  : "Advanced: Self-managed TLS cert/key."}
             </p>
           </div>
+
+          {tlsMode === "self" && (
+            <div className="space-y-3 rounded-md border border-input/80 p-3">
+              <p className="text-xs font-medium text-foreground">Self TLS Files</p>
+              <div className="space-y-2">
+                <label
+                  htmlFor="tls-cert-file"
+                  className="text-sm font-medium text-foreground"
+                >
+                  TLS Cert File
+                </label>
+                <div className="flex items-center rounded-md bg-border">
+                  <span className="px-3 text-sm text-text-muted">TLS_CERT_FILE=</span>
+                  <Input
+                    id="tls-cert-file"
+                    type="text"
+                    value={tlsCertFile}
+                    onChange={(e) => setTlsCertFile(e.target.value)}
+                    placeholder="/path/to/fullchain.pem"
+                    className="rounded-l-none"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label
+                  htmlFor="tls-key-file"
+                  className="text-sm font-medium text-foreground"
+                >
+                  TLS Key File
+                </label>
+                <div className="flex items-center rounded-md bg-border">
+                  <span className="px-3 text-sm text-text-muted">TLS_KEY_FILE=</span>
+                  <Input
+                    id="tls-key-file"
+                    type="text"
+                    value={tlsKeyFile}
+                    onChange={(e) => setTlsKeyFile(e.target.value)}
+                    placeholder="/path/to/privkey.pem"
+                    className="rounded-l-none"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-text-muted">
+                Self TLS selected. These files are included in the command.
+              </p>
+            </div>
+          )}
 
           {/* Generated Command */}
           <div className="space-y-2">

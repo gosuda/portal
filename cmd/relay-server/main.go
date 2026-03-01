@@ -2,133 +2,143 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
+	"gosuda.org/portal/portal/sni"
 )
 
-var (
-	flagPortalURL      string
-	flagPortalAppURL   string
-	flagBootstraps     []string
-	flagALPN           string
-	flagPort           int
-	flagMaxLease       int
-	flagLeaseBPS       int
-	flagNoIndex        bool
-	flagAdminSecretKey string
+const (
+	defaultHTTPPort       = 4017
+	defaultPortalURL      = "http://localhost:4017"
+	defaultSNIPort        = ":443"
+	defaultKeylessKeyFile = "/etc/portal/keyless/privkey.pem"
 )
+
+// flagPortalURL is kept for package-level consumers in other files.
+var flagPortalURL string
+
+type relayServerConfig struct {
+	Port           int
+	AdminSecretKey string
+	NoIndex        bool
+	LeaseBPS       int
+	PortalURL      string
+	Bootstraps     []string
+	SNIPort        string
+	KeylessKeyFile string
+}
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 
-	defaultPortalURL := strings.TrimSuffix(os.Getenv("PORTAL_URL"), "/")
-	if defaultPortalURL == "" {
-		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
-		defaultPortalURL = "http://localhost:4017"
+	cfg := relayServerConfig{}
+
+	portalURL := strings.TrimSuffix(strings.TrimSpace(os.Getenv("PORTAL_URL")), "/")
+	if portalURL == "" {
+		// Prefer explicit scheme for localhost so downstream URL building is unambiguous.
+		portalURL = defaultPortalURL
 	}
-	defaultAppURL := os.Getenv("PORTAL_APP_URL")
-	if defaultAppURL == "" {
-		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
+	bootstrapsCSV := strings.TrimSpace(os.Getenv("BOOTSTRAP_URIS"))
+	if bootstrapsCSV == "" {
+		bootstrapsCSV = defaultBootstrapFrom(portalURL)
 	}
-	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
-	if defaultBootstraps == "" {
-		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
+	sniPort := strings.TrimSpace(os.Getenv("SNI_PORT"))
+	if sniPort == "" {
+		sniPort = defaultSNIPort
+	}
+	keylessKey := strings.TrimSpace(os.Getenv("KEYLESS_KEY_FILE"))
+	if keylessKey == "" {
+		keylessKey = defaultKeylessKeyFile
 	}
 
-	var flagBootstrapsCSV string
-	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
-	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
-	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
-	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
-
-	defaultNoIndex := os.Getenv("NOINDEX") == "true"
-	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
-
-	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
-	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+	flag.IntVar(&cfg.Port, "port", defaultHTTPPort, "HTTP server port")
+	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY")), "admin auth secret (env: ADMIN_SECRET_KEY)")
+	flag.BoolVar(&cfg.NoIndex, "noindex", strings.EqualFold(strings.TrimSpace(os.Getenv("NOINDEX")), "true"), "disallow crawlers (env: NOINDEX)")
+	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
+	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
+	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
+	flag.StringVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port (env: SNI_PORT)")
+	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessKey, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
 	flag.Parse()
 
-	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
-	if err := runServer(); err != nil {
+	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	flagPortalURL = cfg.PortalURL
+	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
-func runServer() error {
+func runServer(cfg relayServerConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	log.Info().
-		Str("portal_base_url", flagPortalURL).
-		Str("app_url", flagPortalAppURL).
-		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
+		Str("portal_base_url", cfg.PortalURL).
+		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	cred := sdk.NewCredential()
-
-	serv := portal.NewRelayServer(cred, flagBootstraps)
-	if flagMaxLease > 0 {
-		serv.SetMaxRelayedPerLease(flagMaxLease)
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, cfg.SNIPort, cfg.PortalURL, cfg.KeylessKeyFile)
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	// Create AuthManager for admin authentication
-	// Auto-generate secret key if not provided
-	if flagAdminSecretKey == "" {
-		randomBytes := make([]byte, 16)
-		if _, err := rand.Read(randomBytes); err != nil {
-			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
-		}
-		flagAdminSecretKey = hex.EncodeToString(randomBytes)
-		log.Warn().Str("key", flagAdminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
-	} else {
-		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
-	}
-	authManager := manager.NewAuthManager(flagAdminSecretKey)
-
-	// Create Frontend first, then Admin, then attach Admin back to Frontend.
 	frontend := NewFrontend()
-	admin := NewAdmin(int64(flagLeaseBPS), frontend, authManager)
+	authManager := manager.NewAuthManager(cfg.AdminSecretKey)
+	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
 	admin.LoadSettings(serv)
 
-	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		// Associate pending IP with this lease
-		ipManager := admin.GetIPManager()
-		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
-			}
+	// Set up SNI connection callback to route to tunnel backends
+	serv.GetSNIRouter().SetConnectionCallback(func(clientConn net.Conn, route *sni.Route) {
+		if _, ok := serv.GetLeaseManager().GetLeaseByID(route.LeaseID); !ok {
+			log.Warn().
+				Str("lease_id", route.LeaseID).
+				Str("sni", route.SNI).
+				Msg("[SNI] Lease not active; dropping connection and unregistering route")
+			serv.GetSNIRouter().UnregisterRouteByLeaseID(route.LeaseID)
+			clientConn.Close()
+			return
 		}
+
+		// Get BPS manager for rate limiting
 		bpsManager := admin.GetBPSManager()
-		manager.EstablishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
+
+		reverseConn, err := serv.GetReverseHub().AcquireForTLS(route.LeaseID, portal.TLSAcquireWait)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("lease_id", route.LeaseID).
+				Str("sni", route.SNI).
+				Msg("[SNI] Reverse tunnel unavailable")
+			clientConn.Close()
+			return
+		}
+
+		// SNI path is reverse-only (NAT-friendly): relay never dials app directly.
+		manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, route.LeaseID, bpsManager)
+		reverseConn.Close()
 	})
 
-	serv.Start()
+	if err := serv.Start(); err != nil {
+		return fmt.Errorf("start relay server: %w", err)
+	}
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.Port), serv, admin, frontend, cfg.NoIndex, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

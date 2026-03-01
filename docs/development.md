@@ -1,45 +1,51 @@
-# Development Principles and Operational Guide
+# Development Guide
 
-This document defines the core principles and operational scope of the Portal project.
-It aims to prevent unnecessary feature expansion or direction drift, and to maintain a consistent user experience.
+## Quick Start
 
----
+```bash
+# Clone and build
+git clone https://github.com/gosuda/portal.git
+cd portal
+make build
 
-## 1. Usability Invariance Principle
-Portal developers must ensure that any new feature does not alter existing usability.
-A "change in usability" includes, but is not limited to:
+# Run tests
+make test
 
-- Modifications to the Portal usage flow
-- Changes to the deployment or configuration process
-- Alterations to the SDK development environment
-- Increases in codebase complexity
-- Any similar impacts that may affect the user experience
+# Run relay server locally
+make run
+```
 
----
+## Project Structure
 
-## 2. Prior Agreement for Changes
-If a feature impacts usability, the proposer must provide a clear written rationale and obtain prior agreement from the team before proceeding.
+```
+cmd/
+  relay-server/    # Relay server entrypoint
+  portal-tunnel/   # Tunnel CLI client
+  demo-app/        # Demo application
+portal/            # Core relay logic
+sdk/               # Go SDK for apps
+utils/             # Shared utilities
+```
 
-- A merge is permitted only when at least one reviewer (other than the proposer) approves the change.
+## Key Commands
 
----
+| Command | Description |
+|---------|-------------|
+| `make build` | Build all components |
+| `make test` | Run tests with race detector |
+| `make lint` | Run golangci-lint |
+| `make fmt` | Format code |
+| `make run` | Run relay server |
 
+## Guidelines
 
-## 3. Testing and Quality Assurance
-Unfinished or experimental features must not be merged directly into the main branch.
-All new features must be fully tested and verified in a personal branch before merging.
+1. **No breaking changes** to existing workflows without team discussion
+2. **Test before merging** — all features must be verified in a branch
+3. **Follow existing patterns** — check similar code before adding new features
+4. **Run linters** before committing: `make fmt && make lint`
 
----
+## Architecture Decisions
 
-## 4. Project Philosophy and Scope
-Portal serves as a relay layer that allows individuals to publicly expose locally running services, with built-in end-to-end encryption.
-
-- When proposing new features, include sufficient justification and follow the agreement process described above.
-- Approved features must be documented and tracked in the project roadmap.
-
----
-
-## 5. Principles for Resolving Disagreements
-If differences of opinion arise, resolve them through constructive discussion and consensus.
-
----
+- **E2EE**: TLS passthrough with keyless certificates
+- **SNI Routing**: TLS routed by hostname without termination
+- **No CGO**: pure Go for cross-platform builds

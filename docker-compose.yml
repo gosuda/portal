@@ -9,10 +9,17 @@ services:
       - "--port"
       - "${PORTAL_PORT:-4017}"
     environment:
+      # Core configuration
       PORTAL_URL: ${PORTAL_URL:-http://localhost:${PORTAL_PORT:-4017}}
-      PORTAL_APP_URL: ${PORTAL_APP_URL:-http://*.localhost:${PORTAL_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-ws://localhost:${PORTAL_PORT:-4017}/relay}
+      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-http://localhost:${PORTAL_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      NOINDEX: ${NOINDEX:-}
+
+      # SNI router port (for TLS passthrough)
+      SNI_PORT: ${SNI_PORT:-:443}
+      KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
     ports:
-      - "4017:4017"
+      - "${PORTAL_PORT:-4017}:${PORTAL_PORT:-4017}"
+      - "80:80"
+      - "443:443"
     restart: unless-stopped

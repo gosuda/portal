@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/utils"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
@@ -56,6 +54,11 @@ set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost:3000}"
 if [ "${HIDE:-}" = "1" ] || [ "${HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
+[ -n "${TLS_MODE:-}" ] && set -- "$@" --tls-mode "$TLS_MODE"
+if [ "${TLS_MODE:-}" = "self" ]; then
+  [ -n "${TLS_CERT_FILE:-}" ] && set -- "$@" --tls-cert-file "$TLS_CERT_FILE"
+  [ -n "${TLS_KEY_FILE:-}" ] && set -- "$@" --tls-key-file "$TLS_KEY_FILE"
+fi
 
 echo "Starting portal-tunnel..." >&2
 exec "$@"
@@ -100,6 +103,11 @@ if ($env:TAGS) { $ArgsList += "--tags", $env:TAGS }
 if ($env:THUMBNAIL) { $ArgsList += "--thumbnail", $env:THUMBNAIL }
 if ($env:OWNER) { $ArgsList += "--owner", $env:OWNER }
 if ($env:HIDE -eq "1" -or $env:HIDE -eq "true") { $ArgsList += "--hide" }
+if ($env:TLS_MODE) { $ArgsList += "--tls-mode", $env:TLS_MODE }
+if ($env:TLS_MODE -eq "self") {
+    if ($env:TLS_CERT_FILE) { $ArgsList += "--tls-cert-file", $env:TLS_CERT_FILE }
+    if ($env:TLS_KEY_FILE) { $ArgsList += "--tls-key-file", $env:TLS_KEY_FILE }
+}
 
 Write-Host "Starting portal-tunnel..."
 try {
@@ -112,7 +120,7 @@ try {
 `
 
 func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -153,7 +161,7 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
+	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

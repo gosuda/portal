@@ -8,9 +8,7 @@ Build:
 - `make build` (all artifacts)
 - `make build-server` (relay server binary)
 - `make build-frontend` (React admin UI)
-- `make build-wasm` (webclient WASM)
 - `make build-tunnel` (portal-tunnel binaries)
-- `make build-protoc` (protobufs)
 
 Run:
 - `make run` (run `./bin/relay-server`)
@@ -37,38 +35,76 @@ Frontend dev:
 Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
 
 Core components:
-- Relay server: `cmd/relay-server` (HTTP + WS relay, admin UI serving)
-- Relay core logic: `portal/` (lease manager, connection handlers, forwarding)
-- Crypto + protocols: `portal/core/` and `portal/core/proto/` (RDSEC/RDVERB)
+- Relay server: `cmd/relay-server` (HTTP API/admin + SNI router)
+- Relay core logic: `portal/` (lease manager, reverse connection hub, forwarding)
+- SNI router package: `portal/sni/`
 - SDK for Apps: `sdk/`
 - Tunnel client: `cmd/portal-tunnel/` (exposes local services)
-- Webclient: `cmd/webclient/` (WASM + service worker served by relay)
 - Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
 
 ## Connection Flow (High Level)
 
-1. App registers a Lease with the relay (identity, ALPN, metadata).
-2. Client requests connection by Lease ID or name.
-3. Relay forwards the request to the App and brokers the connection.
-4. RDSEC handshake establishes end-to-end encryption (X25519 + ChaCha20-Poly1305).
-5. Yamux multiplexes multiple streams over one relay connection.
+1. App/Tunnel registers a Lease with relay via `/sdk/register` (name, metadata, TLS mode, reverse token).
+2. Tunnel maintains reverse WebSocket workers to relay via `/sdk/connect`.
+3. Client traffic enters relay:
+   - TLS traffic on SNI port is routed by SNI.
+   - Non-TLS traffic can use HTTP proxy mode.
+4. Relay acquires a reverse tunnel connection and forwards bytes end-to-end.
 
 ## Key Terms
 
 - Portal / Relay: central mediator; never decrypts payloads.
 - App: service publisher using SDK or tunnel to register Leases.
-- Client: consumer (often browser + WASM) connecting via relay.
+- Client: consumer connecting via relay.
 - Lease: advertising unit; one Lease maps to one public endpoint.
 
 ## Where to Look
 
-- `cmd/relay-server/` (entrypoint and HTTP/WS relay)
-- `portal/` (core relay logic)
-- `portal/core/proto/` (protocol definitions)
+- `cmd/relay-server/` (entrypoint, HTTP APIs, SNI callback wiring)
+- `portal/reverse_hub.go` (reverse WebSocket connection pool)
+- `portal/sni/` (SNI parser/router)
 - `sdk/` (App integration)
 - `cmd/portal-tunnel/` (tunnel client)
-- `cmd/webclient/` (WASM client)
 - `docs/architecture.md` and `docs/glossary.md`
+
+## Domain Configuration
+
+Portal uses environment variables for domain and TLS configuration:
+
+### Core Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PORTAL_URL` | Base URL (e.g., `https://portal.example.com`) |
+| `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
+| `SNI_PORT` | SNI router port (default `:443`) |
+| `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
+
+### Tunnel Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `RELAYS` | Relay API URLs for tunnel client (comma-separated) |
+| `TLS_MODE` | `no-tls`, `self`, or `keyless` |
+| `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
+| `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
+
+### Domain Derivation
+
+- Service URL: `{name}.{base_domain}` (e.g., `myapp.example.com`)
+- Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
+- SNI routes registered in `portal/sni/router.go`
+
+### TLS Modes
+
+1. **`no-tls`**: HTTP proxy mode for development.
+2. **`self`**: Tunnel uses locally provided certificate and key (`TLS_CERT_FILE` + `TLS_KEY_FILE`).
+3. **`keyless`**: Tunnel uses SDK keyless mode with auto defaults.
+   - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
+   - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
+   - Auto-discovery requires an HTTPS signer endpoint.
+
+See `docs/portal-deploy-guide.md` for full deployment documentation.
 
 ## Repo Basics
 

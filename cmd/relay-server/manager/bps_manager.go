@@ -2,11 +2,11 @@ package manager
 
 import (
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog/log"
 )
 
@@ -118,8 +118,8 @@ func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, 
 }
 
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
-// Connection tracking is handled by RelayServer's event loop (cmdCheckAndIncLimit/cmdDecLimit).
-func EstablishRelayWithBPS(clientStream, leaseStream *yamux.Stream, leaseID string, bpsManager *BPSManager) {
+// In the new TLS passthrough architecture, this uses net.Conn
+func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *BPSManager) {
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().
 		Str("lease_id", leaseID).
@@ -138,15 +138,15 @@ func EstablishRelayWithBPS(clientStream, leaseStream *yamux.Stream, leaseID stri
 	// Client -> Lease
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(leaseStream, clientStream, leaseID)
-		leaseStream.Close()
+		bpsManager.Copy(leaseConn, clientConn, leaseID)
+		leaseConn.Close()
 	}()
 
 	// Lease -> Client
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(clientStream, leaseStream, leaseID)
-		clientStream.Close()
+		bpsManager.Copy(clientConn, leaseConn, leaseID)
+		clientConn.Close()
 	}()
 
 	wg.Wait()

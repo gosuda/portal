@@ -1,21 +1,17 @@
 package main
 
 import (
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
 )
 
 const adminCookieName = "portal_admin"
@@ -242,12 +238,12 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	case route == "":
 		a.frontend.ServeAppStatic(w, r, "", serv)
 	case route == "leases" && r.Method == http.MethodGet:
-		writeJSON(w, a.convertLeaseEntriesToAdminRows(serv))
+		writeJSON(w, convertLeaseEntriesToRows(serv, a, true))
 	case route == "leases/banned" && r.Method == http.MethodGet:
 		writeJSON(w, serv.GetLeaseManager().GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
 		writeJSON(w, map[string]interface{}{
-			"leases_count": len(serv.GetAllLeaseEntries()),
+			"leases_count": len(serv.GetLeaseManager().GetAllLeaseEntries()),
 			"uptime":       "TODO",
 		})
 	case route == "settings" && r.Method == http.MethodGet:
@@ -576,137 +572,4 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-// convertLeaseEntriesToAdminRows converts LeaseEntry data to leaseRow format for admin API
-func (a *Admin) convertLeaseEntriesToAdminRows(serv *portal.RelayServer) []leaseRow {
-	leaseEntries := serv.GetAllLeaseEntries()
-	rows := []leaseRow{}
-	now := time.Now()
-
-	for _, leaseEntry := range leaseEntries {
-		if now.After(leaseEntry.Expires) {
-			continue
-		}
-
-		lease := leaseEntry.Lease
-		identityID := string(lease.Identity.Id)
-
-		ttl := time.Until(leaseEntry.Expires)
-		ttlStr := ""
-		if ttl > 0 {
-			if ttl > time.Hour {
-				ttlStr = fmt.Sprintf("%.0fh", ttl.Hours())
-			} else if ttl > time.Minute {
-				ttlStr = fmt.Sprintf("%.0fm", ttl.Minutes())
-			} else {
-				ttlStr = fmt.Sprintf("%.0fs", ttl.Seconds())
-			}
-		}
-
-		since := now.Sub(leaseEntry.LastSeen)
-		if since < 0 {
-			since = 0
-		}
-		lastSeenStr := func(d time.Duration) string {
-			if d >= time.Hour {
-				h := int(d / time.Hour)
-				m := int((d % time.Hour) / time.Minute)
-				if m > 0 {
-					return fmt.Sprintf("%dh %dm", h, m)
-				}
-				return fmt.Sprintf("%dh", h)
-			}
-			if d >= time.Minute {
-				m := int(d / time.Minute)
-				s := int((d % time.Minute) / time.Second)
-				if s > 0 {
-					return fmt.Sprintf("%dm %ds", m, s)
-				}
-				return fmt.Sprintf("%dm", m)
-			}
-			return fmt.Sprintf("%ds", int(d/time.Second))
-		}(since)
-		lastSeenISO := leaseEntry.LastSeen.UTC().Format(time.RFC3339)
-		firstSeenISO := leaseEntry.FirstSeen.UTC().Format(time.RFC3339)
-
-		connected := serv.IsConnectionActive(leaseEntry.ConnectionID)
-
-		name := lease.Name
-		if name == "" {
-			name = "(unnamed)"
-		}
-
-		kind := "client"
-		if len(lease.Alpn) > 0 {
-			kind = lease.Alpn[0]
-		}
-
-		dnsLabel := identityID
-		if len(dnsLabel) > 8 {
-			dnsLabel = dnsLabel[:8] + "..."
-		}
-
-		base := flagPortalAppURL
-		if base == "" {
-			base = flagPortalURL
-		}
-		link := fmt.Sprintf("//%s.%s/", lease.Name, utils.StripWildCard(utils.StripScheme(base)))
-
-		var bps int64
-		if a.bpsManager != nil {
-			bps = a.bpsManager.GetBPSLimit(identityID)
-		}
-
-		// Get IP info for this lease
-		var ip string
-		var isIPBanned bool
-		if a.ipManager != nil {
-			ip = a.ipManager.GetLeaseIP(identityID)
-			if ip != "" {
-				isIPBanned = a.ipManager.IsIPBanned(ip)
-			}
-		}
-
-		rows = append(rows, leaseRow{
-			Peer:         identityID,
-			Name:         name,
-			Kind:         kind,
-			Connected:    connected,
-			DNS:          dnsLabel,
-			LastSeen:     lastSeenStr,
-			LastSeenISO:  lastSeenISO,
-			FirstSeenISO: firstSeenISO,
-			TTL:          ttlStr,
-			Link:         link,
-			StaleRed:     !connected && since >= 15*time.Second,
-			Hide:         leaseEntry.ParsedMetadata != nil && leaseEntry.ParsedMetadata.Hide,
-			Metadata:     lease.Metadata,
-			BPS:          bps,
-			IsApproved:   a.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || a.approveManager.IsLeaseApproved(identityID),
-			IsDenied:     a.approveManager.IsLeaseDenied(identityID),
-			IP:           ip,
-			IsIPBanned:   isIPBanned,
-		})
-	}
-
-	return rows
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Error().Err(err).Msg("[HTTP] Failed to encode response")
-	}
-}
-
-func decodeLeaseID(encoded string) (string, bool) {
-	idBytes, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		idBytes, err = base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", false
-		}
-	}
-	return string(idBytes), true
 }

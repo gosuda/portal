@@ -1,30 +1,38 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/utils"
+	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/sdk"
 )
 
 //go:embed dist/*
 var distFS embed.FS
 
 // serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, noIndex bool, cancel context.CancelFunc) *http.Server {
+func serveHTTP(
+	addr string,
+	serv *portal.RelayServer,
+	admin *Admin,
+	frontend *Frontend,
+	noIndex bool,
+	cancel context.CancelFunc,
+) *http.Server {
 	if addr == "" {
 		addr = ":0"
-	}
-
-	// Initialize WASM cache used by content handlers
-	if err := frontend.InitWasmCache(); err != nil {
-		log.Error().Err(err).Msg("failed to initialize WASM cache")
 	}
 
 	// Create app UI mux
@@ -44,21 +52,15 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	}
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
-	appMux.HandleFunc("/app/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/app/")
-		frontend.ServeAppStatic(w, r, p, serv)
-	}))
-
-	// Portal frontend files (for unified caching)
-	appMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
+	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
+		setCORSHeaders(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
 			return
 		}
-
-		frontend.ServePortalStaticFile(w, r, p)
-	}))
+		p := strings.TrimPrefix(r.URL.Path, "/app/")
+		frontend.ServeAppStatic(w, r, p, serv)
+	})
 
 	// Tunnel installer script and binaries
 	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
@@ -68,38 +70,15 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		serveTunnelBinary(w, r)
 	})
 
-	appMux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
+	// SDK Registry API for lease registration
+	registry := &SDKRegistry{}
+	appMux.HandleFunc("/sdk/", func(w http.ResponseWriter, r *http.Request) {
+		registry.HandleSDKRequest(w, r, serv)
+	})
 
-		// Check if IP is banned
-		clientIP := manager.ExtractClientIP(r)
-		ipManager := admin.GetIPManager()
-		if ipManager != nil && ipManager.IsIPBanned(clientIP) {
-			log.Warn().Str("ip", clientIP).Msg("[server] connection rejected: IP banned")
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-
-		stream, wsConn, err := utils.UpgradeToWSStream(w, r, nil)
-		if err != nil {
-			log.Error().Err(err).Msg("[server] websocket upgrade failed")
-			return
-		}
-
-		// Store pending IP for lease association (will be linked when lease is registered)
-		if ipManager != nil && clientIP != "" {
-			ipManager.StorePendingIP(clientIP)
-		}
-
-		if err := serv.HandleConnection(stream); err != nil {
-			log.Error().Err(err).Msg("[server] websocket relay connection error")
-			wsConn.Close()
-			return
-		}
+	// Keyless signer endpoint.
+	appMux.HandleFunc("/v1/sign", func(w http.ResponseWriter, r *http.Request) {
+		handleKeylessSign(w, r, serv.GetKeylessSigner())
 	})
 
 	// App UI index page - serve React frontend with SSR (delegates to serveAppStatic)
@@ -119,53 +98,39 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 		admin.HandleAdminRequest(w, r, serv)
 	})
 
-	// Create portal frontend mux (routes only)
-	portalMux := http.NewServeMux()
-
-	// Static file handler for /frontend/ (for unified caching)
-	portalMux.HandleFunc("/frontend/", withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		p := strings.TrimPrefix(r.URL.Path, "/frontend/")
-		if p == "manifest.json" {
-			frontend.ServeDynamicManifest(w, r)
+	// Create the main handler
+	appDomain := defaultAppPattern(flagPortalURL)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Compatibility endpoints for legacy webclient deployments.
+		// Handle before host-based routing so stale service workers can recover.
+		if r.URL.Path == "/service-worker.js" {
+			frontend.ServeLegacyServiceWorkerCleanup(w, r)
 			return
 		}
-		frontend.ServePortalStaticFile(w, r, p)
-	}))
-
-	// Service worker for portal subdomains (serve from dist/wasm)
-	portalMux.HandleFunc("/service-worker.js", func(w http.ResponseWriter, r *http.Request) {
-		frontend.ServeDynamicServiceWorker(w, r)
-	})
-
-	// Create HTTP reverse proxy for subdomain tunneling (same-origin cookie support)
-	httpProxy := NewHTTPProxy(serv)
-
-	// Root handler: try server-side reverse proxy first, then fall back to portal HTML
-	portalMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Try server-side reverse proxy to tunnel backend
-		if httpProxy.TryProxy(w, r) {
+		if strings.HasPrefix(r.URL.Path, "/frontend/") {
+			frontend.ServeLegacyFrontendCompat(w, r)
 			return
 		}
 
-		// Fallback: serve portal frontend (Service Worker based proxy)
-		withCORSMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/" {
-				frontend.ServePortalHTMLWithSSR(w, r, serv)
+		// Handle subdomain requests
+		if isSubdomain(appDomain, r.Host) {
+			log.Debug().
+				Str("host", r.Host).
+				Str("url", r.URL.String()).
+				Msg("[server] handling subdomain request")
+			// Check if the tunnel has TLS enabled by looking up the lease
+			if shouldProxyHTTP(r.Host, serv) {
+				// TLS is not enabled on the tunnel, proxy via HTTP
+				log.Debug().Str("host", r.Host).Msg("[server] proxying to HTTP")
+				proxyToHTTP(w, r, serv)
 				return
 			}
-			frontend.ServePortalStatic(w, r)
-		})(w, r)
-	})
-
-	// routes based on host and path
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Route subdomain requests (e.g., *.example.com) to portalMux
-		// and everything else to the app UI mux.
-		if utils.IsSubdomain(flagPortalAppURL, r.Host) {
-			portalMux.ServeHTTP(w, r)
-		} else {
-			appMux.ServeHTTP(w, r)
+			// TLS is enabled, redirect to HTTPS.
+			log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
+			redirectToHTTPS(w, r, serv.GetSNIRouter().GetAddr())
+			return
 		}
+		appMux.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{
@@ -184,34 +149,178 @@ func serveHTTP(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fr
 	return srv
 }
 
-func withCORSMiddleware(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		utils.SetCORSHeaders(w)
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
+func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.Signer) {
+	if signer == nil {
+		writeSignError(w, http.StatusNotFound, "keyless signer is disabled")
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeSignError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeSignError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var req keyless.SignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSignError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	resp, err := signer.Sign(r.Context(), &req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, keyless.ErrSignerDisabled):
+			status = http.StatusNotFound
+		case errors.Is(err, keyless.ErrInvalidArgument):
+			status = http.StatusBadRequest
+		case errors.Is(err, keyless.ErrPermissionDenied):
+			status = http.StatusForbidden
 		}
-		h(w, r)
+		writeSignError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("[signer] failed to encode sign response")
+		writeSignError(w, http.StatusInternalServerError, "failed to encode response")
 	}
 }
 
-type leaseRow struct {
-	Peer         string
-	Name         string
-	Kind         string
-	Connected    bool
-	DNS          string
-	LastSeen     string
-	LastSeenISO  string
-	FirstSeenISO string
-	TTL          string
-	Link         string
-	StaleRed     bool
-	Hide         bool
-	Metadata     string
-	BPS          int64  // bytes-per-second limit (0 = unlimited)
-	IsApproved   bool   // whether lease is approved (for manual mode)
-	IsDenied     bool   // whether lease is denied (for manual mode)
-	IP           string // client IP address (for IP-based ban)
-	IsIPBanned   bool   // whether the IP is banned
+func writeSignError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(keyless.ErrorResponse{Error: message})
+}
+
+// shouldProxyHTTP checks if the request should be proxied via HTTP.
+// Returns true if TLS mode is no-tls.
+func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
+	leaseName, ok := leaseNameFromHost(host, defaultAppPattern(flagPortalURL))
+	if !ok {
+		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
+		return false
+	}
+
+	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
+	if !ok {
+		log.Debug().Str("lease_name", leaseName).Msg("[proxy] shouldProxyHTTP: lease not found")
+		return true
+	}
+
+	// If TLS mode is no-tls, we can proxy via HTTP.
+	shouldProxy := normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) == sdk.TLSModeNoTLS
+	log.Debug().
+		Str("lease_name", leaseName).
+		Str("tls_mode", entry.Lease.TLSMode).
+		Msg("[proxy] shouldProxyHTTP")
+	return shouldProxy
+}
+
+func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
+	leaseName, ok := leaseNameFromHost(r.Host, defaultAppPattern(flagPortalURL))
+	if !ok {
+		http.Error(w, "invalid subdomain", http.StatusBadRequest)
+		return
+	}
+
+	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
+	if !ok {
+		http.Error(w, "service not found", http.StatusNotFound)
+		return
+	}
+
+	if normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) != sdk.TLSModeNoTLS {
+		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
+		return
+	}
+
+	reverseConn, err := serv.GetReverseHub().AcquireForHTTP(entry.Lease.ID, portal.HTTPProxyWait)
+	if err != nil {
+		log.Error().
+			Err(err).
+			Str("lease", leaseName).
+			Str("lease_id", entry.Lease.ID).
+			Msg("[proxy] failed to connect to backend")
+		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer reverseConn.Close()
+	targetConn := reverseConn.Conn
+
+	// Write the HTTP request to the tunnel
+	if err := r.Write(targetConn); err != nil {
+		log.Error().Err(err).Msg("[proxy] failed to write request to tunnel")
+		http.Error(w, "proxy error", http.StatusInternalServerError)
+		return
+	}
+
+	// Read the response from the tunnel
+	resp, err := http.ReadResponse(bufio.NewReader(targetConn), r)
+	if err != nil {
+		log.Error().Err(err).Msg("[proxy] failed to read response from tunnel")
+		http.Error(w, "proxy error", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy headers
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+
+	// Write status code
+	w.WriteHeader(resp.StatusCode)
+
+	// Copy body
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Debug().Err(err).Msg("[proxy] error copying response body")
+	}
+}
+
+// redirectToHTTPS redirects the request to HTTPS using the configured SNI port.
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
+	host := strings.TrimSpace(r.Host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+
+	// Extract port from sniListenAddr (e.g., ":443", "443", "example.com:443")
+	port := "443"
+	if raw := strings.TrimSpace(sniListenAddr); raw != "" {
+		switch {
+		case strings.HasPrefix(raw, ":"):
+			port = strings.TrimPrefix(raw, ":")
+		case strings.Count(raw, ":") == 0:
+			port = raw
+		default:
+			if _, p, err := net.SplitHostPort(raw); err == nil {
+				port = p
+			}
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			port = "443"
+		}
+	}
+
+	if port != "443" {
+		host = net.JoinHostPort(host, port)
+	}
+
+	target := "https://" + host + r.URL.Path
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
