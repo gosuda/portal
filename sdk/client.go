@@ -31,7 +31,6 @@ type Client struct {
 func NewClient(opt ...ClientOption) (*Client, error) {
 	config := &ClientConfig{
 		BootstrapServers:   []string{},
-		ReverseWorkers:     0, // uses defaultReverseWorkers from listener
 		ReverseDialTimeout: 5 * time.Second,
 		TLSMode:            TLSModeNoTLS,
 	}
@@ -88,7 +87,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		}
 
 		leaseCopy := *lease
-		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, c.config.ReverseWorkers, c.config.ReverseDialTimeout, listenerCloseFns...)
+		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, 0, c.config.ReverseDialTimeout, listenerCloseFns...)
 		if listenerErr != nil {
 			for _, closeFn := range listenerCloseFns {
 				if closeFn != nil {
@@ -220,18 +219,12 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 
 	switch tlsMode {
 	case TLSModeSelf:
-		var cert tls.Certificate
-		var err error
-		if c.config.TLSCertificate != nil {
-			cert = *c.config.TLSCertificate
-		} else {
-			if c.config.TLSSelfCertFile == "" || c.config.TLSSelfKeyFile == "" {
-				return nil, nil, fmt.Errorf("self TLS mode requires certificate/key (WithTLSSelfCertificate or WithTLSSelfCertificateFiles)")
-			}
-			cert, err = tls.LoadX509KeyPair(c.config.TLSSelfCertFile, c.config.TLSSelfKeyFile)
-			if err != nil {
-				return nil, nil, fmt.Errorf("load self TLS certificate files: %w", err)
-			}
+		if c.config.TLSSelfCertFile == "" || c.config.TLSSelfKeyFile == "" {
+			return nil, nil, fmt.Errorf("self TLS mode requires certificate/key files (WithTLSSelfCertificateFiles)")
+		}
+		cert, err := tls.LoadX509KeyPair(c.config.TLSSelfCertFile, c.config.TLSSelfKeyFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load self TLS certificate files: %w", err)
 		}
 
 		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
@@ -242,35 +235,30 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 		return tlsConfig, nil, nil
 
 	case TLSModeKeyless:
-		keylessEndpoint := c.config.TLSKeyless.Endpoint
+		keylessEndpoint := c.config.TLSKeylessEndpoint
 		if keylessEndpoint == "" {
 			keylessEndpoint = relayAddr
 		}
 
-		keylessKeyID := c.config.TLSKeyless.KeyID
-		if keylessKeyID == "" {
-			keylessKeyID = "relay-cert"
-		}
+		keylessKeyID := "relay-cert"
 
-		keylessServerName := c.config.TLSKeyless.ServerName
-		if keylessServerName == "" {
-			if parsed, err := url.Parse(keylessEndpoint); err == nil {
-				keylessServerName = parsed.Hostname()
-			}
+		keylessServerName := ""
+		if parsed, err := url.Parse(keylessEndpoint); err == nil {
+			keylessServerName = parsed.Hostname()
 		}
 
 		certPEM, rootCAPEM, err := keyless.ResolveMaterials(
 			context.Background(),
 			keylessEndpoint,
 			keylessServerName,
-			c.config.TLSKeylessCertificatePEM,
-			c.config.TLSKeyless.RootCAPEM,
+			nil,
+			nil,
 		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 		}
 
-		baseDomain := c.config.TLSKeyless.BaseDomain
+		baseDomain := c.config.TLSKeylessBaseDomain
 		if baseDomain == "" {
 			baseDomain = ExtractBaseDomain(relayAddr)
 		}
@@ -286,13 +274,10 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 		}
 
 		remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
-			Endpoint:      keylessEndpoint,
-			ServerName:    keylessServerName,
-			KeyID:         keylessKeyID,
-			EnableMTLS:    c.config.TLSKeyless.EnableMTLS,
-			ClientCertPEM: c.config.TLSKeyless.ClientCertPEM,
-			ClientKeyPEM:  c.config.TLSKeyless.ClientKeyPEM,
-			RootCAPEM:     rootCAPEM,
+			Endpoint:   keylessEndpoint,
+			ServerName: keylessServerName,
+			KeyID:      keylessKeyID,
+			RootCAPEM:  rootCAPEM,
 		}, certPEM)
 		if err != nil {
 			return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)

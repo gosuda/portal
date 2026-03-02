@@ -1,10 +1,7 @@
 package sdk
 
 import (
-	"context"
-	"crypto/tls"
 	"errors"
-	"io"
 	"time"
 
 	"gosuda.org/portal/portal"
@@ -29,37 +26,21 @@ const (
 	TLSModeKeyless TLSMode = "keyless"
 )
 
-type TLSKeylessConfig struct {
-	Endpoint      string
-	ServerName    string
-	BaseDomain    string
-	KeyID         string
-	RootCAPEM     []byte
-	EnableMTLS    bool
-	ClientCertPEM []byte
-	ClientKeyPEM  []byte
-}
-
 type ClientConfig struct {
-	BootstrapServers    []string
-	Dialer              func(context.Context, string) (io.ReadWriteCloser, error)
-	HealthCheckInterval time.Duration // Interval for health checks (default: 10 seconds)
-	ReconnectMaxRetries int           // Maximum reconnection attempts (default: 0 = infinite)
-	ReconnectInterval   time.Duration // Interval between reconnection attempts (default: 5 seconds)
-	ReverseWorkers      int           // Number of reverse websocket workers per listener (default: 16)
-	ReverseDialTimeout  time.Duration // Reverse websocket dial timeout (default: 5 seconds)
+	BootstrapServers   []string
+	ReverseDialTimeout time.Duration // Reverse websocket dial timeout (default: 5 seconds)
 
-	// TLS configuration for tunnel server mode
 	TLSMode TLSMode
 
-	// Optional local certificate used in self TLS mode.
-	TLSCertificate  *tls.Certificate
+	// Self TLS mode certificate/key file paths.
 	TLSSelfCertFile string
 	TLSSelfKeyFile  string
 
-	// Optional certificate chain and remote signer config used by keyless mode.
-	TLSKeylessCertificatePEM []byte
-	TLSKeyless               TLSKeylessConfig
+	// Optional keyless overrides.
+	// If endpoint is empty, SDK uses the relay URL.
+	TLSKeylessEndpoint string
+	// If base domain is empty, SDK derives it from relay or signer endpoint.
+	TLSKeylessBaseDomain string
 }
 
 type ClientOption func(*ClientConfig)
@@ -70,48 +51,9 @@ func WithBootstrapServers(servers []string) ClientOption {
 	}
 }
 
-func WithDialer(dialer func(context.Context, string) (io.ReadWriteCloser, error)) ClientOption {
-	return func(c *ClientConfig) {
-		c.Dialer = dialer
-	}
-}
-
-func WithHealthCheckInterval(interval time.Duration) ClientOption {
-	return func(c *ClientConfig) {
-		c.HealthCheckInterval = interval
-	}
-}
-
-func WithReconnectMaxRetries(retries int) ClientOption {
-	return func(c *ClientConfig) {
-		c.ReconnectMaxRetries = retries
-	}
-}
-
-func WithReconnectInterval(interval time.Duration) ClientOption {
-	return func(c *ClientConfig) {
-		c.ReconnectInterval = interval
-	}
-}
-
-func WithReverseWorkers(workers int) ClientOption {
-	return func(c *ClientConfig) {
-		c.ReverseWorkers = workers
-	}
-}
-
 func WithReverseDialTimeout(timeout time.Duration) ClientOption {
 	return func(c *ClientConfig) {
 		c.ReverseDialTimeout = timeout
-	}
-}
-
-// WithTLSSelfCertificate enables TLS with a locally managed certificate/key pair.
-func WithTLSSelfCertificate(cert tls.Certificate) ClientOption {
-	return func(c *ClientConfig) {
-		c.TLSMode = TLSModeSelf
-		copy := cert
-		c.TLSCertificate = &copy
 	}
 }
 
@@ -124,30 +66,12 @@ func WithTLSSelfCertificateFiles(certFile, keyFile string) ClientOption {
 	}
 }
 
-// WithTLSKeyless enables TLS with a local certificate chain and remote keyless signer.
-func WithTLSKeyless(certPEM []byte, cfg TLSKeylessConfig) ClientOption {
+// WithTLSKeyless enables keyless TLS mode with optional signer overrides.
+func WithTLSKeyless(endpoint, baseDomain string) ClientOption {
 	return func(c *ClientConfig) {
 		c.TLSMode = TLSModeKeyless
-		c.TLSKeylessCertificatePEM = append([]byte(nil), certPEM...)
-		c.TLSKeyless = TLSKeylessConfig{
-			Endpoint:      cfg.Endpoint,
-			ServerName:    cfg.ServerName,
-			BaseDomain:    cfg.BaseDomain,
-			KeyID:         cfg.KeyID,
-			RootCAPEM:     append([]byte(nil), cfg.RootCAPEM...),
-			EnableMTLS:    cfg.EnableMTLS,
-			ClientCertPEM: append([]byte(nil), cfg.ClientCertPEM...),
-			ClientKeyPEM:  append([]byte(nil), cfg.ClientKeyPEM...),
-		}
-	}
-}
-
-// WithTLSKeylessBaseDomain sets a global base domain override for keyless certificate hostname validation.
-// If unset, base domain is derived per relay URL.
-func WithTLSKeylessBaseDomain(baseDomain string) ClientOption {
-	return func(c *ClientConfig) {
-		c.TLSMode = TLSModeKeyless
-		c.TLSKeyless.BaseDomain = baseDomain
+		c.TLSKeylessEndpoint = endpoint
+		c.TLSKeylessBaseDomain = baseDomain
 	}
 }
 

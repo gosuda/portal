@@ -139,14 +139,10 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	go func() {
 		var err error
 		if tlsCertFile != "" && tlsKeyFile != "" {
-			log.Info().
-				Str("addr", addr).
-				Str("cert_file", tlsCertFile).
-				Str("key_file", tlsKeyFile).
-				Msg("[server] admin https enabled")
+			log.Info().Str("addr", addr).Str("cert_file", tlsCertFile).Str("key_file", tlsKeyFile).Msg("[server] https api enabled")
 			err = srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
 		} else {
-			log.Info().Msgf("[server] http: %s", addr)
+			log.Info().Str("addr", addr).Msgf("[server] http api enabled")
 			err = srv.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
@@ -170,12 +166,11 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) (string, *portal.Lea
 	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
 	if !ok {
 		log.Debug().Str("lease_name", leaseName).Msg("[proxy] shouldProxyHTTP: lease not found")
-		// Keep existing behavior: unknown subdomain goes through proxy path and returns 404.
 		return leaseName, nil, true
 	}
 
 	// If TLS mode is no-tls, we can proxy via HTTP.
-	shouldProxy := normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) == sdk.TLSModeNoTLS
+	shouldProxy := sdk.TLSMode(entry.Lease.TLSMode) == sdk.TLSModeNoTLS
 	log.Debug().
 		Str("lease_name", leaseName).
 		Str("tls_mode", entry.Lease.TLSMode).
@@ -194,7 +189,7 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		return
 	}
 
-	if normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) != sdk.TLSModeNoTLS {
+	if sdk.TLSMode(entry.Lease.TLSMode) != sdk.TLSModeNoTLS {
 		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
 		return
 	}

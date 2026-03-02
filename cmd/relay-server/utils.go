@@ -386,7 +386,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	}
 
 	kind := "http"
-	if normalizeTLSMode(sdk.TLSMode(lease.TLSMode)) != sdk.TLSModeNoTLS {
+	if sdk.TLSMode(lease.TLSMode) != sdk.TLSModeNoTLS {
 		kind = "https"
 	}
 

@@ -64,48 +64,13 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		return
 	}
 
-	// Validate request
-	if registerReq.LeaseID == "" {
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: "lease_id is required",
-		})
-		return
-	}
-
-	if registerReq.Name == "" {
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: "name is required",
-		})
-		return
-	}
-
-	if strings.TrimSpace(registerReq.ReverseToken) == "" {
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: "reverse_token is required",
-		})
-		return
-	}
-	tlsMode := normalizeTLSMode(registerReq.TLSMode)
-	switch tlsMode {
-	case sdk.TLSModeNoTLS, sdk.TLSModeSelf, sdk.TLSModeKeyless:
-	default:
-		writeJSON(w, sdk.RegisterResponse{
-			Success: false,
-			Message: "tls_mode must be one of: no-tls, self, keyless",
-		})
-		return
-	}
-
 	// Create lease
 	lease := &portal.Lease{
 		ID:           registerReq.LeaseID,
 		Name:         registerReq.Name,
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(30 * time.Second),
-		TLSMode:      string(tlsMode),
+		TLSMode:      string(registerReq.TLSMode),
 		ReverseToken: strings.TrimSpace(registerReq.ReverseToken),
 	}
 
@@ -122,8 +87,9 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	serv.GetReverseHub().ClearDropped(registerReq.LeaseID)
 
 	// Only register SNI route for TLS leases.
-	if normalizeTLSMode(tlsMode) != sdk.TLSModeNoTLS {
-		if err := registerSNIRoute(serv, registerReq.LeaseID, registerReq.Name); err != nil {
+	if registerReq.TLSMode != sdk.TLSModeNoTLS {
+		sniName := strings.ToLower(strings.TrimSpace(registerReq.Name)) + "." + serv.BaseHost
+		if err := serv.GetSNIRouter().RegisterRoute(sniName, registerReq.LeaseID, registerReq.Name); err != nil {
 			// Keep lease and route state consistent on partial failure.
 			serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
 			writeJSON(w, sdk.RegisterResponse{
@@ -137,7 +103,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	log.Info().
 		Str("lease_id", registerReq.LeaseID).
 		Str("name", registerReq.Name).
-		Str("tls_mode", string(tlsMode)).
+		Str("tls_mode", string(registerReq.TLSMode)).
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
@@ -158,23 +124,12 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 		return
 	}
 
-	var unregisterReq struct {
-		LeaseID string `json:"lease_id"`
-	}
-
+	var unregisterReq sdk.UnregisterRequest
 	if err := json.NewDecoder(req.Body).Decode(&unregisterReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode unregistration request")
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "invalid request body",
-		})
-		return
-	}
-
-	if unregisterReq.LeaseID == "" {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "lease_id is required",
+		writeJSON(w, sdk.APIResponse{
+			Success: false,
+			Message: "invalid request body",
 		})
 		return
 	}
@@ -185,11 +140,11 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 			Str("lease_id", unregisterReq.LeaseID).
 			Msg("[Registry] Lease unregistered")
 	}
-	unregisterSNIRoute(serv, unregisterReq.LeaseID)
+	serv.GetSNIRouter().UnregisterRouteByLeaseID(unregisterReq.LeaseID)
 	serv.GetReverseHub().DropLease(unregisterReq.LeaseID)
 
-	writeJSON(w, map[string]any{
-		"success": true,
+	writeJSON(w, sdk.APIResponse{
+		Success: true,
 	})
 }
 
@@ -201,31 +156,12 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		return
 	}
 
-	var renewReq struct {
-		LeaseID      string `json:"lease_id"`
-		ReverseToken string `json:"reverse_token"`
-	}
-
+	var renewReq sdk.RenewRequest
 	if err := json.NewDecoder(req.Body).Decode(&renewReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode renewal request")
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "invalid request body",
-		})
-		return
-	}
-
-	if renewReq.LeaseID == "" {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "lease_id is required",
-		})
-		return
-	}
-	if strings.TrimSpace(renewReq.ReverseToken) == "" {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "reverse_token is required",
+		writeJSON(w, sdk.APIResponse{
+			Success: false,
+			Message: "invalid request body",
 		})
 		return
 	}
@@ -233,16 +169,16 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	// Get existing lease
 	entry, ok := serv.GetLeaseManager().GetLeaseByID(renewReq.LeaseID)
 	if !ok {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "lease not found",
+		writeJSON(w, sdk.APIResponse{
+			Success: false,
+			Message: "lease not found",
 		})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(strings.TrimSpace(renewReq.ReverseToken))) != 1 {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "unauthorized lease renewal",
+		writeJSON(w, sdk.APIResponse{
+			Success: false,
+			Message: "unauthorized lease renewal",
 		})
 		return
 	}
@@ -250,17 +186,18 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	// Update expiration
 	entry.Lease.Expires = time.Now().Add(30 * time.Second)
 	if !serv.GetLeaseManager().UpdateLease(entry.Lease) {
-		writeJSON(w, map[string]any{
-			"success": false,
-			"message": "failed to renew lease",
+		writeJSON(w, sdk.APIResponse{
+			Success: false,
+			Message: "failed to renew lease",
 		})
 		return
 	}
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
 	// Only TLS leases need SNI routes.
-	if normalizeTLSMode(sdk.TLSMode(entry.Lease.TLSMode)) != sdk.TLSModeNoTLS {
-		if err := registerSNIRoute(serv, entry.Lease.ID, entry.Lease.Name); err != nil {
+	if sdk.TLSMode(entry.Lease.TLSMode) != sdk.TLSModeNoTLS {
+		sniName := strings.ToLower(strings.TrimSpace(entry.Lease.Name)) + "." + serv.BaseHost
+		if err := serv.GetSNIRouter().RegisterRoute(sniName, entry.Lease.ID, entry.Lease.Name); err != nil {
 			log.Warn().
 				Err(err).
 				Str("lease_id", entry.Lease.ID).
@@ -269,37 +206,9 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		}
 	}
 
-	writeJSON(w, map[string]any{
-		"success": true,
+	writeJSON(w, sdk.APIResponse{
+		Success: true,
 	})
-}
-
-func registerSNIRoute(serv *portal.RelayServer, leaseID, name string) error {
-	sniRouter := serv.GetSNIRouter()
-	if sniRouter == nil {
-		return nil
-	}
-	if serv.BaseHost == "" {
-		return fmt.Errorf("base domain not configured (set PORTAL_URL)")
-	}
-	sniName := strings.ToLower(strings.TrimSpace(name)) + "." + serv.BaseHost
-	return sniRouter.RegisterRoute(sniName, leaseID, name)
-}
-
-func unregisterSNIRoute(serv *portal.RelayServer, leaseID string) {
-	sniRouter := serv.GetSNIRouter()
-	if sniRouter == nil {
-		return
-	}
-	sniRouter.UnregisterRouteByLeaseID(leaseID)
-}
-
-func normalizeTLSMode(mode sdk.TLSMode) sdk.TLSMode {
-	normalized := sdk.TLSMode(strings.ToLower(strings.TrimSpace(string(mode))))
-	if normalized == "" {
-		return sdk.TLSModeNoTLS
-	}
-	return normalized
 }
 
 // handleDomain returns the relay's base domain for TLS certificate construction.

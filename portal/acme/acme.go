@@ -295,8 +295,8 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 	}
 
 	for _, domain := range domains {
-		if strings.HasPrefix(domain, "*.") {
-			probeHost := "acme-probe." + strings.TrimPrefix(domain, "*.")
+		if after, ok := strings.CutPrefix(domain, "*."); ok {
+			probeHost := "acme-probe." + after
 			if err := cert.VerifyHostname(probeHost); err != nil {
 				return false, nil
 			}

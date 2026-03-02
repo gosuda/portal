@@ -64,7 +64,7 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 	if lease.Name == "" {
 		return nil, fmt.Errorf("lease name is required")
 	}
-	if strings.TrimSpace(lease.ReverseToken) == "" {
+	if lease.ReverseToken == "" {
 		return nil, fmt.Errorf("lease reverse token is required")
 	}
 
@@ -389,15 +389,12 @@ func (l *Listener) postJSON(path string, body any) error {
 		return nil
 	}
 
-	var apiResp struct {
-		Success *bool  `json:"success"`
-		Message string `json:"message"`
-	}
+	var apiResp APIResponse
 	if err := json.Unmarshal(data, &apiResp); err != nil {
 		// Non-JSON success payloads are treated as successful.
 		return nil
 	}
-	if apiResp.Success != nil && !*apiResp.Success {
+	if !apiResp.Success {
 		msg := strings.TrimSpace(apiResp.Message)
 		if msg == "" {
 			msg = strings.TrimSpace(string(data))

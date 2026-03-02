@@ -27,17 +27,16 @@ var staticFiles embed.FS
 var thumbnailPNG []byte
 
 var (
-	flagServerURL     string
-	flagPort          int
-	flagName          string
-	flagDesc          string
-	flagTags          string
-	flagOwner         string
-	flagHide          bool
-	flagTLSMode       string
-	flagTLSCert       string
-	flagTLSKey        string
-	flagTLSBaseDomain string
+	flagServerURL string
+	flagPort      int
+	flagName      string
+	flagDesc      string
+	flagTags      string
+	flagOwner     string
+	flagHide      bool
+	flagTLSMode   string
+	flagTLSCert   string
+	flagTLSKey    string
 )
 
 func main() {

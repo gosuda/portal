@@ -20,17 +20,17 @@ import (
 )
 
 var (
-	flagRelayURLs   string
-	flagHost        string
-	flagName        string
-	flagTLSMode     string
-	flagTLSCertFile string
-	flagTLSKeyFile  string
-	flagDescription string
-	flagTags        string
-	flagThumbnail   string
-	flagOwner       string
-	flagHide        bool
+	flagRelayURLs string
+	flagHost      string
+	flagName      string
+	flagDesc      string
+	flagTags      string
+	flagThumbnail string
+	flagOwner     string
+	flagHide      bool
+	flagTLSMode   string
+	flagTLSCert   string
+	flagTLSKey    string
 )
 
 func main() {
@@ -50,58 +50,29 @@ func main() {
 		defaultTLSMode = string(sdk.TLSModeNoTLS)
 	}
 	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
-	flag.StringVar(&flagTLSCertFile, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]")
-	flag.StringVar(&flagTLSKeyFile, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "PEM private key for --tls-mode self [env: TLS_KEY_FILE]")
+	flag.StringVar(&flagTLSCert, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]")
+	flag.StringVar(&flagTLSKey, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "PEM private key for --tls-mode self [env: TLS_KEY_FILE]")
 
-	flag.StringVar(&flagDescription, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
+	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
 	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")
 	flag.StringVar(&flagOwner, "owner", os.Getenv("APP_OWNER"), "Service owner metadata [env: APP_OWNER]")
 
 	defaultHide := os.Getenv("APP_HIDE") == "true"
 	flag.BoolVar(&flagHide, "hide", defaultHide, "Hide service from discovery (metadata) [env: APP_HIDE]")
-
 	flag.Parse()
 
-	if flagHost == "" || flagName == "" {
-		flag.Usage()
-		os.Exit(1)
-	}
-	if flagTLSMode != string(sdk.TLSModeNoTLS) &&
-		flagTLSMode != string(sdk.TLSModeSelf) &&
-		flagTLSMode != string(sdk.TLSModeKeyless) {
-		log.Error().Str("tls_mode", flagTLSMode).Msg("--tls-mode must be one of: no-tls, self, keyless")
-		os.Exit(1)
-	}
-
-	relayURLs := parseURLs(flagRelayURLs)
-	if len(relayURLs) == 0 {
-		log.Error().Msg("--relay must include at least one non-empty URL")
-		os.Exit(1)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	go func() {
-		<-sigCh
-		log.Info().Msg("Shutting down tunnel...")
-		cancel()
-	}()
-
-	if err := runServiceTunnel(ctx, relayURLs); err != nil {
+	if err := runTunnel(); err != nil {
 		log.Error().Err(err).Msg("Exited with error")
 		os.Exit(1)
 	}
-
-	log.Info().Msg("Tunnel stopped")
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string) error {
+func runTunnel() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	relayURLs := splitCSV(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
@@ -112,35 +83,32 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
 	log.Info().Msgf("  TLS Mode: %s", flagTLSMode)
 
-	var clientOpts []sdk.ClientOption
-	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
-
-	if flagTLSMode == string(sdk.TLSModeSelf) {
-		clientOpts = append(clientOpts, sdk.WithTLSSelfCertificateFiles(flagTLSCertFile, flagTLSKeyFile))
-		log.Info().
-			Str("cert_file", flagTLSCertFile).
-			Str("key_file", flagTLSKeyFile).
-			Msg("TLS: Using self-managed local certificate")
-	} else if flagTLSMode == string(sdk.TLSModeKeyless) {
-		clientOpts = append(clientOpts, sdk.WithTLSKeylessDefaults())
-		log.Info().Msg("TLS: Using keyless remote signer (SDK auto configuration)")
+	opts := []sdk.ClientOption{sdk.WithBootstrapServers(relayURLs)}
+	mode := sdk.TLSMode(flagTLSMode)
+	switch mode {
+	case sdk.TLSModeNoTLS:
+	case sdk.TLSModeSelf:
+		opts = append(opts, sdk.WithTLSSelfCertificateFiles(flagTLSCert, flagTLSKey))
+	case sdk.TLSModeKeyless:
+		opts = append(opts, sdk.WithTLSKeylessDefaults())
+	default:
+		return fmt.Errorf("unsupported tls mode: %s", flagTLSMode)
 	}
 
-	client, err := sdk.NewClient(clientOpts...)
+	client, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
 	}
 	defer client.Close()
 
-	metadataOptions := []sdk.MetadataOption{
-		sdk.WithDescription(flagDescription),
+	listener, err := client.Listen(
+		flagName,
+		sdk.WithDescription(flagDesc),
 		sdk.WithTags(splitCSV(flagTags)),
 		sdk.WithOwner(flagOwner),
 		sdk.WithThumbnail(flagThumbnail),
 		sdk.WithHide(flagHide),
-	}
-
-	listener, err := client.Listen(flagName, metadataOptions...)
+	)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", flagName, err)
 	}
@@ -165,11 +133,13 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 
 	connCount := 0
 	var connWG sync.WaitGroup
-	defer connWG.Wait()
+
+loop:
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			log.Info().Msg("[tunnel] shutting down...")
+			break loop
 		default:
 		}
 
@@ -177,7 +147,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				return nil
+				break loop
 			default:
 				log.Error().Err(err).Msg("Failed to accept connection")
 				continue
@@ -201,34 +171,21 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 			log.Info().Str("proxy", proxyType).Msg("Connection closed")
 		}(relayConn)
 	}
-}
 
-func parseURLs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
+	done := make(chan struct{})
+	go func() {
+		connWG.Wait()
+		close(done)
+	}()
 
-func splitCSV(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Warn().Msg("[tunnel] shutdown timeout, some connections still active")
 	}
-	return out
+
+	log.Info().Msg("[tunnel] shutdown complete")
+	return nil
 }
 
 var bufferPool = sync.Pool{
@@ -245,7 +202,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
 		log.Debug().
-			Str("local_addr", localAddr).
+			Str("addr", localAddr).
 			Err(err).
 			Msg("Local service unavailable")
 		if tlsEnabled {
@@ -255,7 +212,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 	}
 	defer localConn.Close()
 
-	log.Info().Str("local_addr", localAddr).Msg("Connected to local service")
+	log.Info().Str("addr", localAddr).Msg("Connected to local service")
 
 	errCh := make(chan error, 2)
 	stopCh := make(chan struct{})
@@ -320,4 +277,16 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 		"\r\n%s", len(htmlBody), htmlBody)
 	_, err := conn.Write([]byte(response))
 	return err
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

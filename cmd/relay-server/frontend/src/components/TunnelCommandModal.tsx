@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { Copy, Check, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -40,6 +40,24 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [tlsCertFile, setTlsCertFile] = useState("");
   const [tlsKeyFile, setTlsKeyFile] = useState("");
   const urlInputRef = useRef<HTMLInputElement>(null);
+  const keylessAvailable = useMemo(() => {
+    if (relayUrls.length === 0) {
+      return false;
+    }
+    return relayUrls.every((raw) => {
+      try {
+        return new URL(raw).protocol === "https:";
+      } catch {
+        return false;
+      }
+    });
+  }, [relayUrls]);
+
+  useEffect(() => {
+    if (!keylessAvailable && tlsMode === "keyless") {
+      setTlsMode("no-tls");
+    }
+  }, [keylessAvailable, tlsMode]);
 
   const addRelayUrl = (url: string) => {
     const trimmed = url.trim();
