@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/portal/sni"
 	"gosuda.org/portal/sdk"
 )
 
@@ -103,11 +105,11 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
 				Msg("[server] handling subdomain request")
-			// Check if the tunnel has TLS enabled by looking up the lease
-			if shouldProxyHTTP(r.Host, serv) {
+			leaseName, leaseEntry, shouldProxy := shouldProxyHTTP(r.Host, serv)
+			if shouldProxy {
 				// TLS is not enabled on the tunnel, proxy via HTTP
 				log.Debug().Str("host", r.Host).Msg("[server] proxying to HTTP")
-				proxyToHTTP(w, r, serv)
+				proxyToHTTP(w, r, serv, leaseName, leaseEntry)
 				return
 			}
 			// TLS is enabled, redirect to HTTPS.
@@ -124,6 +126,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	}
 	acmeManager := serv.GetACMEManager()
 	tlsCertFile, tlsKeyFile := acmeManager.TLSFiles()
+	configurePortalRootFallback(addr, serv)
 
 	go func() {
 		var err error
@@ -147,72 +150,20 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	return srv
 }
 
-func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.Signer) {
-	if signer == nil {
-		writeSignError(w, http.StatusNotFound, "keyless signer is disabled")
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		writeSignError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
-		writeSignError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
-		return
-	}
-
-	defer r.Body.Close()
-
-	var req keyless.SignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeSignError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-
-	resp, err := signer.Sign(r.Context(), &req)
-	if err != nil {
-		status := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, keyless.ErrSignerDisabled):
-			status = http.StatusNotFound
-		case errors.Is(err, keyless.ErrInvalidArgument):
-			status = http.StatusBadRequest
-		case errors.Is(err, keyless.ErrPermissionDenied):
-			status = http.StatusForbidden
-		}
-		writeSignError(w, status, err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Error().Err(err).Msg("[signer] failed to encode sign response")
-		writeSignError(w, http.StatusInternalServerError, "failed to encode response")
-	}
-}
-
-func writeSignError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(keyless.ErrorResponse{Error: message})
-}
-
 // shouldProxyHTTP checks if the request should be proxied via HTTP.
-// Returns true if TLS mode is no-tls.
-func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
+// It returns leaseName, lease entry, and whether HTTP proxying should be used.
+func shouldProxyHTTP(host string, serv *portal.RelayServer) (string, *portal.LeaseEntry, bool) {
 	leaseName, ok := leaseNameFromHost(host, defaultAppPattern(flagPortalURL))
 	if !ok {
 		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
-		return false
+		return "", nil, false
 	}
 
 	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
 	if !ok {
 		log.Debug().Str("lease_name", leaseName).Msg("[proxy] shouldProxyHTTP: lease not found")
-		return true
+		// Keep existing behavior: unknown subdomain goes through proxy path and returns 404.
+		return leaseName, nil, true
 	}
 
 	// If TLS mode is no-tls, we can proxy via HTTP.
@@ -221,18 +172,16 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) bool {
 		Str("lease_name", leaseName).
 		Str("tls_mode", entry.Lease.TLSMode).
 		Msg("[proxy] shouldProxyHTTP")
-	return shouldProxy
+	return leaseName, entry, shouldProxy
 }
 
-func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	leaseName, ok := leaseNameFromHost(r.Host, defaultAppPattern(flagPortalURL))
-	if !ok {
+func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseName string, entry *portal.LeaseEntry) {
+	if leaseName == "" {
 		http.Error(w, "invalid subdomain", http.StatusBadRequest)
 		return
 	}
 
-	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
-	if !ok {
+	if entry == nil {
 		http.Error(w, "service not found", http.StatusNotFound)
 		return
 	}
@@ -321,4 +270,90 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr strin
 		target += "?" + r.URL.RawQuery
 	}
 	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.Signer) {
+	if signer == nil {
+		writeSignError(w, http.StatusNotFound, "keyless signer is disabled")
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeSignError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+		writeSignError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var req keyless.SignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSignError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	resp, err := signer.Sign(r.Context(), &req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, keyless.ErrSignerDisabled):
+			status = http.StatusNotFound
+		case errors.Is(err, keyless.ErrInvalidArgument):
+			status = http.StatusBadRequest
+		case errors.Is(err, keyless.ErrPermissionDenied):
+			status = http.StatusForbidden
+		}
+		writeSignError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Error().Err(err).Msg("[signer] failed to encode sign response")
+		writeSignError(w, http.StatusInternalServerError, "failed to encode response")
+	}
+}
+
+func configurePortalRootFallback(adminListenAddr string, serv *portal.RelayServer) {
+	portalRootSNI := portalRootHost(flagPortalURL)
+	if portalRootSNI == "" {
+		return
+	}
+
+	apiAddr, ok := loopbackForwardAddr(adminListenAddr)
+	if !ok {
+		log.Warn().
+			Str("listen_addr", adminListenAddr).
+			Msg("[SNI] invalid admin listen address; root-domain fallback disabled")
+		return
+	}
+
+	serv.GetSNIRouter().SetNoRouteHandler(func(clientConn net.Conn, serverName string) bool {
+		if !strings.EqualFold(strings.TrimSpace(serverName), portalRootSNI) {
+			return false
+		}
+
+		upstreamConn, err := net.DialTimeout("tcp", apiAddr, 5*time.Second)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("sni", serverName).
+				Str("upstream", apiAddr).
+				Msg("[SNI] failed to forward root domain to admin/API listener")
+			clientConn.Close()
+			return true
+		}
+
+		log.Debug().
+			Str("sni", serverName).
+			Str("upstream", apiAddr).
+			Msg("[SNI] forwarding root domain to admin/API listener")
+		sni.BridgeConnections(clientConn, upstreamConn)
+		return true
+	})
 }

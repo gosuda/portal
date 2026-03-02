@@ -43,6 +43,8 @@ type Router struct {
 
 	// Callback for new connections
 	onConnection func(conn net.Conn, route *Route)
+	// Callback for SNI connections that do not match any registered route.
+	onNoRoute func(conn net.Conn, sni string) bool
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -69,6 +71,14 @@ func (r *Router) SetConnectionCallback(cb func(conn net.Conn, route *Route)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onConnection = cb
+}
+
+// SetNoRouteHandler sets the callback for unmatched SNI connections.
+// Return true when the callback handled the connection lifecycle.
+func (r *Router) SetNoRouteHandler(cb func(conn net.Conn, sni string) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onNoRoute = cb
 }
 
 // RegisterRoute registers a new route for an SNI
@@ -290,9 +300,22 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	// Clear the deadline
 	clientConn.SetReadDeadline(time.Time{})
 
+	// Wrap the connection so callbacks can still read the peeked bytes.
+	wrappedConn := &peekedConn{
+		Conn:   clientConn,
+		reader: peekedReader,
+	}
+
 	// Find the route
 	route, ok := r.GetRoute(sni)
 	if !ok {
+		r.mu.RLock()
+		onNoRoute := r.onNoRoute
+		r.mu.RUnlock()
+		if onNoRoute != nil && onNoRoute(wrappedConn, sni) {
+			return
+		}
+
 		log.Warn().
 			Str("sni", sni).
 			Str("remote", clientConn.RemoteAddr().String()).
@@ -306,12 +329,6 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 		Str("lease_id", route.LeaseID).
 		Str("remote", clientConn.RemoteAddr().String()).
 		Msg("[SNI] Route found")
-
-	// Wrap the connection so the callback can still read the peeked bytes.
-	wrappedConn := &peekedConn{
-		Conn:   clientConn,
-		reader: peekedReader,
-	}
 
 	// Call the connection callback if set
 	r.mu.RLock()

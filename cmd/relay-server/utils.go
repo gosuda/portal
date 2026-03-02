@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,8 +15,22 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/sdk"
 )
+
+func isSecureRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on")
+}
 
 // parseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
 func parseURLs(raw string) []string {
@@ -137,6 +153,51 @@ func portalHostPort(portalURL string) string {
 	return strings.ToLower(strings.TrimSpace(
 		stripWildCard(stripScheme(portalURL)),
 	))
+}
+
+// loopbackForwardAddr resolves a listen address into 127.0.0.1:<port>.
+func loopbackForwardAddr(listenAddr string) (string, bool) {
+	raw := strings.TrimSpace(listenAddr)
+	if raw == "" {
+		return "", false
+	}
+
+	port := ""
+	switch {
+	case strings.HasPrefix(raw, ":"):
+		port = strings.TrimPrefix(raw, ":")
+	case strings.Count(raw, ":") == 0:
+		port = raw
+	default:
+		_, p, err := net.SplitHostPort(raw)
+		if err != nil {
+			return "", false
+		}
+		port = p
+	}
+
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return "", false
+	}
+
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(portNum)), true
+}
+
+func portalRootHost(portalURL string) string {
+	raw := strings.TrimSpace(portalURL)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), "*.")
 }
 
 // servicePublicURL returns a service URL derived from portalURL and service name.
@@ -415,6 +476,12 @@ func writeJSON(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		log.Error().Err(err).Msg("[HTTP] Failed to encode response")
 	}
+}
+
+func writeSignError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(keyless.ErrorResponse{Error: message})
 }
 
 func decodeLeaseID(encoded string) (string, bool) {

@@ -311,12 +311,14 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Successful login
 	a.authManager.ResetFailedLogin(clientIP)
 	token := a.authManager.CreateSession()
+	secureCookie := isSecureRequest(r)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    token,
 		Path:     "/admin",
 		HttpOnly: true,
+		Secure:   secureCookie,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   86400, // 24 hours
 	})
@@ -333,6 +335,7 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		a.authManager.DeleteSession(cookie.Value)
 	}
+	secureCookie := isSecureRequest(r)
 
 	// Clear the cookie
 	http.SetCookie(w, &http.Cookie{
@@ -340,6 +343,7 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/admin",
 		HttpOnly: true,
+		Secure:   secureCookie,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1, // Delete cookie
 	})
