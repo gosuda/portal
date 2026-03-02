@@ -27,29 +27,30 @@ var staticFiles embed.FS
 var thumbnailPNG []byte
 
 var (
-	flagServerURL string
-	flagPort      int
-	flagName      string
-	flagDesc      string
-	flagTags      string
-	flagOwner     string
-	flagHide      bool
-	flagTLSMode   string
-	flagTLSCert   string
-	flagTLSKey    string
+	flagServerURL     string
+	flagPort          int
+	flagName          string
+	flagDesc          string
+	flagTags          string
+	flagOwner         string
+	flagHide          bool
+	flagTLSMode       string
+	flagTLSCert       string
+	flagTLSKey        string
+	flagTLSBaseDomain string
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "https://gosunuts.xyz", "relay API URL (http/https)")
+	flag.StringVar(&flagServerURL, "server-url", "http://localhost:4017", "relay API URL (http/https)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
-	defaultTLSMode := strings.TrimSpace(os.Getenv("TLS_MODE"))
+	defaultTLSMode := os.Getenv("TLS_MODE")
 	if defaultTLSMode == "" {
-		defaultTLSMode = string(sdk.TLSModeKeyless)
+		defaultTLSMode = string(sdk.TLSModeNoTLS)
 	}
 	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
 	flag.StringVar(&flagTLSCert, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "certificate chain PEM file for --tls-mode self [env: TLS_CERT_FILE]")
@@ -65,17 +66,12 @@ func main() {
 func runDemo() error {
 	// 1) Create SDK client and connect to relay(s)
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers([]string{flagServerURL})}
-	mode := sdk.TLSMode(strings.ToLower(strings.TrimSpace(flagTLSMode)))
+	mode := sdk.TLSMode(flagTLSMode)
 	switch mode {
 	case sdk.TLSModeNoTLS:
 	case sdk.TLSModeSelf:
 		opts = append(opts, sdk.WithTLSSelfCertificateFiles(flagTLSCert, flagTLSKey))
 	case sdk.TLSModeKeyless:
-		if certFile := strings.TrimSpace(flagTLSCert); certFile != "" {
-			log.Warn().
-				Str("cert_file", certFile).
-				Msg("Ignoring --tls-cert-file in keyless mode (SDK auto configuration only)")
-		}
 		opts = append(opts, sdk.WithTLSKeylessDefaults())
 	default:
 		return fmt.Errorf("unsupported tls mode: %s", flagTLSMode)

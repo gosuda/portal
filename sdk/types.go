@@ -32,6 +32,7 @@ const (
 type TLSKeylessConfig struct {
 	Endpoint      string
 	ServerName    string
+	BaseDomain    string
 	KeyID         string
 	RootCAPEM     []byte
 	EnableMTLS    bool
@@ -131,12 +132,22 @@ func WithTLSKeyless(certPEM []byte, cfg TLSKeylessConfig) ClientOption {
 		c.TLSKeyless = TLSKeylessConfig{
 			Endpoint:      cfg.Endpoint,
 			ServerName:    cfg.ServerName,
+			BaseDomain:    cfg.BaseDomain,
 			KeyID:         cfg.KeyID,
 			RootCAPEM:     append([]byte(nil), cfg.RootCAPEM...),
 			EnableMTLS:    cfg.EnableMTLS,
 			ClientCertPEM: append([]byte(nil), cfg.ClientCertPEM...),
 			ClientKeyPEM:  append([]byte(nil), cfg.ClientKeyPEM...),
 		}
+	}
+}
+
+// WithTLSKeylessBaseDomain sets a global base domain override for keyless certificate hostname validation.
+// If unset, base domain is derived per relay URL.
+func WithTLSKeylessBaseDomain(baseDomain string) ClientOption {
+	return func(c *ClientConfig) {
+		c.TLSMode = TLSModeKeyless
+		c.TLSKeyless.BaseDomain = baseDomain
 	}
 }
 

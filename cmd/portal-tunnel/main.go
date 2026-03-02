@@ -45,7 +45,7 @@ func main() {
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
 
-	defaultTLSMode := strings.ToLower(strings.TrimSpace(os.Getenv("TLS_MODE")))
+	defaultTLSMode := os.Getenv("TLS_MODE")
 	if defaultTLSMode == "" {
 		defaultTLSMode = string(sdk.TLSModeNoTLS)
 	}
@@ -67,7 +67,6 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	flagTLSMode = strings.ToLower(strings.TrimSpace(flagTLSMode))
 	if flagTLSMode != string(sdk.TLSModeNoTLS) &&
 		flagTLSMode != string(sdk.TLSModeSelf) &&
 		flagTLSMode != string(sdk.TLSModeKeyless) {
@@ -111,36 +110,20 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	log.Info().Msg("Starting Portal Tunnel...")
 	log.Info().Msgf("  Local:    %s", flagHost)
 	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	tlsEnabled := flagTLSMode != string(sdk.TLSModeNoTLS)
-	log.Info().Msgf("  TLS:      %v", tlsEnabled)
-	if tlsEnabled {
-		log.Info().Msgf("  TLS Mode: %s", flagTLSMode)
-	}
+	log.Info().Msgf("  TLS Mode: %s", flagTLSMode)
 
 	var clientOpts []sdk.ClientOption
 	clientOpts = append(clientOpts, sdk.WithBootstrapServers(relayURLs))
 
-	if tlsEnabled {
-		if flagTLSMode == string(sdk.TLSModeSelf) {
-			certFile := strings.TrimSpace(flagTLSCertFile)
-			keyFile := strings.TrimSpace(flagTLSKeyFile)
-			clientOpts = append(clientOpts, sdk.WithTLSSelfCertificateFiles(certFile, keyFile))
-			log.Info().
-				Str("cert_file", certFile).
-				Str("key_file", keyFile).
-				Msg("TLS: Using self-managed local certificate")
-		} else if flagTLSMode == string(sdk.TLSModeKeyless) {
-			certFile := strings.TrimSpace(flagTLSCertFile)
-			if certFile != "" {
-				log.Warn().
-					Str("cert_file", certFile).
-					Msg("Ignoring --tls-cert-file in keyless mode (SDK auto configuration only)")
-			}
-			clientOpts = append(clientOpts, sdk.WithTLSKeylessDefaults())
-			log.Info().Msg("TLS: Using keyless remote signer (SDK auto configuration)")
-		} else {
-			return fmt.Errorf("unsupported TLS mode: %s", flagTLSMode)
-		}
+	if flagTLSMode == string(sdk.TLSModeSelf) {
+		clientOpts = append(clientOpts, sdk.WithTLSSelfCertificateFiles(flagTLSCertFile, flagTLSKeyFile))
+		log.Info().
+			Str("cert_file", flagTLSCertFile).
+			Str("key_file", flagTLSKeyFile).
+			Msg("TLS: Using self-managed local certificate")
+	} else if flagTLSMode == string(sdk.TLSModeKeyless) {
+		clientOpts = append(clientOpts, sdk.WithTLSKeylessDefaults())
+		log.Info().Msg("TLS: Using keyless remote signer (SDK auto configuration)")
 	}
 
 	client, err := sdk.NewClient(clientOpts...)
@@ -174,7 +157,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
 		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
-	if tlsEnabled {
+	if flagTLSMode != string(sdk.TLSModeNoTLS) {
 		log.Info().Msg("- TLS:      Enabled")
 	}
 
@@ -207,6 +190,7 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
+			tlsEnabled := flagTLSMode != string(sdk.TLSModeNoTLS)
 			proxyType := "TCP"
 			if tlsEnabled {
 				proxyType = "TLS→TCP"

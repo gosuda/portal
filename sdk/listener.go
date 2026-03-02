@@ -488,3 +488,99 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	u.Fragment = ""
 	return u.String(), nil
 }
+
+type multiRelayListener struct {
+	leaseID   string
+	listeners []net.Listener
+
+	acceptCh chan net.Conn
+	stopCh   chan struct{}
+
+	closeOnce sync.Once
+	wg        sync.WaitGroup
+}
+
+func newMultiRelayListener(leaseID string, listeners []net.Listener) *multiRelayListener {
+	m := &multiRelayListener{
+		leaseID:   leaseID,
+		listeners: listeners,
+		acceptCh:  make(chan net.Conn, 128),
+		stopCh:    make(chan struct{}),
+	}
+
+	for i, listener := range listeners {
+		m.wg.Add(1)
+		go m.forwardAccept(i, listener)
+	}
+
+	return m
+}
+
+func (m *multiRelayListener) forwardAccept(index int, listener net.Listener) {
+	defer m.wg.Done()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			select {
+			case <-m.stopCh:
+				return
+			default:
+			}
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Debug().
+				Err(err).
+				Int("relay_index", index).
+				Msg("[SDK] relay listener accept failed")
+			continue
+		}
+
+		select {
+		case <-m.stopCh:
+			_ = conn.Close()
+			return
+		case m.acceptCh <- conn:
+		}
+	}
+}
+
+func (m *multiRelayListener) Accept() (net.Conn, error) {
+	select {
+	case <-m.stopCh:
+		return nil, net.ErrClosed
+	case conn := <-m.acceptCh:
+		if conn == nil {
+			return nil, net.ErrClosed
+		}
+		return conn, nil
+	}
+}
+
+func (m *multiRelayListener) Close() error {
+	var retErr error
+	m.closeOnce.Do(func() {
+		close(m.stopCh)
+
+		for _, listener := range m.listeners {
+			if err := listener.Close(); err != nil && retErr == nil {
+				retErr = err
+			}
+		}
+
+		m.wg.Wait()
+	})
+	return retErr
+}
+
+func (m *multiRelayListener) Addr() net.Addr {
+	if len(m.listeners) > 0 {
+		return m.listeners[0].Addr()
+	}
+	return &net.TCPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0}
+}
+
+func (m *multiRelayListener) LeaseID() string {
+	return m.leaseID
+}

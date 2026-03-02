@@ -234,28 +234,6 @@ func servicePublicURL(portalURL, serviceName string) string {
 	return fmt.Sprintf("%s://%s.%s", scheme, serviceName, host)
 }
 
-func extractBaseDomain(rawURL string) string {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return ""
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + trimmed
-	}
-
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-
-	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
-}
-
 func portalRootHost(portalURL string) string {
 	raw := strings.TrimSpace(portalURL)
 	if raw == "" {

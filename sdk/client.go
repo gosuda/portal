@@ -5,46 +5,26 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gosuda/keyless_tls/keyless"
-
+	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/keyless"
 )
-
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
-
-// isURLSafeName checks if a name contains only URL-safe characters.
-func isURLSafeName(name string) bool {
-	if name == "" {
-		return true
-	}
-	return urlSafeNameRegex.MatchString(name)
-}
 
 // Client is a minimal client for lease registration with the relay.
 type Client struct {
 	mu     sync.Mutex
 	config *ClientConfig
-
-	leases map[string]*portal.Lease
-
-	stopch    chan struct{}
-	stopOnce  sync.Once
-	waitGroup sync.WaitGroup
 }
 
 // NewClient creates a new SDK client.
@@ -60,11 +40,17 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 		o(config)
 	}
 
-	return &Client{
-		config: config,
-		leases: make(map[string]*portal.Lease),
-		stopch: make(chan struct{}),
-	}, nil
+	return &Client{config: config}, nil
+}
+
+var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
+
+// isURLSafeName checks if a name contains only URL-safe characters.
+func isURLSafeName(name string) bool {
+	if name == "" {
+		return true
+	}
+	return urlSafeNameRegex.MatchString(name)
 }
 
 // Listen creates a listener and registers it with the relay.
@@ -74,7 +60,6 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Validate name
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
 	}
@@ -82,17 +67,82 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		return nil, ErrInvalidName
 	}
 
+	relayAddrs, err := normalizeRelayAPIURLs(c.config.BootstrapServers)
+	if err != nil {
+		return nil, err
+	}
+
+	lease, err := c.newLease(name, options...)
+	if err != nil {
+		return nil, err
+	}
+
+	listeners := make([]net.Listener, 0, len(relayAddrs))
+	for _, relayAddr := range relayAddrs {
+		tlsConfig, listenerCloseFns, tlsErr := c.buildTLSConfig(relayAddr, name)
+		if tlsErr != nil {
+			for _, l := range listeners {
+				_ = l.Close()
+			}
+			return nil, tlsErr
+		}
+
+		leaseCopy := *lease
+		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, c.config.ReverseWorkers, c.config.ReverseDialTimeout, listenerCloseFns...)
+		if listenerErr != nil {
+			for _, closeFn := range listenerCloseFns {
+				if closeFn != nil {
+					closeFn()
+				}
+			}
+			for _, l := range listeners {
+				_ = l.Close()
+			}
+			return nil, fmt.Errorf("create relay listener: %w", listenerErr)
+		}
+
+		if startErr := listener.Start(); startErr != nil {
+			_ = listener.Close()
+			for _, l := range listeners {
+				_ = l.Close()
+			}
+			return nil, fmt.Errorf("start relay listener: %w", startErr)
+		}
+
+		listeners = append(listeners, listener)
+	}
+
+	var listener net.Listener
+	if len(listeners) == 1 {
+		listener = listeners[0]
+	} else {
+		listener = newMultiRelayListener(lease.ID, listeners)
+	}
+
+	if c.config.TLSMode != TLSModeNoTLS {
+		log.Info().
+			Str("lease_id", lease.ID).
+			Str("name", name).
+			Bool("tls", true).
+			Str("tls_mode", string(c.config.TLSMode)).
+			Msg("[SDK] Lease registered with TLS")
+	} else {
+		log.Info().
+			Str("lease_id", lease.ID).
+			Str("name", name).
+			Str("tls_mode", string(TLSModeNoTLS)).
+			Msg("[SDK] Lease registered")
+	}
+
+	return listener, nil
+}
+
+func (c *Client) newLease(name string, options ...MetadataOption) (*portal.Lease, error) {
 	var metadata portal.Metadata
 	for _, option := range options {
 		option(&metadata)
 	}
 
-	relayAddr, err := firstRelayAPIURL(c.config.BootstrapServers)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create lease
 	reverseToken, err := generateToken(16)
 	if err != nil {
 		return nil, fmt.Errorf("generate reverse token: %w", err)
@@ -112,157 +162,163 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		},
 		Expires: time.Now().Add(30 * time.Second),
 	}
+	return lease, nil
+}
 
-	// Build TLS config if enabled
-	var tlsConfig *tls.Config
-	var listenerCloseFns []func()
-	tlsMode := c.config.TLSMode
-	tlsEnabled := tlsMode != TLSModeNoTLS
-	if tlsEnabled {
-		switch tlsMode {
-		case TLSModeSelf:
-			var cert tls.Certificate
-			if c.config.TLSCertificate != nil {
-				cert = *c.config.TLSCertificate
-			} else {
-				certFile := strings.TrimSpace(c.config.TLSSelfCertFile)
-				keyFile := strings.TrimSpace(c.config.TLSSelfKeyFile)
-				if certFile == "" || keyFile == "" {
-					return nil, fmt.Errorf("self TLS mode requires certificate/key (WithTLSSelfCertificate or WithTLSSelfCertificateFiles)")
-				}
-				certPair, err := tls.LoadX509KeyPair(certFile, keyFile)
-				if err != nil {
-					return nil, fmt.Errorf("load self TLS certificate files: %w", err)
-				}
-				cert = certPair
-			}
-			tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-			tlsConfig.NextProtos = []string{"http/1.1"}
-			tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return &cert, nil
-			}
-		case TLSModeKeyless:
-			keylessEndpoint := strings.TrimSpace(c.config.TLSKeyless.Endpoint)
-			if keylessEndpoint == "" {
-				keylessEndpoint = strings.TrimSpace(relayAddr)
-			}
-			keylessKeyID := strings.TrimSpace(c.config.TLSKeyless.KeyID)
-			if keylessKeyID == "" {
-				keylessKeyID = "relay-cert"
-			}
-			keylessServerName := strings.TrimSpace(c.config.TLSKeyless.ServerName)
-			if keylessServerName == "" {
-				if parsed, err := url.Parse(keylessEndpoint); err == nil {
-					keylessServerName = parsed.Hostname()
-				}
-			}
+func ExtractBaseDomain(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "https://" + trimmed
+	}
 
-			certPEM, rootCAPEM, err := resolveKeylessMaterials(
-				context.Background(),
-				keylessEndpoint,
-				keylessServerName,
-				c.config.TLSKeylessCertificatePEM,
-				c.config.TLSKeyless.RootCAPEM,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("prepare keyless materials: %w", err)
-			}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
 
-			baseDomain, err := fetchBaseDomain(context.Background(), relayAddr)
-			if err != nil {
-				return nil, fmt.Errorf("get base domain for keyless mode: %w", err)
-			}
-			domain := strings.ToLower(name + "." + baseDomain)
-			_, leaf, err := parseCertificateChainPEM(certPEM)
-			if err != nil {
-				return nil, fmt.Errorf("parse keyless certificate chain: %w", err)
-			}
-			if err := leaf.VerifyHostname(domain); err != nil {
-				return nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, err)
-			}
+	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
 
-			remoteSigner, err := keyless.NewRemoteSigner(keyless.RemoteSignerConfig{
-				Endpoint:      keylessEndpoint,
-				ServerName:    keylessServerName,
-				KeyID:         keylessKeyID,
-				EnableMTLS:    c.config.TLSKeyless.EnableMTLS,
-				ClientCertPEM: c.config.TLSKeyless.ClientCertPEM,
-				ClientKeyPEM:  c.config.TLSKeyless.ClientKeyPEM,
-				RootCAPEM:     rootCAPEM,
-			}, certPEM)
-			if err != nil {
-				return nil, fmt.Errorf("create keyless remote signer: %w", err)
-			}
-			listenerCloseFns = append(listenerCloseFns, func() {
-				_ = remoteSigner.Close()
-			})
+func normalizeRelayAPIURLs(bootstrapServers []string) ([]string, error) {
+	if len(bootstrapServers) == 0 {
+		return nil, ErrNoAvailableRelay
+	}
 
-			tlsConfig, err = keyless.NewServerTLSConfig(keyless.ServerTLSConfig{
-				CertPEM: certPEM,
-				Signer:  remoteSigner,
-			})
-			if err != nil {
-				_ = remoteSigner.Close()
-				return nil, fmt.Errorf("create keyless TLS config: %w", err)
-			}
-			tlsConfig.NextProtos = []string{"http/1.1"}
-		default:
-			return nil, fmt.Errorf("unsupported TLS mode: %s", tlsMode)
+	seen := make(map[string]struct{}, len(bootstrapServers))
+	out := make([]string, 0, len(bootstrapServers))
+	for _, relay := range bootstrapServers {
+		normalized, err := normalizeRelayAPIURL(relay)
+		if err != nil {
+			continue
 		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
 	}
 
-	listener, err := NewListener(relayAddr, lease, tlsConfig, c.config.ReverseWorkers, c.config.ReverseDialTimeout, listenerCloseFns...)
-	if err != nil {
-		return nil, fmt.Errorf("create relay listener: %w", err)
+	if len(out) == 0 {
+		return nil, ErrNoAvailableRelay
+	}
+	return out, nil
+}
+
+func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
+	tlsMode := c.config.TLSMode
+	if tlsMode == TLSModeNoTLS {
+		return nil, nil, nil
 	}
 
-	// Register lease with relay BEFORE requesting certificate
-	if err := listener.Start(); err != nil {
-		return nil, fmt.Errorf("start relay listener: %w", err)
+	switch tlsMode {
+	case TLSModeSelf:
+		var cert tls.Certificate
+		var err error
+		if c.config.TLSCertificate != nil {
+			cert = *c.config.TLSCertificate
+		} else {
+			if c.config.TLSSelfCertFile == "" || c.config.TLSSelfKeyFile == "" {
+				return nil, nil, fmt.Errorf("self TLS mode requires certificate/key (WithTLSSelfCertificate or WithTLSSelfCertificateFiles)")
+			}
+			cert, err = tls.LoadX509KeyPair(c.config.TLSSelfCertFile, c.config.TLSSelfKeyFile)
+			if err != nil {
+				return nil, nil, fmt.Errorf("load self TLS certificate files: %w", err)
+			}
+		}
+
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		tlsConfig.NextProtos = []string{"http/1.1"}
+		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return &cert, nil
+		}
+		return tlsConfig, nil, nil
+
+	case TLSModeKeyless:
+		keylessEndpoint := c.config.TLSKeyless.Endpoint
+		if keylessEndpoint == "" {
+			keylessEndpoint = relayAddr
+		}
+
+		keylessKeyID := c.config.TLSKeyless.KeyID
+		if keylessKeyID == "" {
+			keylessKeyID = "relay-cert"
+		}
+
+		keylessServerName := c.config.TLSKeyless.ServerName
+		if keylessServerName == "" {
+			if parsed, err := url.Parse(keylessEndpoint); err == nil {
+				keylessServerName = parsed.Hostname()
+			}
+		}
+
+		certPEM, rootCAPEM, err := keyless.ResolveMaterials(
+			context.Background(),
+			keylessEndpoint,
+			keylessServerName,
+			c.config.TLSKeylessCertificatePEM,
+			c.config.TLSKeyless.RootCAPEM,
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
+		}
+
+		baseDomain := c.config.TLSKeyless.BaseDomain
+		if baseDomain == "" {
+			baseDomain = ExtractBaseDomain(relayAddr)
+		}
+		if baseDomain == "" {
+			baseDomain = ExtractBaseDomain(keylessEndpoint)
+		}
+		if baseDomain == "" {
+			return nil, nil, fmt.Errorf("keyless base domain is required for relay %s", relayAddr)
+		}
+		domain := leaseName + "." + baseDomain
+		if err := keyless.VerifyCertificateHostname(certPEM, domain); err != nil {
+			return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, err)
+		}
+
+		remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
+			Endpoint:      keylessEndpoint,
+			ServerName:    keylessServerName,
+			KeyID:         keylessKeyID,
+			EnableMTLS:    c.config.TLSKeyless.EnableMTLS,
+			ClientCertPEM: c.config.TLSKeyless.ClientCertPEM,
+			ClientKeyPEM:  c.config.TLSKeyless.ClientKeyPEM,
+			RootCAPEM:     rootCAPEM,
+		}, certPEM)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
+		}
+
+		tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
+			CertPEM: certPEM,
+			Signer:  remoteSigner,
+		})
+		if err != nil {
+			_ = remoteSigner.Close()
+			return nil, nil, fmt.Errorf("create keyless TLS config: %w", err)
+		}
+		tlsConfig.NextProtos = []string{"http/1.1"}
+
+		return tlsConfig, []func(){
+			func() { _ = remoteSigner.Close() },
+		}, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported TLS mode: %s", tlsMode)
 	}
-
-	c.leases[lease.ID] = lease
-
-	if tlsEnabled {
-		log.Info().
-			Str("lease_id", lease.ID).
-			Str("name", name).
-			Bool("tls", true).
-			Str("tls_mode", string(tlsMode)).
-			Msg("[SDK] Lease registered with TLS")
-	} else {
-		log.Info().
-			Str("lease_id", lease.ID).
-			Str("name", name).
-			Str("tls_mode", string(TLSModeNoTLS)).
-			Msg("[SDK] Lease registered")
-	}
-
-	return listener, nil
 }
 
 // Close closes the client.
 func (c *Client) Close() error {
-	c.stopOnce.Do(func() {
-		close(c.stopch)
-	})
-	c.waitGroup.Wait()
 	return nil
-}
-
-func firstRelayAPIURL(bootstrapServers []string) (string, error) {
-	if len(bootstrapServers) == 0 {
-		return "", ErrNoAvailableRelay
-	}
-
-	for _, relay := range bootstrapServers {
-		normalized, err := normalizeRelayAPIURL(relay)
-		if err == nil {
-			return normalized, nil
-		}
-	}
-
-	return "", ErrNoAvailableRelay
 }
 
 // generateID generates a unique ID for the lease.
@@ -281,168 +337,4 @@ func generateToken(size int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-func parseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, error) {
-	if len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("certificate PEM is empty")
-	}
-	var chain [][]byte
-	rest := certPEM
-	for {
-		block, next := pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type == "CERTIFICATE" {
-			chain = append(chain, block.Bytes)
-		}
-		rest = next
-	}
-	if len(chain) == 0 {
-		return nil, nil, fmt.Errorf("no certificate blocks found")
-	}
-	leaf, err := x509.ParseCertificate(chain[0])
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse leaf certificate: %w", err)
-	}
-	return chain, leaf, nil
-}
-
-func fetchBaseDomain(ctx context.Context, relayAPIURL string) (string, error) {
-	endpoint := strings.TrimSuffix(strings.TrimSpace(relayAPIURL), "/") + "/sdk/domain"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	var domainResp struct {
-		Success    bool   `json:"success"`
-		BaseDomain string `json:"base_domain"`
-		Message    string `json:"message"`
-	}
-	if err := json.Unmarshal(respBody, &domainResp); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-	if !domainResp.Success {
-		msg := strings.TrimSpace(domainResp.Message)
-		if msg == "" {
-			msg = "base domain not configured"
-		}
-		return "", fmt.Errorf("get base domain: %s", msg)
-	}
-	return domainResp.BaseDomain, nil
-}
-
-func resolveKeylessMaterials(
-	ctx context.Context,
-	keylessEndpoint string,
-	keylessServerName string,
-	inlineCertPEM []byte,
-	inlineRootCAPEM []byte,
-) ([]byte, []byte, error) {
-	certPEM := append([]byte(nil), inlineCertPEM...)
-	rootCAPEM := append([]byte(nil), inlineRootCAPEM...)
-
-	// If both are explicitly provided, no need for cache or fetch
-	if len(certPEM) > 0 && len(rootCAPEM) > 0 {
-		return certPEM, rootCAPEM, nil
-	}
-
-	// Fetch from endpoint
-	chainFromEndpoint, err := fetchEndpointCertificateChain(ctx, keylessEndpoint, keylessServerName)
-	if err != nil && len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("auto-discover certificate chain from signer endpoint: %w", err)
-	}
-	if err != nil {
-		log.Debug().Err(err).Msg("[SDK] Failed to fetch cert from endpoint, using inline materials")
-	}
-
-	if len(certPEM) == 0 {
-		certPEM = chainFromEndpoint
-	}
-	if len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("keyless certificate chain is required")
-	}
-
-	if len(rootCAPEM) == 0 && len(chainFromEndpoint) > 0 {
-		rootCAPEM = append([]byte(nil), chainFromEndpoint...)
-	}
-	if len(rootCAPEM) == 0 {
-		rootCAPEM = append([]byte(nil), certPEM...)
-	}
-
-	return certPEM, rootCAPEM, nil
-}
-
-func fetchEndpointCertificateChain(ctx context.Context, endpoint string, serverName string) ([]byte, error) {
-	raw := strings.TrimSpace(endpoint)
-	if raw == "" {
-		return nil, fmt.Errorf("endpoint is required")
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse endpoint URL: %w", err)
-	}
-	if strings.EqualFold(u.Scheme, "http") {
-		return nil, fmt.Errorf("http signer endpoint does not expose TLS certificate chain (use https endpoint)")
-	}
-
-	host := u.Hostname()
-	if host == "" {
-		return nil, fmt.Errorf("endpoint hostname is empty")
-	}
-	port := u.Port()
-	if port == "" {
-		port = "443"
-	}
-	if strings.TrimSpace(serverName) == "" {
-		serverName = host
-	}
-
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	rawConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-	if err != nil {
-		return nil, fmt.Errorf("dial signer endpoint: %w", err)
-	}
-
-	tlsConn := tls.Client(rawConn, &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ServerName:         serverName,
-		InsecureSkipVerify: true,
-	})
-	defer tlsConn.Close()
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("TLS handshake with signer endpoint: %w", err)
-	}
-
-	peerCerts := tlsConn.ConnectionState().PeerCertificates
-	if len(peerCerts) == 0 {
-		return nil, fmt.Errorf("no peer certificates from signer endpoint")
-	}
-
-	var chainPEM []byte
-	for _, cert := range peerCerts {
-		chainPEM = append(chainPEM, pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.Raw,
-		})...)
-	}
-	return chainPEM, nil
 }

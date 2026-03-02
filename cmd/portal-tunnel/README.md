@@ -53,6 +53,7 @@ Options:
         --tls-mode        TLS mode: no-tls, self, or keyless [default: no-tls] [env: TLS_MODE]
         --tls-cert-file   PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]
         --tls-key-file    PEM private key for --tls-mode self [env: TLS_KEY_FILE]
+        --tls-base-domain Base domain for keyless certificate validation (e.g., example.com) [env: TLS_BASE_DOMAIN]
         --description     Service description metadata  [env: APP_DESCRIPTION]
         --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
         --thumbnail       Service thumbnail URL metadata  [env: APP_THUMBNAIL]
@@ -80,6 +81,7 @@ export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
 export TLS_MODE=keyless
+export TLS_BASE_DOMAIN=example.com
 
 ./bin/portal-tunnel
 ```
@@ -104,6 +106,7 @@ export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
 export TLS_MODE=keyless
+export TLS_BASE_DOMAIN=example.com
 
 ./bin/portal-tunnel
 ```

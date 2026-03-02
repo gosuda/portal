@@ -90,6 +90,7 @@ Portal uses environment variables for domain and TLS configuration:
 | `TLS_MODE` | `no-tls`, `self`, or `keyless` |
 | `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
 | `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
+| `TLS_BASE_DOMAIN` | Base domain used for keyless certificate hostname validation (keyless mode) |
 
 ### Domain Derivation
 
@@ -168,4 +169,9 @@ CI/CD:
 
 Verbalized sampling:
 - For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
+
+Refactoring discipline:
+- Do not stack repeated "minimal patches" that leave logic fragmented across files.
+- For domain/URL parsing and normalization, keep a single source of truth and make all callers use it.
+- If a flow is being refactored (e.g., SDK client/listener TLS domain handling), complete consolidation in the same change instead of leaving temporary split logic.
 

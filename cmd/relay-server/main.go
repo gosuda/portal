@@ -17,6 +17,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/sni"
+	"gosuda.org/portal/sdk"
 )
 
 const (
@@ -89,7 +90,7 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	baseHost := extractBaseDomain(cfg.PortalURL)
+	baseHost := sdk.ExtractBaseDomain(cfg.PortalURL)
 	rootSNI := portalRootHost(cfg.PortalURL)
 	apiUpstreamAddr := loopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
 	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, baseHost, cfg.KeylessDir, cfg.CloudflareToken)

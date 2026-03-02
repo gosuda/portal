@@ -52,22 +52,6 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 	}
 }
 
-func TestFirstRelayAPIURL(t *testing.T) {
-	t.Parallel()
-
-	got, err := firstRelayAPIURL([]string{"invalid://relay", "http://localhost:4017"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "http://localhost:4017" {
-		t.Fatalf("unexpected relay URL: got %q", got)
-	}
-
-	if _, err := firstRelayAPIURL(nil); err == nil {
-		t.Fatal("expected error with no bootstrap servers")
-	}
-}
-
 func TestRelayConnectURL(t *testing.T) {
 	t.Parallel()
 
