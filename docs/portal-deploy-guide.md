@@ -9,7 +9,9 @@ Portal uses SNI-based TLS passthrough: the relay routes TLS by SNI to tunnel bac
 TLS certificate mode:
 - `self`: tunnel uses locally managed certificate and key files.
 - `keyless`: tunnel delegates TLS signing to relay keyless signer (`/v1/sign`). Relay uses `KEYLESS_DIR` and can auto-issue key/cert via ACME DNS-01 when `CLOUDFLARE_TOKEN` is set.
-  When `KEYLESS_DIR/fullchain.pem` and `KEYLESS_DIR/privatekey.pem` exist, relay admin/API on `--adminport` is served over HTTPS automatically.
+  Relay uses one unified cert/key pair at `KEYLESS_DIR/fullchain.pem` and `KEYLESS_DIR/privatekey.pem`.
+  The certificate covers both `*.example.com` and `example.com` (SAN), and relay admin/API on `--adminport` is served over HTTPS automatically.
+  Admin/API HTTPS is served as HTTP/1.1 only.
 
 ```
 Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Backend (TLS mode)
@@ -81,7 +83,7 @@ https://myapp.example.com
 | `BOOTSTRAP_URIS` | (derived) | Relay API URLs |
 | `ADMIN_SECRET_KEY` | (auto-generated) | Admin authentication key |
 | `SNI_PORT` | `443` | SNI router port |
-| `KEYLESS_DIR` | `/etc/portal/keyless` | Relay keyless materials directory (`wildcard-privatekey.pem` for signer, `fullchain.pem` + `privatekey.pem` for admin/API HTTPS) |
+| `KEYLESS_DIR` | `/etc/portal/keyless` | Relay keyless materials directory (`fullchain.pem` + `privatekey.pem` used for signer and admin/API HTTPS, HTTP/1.1 only) |
 | `CLOUDFLARE_TOKEN` | (empty) | Cloudflare DNS API token used for ACME DNS-01 auto issuance |
 
 ## docker-compose.yml
@@ -154,7 +156,7 @@ portal-tunnel \
 - Auto-discovery expects an HTTPS signer endpoint.
 - External signer API must return TLS signature responses for the requested digest.
 - Relay keyless signer key path is configured by `KEYLESS_DIR`.
-- When key file is missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues key/cert using ACME DNS-01.
+- When key/cert files are missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues a unified certificate (`*.example.com` + `example.com`) via ACME DNS-01.
 
 Signer API request/response example:
 

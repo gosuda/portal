@@ -106,7 +106,7 @@ Portal uses environment variables for domain and TLS configuration:
    - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
    - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
    - Auto-discovery requires an HTTPS signer endpoint.
-   - Relay signer key comes from `KEYLESS_DIR/wildcard-privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
+   - Relay signer key comes from `KEYLESS_DIR/privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
 
 See `docs/portal-deploy-guide.md` for full deployment documentation.
 

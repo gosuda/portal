@@ -25,13 +25,11 @@ import (
 )
 
 const (
-	fullChainFileName         = "fullchain.pem"
-	keyFileName               = "privatekey.pem"
-	wildcardFullChainFileName = "wildcard-fullchain.pem"
-	wildcardKeyFileName       = "wildcard-privatekey.pem"
-	accountKeyFileName        = "acme-account.key"
-	registrationFileName      = "acme-registration.json"
-	defaultACMEEmailPrefix    = "acme@"
+	fullChainFileName      = "fullchain.pem"
+	keyFileName            = "privatekey.pem"
+	accountKeyFileName     = "acme-account.key"
+	registrationFileName   = "acme-registration.json"
+	defaultACMEEmailPrefix = "acme@"
 )
 
 type certTarget struct {
@@ -85,7 +83,7 @@ func (m *AcmeManager) keyDir() string {
 	return m.cfg.KeyDir
 }
 
-// SigningKeyFile returns the fixed wildcard key path under configured key directory.
+// SigningKeyFile returns the unified signer key path under configured key directory.
 func (m *AcmeManager) SigningKeyFile() string {
 	if m == nil {
 		return ""
@@ -94,7 +92,7 @@ func (m *AcmeManager) SigningKeyFile() string {
 	if keyDir == "" {
 		return ""
 	}
-	return wildcardKeyPath(keyDir)
+	return keyPath(keyDir)
 }
 
 type acmeUser struct {
@@ -146,11 +144,7 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	wildcardTarget, ok := certTargetByName(targets, "wildcard")
-	if !ok {
-		return "", errors.New("missing wildcard ACME target")
-	}
-	signerKeyFile := wildcardTarget.KeyFile
+	signerKeyFile := keyPath(configuredKeyDir)
 
 	missingTargets := make([]certTarget, 0, len(targets))
 	for _, target := range targets {
@@ -197,7 +191,7 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 	return signerKeyFile, nil
 }
 
-// TLSFiles returns fullchain and private key file paths when both exist.
+// TLSFiles returns the unified fullchain and private key file paths when both exist.
 func (m *AcmeManager) TLSFiles() (string, string) {
 	if m == nil {
 		return "", ""
@@ -207,16 +201,10 @@ func (m *AcmeManager) TLSFiles() (string, string) {
 		return "", ""
 	}
 
-	wildcardKeyFile := wildcardKeyPath(keyDir)
-	wildcardCertFile := fullChainPath(keyDir)
-	if fileExists(wildcardCertFile) && fileExists(wildcardKeyFile) {
-		return wildcardCertFile, wildcardKeyFile
-	}
-
-	mainKeyFile := mainKeyPath(keyDir)
-	mainCertFile := mainFullChainPath(keyDir)
-	if fileExists(mainCertFile) && fileExists(mainKeyFile) {
-		return mainCertFile, mainKeyFile
+	keyFile := keyPath(keyDir)
+	certFile := fullChainPath(keyDir)
+	if fileExists(certFile) && fileExists(keyFile) {
+		return certFile, keyFile
 	}
 
 	return "", ""
@@ -266,16 +254,10 @@ func buildCertTargets(baseDomain, configuredKeyDir string) ([]certTarget, error)
 
 	return []certTarget{
 		{
-			Name:     "wildcard",
-			KeyFile:  wildcardKeyPath(keyDir),
+			Name:     "unified",
+			KeyFile:  keyPath(keyDir),
 			CertFile: fullChainPath(keyDir),
-			Domains:  []string{"*." + base},
-		},
-		{
-			Name:     "main",
-			KeyFile:  mainKeyPath(keyDir),
-			CertFile: mainFullChainPath(keyDir),
-			Domains:  []string{base},
+			Domains:  []string{"*." + base, base},
 		},
 	}, nil
 }
@@ -500,26 +482,9 @@ func hasCloudflareToken(cloudflareToken string) bool {
 }
 
 func fullChainPath(keyDir string) string {
-	return filepath.Join(keyDir, wildcardFullChainFileName)
-}
-
-func wildcardKeyPath(keyDir string) string {
-	return filepath.Join(keyDir, wildcardKeyFileName)
-}
-
-func mainFullChainPath(keyDir string) string {
 	return filepath.Join(keyDir, fullChainFileName)
 }
 
-func mainKeyPath(keyDir string) string {
+func keyPath(keyDir string) string {
 	return filepath.Join(keyDir, keyFileName)
-}
-
-func certTargetByName(targets []certTarget, name string) (certTarget, bool) {
-	for _, target := range targets {
-		if target.Name == name {
-			return target, true
-		}
-	}
-	return certTarget{}, false
 }

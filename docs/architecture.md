@@ -46,30 +46,9 @@ Portal connects local applications to web users through a secure relay layer wit
 
 ## Security
 
-- **E2EE**: TLS passthrough with keyless wildcard certificates - relay routes TLS by SNI without termination
+- **E2EE**: TLS passthrough with keyless certificate (`*.example.com` + `example.com` SAN) - relay routes TLS by SNI without termination
 - **Tokens**: Per-lease reverse connection tokens
 - **SNI Routing**: TLS passthrough without decryption
-
-## Certificate Strategy
-
-Portal issues **two separate certificates** for each domain:
-
-1. **Wildcard certificate**: `*.example.com` - for subdomain routes (e.g., `foo.example.com`)
-2. **Main certificate**: `example.com` - for the apex/root domain
-
-### Why Two Certificates?
-
-This separation is necessary due to **HTTP/2 connection coalescing**:
-
-1. Browser connects to `foo.example.com` (SNI: `foo.example.com`)
-2. If the certificate also includes `example.com` as a SAN, the browser may reuse this connection for `example.com` requests
-3. However, the TLS handshake has already negotiated SNI as `foo.example.com`
-4. The SNI router will only match the `foo.example.com` route, not `example.com`
-
-By keeping certificates separate:
-- Browser creates a new connection for `example.com`
-- SNI is properly negotiated as `example.com`
-- The `onNoRoute` handler can serve the apex domain correctly (e.g., admin UI or redirect)
 
 ### SNI Routing Logic
 
