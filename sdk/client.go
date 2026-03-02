@@ -138,6 +138,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 				cert = certPair
 			}
 			tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+			tlsConfig.NextProtos = []string{"http/1.1"}
 			tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 				return &cert, nil
 			}
@@ -207,6 +208,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 				_ = remoteSigner.Close()
 				return nil, fmt.Errorf("create keyless TLS config: %w", err)
 			}
+			tlsConfig.NextProtos = []string{"http/1.1"}
 		default:
 			return nil, fmt.Errorf("unsupported TLS mode: %s", tlsMode)
 		}
