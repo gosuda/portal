@@ -222,10 +222,15 @@ func (m *AcmeManager) doRenew(cfg provisionConfig) error {
 		return fmt.Errorf("read certificate for renewal: %w", err)
 	}
 
+	keyPEM, err := os.ReadFile(cfg.KeyFile)
+	if err != nil {
+		return fmt.Errorf("read private key for renewal: %w", err)
+	}
+
 	renewed, err := client.Certificate.Renew(certificate.Resource{
 		Domain:      cfg.Domains[0],
 		Certificate: certPEM,
-		PrivateKey:  nil,
+		PrivateKey:  keyPEM,
 	}, true, false, "")
 	if err != nil {
 		return fmt.Errorf("ACME renew: %w", err)
@@ -236,6 +241,12 @@ func (m *AcmeManager) doRenew(cfg provisionConfig) error {
 
 	if err := writeFileAtomic(cfg.CertFile, renewed.Certificate, 0o644); err != nil {
 		return fmt.Errorf("write renewed certificate chain: %w", err)
+	}
+
+	if len(renewed.PrivateKey) > 0 {
+		if err := writeFileAtomic(cfg.KeyFile, renewed.PrivateKey, 0o600); err != nil {
+			return fmt.Errorf("write renewed private key: %w", err)
+		}
 	}
 
 	return nil

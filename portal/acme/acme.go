@@ -208,15 +208,15 @@ func (m *AcmeManager) TLSFiles() (string, string) {
 	}
 
 	wildcardKeyFile := wildcardKeyPath(keyDir)
+	wildcardCertFile := fullChainPath(keyDir)
+	if fileExists(wildcardCertFile) && fileExists(wildcardKeyFile) {
+		return wildcardCertFile, wildcardKeyFile
+	}
+
 	mainKeyFile := mainKeyPath(keyDir)
 	mainCertFile := mainFullChainPath(keyDir)
 	if fileExists(mainCertFile) && fileExists(mainKeyFile) {
 		return mainCertFile, mainKeyFile
-	}
-
-	wildcardCertFile := fullChainPath(keyDir)
-	if fileExists(wildcardCertFile) && fileExists(wildcardKeyFile) {
-		return wildcardCertFile, wildcardKeyFile
 	}
 
 	return "", ""
@@ -269,8 +269,7 @@ func buildCertTargets(baseDomain, configuredKeyDir string) ([]certTarget, error)
 			Name:     "wildcard",
 			KeyFile:  wildcardKeyPath(keyDir),
 			CertFile: fullChainPath(keyDir),
-			// Keep root + wildcard SAN for keyless compatibility.
-			Domains: []string{base, "*." + base},
+			Domains:  []string{"*." + base},
 		},
 		{
 			Name:     "main",
