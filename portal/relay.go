@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/portal/acme"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/sni"
 )
@@ -22,6 +23,7 @@ type RelayServer struct {
 	leaseManager  *LeaseManager
 	reverseHub    *ReverseHub
 	sniRouter     *sni.Router
+	acmeManager   *acme.Manager
 	keylessSigner *keyless.Signer
 
 	stopch    chan struct{}
@@ -48,10 +50,15 @@ func NewRelayServer(
 		leaseManager: NewLeaseManager(30 * time.Second),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
-		stopch:       make(chan struct{}),
+		acmeManager: acme.NewManager(acme.Config{
+			PortalURL:       portalURL,
+			KeyFile:         keylessKey,
+			CloudflareToken: cloudflareToken,
+		}),
+		stopch: make(chan struct{}),
 	}
 
-	keyFile, err := keyless.EnsureSigningKey(ctx, portalURL, keylessKey, cloudflareToken)
+	keyFile, err := server.acmeManager.EnsureSigningKey(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ensure keyless signing key: %w", err)
 	}
@@ -124,6 +131,11 @@ func (g *RelayServer) GetSNIRouter() *sni.Router {
 // GetKeylessSigner returns relay keyless signer when configured.
 func (g *RelayServer) GetKeylessSigner() *keyless.Signer {
 	return g.keylessSigner
+}
+
+// GetACMEManager returns relay ACME manager.
+func (g *RelayServer) GetACMEManager() *acme.Manager {
+	return g.acmeManager
 }
 
 // Start starts the relay server.

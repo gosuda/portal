@@ -22,14 +22,8 @@ import (
 //go:embed dist/*
 var distFS embed.FS
 
-// serveHTTP builds the HTTP mux and returns the server.
-func serveHTTP(
-	addr string,
-	serv *portal.RelayServer,
-	admin *Admin,
-	frontend *Frontend,
-	cancel context.CancelFunc,
-) *http.Server {
+// serveAPI builds the admin/API mux and returns the server.
+func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -128,10 +122,23 @@ func serveHTTP(
 		Addr:    addr,
 		Handler: handler,
 	}
+	acmeManager := serv.GetACMEManager()
+	tlsCertFile, tlsKeyFile := acmeManager.TLSFiles()
 
 	go func() {
-		log.Info().Msgf("[server] http: %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if tlsCertFile != "" && tlsKeyFile != "" {
+			log.Info().
+				Str("addr", addr).
+				Str("cert_file", tlsCertFile).
+				Str("key_file", tlsKeyFile).
+				Msg("[server] admin https enabled")
+			err = srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+		} else {
+			log.Info().Msgf("[server] http: %s", addr)
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[server] http error")
 			cancel()
 		}

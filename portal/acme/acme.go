@@ -1,4 +1,4 @@
-package keyless
+package acme
 
 import (
 	"context"
@@ -25,7 +25,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type acmeProvisionConfig struct {
+const (
+	fullChainFileName      = "fullchain.pem"
+	accountKeyFileName     = "acme-account.key"
+	registrationFileName   = "acme-registration.json"
+	defaultACMEEmailPrefix = "acme@"
+)
+
+type provisionConfig struct {
 	KeyFile          string
 	CertFile         string
 	Email            string
@@ -33,6 +40,33 @@ type acmeProvisionConfig struct {
 	AccountKeyFile   string
 	RegistrationFile string
 	CloudflareToken  string
+}
+
+type Config struct {
+	PortalURL       string
+	KeyFile         string
+	CloudflareToken string
+}
+
+type Manager struct {
+	cfg Config
+}
+
+func NewManager(cfg Config) *Manager {
+	return &Manager{
+		cfg: Config{
+			PortalURL:       strings.TrimSpace(cfg.PortalURL),
+			KeyFile:         strings.TrimSpace(cfg.KeyFile),
+			CloudflareToken: strings.TrimSpace(cfg.CloudflareToken),
+		},
+	}
+}
+
+func (m *Manager) keyFile() string {
+	if m == nil {
+		return ""
+	}
+	return strings.TrimSpace(m.cfg.KeyFile)
 }
 
 type acmeUser struct {
@@ -63,8 +97,11 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey {
 }
 
 // EnsureSigningKey provisions a keyless signing key via ACME DNS-01 when missing.
-func EnsureSigningKey(ctx context.Context, portalURL, keyFile, cloudflareToken string) (string, error) {
-	keyFile = strings.TrimSpace(keyFile)
+func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
+	if m == nil {
+		return "", errors.New("acme manager is nil")
+	}
+	keyFile := m.keyFile()
 	if keyFile == "" {
 		return "", nil
 	}
@@ -75,19 +112,19 @@ func EnsureSigningKey(ctx context.Context, portalURL, keyFile, cloudflareToken s
 	if fileExists(keyFile) {
 		return keyFile, nil
 	}
-	if !hasCloudflareCredentials(cloudflareToken) {
+	if !hasCloudflareToken(m.cfg.CloudflareToken) {
 		log.Warn().
 			Str("key_file", keyFile).
 			Msg("[signer] keyless key file is missing and Cloudflare credentials are not set; signer will stay disabled")
 		return keyFile, nil
 	}
 
-	baseDomain := extractBaseDomainForKeyless(portalURL)
+	baseDomain := extractBaseDomain(m.cfg.PortalURL)
 	if baseDomain == "" {
 		return "", fmt.Errorf("derive base domain from PORTAL_URL for ACME provisioning")
 	}
 
-	cfg, err := buildACMEProvisionConfig(baseDomain, keyFile, cloudflareToken)
+	cfg, err := buildProvisionConfig(baseDomain, keyFile, m.cfg.CloudflareToken)
 	if err != nil {
 		return "", err
 	}
@@ -98,28 +135,44 @@ func EnsureSigningKey(ctx context.Context, portalURL, keyFile, cloudflareToken s
 		Str("cert_file", cfg.CertFile).
 		Msg("[signer] keyless key is missing; issuing certificate with ACME DNS-01 via Cloudflare")
 
-	if err := provisionKeylessCertificate(cfg); err != nil {
+	if err := m.provisionCertificate(cfg); err != nil {
 		return "", err
 	}
 	return keyFile, nil
 }
 
-func buildACMEProvisionConfig(baseDomain, keyFile, cloudflareToken string) (acmeProvisionConfig, error) {
+// TLSFiles returns fullchain and private key file paths when both exist.
+func (m *Manager) TLSFiles() (string, string) {
+	if m == nil {
+		return "", ""
+	}
+	keyFile := m.keyFile()
+	if keyFile == "" {
+		return "", ""
+	}
+	certFile := fullChainPath(keyFile)
+	if _, err := os.Stat(certFile); err != nil {
+		return "", ""
+	}
+	if _, err := os.Stat(keyFile); err != nil {
+		return "", ""
+	}
+	return certFile, keyFile
+}
+
+func buildProvisionConfig(baseDomain, keyFile, cloudflareToken string) (provisionConfig, error) {
 	keyDir := filepath.Dir(keyFile)
-	certFile := filepath.Join(keyDir, "fullchain.pem")
+	certFile := fullChainPath(keyFile)
+	accountKeyFile := filepath.Join(keyDir, accountKeyFileName)
+	registrationFile := filepath.Join(keyDir, registrationFileName)
+	email := defaultACMEEmailPrefix + baseDomain
 
-	accountKeyFile := filepath.Join(keyDir, "acme-account.key")
-
-	registrationFile := filepath.Join(keyDir, "acme-registration.json")
-
-	email := "acme@" + baseDomain
-
-	domains, err := resolveACMEDomains(baseDomain)
+	domains, err := resolveDomains(baseDomain)
 	if err != nil {
-		return acmeProvisionConfig{}, err
+		return provisionConfig{}, err
 	}
 
-	return acmeProvisionConfig{
+	return provisionConfig{
 		KeyFile:          keyFile,
 		CertFile:         certFile,
 		Email:            email,
@@ -130,7 +183,7 @@ func buildACMEProvisionConfig(baseDomain, keyFile, cloudflareToken string) (acme
 	}, nil
 }
 
-func resolveACMEDomains(baseDomain string) ([]string, error) {
+func resolveDomains(baseDomain string) ([]string, error) {
 	domain := strings.ToLower(strings.TrimSpace(baseDomain))
 	if domain == "" {
 		return nil, errors.New("base domain is required")
@@ -138,7 +191,7 @@ func resolveACMEDomains(baseDomain string) ([]string, error) {
 	return []string{domain, "*." + domain}, nil
 }
 
-func provisionKeylessCertificate(cfg acmeProvisionConfig) error {
+func (m *Manager) provisionCertificate(cfg provisionConfig) error {
 	for _, path := range []string{cfg.KeyFile, cfg.CertFile, cfg.AccountKeyFile, cfg.RegistrationFile} {
 		if err := ensureParentDir(path); err != nil {
 			return err
@@ -352,11 +405,11 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
-func hasCloudflareCredentials(cloudflareToken string) bool {
+func hasCloudflareToken(cloudflareToken string) bool {
 	return strings.TrimSpace(cloudflareToken) != ""
 }
 
-func extractBaseDomainForKeyless(portalURL string) string {
+func extractBaseDomain(portalURL string) string {
 	raw := strings.TrimSpace(portalURL)
 	if raw == "" {
 		return ""
@@ -379,4 +432,8 @@ func extractBaseDomainForKeyless(portalURL string) string {
 		return ""
 	}
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
+
+func fullChainPath(keyFile string) string {
+	return filepath.Join(filepath.Dir(keyFile), fullChainFileName)
 }

@@ -77,7 +77,7 @@ Portal uses environment variables for domain and TLS configuration:
 |----------|-------------|
 | `PORTAL_URL` | Base URL (e.g., `https://portal.example.com`) |
 | `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
-| `SNI_PORT` | SNI router port (default `:443`) |
+| `SNI_PORT` | SNI router port (default `443`) |
 | `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
 | `KEYLESS_KEY_FILE` | Relay keyless signer private key path (default `/etc/portal/keyless/privkey.pem`) |
 | `CLOUDFLARE_TOKEN` | Cloudflare DNS token for ACME DNS-01 auto-issuance when key file is missing |

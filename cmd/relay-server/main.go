@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,9 +21,9 @@ import (
 )
 
 const (
-	defaultHTTPPort       = 4017
+	defaultAPIPort        = 4017
+	defaultSNIPort        = 443
 	defaultPortalURL      = "http://localhost:4017"
-	defaultSNIPort        = ":443"
 	defaultKeylessKeyFile = "/etc/portal/keyless/privkey.pem"
 )
 
@@ -35,7 +36,7 @@ type relayServerConfig struct {
 	LeaseBPS       int
 	PortalURL      string
 	Bootstraps     []string
-	SNIPort        string
+	SNIPort        int
 
 	KeylessKeyFile  string
 	CloudflareToken string
@@ -54,24 +55,21 @@ func main() {
 	if bootstrapsCSV == "" {
 		bootstrapsCSV = defaultBootstrapFrom(portalURL)
 	}
-	sniPort := strings.TrimSpace(os.Getenv("SNI_PORT"))
-	if sniPort == "" {
-		sniPort = defaultSNIPort
-	}
-	keylessKey := strings.TrimSpace(os.Getenv("KEYLESS_KEY_FILE"))
-	if keylessKey == "" {
-		keylessKey = defaultKeylessKeyFile
+	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort, "SNI_PORT")
+	keylessFile := strings.TrimSpace(os.Getenv("KEYLESS_KEY_FILE"))
+	if keylessFile == "" {
+		keylessFile = defaultKeylessKeyFile
 	}
 	adminSecretKey := strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY"))
 	cloudflareToken := strings.TrimSpace(os.Getenv("CLOUDFLARE_TOKEN"))
 
-	flag.IntVar(&cfg.AdminPort, "adminport", defaultHTTPPort, "Admin/HTTP server port")
+	flag.IntVar(&cfg.AdminPort, "adminport", defaultAPIPort, "Admin/HTTP server port")
 	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
 	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
-	flag.StringVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port (env: SNI_PORT)")
-	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessKey, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
+	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
+	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessFile, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
 	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
@@ -85,13 +83,14 @@ func main() {
 func runServer(cfg relayServerConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
 
 	log.Info().
 		Str("portal_base_url", cfg.PortalURL).
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, cfg.SNIPort, cfg.PortalURL, cfg.KeylessKeyFile, cfg.CloudflareToken)
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, cfg.PortalURL, cfg.KeylessKeyFile, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
@@ -140,19 +139,37 @@ func runServer(cfg relayServerConfig) error {
 	}
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, stop)
+	apiServ := serveAPI(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if httpSrv != nil {
-		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+	if apiServ != nil {
+		if err := apiServ.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("[server] http server shutdown error")
 		}
 	}
 
 	log.Info().Msg("[server] shutdown complete")
 	return nil
+}
+
+func parsePortNumber(raw string, fallback int, source string) int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return fallback
+	}
+	value = strings.TrimPrefix(value, ":")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		log.Warn().
+			Str("source", source).
+			Str("value", raw).
+			Int("fallback_port", fallback).
+			Msg("[server] invalid port value; using fallback")
+		return fallback
+	}
+	return port
 }

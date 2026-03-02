@@ -1,7 +1,6 @@
 services:
   portal:
     image: ghcr.io/gosuda/portal:1
-    pull_policy: always
     build:
       context: .
       dockerfile: Dockerfile
@@ -14,12 +13,14 @@ services:
       BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-http://localhost:${ADMIN_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
 
-      # TLS/SNI and keyless configuration
-      SNI_PORT: ${SNI_PORT:-:443}
+      # TLS/SNI and keyless configurationa
+      SNI_PORT: ${SNI_PORT:-443}
       KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
       - "${ADMIN_PORT:-4017}:${ADMIN_PORT:-4017}"
       - "80:80"
       - "443:443"
+    volumes:
+      - ./data/keyless:/etc/portal/keyless
     restart: unless-stopped

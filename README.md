@@ -34,7 +34,9 @@ ADMIN_SECRET_KEY=your-secret-key docker compose up
 
 # Keyless auto-issuance (optional):
 # if KEYLESS_KEY_FILE is missing and CLOUDFLARE_TOKEN is set,
-# relay issues/renews keyless certs via ACME DNS-01.
+# relay issues keyless certs via ACME DNS-01.
+# when KEYLESS_KEY_FILE and sibling fullchain.pem both exist,
+# admin/API listener on --adminport auto-switches to HTTPS.
 CLOUDFLARE_TOKEN=your-cloudflare-dns-token docker compose up
 ```
 

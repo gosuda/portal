@@ -9,6 +9,7 @@ Portal uses SNI-based TLS passthrough: the relay routes TLS by SNI to tunnel bac
 TLS certificate mode:
 - `self`: tunnel uses locally managed certificate and key files.
 - `keyless`: tunnel delegates TLS signing to relay keyless signer (`/v1/sign`). Relay uses `KEYLESS_KEY_FILE` and can auto-issue key/cert via ACME DNS-01 when `CLOUDFLARE_TOKEN` is set.
+  When `KEYLESS_KEY_FILE` and sibling `fullchain.pem` exist, relay admin/API on `--adminport` is served over HTTPS automatically.
 
 ```
 Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Backend (TLS mode)
@@ -79,8 +80,8 @@ https://myapp.example.com
 | `PORTAL_URL` | `http://localhost:4017` | Base URL (e.g., `https://example.com`) |
 | `BOOTSTRAP_URIS` | (derived) | Relay API URLs |
 | `ADMIN_SECRET_KEY` | (auto-generated) | Admin authentication key |
-| `SNI_PORT` | `:443` | SNI router port |
-| `KEYLESS_KEY_FILE` | `/etc/portal/keyless/privkey.pem` | Relay keyless signing private key path |
+| `SNI_PORT` | `443` | SNI router port |
+| `KEYLESS_KEY_FILE` | `/etc/portal/keyless/privkey.pem` | Relay keyless signing private key path (`fullchain.pem` is expected in same directory for admin/API HTTPS auto-enable) |
 | `CLOUDFLARE_TOKEN` | (empty) | Cloudflare DNS API token used for ACME DNS-01 auto issuance |
 
 ## docker-compose.yml
@@ -95,7 +96,7 @@ services:
     environment:
       PORTAL_URL: ${PORTAL_URL}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY}
-      SNI_PORT: ${SNI_PORT:-:443}
+      SNI_PORT: ${SNI_PORT:-443}
       KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
