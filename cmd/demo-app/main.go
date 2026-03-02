@@ -49,7 +49,7 @@ func main() {
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
 	defaultTLSMode := strings.TrimSpace(os.Getenv("TLS_MODE"))
 	if defaultTLSMode == "" {
-		defaultTLSMode = string(sdk.TLSModeNoTLS)
+		defaultTLSMode = string(sdk.TLSModeKeyless)
 	}
 	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
 	flag.StringVar(&flagTLSCert, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "certificate chain PEM file for --tls-mode self [env: TLS_CERT_FILE]")

@@ -48,7 +48,7 @@ func NewSigner(cfg Config) (*Signer, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read KEYLESS_KEY_FILE: %w", err)
+		return nil, fmt.Errorf("read keyless signing key: %w", err)
 	}
 
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)

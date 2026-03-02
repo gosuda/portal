@@ -23,7 +23,7 @@ type RelayServer struct {
 	leaseManager  *LeaseManager
 	reverseHub    *ReverseHub
 	sniRouter     *sni.Router
-	acmeManager   *acme.Manager
+	acmeManager   *acme.AcmeManager
 	keylessSigner *keyless.Signer
 
 	stopch    chan struct{}
@@ -36,26 +36,41 @@ func NewRelayServer(
 	address []string,
 	sniPort string,
 	baseHost string,
-	keylessKey string,
+	keylessDir string,
 	cloudflareToken string,
 ) (*RelayServer, error) {
 	server := &RelayServer{
-		BaseHost:     strings.ToLower(strings.TrimSpace(baseHost)),
+		BaseHost:     baseHost,
 		address:      address,
 		leaseManager: NewLeaseManager(30 * time.Second),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
-		acmeManager: acme.NewManager(acme.Config{
-			BaseDomain:      strings.ToLower(strings.TrimSpace(baseHost)),
-			KeyFile:         keylessKey,
-			CloudflareToken: cloudflareToken,
-		}),
-		stopch: make(chan struct{}),
+		stopch:       make(chan struct{}),
 	}
 
-	keyFile, err := server.acmeManager.EnsureSigningKey(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("ensure keyless signing key: %w", err)
+	keyFile := ""
+	if keylessDir != "" {
+		server.acmeManager = acme.NewManager(acme.Config{
+			BaseDomain:      baseHost,
+			KeyDir:          keylessDir,
+			CloudflareToken: cloudflareToken,
+		})
+		keyFile = server.acmeManager.SigningKeyFile()
+	}
+
+	shouldEnsureWithACME := keylessDir != "" && cloudflareToken != "" && baseHost != ""
+	if shouldEnsureWithACME {
+		var err error
+		keyFile, err = server.acmeManager.EnsureSigningKey(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ensure keyless signing key: %w", err)
+		}
+	} else {
+		log.Info().
+			Bool("has_key_dir", keylessDir != "").
+			Bool("has_cloudflare_token", cloudflareToken != "").
+			Bool("has_base_domain", baseHost != "").
+			Msg("[signer] ACME issuance disabled (requires key directory, Cloudflare token, and base domain)")
 	}
 
 	signer, err := keyless.NewSigner(keyless.Config{
@@ -73,15 +88,15 @@ func NewRelayServer(
 
 	server.leaseManager.SetOnLeaseDeleted(server.reverseHub.DropLease)
 	server.reverseHub.SetAuthorizer(func(leaseID, token string) bool {
-		entry, ok := server.leaseManager.GetLeaseByID(strings.TrimSpace(leaseID))
+		entry, ok := server.leaseManager.GetLeaseByID(leaseID)
 		if !ok || entry == nil || entry.Lease == nil {
 			return false
 		}
-		expected := strings.TrimSpace(entry.Lease.ReverseToken)
+		expected := entry.Lease.ReverseToken
 		if expected == "" {
 			return false
 		}
-		return subtle.ConstantTimeCompare([]byte(expected), []byte(strings.TrimSpace(token))) == 1
+		return subtle.ConstantTimeCompare([]byte(expected), []byte(token)) == 1
 	})
 	return server, nil
 }
@@ -107,7 +122,7 @@ func (g *RelayServer) GetKeylessSigner() *keyless.Signer {
 }
 
 // GetACMEManager returns relay ACME manager.
-func (g *RelayServer) GetACMEManager() *acme.Manager {
+func (g *RelayServer) GetACMEManager() *acme.AcmeManager {
 	return g.acmeManager
 }
 
@@ -117,12 +132,10 @@ func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) 
 		return
 	}
 
-	rootSNI = strings.ToLower(strings.TrimSpace(rootSNI))
 	if rootSNI == "" {
 		return
 	}
 
-	upstreamAddr = strings.TrimSpace(upstreamAddr)
 	if upstreamAddr == "" {
 		log.Warn().
 			Msg("[RelayServer] root-domain SNI fallback upstream is empty; fallback disabled")
@@ -130,7 +143,7 @@ func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) 
 	}
 
 	g.sniRouter.SetNoRouteHandler(func(clientConn net.Conn, serverName string) bool {
-		if !strings.EqualFold(strings.TrimSpace(serverName), rootSNI) {
+		if !strings.EqualFold(serverName, rootSNI) {
 			return false
 		}
 
@@ -164,6 +177,11 @@ func (g *RelayServer) Start() error {
 	}
 	log.Info().Str("addr", g.sniRouter.GetAddr()).Msg("[RelayServer] SNI router started")
 
+	// Start ACME renewal loop
+	if g.acmeManager != nil {
+		g.acmeManager.Start(context.Background())
+	}
+
 	log.Info().Msg("[RelayServer] Started")
 	return nil
 }
@@ -173,6 +191,9 @@ func (g *RelayServer) Stop() {
 	close(g.stopch)
 	g.leaseManager.Stop()
 	g.sniRouter.Stop()
+	if g.acmeManager != nil {
+		g.acmeManager.Stop()
+	}
 	g.waitgroup.Wait()
 	log.Info().Msg("[RelayServer] Stopped")
 }

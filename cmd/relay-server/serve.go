@@ -131,8 +131,10 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		Handler:      handler,
 		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
-	acmeManager := serv.GetACMEManager()
-	tlsCertFile, tlsKeyFile := acmeManager.TLSFiles()
+	tlsCertFile, tlsKeyFile := "", ""
+	if acmeManager := serv.GetACMEManager(); acmeManager != nil {
+		tlsCertFile, tlsKeyFile = acmeManager.TLSFiles()
+	}
 
 	go func() {
 		var err error

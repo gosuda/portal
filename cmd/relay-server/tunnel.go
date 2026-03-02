@@ -32,7 +32,7 @@ case "$ARCH" in
 esac
 
 BASE_URL="${BASE_URL:-%s}"
-RELAY_URL="${RELAY_URL:-$BASE_URL}"
+RELAYS="${RELAYS:-$BASE_URL}"
 BIN_URL="${BIN_URL:-$BASE_URL/tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH}"
 
 TMPDIR="${TMPDIR:-/tmp}"
@@ -45,13 +45,13 @@ echo "Downloading portal-tunnel ($TUNNEL_OS/$TUNNEL_ARCH)..." >&2
 curl -fsSL "$BIN_URL" -o "$BIN_PATH"
 chmod +x "$BIN_PATH"
 
-set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost:3000}"
-[ -n "${NAME:-}" ] && set -- "$@" --name "$NAME"
-[ -n "${DESCRIPTION:-}" ] && set -- "$@" --description "$DESCRIPTION"
-[ -n "${TAGS:-}" ] && set -- "$@" --tags "$TAGS"
-[ -n "${THUMBNAIL:-}" ] && set -- "$@" --thumbnail "$THUMBNAIL"
-[ -n "${OWNER:-}" ] && set -- "$@" --owner "$OWNER"
-if [ "${HIDE:-}" = "1" ] || [ "${HIDE:-}" = "true" ]; then
+set -- "$BIN_PATH" --relay "$RELAYS" --host "${APP_HOST:-localhost:3000}"
+[ -n "${APP_NAME:-}" ] && set -- "$@" --name "$APP_NAME"
+[ -n "${APP_DESCRIPTION:-}" ] && set -- "$@" --description "$APP_DESCRIPTION"
+[ -n "${APP_TAGS:-}" ] && set -- "$@" --tags "$APP_TAGS"
+[ -n "${APP_THUMBNAIL:-}" ] && set -- "$@" --thumbnail "$APP_THUMBNAIL"
+[ -n "${APP_OWNER:-}" ] && set -- "$@" --owner "$APP_OWNER"
+if [ "${APP_HIDE:-}" = "1" ] || [ "${APP_HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
 [ -n "${TLS_MODE:-}" ] && set -- "$@" --tls-mode "$TLS_MODE"
@@ -67,7 +67,7 @@ exec "$@"
 const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
-$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $BaseUrl }
+$Relays = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
 
 $Arch = $env:PROCESSOR_ARCHITECTURE
 if ($Arch -eq "AMD64") {
@@ -94,15 +94,15 @@ try {
     exit 1
 }
 
-$ArgsList = @("--relay", $RelayUrl)
+$ArgsList = @("--relay", $Relays)
 
-if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
-if ($env:NAME) { $ArgsList += "--name", $env:NAME }
-if ($env:DESCRIPTION) { $ArgsList += "--description", $env:DESCRIPTION }
-if ($env:TAGS) { $ArgsList += "--tags", $env:TAGS }
-if ($env:THUMBNAIL) { $ArgsList += "--thumbnail", $env:THUMBNAIL }
-if ($env:OWNER) { $ArgsList += "--owner", $env:OWNER }
-if ($env:HIDE -eq "1" -or $env:HIDE -eq "true") { $ArgsList += "--hide" }
+if ($env:APP_HOST) { $ArgsList += "--host", $env:APP_HOST } else { $ArgsList += "--host", "localhost:3000" }
+if ($env:APP_NAME) { $ArgsList += "--name", $env:APP_NAME }
+if ($env:APP_DESCRIPTION) { $ArgsList += "--description", $env:APP_DESCRIPTION }
+if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
+if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }
+if ($env:APP_OWNER) { $ArgsList += "--owner", $env:APP_OWNER }
+if ($env:APP_HIDE -eq "1" -or $env:APP_HIDE -eq "true") { $ArgsList += "--hide" }
 if ($env:TLS_MODE) { $ArgsList += "--tls-mode", $env:TLS_MODE }
 if ($env:TLS_MODE -eq "self") {
     if ($env:TLS_CERT_FILE) { $ArgsList += "--tls-cert-file", $env:TLS_CERT_FILE }

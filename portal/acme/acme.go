@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
@@ -25,13 +25,24 @@ import (
 )
 
 const (
-	fullChainFileName      = "fullchain.pem"
-	accountKeyFileName     = "acme-account.key"
-	registrationFileName   = "acme-registration.json"
-	defaultACMEEmailPrefix = "acme@"
+	fullChainFileName         = "fullchain.pem"
+	keyFileName               = "privatekey.pem"
+	wildcardFullChainFileName = "wildcard-fullchain.pem"
+	wildcardKeyFileName       = "wildcard-privatekey.pem"
+	accountKeyFileName        = "acme-account.key"
+	registrationFileName      = "acme-registration.json"
+	defaultACMEEmailPrefix    = "acme@"
 )
 
+type certTarget struct {
+	Name     string
+	KeyFile  string
+	CertFile string
+	Domains  []string
+}
+
 type provisionConfig struct {
+	TargetName       string
 	KeyFile          string
 	CertFile         string
 	Email            string
@@ -43,29 +54,47 @@ type provisionConfig struct {
 
 type Config struct {
 	BaseDomain      string
-	KeyFile         string
+	KeyDir          string
 	CloudflareToken string
 }
 
-type Manager struct {
-	cfg Config
+type AcmeManager struct {
+	cfg       Config
+	mu        sync.RWMutex
+	stopCh    chan struct{}
+	waitGroup sync.WaitGroup
+	startOnce sync.Once
+	stopOnce  sync.Once
 }
 
-func NewManager(cfg Config) *Manager {
-	return &Manager{
+func NewManager(cfg Config) *AcmeManager {
+	return &AcmeManager{
 		cfg: Config{
-			BaseDomain:      strings.ToLower(strings.TrimSpace(cfg.BaseDomain)),
-			KeyFile:         strings.TrimSpace(cfg.KeyFile),
-			CloudflareToken: strings.TrimSpace(cfg.CloudflareToken),
+			BaseDomain:      cfg.BaseDomain,
+			KeyDir:          cfg.KeyDir,
+			CloudflareToken: cfg.CloudflareToken,
 		},
+		stopCh: make(chan struct{}),
 	}
 }
 
-func (m *Manager) keyFile() string {
+func (m *AcmeManager) keyDir() string {
 	if m == nil {
 		return ""
 	}
-	return strings.TrimSpace(m.cfg.KeyFile)
+	return m.cfg.KeyDir
+}
+
+// SigningKeyFile returns the fixed wildcard key path under configured key directory.
+func (m *AcmeManager) SigningKeyFile() string {
+	if m == nil {
+		return ""
+	}
+	keyDir := m.keyDir()
+	if keyDir == "" {
+		return ""
+	}
+	return wildcardKeyPath(keyDir)
 }
 
 type acmeUser struct {
@@ -78,7 +107,7 @@ func (u *acmeUser) GetEmail() string {
 	if u == nil {
 		return ""
 	}
-	return strings.TrimSpace(u.Email)
+	return u.Email
 }
 
 func (u *acmeUser) GetRegistration() *registration.Resource {
@@ -96,26 +125,16 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey {
 }
 
 // EnsureSigningKey provisions a keyless signing key via ACME DNS-01 when missing.
-func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
+func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 	if m == nil {
 		return "", errors.New("acme manager is nil")
 	}
-	keyFile := m.keyFile()
-	if keyFile == "" {
+	configuredKeyDir := m.keyDir()
+	if configuredKeyDir == "" {
 		return "", nil
 	}
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("keyless provisioning canceled: %w", err)
-	}
-
-	if fileExists(keyFile) {
-		return keyFile, nil
-	}
-	if !hasCloudflareToken(m.cfg.CloudflareToken) {
-		log.Warn().
-			Str("key_file", keyFile).
-			Msg("[signer] keyless key file is missing and Cloudflare credentials are not set; signer will stay disabled")
-		return keyFile, nil
 	}
 
 	baseDomain := m.cfg.BaseDomain
@@ -123,74 +142,146 @@ func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("base domain is required for ACME provisioning")
 	}
 
-	cfg, err := buildProvisionConfig(baseDomain, keyFile, m.cfg.CloudflareToken)
+	targets, err := buildCertTargets(baseDomain, configuredKeyDir)
 	if err != nil {
 		return "", err
 	}
-
-	log.Info().
-		Strs("domains", cfg.Domains).
-		Str("key_file", cfg.KeyFile).
-		Str("cert_file", cfg.CertFile).
-		Msg("[signer] keyless key is missing; issuing certificate with ACME DNS-01 via Cloudflare")
-
-	if err := m.provisionCertificate(cfg); err != nil {
-		return "", err
+	wildcardTarget, ok := certTargetByName(targets, "wildcard")
+	if !ok {
+		return "", errors.New("missing wildcard ACME target")
 	}
-	return keyFile, nil
+	signerKeyFile := wildcardTarget.KeyFile
+
+	missingTargets := make([]certTarget, 0, len(targets))
+	for _, target := range targets {
+		if fileExists(target.KeyFile) && fileExists(target.CertFile) {
+			continue
+		}
+		missingTargets = append(missingTargets, target)
+	}
+	if len(missingTargets) == 0 {
+		return signerKeyFile, nil
+	}
+	if !hasCloudflareToken(m.cfg.CloudflareToken) {
+		if !fileExists(signerKeyFile) {
+			log.Warn().
+				Str("key_file", signerKeyFile).
+				Msg("[signer] keyless key file is missing and Cloudflare credentials are not set; signer will stay disabled")
+		}
+		for _, target := range missingTargets {
+			log.Warn().
+				Str("target", target.Name).
+				Str("key_file", target.KeyFile).
+				Str("cert_file", target.CertFile).
+				Msg("[signer] ACME target is missing and Cloudflare credentials are not set")
+		}
+		return signerKeyFile, nil
+	}
+
+	for _, target := range missingTargets {
+		cfg, buildErr := buildProvisionConfig(baseDomain, target, m.cfg.CloudflareToken)
+		if buildErr != nil {
+			return "", buildErr
+		}
+		log.Info().
+			Str("target", cfg.TargetName).
+			Strs("domains", cfg.Domains).
+			Str("key_file", cfg.KeyFile).
+			Str("cert_file", cfg.CertFile).
+			Msg("[signer] ACME target is missing; issuing certificate with ACME DNS-01 via Cloudflare")
+
+		if err := m.provisionCertificate(cfg); err != nil {
+			return "", err
+		}
+	}
+	return signerKeyFile, nil
 }
 
 // TLSFiles returns fullchain and private key file paths when both exist.
-func (m *Manager) TLSFiles() (string, string) {
+func (m *AcmeManager) TLSFiles() (string, string) {
 	if m == nil {
 		return "", ""
 	}
-	keyFile := m.keyFile()
-	if keyFile == "" {
+	keyDir := m.keyDir()
+	if keyDir == "" {
 		return "", ""
 	}
-	certFile := fullChainPath(keyFile)
-	if _, err := os.Stat(certFile); err != nil {
-		return "", ""
+
+	wildcardKeyFile := wildcardKeyPath(keyDir)
+	mainKeyFile := mainKeyPath(keyDir)
+	mainCertFile := mainFullChainPath(keyDir)
+	if fileExists(mainCertFile) && fileExists(mainKeyFile) {
+		return mainCertFile, mainKeyFile
 	}
-	if _, err := os.Stat(keyFile); err != nil {
-		return "", ""
+
+	wildcardCertFile := fullChainPath(keyDir)
+	if fileExists(wildcardCertFile) && fileExists(wildcardKeyFile) {
+		return wildcardCertFile, wildcardKeyFile
 	}
-	return certFile, keyFile
+
+	return "", ""
 }
 
-func buildProvisionConfig(baseDomain, keyFile, cloudflareToken string) (provisionConfig, error) {
-	keyDir := filepath.Dir(keyFile)
-	certFile := fullChainPath(keyFile)
+func buildProvisionConfig(baseDomain string, target certTarget, cloudflareToken string) (provisionConfig, error) {
+	keyDir := filepath.Dir(target.KeyFile)
 	accountKeyFile := filepath.Join(keyDir, accountKeyFileName)
 	registrationFile := filepath.Join(keyDir, registrationFileName)
 	email := defaultACMEEmailPrefix + baseDomain
 
-	domains, err := resolveDomains(baseDomain)
-	if err != nil {
+	if target.KeyFile == "" || target.CertFile == "" || len(target.Domains) == 0 {
+		return provisionConfig{}, errors.New("invalid ACME target")
+	}
+	if _, err := resolveDomain(baseDomain); err != nil {
 		return provisionConfig{}, err
 	}
 
 	return provisionConfig{
-		KeyFile:          keyFile,
-		CertFile:         certFile,
+		TargetName:       target.Name,
+		KeyFile:          target.KeyFile,
+		CertFile:         target.CertFile,
 		Email:            email,
-		Domains:          domains,
+		Domains:          target.Domains,
 		AccountKeyFile:   accountKeyFile,
 		RegistrationFile: registrationFile,
-		CloudflareToken:  strings.TrimSpace(cloudflareToken),
+		CloudflareToken:  cloudflareToken,
 	}, nil
 }
 
-func resolveDomains(baseDomain string) ([]string, error) {
-	domain := strings.ToLower(strings.TrimSpace(baseDomain))
-	if domain == "" {
-		return nil, errors.New("base domain is required")
+func resolveDomain(baseDomain string) (string, error) {
+	if baseDomain == "" {
+		return "", errors.New("base domain is required")
 	}
-	return []string{domain, "*." + domain}, nil
+	return baseDomain, nil
 }
 
-func (m *Manager) provisionCertificate(cfg provisionConfig) error {
+func buildCertTargets(baseDomain, configuredKeyDir string) ([]certTarget, error) {
+	base, err := resolveDomain(baseDomain)
+	if err != nil {
+		return nil, err
+	}
+	keyDir := configuredKeyDir
+	if keyDir == "" {
+		return nil, errors.New("key directory is required")
+	}
+
+	return []certTarget{
+		{
+			Name:     "wildcard",
+			KeyFile:  wildcardKeyPath(keyDir),
+			CertFile: fullChainPath(keyDir),
+			// Keep root + wildcard SAN for keyless compatibility.
+			Domains: []string{base, "*." + base},
+		},
+		{
+			Name:     "main",
+			KeyFile:  mainKeyPath(keyDir),
+			CertFile: mainFullChainPath(keyDir),
+			Domains:  []string{base},
+		},
+	}, nil
+}
+
+func (m *AcmeManager) provisionCertificate(cfg provisionConfig) error {
 	for _, path := range []string{cfg.KeyFile, cfg.CertFile, cfg.AccountKeyFile, cfg.RegistrationFile} {
 		if err := ensureParentDir(path); err != nil {
 			return err
@@ -221,7 +312,7 @@ func (m *Manager) provisionCertificate(cfg provisionConfig) error {
 	}
 
 	cfConfig := cloudflare.NewDefaultConfig()
-	cfConfig.AuthToken = strings.TrimSpace(cfg.CloudflareToken)
+	cfConfig.AuthToken = cfg.CloudflareToken
 
 	provider, err := cloudflare.NewDNSProviderConfig(cfConfig)
 	if err != nil {
@@ -266,6 +357,7 @@ func (m *Manager) provisionCertificate(cfg provisionConfig) error {
 	}
 
 	log.Info().
+		Str("target", cfg.TargetName).
 		Str("key_file", cfg.KeyFile).
 		Str("cert_file", cfg.CertFile).
 		Strs("domains", cfg.Domains).
@@ -365,7 +457,7 @@ func ensureParentDir(path string) error {
 }
 
 func fileExists(path string) bool {
-	if strings.TrimSpace(path) == "" {
+	if path == "" {
 		return false
 	}
 	_, err := os.Stat(path)
@@ -405,9 +497,30 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 func hasCloudflareToken(cloudflareToken string) bool {
-	return strings.TrimSpace(cloudflareToken) != ""
+	return cloudflareToken != ""
 }
 
-func fullChainPath(keyFile string) string {
-	return filepath.Join(filepath.Dir(keyFile), fullChainFileName)
+func fullChainPath(keyDir string) string {
+	return filepath.Join(keyDir, wildcardFullChainFileName)
+}
+
+func wildcardKeyPath(keyDir string) string {
+	return filepath.Join(keyDir, wildcardKeyFileName)
+}
+
+func mainFullChainPath(keyDir string) string {
+	return filepath.Join(keyDir, fullChainFileName)
+}
+
+func mainKeyPath(keyDir string) string {
+	return filepath.Join(keyDir, keyFileName)
+}
+
+func certTargetByName(targets []certTarget, name string) (certTarget, bool) {
+	for _, target := range targets {
+		if target.Name == name {
+			return target, true
+		}
+	}
+	return certTarget{}, false
 }

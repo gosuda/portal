@@ -15,7 +15,7 @@ services:
 
       # TLS/SNI and keyless configurationa
       SNI_PORT: ${SNI_PORT:-443}
-      KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
+      KEYLESS_DIR: ${KEYLESS_DIR:-/etc/portal/keyless}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
       - "${ADMIN_PORT:-4017}:${ADMIN_PORT:-4017}"

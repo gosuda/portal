@@ -87,7 +87,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       if (tlsMode === "self" && tlsKeyFile.trim() !== "") {
         tlsEnv += `$env:TLS_KEY_FILE="${tlsKeyFile}"; `;
       }
-      return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+      return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:APP_HOST="${hostVal}"; $env:APP_NAME="${nameVal}"; $env:RELAYS="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
     }
 
     let tlsEnv = `TLS_MODE=${tlsMode} `;
@@ -97,7 +97,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (tlsMode === "self" && tlsKeyFile.trim() !== "") {
       tlsEnv += `TLS_KEY_FILE="${tlsKeyFile}" `;
     }
-    return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}HOST=${hostVal} NAME=${nameVal} RELAY_URL="${relayUrlVal}" sh`;
+    return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
   }, [
     currentOrigin,
     host,
@@ -172,7 +172,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Host
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">HOST=</span>
+              <span className="px-3 text-sm text-text-muted">APP_HOST=</span>
               <Input
                 id="host"
                 type="text"
@@ -196,7 +196,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Service Name
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">NAME=</span>
+              <span className="px-3 text-sm text-text-muted">APP_NAME=</span>
               <Input
                 id="name"
                 type="text"

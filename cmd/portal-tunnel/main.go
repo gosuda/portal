@@ -16,21 +16,23 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/portal/acme"
 	"gosuda.org/portal/sdk"
 )
 
 var (
-	flagRelayURLs   string
-	flagHost        string
-	flagName        string
-	flagTLSMode     string
-	flagTLSCertFile string
-	flagTLSKeyFile  string
-	flagDescription string
-	flagTags        string
-	flagThumbnail   string
-	flagOwner       string
-	flagHide        bool
+	flagRelayURLs        string
+	flagHost             string
+	flagName             string
+	flagTLSMode          string
+	flagTLSCertFile      string
+	flagTLSKeyFile       string
+	flagTLSCertCacheFile string
+	flagDescription      string
+	flagTags             string
+	flagThumbnail        string
+	flagOwner            string
+	flagHide             bool
 )
 
 func main() {
@@ -52,6 +54,7 @@ func main() {
 	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
 	flag.StringVar(&flagTLSCertFile, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]")
 	flag.StringVar(&flagTLSKeyFile, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "PEM private key for --tls-mode self [env: TLS_KEY_FILE]")
+	flag.StringVar(&flagTLSCertCacheFile, "tls-cert-cache-file", os.Getenv("TLS_CERT_CACHE_FILE"), "certificate cache file path for --tls-mode keyless [env: TLS_CERT_CACHE_FILE]")
 
 	flag.StringVar(&flagDescription, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
@@ -130,14 +133,21 @@ func runServiceTunnel(ctx context.Context, relayURLs []string) error {
 				Str("key_file", keyFile).
 				Msg("TLS: Using self-managed local certificate")
 		} else if flagTLSMode == string(sdk.TLSModeKeyless) {
+			certCacheFile := strings.TrimSpace(flagTLSCertCacheFile)
+			if certCacheFile == "" {
+				certCacheFile = acme.DefaultCertCachePath()
+			}
 			certFile := strings.TrimSpace(flagTLSCertFile)
 			if certFile != "" {
 				log.Warn().
 					Str("cert_file", certFile).
 					Msg("Ignoring --tls-cert-file in keyless mode (SDK auto configuration only)")
 			}
+			clientOpts = append(clientOpts, sdk.WithCertCacheFile(certCacheFile))
 			clientOpts = append(clientOpts, sdk.WithTLSKeylessDefaults())
-			log.Info().Msg("TLS: Using keyless remote signer (SDK auto configuration)")
+			log.Info().
+				Str("cert_cache_file", certCacheFile).
+				Msg("TLS: Using keyless remote signer (SDK auto configuration)")
 		} else {
 			return fmt.Errorf("unsupported TLS mode: %s", flagTLSMode)
 		}

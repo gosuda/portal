@@ -42,7 +42,7 @@ ENV PORTAL_URL=http://localhost:4017
 ENV BOOTSTRAP_URIS=http://localhost:4017
 ENV ADMIN_SECRET_KEY=
 ENV SNI_PORT=:443
-ENV KEYLESS_KEY_FILE=/etc/portal/keyless/privkey.pem
+ENV KEYLESS_DIR=/etc/portal/keyless
 ENV CLOUDFLARE_TOKEN=
 ENV TZ=UTC
 

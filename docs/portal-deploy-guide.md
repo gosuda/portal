@@ -8,8 +8,8 @@ Portal uses SNI-based TLS passthrough: the relay routes TLS by SNI to tunnel bac
 
 TLS certificate mode:
 - `self`: tunnel uses locally managed certificate and key files.
-- `keyless`: tunnel delegates TLS signing to relay keyless signer (`/v1/sign`). Relay uses `KEYLESS_KEY_FILE` and can auto-issue key/cert via ACME DNS-01 when `CLOUDFLARE_TOKEN` is set.
-  When `KEYLESS_KEY_FILE` and sibling `fullchain.pem` exist, relay admin/API on `--adminport` is served over HTTPS automatically.
+- `keyless`: tunnel delegates TLS signing to relay keyless signer (`/v1/sign`). Relay uses `KEYLESS_DIR` and can auto-issue key/cert via ACME DNS-01 when `CLOUDFLARE_TOKEN` is set.
+  When `KEYLESS_DIR/fullchain.pem` and `KEYLESS_DIR/privatekey.pem` exist, relay admin/API on `--adminport` is served over HTTPS automatically.
 
 ```
 Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Backend (TLS mode)
@@ -26,7 +26,7 @@ Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Back
   - `example.com -> <server IP>`
   - `*.example.com -> <server IP>`
 - For `self` mode: wildcard TLS certificate and private key for `*.example.com` on the tunnel host.
-- For `keyless` mode: either an existing relay signing key at `KEYLESS_KEY_FILE`, or `CLOUDFLARE_TOKEN` for ACME DNS-01 auto issuance.
+- For `keyless` mode: either an existing relay signing key at `KEYLESS_DIR`, or `CLOUDFLARE_TOKEN` for ACME DNS-01 auto issuance.
 
 ## Quick Start
 
@@ -49,8 +49,8 @@ example.com.             AAAA   2001:db8::1
 PORTAL_URL=https://example.com
 ADMIN_SECRET_KEY=your-secure-key-here
 CLOUDFLARE_TOKEN=your-cloudflare-dns-token
-# Optional (default: /etc/portal/keyless/privkey.pem)
-# KEYLESS_KEY_FILE=/etc/portal/keyless/privkey.pem
+# Optional (default: /etc/portal/keyless)
+# KEYLESS_DIR=/etc/portal/keyless
 ```
 
 ### 3. Run Portal
@@ -81,7 +81,7 @@ https://myapp.example.com
 | `BOOTSTRAP_URIS` | (derived) | Relay API URLs |
 | `ADMIN_SECRET_KEY` | (auto-generated) | Admin authentication key |
 | `SNI_PORT` | `443` | SNI router port |
-| `KEYLESS_KEY_FILE` | `/etc/portal/keyless/privkey.pem` | Relay keyless signing private key path (`fullchain.pem` is expected in same directory for admin/API HTTPS auto-enable) |
+| `KEYLESS_DIR` | `/etc/portal/keyless` | Relay keyless materials directory (`wildcard-privatekey.pem` for signer, `fullchain.pem` + `privatekey.pem` for admin/API HTTPS) |
 | `CLOUDFLARE_TOKEN` | (empty) | Cloudflare DNS API token used for ACME DNS-01 auto issuance |
 
 ## docker-compose.yml
@@ -97,7 +97,7 @@ services:
       PORTAL_URL: ${PORTAL_URL}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY}
       SNI_PORT: ${SNI_PORT:-443}
-      KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
+      KEYLESS_DIR: ${KEYLESS_DIR:-/etc/portal/keyless}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
       - "4017:4017"
@@ -153,7 +153,7 @@ portal-tunnel \
 - Keyless signer endpoint, key id, trust roots, and certificate chain are auto-configured by SDK defaults.
 - Auto-discovery expects an HTTPS signer endpoint.
 - External signer API must return TLS signature responses for the requested digest.
-- Relay keyless signer key path is configured by `KEYLESS_KEY_FILE`.
+- Relay keyless signer key path is configured by `KEYLESS_DIR`.
 - When key file is missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues key/cert using ACME DNS-01.
 
 Signer API request/response example:
@@ -208,7 +208,7 @@ curl https://example.com/sdk/domain
 # Expected: {"success":true,"base_domain":"example.com"}
 
 # Tunnel script
-curl -fsSL https://example.com/tunnel | HOST=localhost:3000 NAME=test sh
+curl -fsSL https://example.com/tunnel | APP_HOST=localhost:3000 APP_NAME=test sh
 ```
 
 ## Architecture

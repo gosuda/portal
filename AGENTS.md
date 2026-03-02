@@ -79,7 +79,7 @@ Portal uses environment variables for domain and TLS configuration:
 | `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
 | `SNI_PORT` | SNI router port (default `443`) |
 | `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
-| `KEYLESS_KEY_FILE` | Relay keyless signer private key path (default `/etc/portal/keyless/privkey.pem`) |
+| `KEYLESS_DIR` | Relay keyless materials directory (default `/etc/portal/keyless`) |
 | `CLOUDFLARE_TOKEN` | Cloudflare DNS token for ACME DNS-01 auto-issuance when key file is missing |
 
 ### Tunnel Environment Variables
@@ -90,6 +90,7 @@ Portal uses environment variables for domain and TLS configuration:
 | `TLS_MODE` | `no-tls`, `self`, or `keyless` |
 | `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
 | `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
+| `TLS_CERT_CACHE_FILE` | Keyless cert cache file path (keyless mode only) |
 
 ### Domain Derivation
 
@@ -105,7 +106,7 @@ Portal uses environment variables for domain and TLS configuration:
    - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
    - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
    - Auto-discovery requires an HTTPS signer endpoint.
-   - Relay signer key comes from `KEYLESS_KEY_FILE`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
+   - Relay signer key comes from `KEYLESS_DIR/wildcard-privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
 
 See `docs/portal-deploy-guide.md` for full deployment documentation.
 
@@ -120,6 +121,8 @@ Formatting & style:
 - Run formatting before commits (see Quick Commands).
 - Import order: stdlib -> external -> internal (blank-line separated).
 - Naming: packages lowercase single-word; interfaces as behavior verbs; errors use `Err` prefix for sentinels and `Error` suffix for types.
+- Do not add meaningless string normalization or utility wrapper functions unless they provide clear, demonstrated value.
+- Do not keep backward compatibility when changing code unless explicitly requested by the user.
 - Context first parameter for public I/O: `func Do(ctx context.Context, ...)`.
 - CGo disabled: `CGO_ENABLED=0`.
 
@@ -144,6 +147,7 @@ Context & concurrency:
 - Avoid `time.After` in loops; use `context.WithTimeout` or `time.Ticker`.
 
 Testing:
+- Do not run tests on every execution. Run tests only when explicitly requested, before handoff, or when a change is high-risk.
 - Use race detector in normal test runs.
 - Use `t.Context()` in tests where applicable.
 - Benchmarks should use `for b.Loop() {}`.
@@ -165,3 +169,4 @@ CI/CD:
 
 Verbalized sampling:
 - For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
+

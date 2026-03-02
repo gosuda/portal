@@ -33,9 +33,9 @@ docker compose up
 ADMIN_SECRET_KEY=your-secret-key docker compose up
 
 # Keyless auto-issuance (optional):
-# if KEYLESS_KEY_FILE is missing and CLOUDFLARE_TOKEN is set,
+# if KEYLESS_DIR is missing and CLOUDFLARE_TOKEN is set,
 # relay issues keyless certs via ACME DNS-01.
-# when KEYLESS_KEY_FILE and sibling fullchain.pem both exist,
+# when KEYLESS_DIR/fullchain.pem and KEYLESS_DIR/privatekey.pem both exist,
 # admin/API listener on --adminport auto-switches to HTTPS.
 CLOUDFLARE_TOKEN=your-cloudflare-dns-token docker compose up
 ```
@@ -51,10 +51,10 @@ For production deployment (DNS, TLS, reverse proxy), see [docs/portal-deploy-gui
 
 ```bash
 # Windows PowerShell
-$env:HOST="localhost:3000"; $env:NAME="myapp"; irm http://localhost:4017/tunnel | iex
+$env:APP_HOST="localhost:3000"; $env:APP_NAME="myapp"; irm http://localhost:4017/tunnel | iex
 
 # macOS/Linux
-curl -fsSL http://localhost:4017/tunnel | HOST=localhost:3000 NAME=myapp sh
+curl -fsSL http://localhost:4017/tunnel | APP_HOST=localhost:3000 APP_NAME=myapp sh
 ```
 
 ### Use Go SDK

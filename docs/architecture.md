@@ -50,6 +50,37 @@ Portal connects local applications to web users through a secure relay layer wit
 - **Tokens**: Per-lease reverse connection tokens
 - **SNI Routing**: TLS passthrough without decryption
 
+## Certificate Strategy
+
+Portal issues **two separate certificates** for each domain:
+
+1. **Wildcard certificate**: `*.example.com` - for subdomain routes (e.g., `foo.example.com`)
+2. **Main certificate**: `example.com` - for the apex/root domain
+
+### Why Two Certificates?
+
+This separation is necessary due to **HTTP/2 connection coalescing**:
+
+1. Browser connects to `foo.example.com` (SNI: `foo.example.com`)
+2. If the certificate also includes `example.com` as a SAN, the browser may reuse this connection for `example.com` requests
+3. However, the TLS handshake has already negotiated SNI as `foo.example.com`
+4. The SNI router will only match the `foo.example.com` route, not `example.com`
+
+By keeping certificates separate:
+- Browser creates a new connection for `example.com`
+- SNI is properly negotiated as `example.com`
+- The `onNoRoute` handler can serve the apex domain correctly (e.g., admin UI or redirect)
+
+### SNI Routing Logic
+
+The SNI router (`portal/sni/router.go`) matches routes in this order:
+
+1. **Exact match**: `foo.example.com` → registered route
+2. **Wildcard match**: `*.example.com` matches `foo.example.com`, `bar.example.com`, etc.
+3. **No match**: Falls through to `onNoRoute` handler (e.g., apex domain `example.com`)
+
+Note: `*.example.com` does NOT match `example.com` (apex) - wildcards only match a single DNS label.
+
 ## Protocol Stack
 
 ```

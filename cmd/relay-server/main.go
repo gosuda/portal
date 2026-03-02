@@ -20,10 +20,10 @@ import (
 )
 
 const (
-	defaultAPIPort        = 4017
-	defaultSNIPort        = 443
-	defaultPortalURL      = "http://localhost:4017"
-	defaultKeylessKeyFile = "/etc/portal/keyless/privkey.pem"
+	defaultAPIPort    = 4017
+	defaultSNIPort    = 443
+	defaultPortalURL  = "http://localhost:4017"
+	defaultKeylessDir = "/etc/portal/keyless"
 )
 
 // flagPortalURL is kept for package-level consumers in other files.
@@ -37,7 +37,7 @@ type relayServerConfig struct {
 	Bootstraps     []string
 	SNIPort        int
 
-	KeylessKeyFile  string
+	KeylessDir      string
 	CloudflareToken string
 }
 
@@ -55,9 +55,9 @@ func main() {
 		bootstrapsCSV = defaultBootstrapFrom(portalURL)
 	}
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort, "SNI_PORT")
-	keylessFile := strings.TrimSpace(os.Getenv("KEYLESS_KEY_FILE"))
-	if keylessFile == "" {
-		keylessFile = defaultKeylessKeyFile
+	keylessDir := strings.TrimSpace(os.Getenv("KEYLESS_DIR"))
+	if keylessDir == "" {
+		keylessDir = defaultKeylessDir
 	}
 	adminSecretKey := strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY"))
 	cloudflareToken := strings.TrimSpace(os.Getenv("CLOUDFLARE_TOKEN"))
@@ -68,7 +68,7 @@ func main() {
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
-	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessFile, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
+	flag.StringVar(&cfg.KeylessDir, "keyless-dir", keylessDir, "directory path for relay keyless materials (env: KEYLESS_DIR)")
 	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
@@ -92,7 +92,7 @@ func runServer(cfg relayServerConfig) error {
 	baseHost := extractBaseDomain(cfg.PortalURL)
 	rootSNI := portalRootHost(cfg.PortalURL)
 	apiUpstreamAddr := loopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
-	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, baseHost, cfg.KeylessKeyFile, cfg.CloudflareToken)
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, baseHost, cfg.KeylessDir, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}

@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/acme"
 )
 
 var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
@@ -162,6 +163,8 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 				keylessServerName,
 				c.config.TLSKeylessCertificatePEM,
 				c.config.TLSKeyless.RootCAPEM,
+				c.config.CertCacheFile,
+				acme.DefaultCacheTTL,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("prepare keyless materials: %w", err)
@@ -350,18 +353,40 @@ func resolveKeylessMaterials(
 	keylessServerName string,
 	inlineCertPEM []byte,
 	inlineRootCAPEM []byte,
+	cacheFile string,
+	cacheTTL time.Duration,
 ) ([]byte, []byte, error) {
 	certPEM := append([]byte(nil), inlineCertPEM...)
-	chainFromEndpoint := []byte(nil)
+	rootCAPEM := append([]byte(nil), inlineRootCAPEM...)
 
-	if len(certPEM) == 0 || len(inlineRootCAPEM) == 0 {
-		autoChain, err := fetchEndpointCertificateChain(ctx, keylessEndpoint, keylessServerName)
-		if err != nil && len(certPEM) == 0 {
-			return nil, nil, fmt.Errorf("auto-discover certificate chain from signer endpoint: %w", err)
+	// If both are explicitly provided, no need for cache or fetch
+	if len(certPEM) > 0 && len(rootCAPEM) > 0 {
+		return certPEM, rootCAPEM, nil
+	}
+
+	// Try loading from cache first
+	if cacheEntry, err := acme.LoadCertCache(cacheFile); err != nil {
+		log.Debug().Err(err).Msg("[SDK] Failed to load cert cache")
+	} else if cacheEntry != nil && acme.IsCertCacheFresh(cacheEntry, cacheTTL) {
+		log.Debug().Str("path", cacheFile).Msg("[SDK] Using cached certificate")
+		if len(certPEM) == 0 && len(cacheEntry.CertPEM) > 0 {
+			certPEM = cacheEntry.CertPEM
 		}
-		if err == nil {
-			chainFromEndpoint = autoChain
+		if len(rootCAPEM) == 0 && len(cacheEntry.RootCAPEM) > 0 {
+			rootCAPEM = cacheEntry.RootCAPEM
 		}
+		if len(certPEM) > 0 && len(rootCAPEM) > 0 {
+			return certPEM, rootCAPEM, nil
+		}
+	}
+
+	// Fetch from endpoint
+	chainFromEndpoint, err := fetchEndpointCertificateChain(ctx, keylessEndpoint, keylessServerName)
+	if err != nil && len(certPEM) == 0 {
+		return nil, nil, fmt.Errorf("auto-discover certificate chain from signer endpoint: %w", err)
+	}
+	if err != nil {
+		log.Debug().Err(err).Msg("[SDK] Failed to fetch cert from endpoint, using inline materials")
 	}
 
 	if len(certPEM) == 0 {
@@ -371,13 +396,23 @@ func resolveKeylessMaterials(
 		return nil, nil, fmt.Errorf("keyless certificate chain is required")
 	}
 
-	rootCAPEM := append([]byte(nil), inlineRootCAPEM...)
 	if len(rootCAPEM) == 0 && len(chainFromEndpoint) > 0 {
 		rootCAPEM = append([]byte(nil), chainFromEndpoint...)
 	}
 	if len(rootCAPEM) == 0 {
-		// Fallback for non-mTLS signer TLS verification.
 		rootCAPEM = append([]byte(nil), certPEM...)
+	}
+
+	// Save to cache
+	if cacheFile != "" {
+		if err := acme.SaveCertCache(cacheFile, &acme.CertCacheEntry{
+			CertPEM:   certPEM,
+			RootCAPEM: rootCAPEM,
+		}); err != nil {
+			log.Debug().Err(err).Msg("[SDK] Failed to save cert cache")
+		} else {
+			log.Debug().Str("path", cacheFile).Msg("[SDK] Saved certificate cache")
+		}
 	}
 
 	return certPEM, rootCAPEM, nil
