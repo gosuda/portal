@@ -101,7 +101,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	lease := &portal.Lease{
 		ID:           generateID(),
 		Name:         name,
-		TLSMode:      string(normalizeTLSMode(c.config.TLSMode)),
+		TLSMode:      string(c.config.TLSMode),
 		ReverseToken: reverseToken,
 		Metadata: portal.Metadata{
 			Description: metadata.Description,
@@ -116,7 +116,7 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	// Build TLS config if enabled
 	var tlsConfig *tls.Config
 	var listenerCloseFns []func()
-	tlsMode := normalizeTLSMode(c.config.TLSMode)
+	tlsMode := c.config.TLSMode
 	tlsEnabled := tlsMode != TLSModeNoTLS
 	if tlsEnabled {
 		switch tlsMode {
@@ -441,12 +441,4 @@ func fetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 		})...)
 	}
 	return chainPEM, nil
-}
-
-func normalizeTLSMode(mode TLSMode) TLSMode {
-	normalized := TLSMode(strings.ToLower(strings.TrimSpace(string(mode))))
-	if normalized == "" {
-		return TLSModeNoTLS
-	}
-	return normalized
 }

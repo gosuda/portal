@@ -49,6 +49,52 @@ func parseURLs(raw string) []string {
 	return out
 }
 
+func parsePortNumber(raw string, fallback int, source string) int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return fallback
+	}
+	value = strings.TrimPrefix(value, ":")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		log.Warn().
+			Str("source", source).
+			Str("value", raw).
+			Int("fallback_port", fallback).
+			Msg("[server] invalid port value; using fallback")
+		return fallback
+	}
+	return port
+}
+
+func loopbackForwardAddr(listenAddr string) string {
+	raw := strings.TrimSpace(listenAddr)
+	if raw == "" {
+		return ""
+	}
+
+	port := ""
+	switch {
+	case strings.HasPrefix(raw, ":"):
+		port = strings.TrimPrefix(raw, ":")
+	case strings.Count(raw, ":") == 0:
+		port = raw
+	default:
+		_, p, err := net.SplitHostPort(raw)
+		if err != nil {
+			return ""
+		}
+		port = p
+	}
+
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return ""
+	}
+
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(portNum))
+}
+
 // isSubdomain reports whether host matches the given domain pattern.
 func isSubdomain(domain, host string) bool {
 	if host == "" || domain == "" {
@@ -155,51 +201,6 @@ func portalHostPort(portalURL string) string {
 	))
 }
 
-// loopbackForwardAddr resolves a listen address into 127.0.0.1:<port>.
-func loopbackForwardAddr(listenAddr string) (string, bool) {
-	raw := strings.TrimSpace(listenAddr)
-	if raw == "" {
-		return "", false
-	}
-
-	port := ""
-	switch {
-	case strings.HasPrefix(raw, ":"):
-		port = strings.TrimPrefix(raw, ":")
-	case strings.Count(raw, ":") == 0:
-		port = raw
-	default:
-		_, p, err := net.SplitHostPort(raw)
-		if err != nil {
-			return "", false
-		}
-		port = p
-	}
-
-	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum < 1 || portNum > 65535 {
-		return "", false
-	}
-
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(portNum)), true
-}
-
-func portalRootHost(portalURL string) string {
-	raw := strings.TrimSpace(portalURL)
-	if raw == "" {
-		return ""
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" {
-		return ""
-	}
-	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), "*.")
-}
-
 // servicePublicURL returns a service URL derived from portalURL and service name.
 func servicePublicURL(portalURL, serviceName string) string {
 	serviceName = strings.TrimSpace(serviceName)
@@ -231,6 +232,44 @@ func servicePublicURL(portalURL, serviceName string) string {
 	}
 
 	return fmt.Sprintf("%s://%s.%s", scheme, serviceName, host)
+}
+
+func extractBaseDomain(rawURL string) string {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "https://" + trimmed
+	}
+
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+
+	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
+
+func portalRootHost(portalURL string) string {
+	raw := strings.TrimSpace(portalURL)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), "*.")
 }
 
 // getContentType returns the MIME type for a file extension

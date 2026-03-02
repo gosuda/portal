@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
-	"net/url"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -35,23 +35,18 @@ func NewRelayServer(
 	ctx context.Context,
 	address []string,
 	sniPort string,
-	portalURL string,
+	baseHost string,
 	keylessKey string,
 	cloudflareToken string,
 ) (*RelayServer, error) {
-	baseDomain := extractBaseDomain(portalURL)
-	if baseDomain == "" {
-		log.Warn().Msg("[RelayServer] Could not extract base domain from portal URL")
-	}
-
 	server := &RelayServer{
-		BaseHost:     baseDomain,
+		BaseHost:     strings.ToLower(strings.TrimSpace(baseHost)),
 		address:      address,
 		leaseManager: NewLeaseManager(30 * time.Second),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
 		acmeManager: acme.NewManager(acme.Config{
-			PortalURL:       portalURL,
+			BaseDomain:      strings.ToLower(strings.TrimSpace(baseHost)),
 			KeyFile:         keylessKey,
 			CloudflareToken: cloudflareToken,
 		}),
@@ -91,28 +86,6 @@ func NewRelayServer(
 	return server, nil
 }
 
-func extractBaseDomain(rawURL string) string {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return ""
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + trimmed
-	}
-
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-
-	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
-}
-
 // GetLeaseManager returns the lease manager instance.
 func (g *RelayServer) GetLeaseManager() *LeaseManager {
 	return g.leaseManager
@@ -136,6 +109,49 @@ func (g *RelayServer) GetKeylessSigner() *keyless.Signer {
 // GetACMEManager returns relay ACME manager.
 func (g *RelayServer) GetACMEManager() *acme.Manager {
 	return g.acmeManager
+}
+
+// ConfigurePortalRootFallback forwards unmatched root-domain SNI traffic to the provided upstream listener.
+func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) {
+	if g == nil || g.sniRouter == nil {
+		return
+	}
+
+	rootSNI = strings.ToLower(strings.TrimSpace(rootSNI))
+	if rootSNI == "" {
+		return
+	}
+
+	upstreamAddr = strings.TrimSpace(upstreamAddr)
+	if upstreamAddr == "" {
+		log.Warn().
+			Msg("[RelayServer] root-domain SNI fallback upstream is empty; fallback disabled")
+		return
+	}
+
+	g.sniRouter.SetNoRouteHandler(func(clientConn net.Conn, serverName string) bool {
+		if !strings.EqualFold(strings.TrimSpace(serverName), rootSNI) {
+			return false
+		}
+
+		upstreamConn, err := net.DialTimeout("tcp", upstreamAddr, 5*time.Second)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("sni", serverName).
+				Str("upstream", upstreamAddr).
+				Msg("[SNI] failed to forward root domain to admin/API listener")
+			clientConn.Close()
+			return true
+		}
+
+		log.Debug().
+			Str("sni", serverName).
+			Str("upstream", upstreamAddr).
+			Msg("[SNI] forwarding root domain to admin/API listener")
+		sni.BridgeConnections(clientConn, upstreamConn)
+		return true
+	})
 }
 
 // Start starts the relay server.

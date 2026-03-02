@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ type provisionConfig struct {
 }
 
 type Config struct {
-	PortalURL       string
+	BaseDomain      string
 	KeyFile         string
 	CloudflareToken string
 }
@@ -55,7 +54,7 @@ type Manager struct {
 func NewManager(cfg Config) *Manager {
 	return &Manager{
 		cfg: Config{
-			PortalURL:       strings.TrimSpace(cfg.PortalURL),
+			BaseDomain:      strings.ToLower(strings.TrimSpace(cfg.BaseDomain)),
 			KeyFile:         strings.TrimSpace(cfg.KeyFile),
 			CloudflareToken: strings.TrimSpace(cfg.CloudflareToken),
 		},
@@ -119,9 +118,9 @@ func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
 		return keyFile, nil
 	}
 
-	baseDomain := extractBaseDomain(m.cfg.PortalURL)
+	baseDomain := m.cfg.BaseDomain
 	if baseDomain == "" {
-		return "", fmt.Errorf("derive base domain from PORTAL_URL for ACME provisioning")
+		return "", fmt.Errorf("base domain is required for ACME provisioning")
 	}
 
 	cfg, err := buildProvisionConfig(baseDomain, keyFile, m.cfg.CloudflareToken)
@@ -407,31 +406,6 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 
 func hasCloudflareToken(cloudflareToken string) bool {
 	return strings.TrimSpace(cloudflareToken) != ""
-}
-
-func extractBaseDomain(portalURL string) string {
-	raw := strings.TrimSpace(portalURL)
-	if raw == "" {
-		return ""
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return ""
-	}
-	if parsed.Hostname() == "" {
-		return ""
-	}
-
-	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
 func fullChainPath(keyFile string) string {

@@ -12,13 +12,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/sni"
 	"gosuda.org/portal/sdk"
 )
 
@@ -135,7 +133,6 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	}
 	acmeManager := serv.GetACMEManager()
 	tlsCertFile, tlsKeyFile := acmeManager.TLSFiles()
-	configurePortalRootFallback(addr, serv)
 
 	go func() {
 		var err error
@@ -326,43 +323,4 @@ func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.S
 		log.Error().Err(err).Msg("[signer] failed to encode sign response")
 		writeSignError(w, http.StatusInternalServerError, "failed to encode response")
 	}
-}
-
-func configurePortalRootFallback(adminListenAddr string, serv *portal.RelayServer) {
-	portalRootSNI := portalRootHost(flagPortalURL)
-	if portalRootSNI == "" {
-		return
-	}
-
-	apiAddr, ok := loopbackForwardAddr(adminListenAddr)
-	if !ok {
-		log.Warn().
-			Str("listen_addr", adminListenAddr).
-			Msg("[SNI] invalid admin listen address; root-domain fallback disabled")
-		return
-	}
-
-	serv.GetSNIRouter().SetNoRouteHandler(func(clientConn net.Conn, serverName string) bool {
-		if !strings.EqualFold(strings.TrimSpace(serverName), portalRootSNI) {
-			return false
-		}
-
-		upstreamConn, err := net.DialTimeout("tcp", apiAddr, 5*time.Second)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("sni", serverName).
-				Str("upstream", apiAddr).
-				Msg("[SNI] failed to forward root domain to admin/API listener")
-			clientConn.Close()
-			return true
-		}
-
-		log.Debug().
-			Str("sni", serverName).
-			Str("upstream", apiAddr).
-			Msg("[SNI] forwarding root domain to admin/API listener")
-		sni.BridgeConnections(clientConn, upstreamConn)
-		return true
-	})
 }

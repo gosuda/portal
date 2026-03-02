@@ -340,7 +340,7 @@ func (l *Listener) registerWithRelay() error {
 		LeaseID:      l.lease.ID,
 		Name:         l.lease.Name,
 		Metadata:     l.lease.Metadata,
-		TLSMode:      normalizeTLSMode(TLSMode(l.lease.TLSMode)),
+		TLSMode:      TLSMode(l.lease.TLSMode),
 		ReverseToken: l.lease.ReverseToken,
 	}
 

@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,7 +89,10 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, cfg.PortalURL, cfg.KeylessKeyFile, cfg.CloudflareToken)
+	baseHost := extractBaseDomain(cfg.PortalURL)
+	rootSNI := portalRootHost(cfg.PortalURL)
+	apiUpstreamAddr := loopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, baseHost, cfg.KeylessKeyFile, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
@@ -134,6 +136,8 @@ func runServer(cfg relayServerConfig) error {
 		reverseConn.Close()
 	})
 
+	serv.ConfigurePortalRootFallback(rootSNI, apiUpstreamAddr)
+
 	if err := serv.Start(); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
 	}
@@ -154,22 +158,4 @@ func runServer(cfg relayServerConfig) error {
 
 	log.Info().Msg("[server] shutdown complete")
 	return nil
-}
-
-func parsePortNumber(raw string, fallback int, source string) int {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return fallback
-	}
-	value = strings.TrimPrefix(value, ":")
-	port, err := strconv.Atoi(value)
-	if err != nil || port < 1 || port > 65535 {
-		log.Warn().
-			Str("source", source).
-			Str("value", raw).
-			Int("fallback_port", fallback).
-			Msg("[server] invalid port value; using fallback")
-		return fallback
-	}
-	return port
 }
