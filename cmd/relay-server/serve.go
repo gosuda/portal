@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -121,15 +122,16 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 			}
 
 			log.Warn().Str("host", r.Host).Msg("[server] tls subdomain reached admin listener without SNI route")
-			http.Error(w, "tls-enabled subdomain must be served via SNI route", http.StatusBadGateway)
+			http.Error(w, "tls-enabled subdomain must be served via SNI route", http.StatusMisdirectedRequest)
 			return
 		}
 		appMux.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:         addr,
+		Handler:      handler,
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
 	tlsCertFile, tlsKeyFile := acmeManager.TLSFiles()
