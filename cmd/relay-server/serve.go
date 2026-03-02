@@ -112,9 +112,16 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 				proxyToHTTP(w, r, serv, leaseName, leaseEntry)
 				return
 			}
-			// TLS is enabled, redirect to HTTPS.
-			log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
-			redirectToHTTPS(w, r, serv.GetSNIRouter().GetAddr())
+			// TLS-enabled subdomains should terminate on SNI passthrough.
+			// Redirect only insecure requests; secure requests here would loop.
+			if !isSecureRequest(r) {
+				log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
+				redirectToHTTPS(w, r, serv.GetSNIRouter().GetAddr())
+				return
+			}
+
+			log.Warn().Str("host", r.Host).Msg("[server] tls subdomain reached admin listener without SNI route")
+			http.Error(w, "tls-enabled subdomain must be served via SNI route", http.StatusBadGateway)
 			return
 		}
 		appMux.ServeHTTP(w, r)
