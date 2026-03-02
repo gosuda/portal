@@ -40,7 +40,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "http://localhost:4017", "relay API URL (http/https)")
+	flag.StringVar(&flagServerURL, "server-url", "https://gosunuts.xyz", "relay API URL (http/https)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")

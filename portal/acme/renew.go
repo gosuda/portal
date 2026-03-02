@@ -2,6 +2,8 @@ package acme
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -250,4 +252,13 @@ func (m *AcmeManager) doRenew(cfg provisionConfig) error {
 	}
 
 	return nil
+}
+
+// ParseCertificatePEM parses a PEM-encoded certificate.
+func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, errors.New("no PEM block found")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }

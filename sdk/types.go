@@ -59,10 +59,6 @@ type ClientConfig struct {
 	// Optional certificate chain and remote signer config used by keyless mode.
 	TLSKeylessCertificatePEM []byte
 	TLSKeyless               TLSKeylessConfig
-
-	// CertCacheFile is the path to cache keyless certificates.
-	// If set, certificates are cached to avoid re-fetching on every startup.
-	CertCacheFile string
 }
 
 type ClientOption func(*ClientConfig)
@@ -149,14 +145,6 @@ func WithTLSKeyless(certPEM []byte, cfg TLSKeylessConfig) ClientOption {
 func WithTLSKeylessDefaults() ClientOption {
 	return func(c *ClientConfig) {
 		c.TLSMode = TLSModeKeyless
-	}
-}
-
-// WithCertCacheFile sets the path for caching keyless certificates.
-// Cached certificates are reused until they expire (default 24 hours).
-func WithCertCacheFile(path string) ClientOption {
-	return func(c *ClientConfig) {
-		c.CertCacheFile = path
 	}
 }
 

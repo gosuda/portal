@@ -53,7 +53,6 @@ Options:
         --tls-mode        TLS mode: no-tls, self, or keyless [default: no-tls] [env: TLS_MODE]
         --tls-cert-file   PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]
         --tls-key-file    PEM private key for --tls-mode self [env: TLS_KEY_FILE]
-        --tls-cert-cache-file Certificate cache file path for --tls-mode keyless [env: TLS_CERT_CACHE_FILE]
         --description     Service description metadata  [env: APP_DESCRIPTION]
         --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
         --thumbnail       Service thumbnail URL metadata  [env: APP_THUMBNAIL]
@@ -81,7 +80,6 @@ export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
 export TLS_MODE=keyless
-export TLS_CERT_CACHE_FILE=/var/lib/portal/cache/cert-cache.json
 
 ./bin/portal-tunnel
 ```
@@ -106,7 +104,6 @@ export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
 export TLS_MODE=keyless
-export TLS_CERT_CACHE_FILE=/var/lib/portal/cache/cert-cache.json
 
 ./bin/portal-tunnel
 ```

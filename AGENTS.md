@@ -90,7 +90,6 @@ Portal uses environment variables for domain and TLS configuration:
 | `TLS_MODE` | `no-tls`, `self`, or `keyless` |
 | `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
 | `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
-| `TLS_CERT_CACHE_FILE` | Keyless cert cache file path (keyless mode only) |
 
 ### Domain Derivation
 
