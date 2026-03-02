@@ -8,7 +8,7 @@ Portal uses SNI-based TLS passthrough: the relay routes TLS by SNI to tunnel bac
 
 TLS certificate mode:
 - `self`: tunnel uses locally managed certificate and key files.
-- `keyless`: tunnel uses a local certificate chain and delegates signing to an external signer API (relay does not hold private key).
+- `keyless`: tunnel delegates TLS signing to relay keyless signer (`/v1/sign`). Relay uses `KEYLESS_KEY_FILE` and can auto-issue key/cert via ACME DNS-01 when `CLOUDFLARE_TOKEN` is set.
 
 ```
 Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Backend (TLS mode)
@@ -24,7 +24,8 @@ Client ──TLS──► Relay (SNI Router :443) ──TLS──► Tunnel Back
 - DNS A/AAAA records pointing to your server:
   - `example.com -> <server IP>`
   - `*.example.com -> <server IP>`
-- Wildcard TLS certificate and private key for `*.example.com`
+- For `self` mode: wildcard TLS certificate and private key for `*.example.com` on the tunnel host.
+- For `keyless` mode: either an existing relay signing key at `KEYLESS_KEY_FILE`, or `CLOUDFLARE_TOKEN` for ACME DNS-01 auto issuance.
 
 ## Quick Start
 
@@ -46,6 +47,9 @@ example.com.             AAAA   2001:db8::1
 # Core
 PORTAL_URL=https://example.com
 ADMIN_SECRET_KEY=your-secure-key-here
+CLOUDFLARE_TOKEN=your-cloudflare-dns-token
+# Optional (default: /etc/portal/keyless/privkey.pem)
+# KEYLESS_KEY_FILE=/etc/portal/keyless/privkey.pem
 ```
 
 ### 3. Run Portal
@@ -76,6 +80,8 @@ https://myapp.example.com
 | `BOOTSTRAP_URIS` | (derived) | Relay API URLs |
 | `ADMIN_SECRET_KEY` | (auto-generated) | Admin authentication key |
 | `SNI_PORT` | `:443` | SNI router port |
+| `KEYLESS_KEY_FILE` | `/etc/portal/keyless/privkey.pem` | Relay keyless signing private key path |
+| `CLOUDFLARE_TOKEN` | (empty) | Cloudflare DNS API token used for ACME DNS-01 auto issuance |
 
 ## docker-compose.yml
 
@@ -83,9 +89,15 @@ https://myapp.example.com
 services:
   portal:
     image: ghcr.io/gosuda/portal:1
+    command:
+      - "--adminport"
+      - "4017"
     environment:
       PORTAL_URL: ${PORTAL_URL}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY}
+      SNI_PORT: ${SNI_PORT:-:443}
+      KEYLESS_KEY_FILE: ${KEYLESS_KEY_FILE:-/etc/portal/keyless/privkey.pem}
+      CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
       - "4017:4017"
       - "443:443"
@@ -140,6 +152,8 @@ portal-tunnel \
 - Keyless signer endpoint, key id, trust roots, and certificate chain are auto-configured by SDK defaults.
 - Auto-discovery expects an HTTPS signer endpoint.
 - External signer API must return TLS signature responses for the requested digest.
+- Relay keyless signer key path is configured by `KEYLESS_KEY_FILE`.
+- When key file is missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues key/cert using ACME DNS-01.
 
 Signer API request/response example:
 

@@ -79,6 +79,8 @@ Portal uses environment variables for domain and TLS configuration:
 | `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
 | `SNI_PORT` | SNI router port (default `:443`) |
 | `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
+| `KEYLESS_KEY_FILE` | Relay keyless signer private key path (default `/etc/portal/keyless/privkey.pem`) |
+| `CLOUDFLARE_TOKEN` | Cloudflare DNS token for ACME DNS-01 auto-issuance when key file is missing |
 
 ### Tunnel Environment Variables
 
@@ -103,6 +105,7 @@ Portal uses environment variables for domain and TLS configuration:
    - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
    - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
    - Auto-discovery requires an HTTPS signer endpoint.
+   - Relay signer key comes from `KEYLESS_KEY_FILE`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
 
 See `docs/portal-deploy-guide.md` for full deployment documentation.
 

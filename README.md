@@ -29,8 +29,18 @@ docker compose up
 
 # Access at http://localhost:4017
 # Admin panel at http://localhost:4017/admin
-# Auto-generated admin key shown in logs, or set your own:
+# Set your own admin key (recommended):
 ADMIN_SECRET_KEY=your-secret-key docker compose up
+
+# Keyless auto-issuance (optional):
+# if KEYLESS_KEY_FILE is missing and CLOUDFLARE_TOKEN is set,
+# relay issues/renews keyless certs via ACME DNS-01.
+CLOUDFLARE_TOKEN=your-cloudflare-dns-token docker compose up
+```
+
+```bash
+# Run relay binary directly
+./bin/relay-server --adminport 4017
 ```
 
 For production deployment (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).

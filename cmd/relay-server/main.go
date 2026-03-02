@@ -30,14 +30,15 @@ const (
 var flagPortalURL string
 
 type relayServerConfig struct {
-	Port           int
+	AdminPort      int
 	AdminSecretKey string
-	NoIndex        bool
 	LeaseBPS       int
 	PortalURL      string
 	Bootstraps     []string
 	SNIPort        string
-	KeylessKeyFile string
+
+	KeylessKeyFile  string
+	CloudflareToken string
 }
 
 func main() {
@@ -47,7 +48,6 @@ func main() {
 
 	portalURL := strings.TrimSuffix(strings.TrimSpace(os.Getenv("PORTAL_URL")), "/")
 	if portalURL == "" {
-		// Prefer explicit scheme for localhost so downstream URL building is unambiguous.
 		portalURL = defaultPortalURL
 	}
 	bootstrapsCSV := strings.TrimSpace(os.Getenv("BOOTSTRAP_URIS"))
@@ -62,15 +62,17 @@ func main() {
 	if keylessKey == "" {
 		keylessKey = defaultKeylessKeyFile
 	}
+	adminSecretKey := strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY"))
+	cloudflareToken := strings.TrimSpace(os.Getenv("CLOUDFLARE_TOKEN"))
 
-	flag.IntVar(&cfg.Port, "port", defaultHTTPPort, "HTTP server port")
-	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", strings.TrimSpace(os.Getenv("ADMIN_SECRET_KEY")), "admin auth secret (env: ADMIN_SECRET_KEY)")
-	flag.BoolVar(&cfg.NoIndex, "noindex", strings.EqualFold(strings.TrimSpace(os.Getenv("NOINDEX")), "true"), "disallow crawlers (env: NOINDEX)")
+	flag.IntVar(&cfg.AdminPort, "adminport", defaultHTTPPort, "Admin/HTTP server port")
+	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
 	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 	flag.StringVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port (env: SNI_PORT)")
 	flag.StringVar(&cfg.KeylessKeyFile, "keyless-key-file", keylessKey, "PEM private key path for relay keyless signer (env: KEYLESS_KEY_FILE)")
+	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
 	cfg.Bootstraps = parseURLs(bootstrapsCSV)
@@ -89,7 +91,7 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, cfg.SNIPort, cfg.PortalURL, cfg.KeylessKeyFile)
+	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, cfg.SNIPort, cfg.PortalURL, cfg.KeylessKeyFile, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
@@ -138,7 +140,7 @@ func runServer(cfg relayServerConfig) error {
 	}
 	defer serv.Stop()
 
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.Port), serv, admin, frontend, cfg.NoIndex, stop)
+	httpSrv := serveHTTP(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

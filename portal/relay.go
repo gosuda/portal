@@ -35,6 +35,7 @@ func NewRelayServer(
 	sniPort string,
 	portalURL string,
 	keylessKey string,
+	cloudflareToken string,
 ) (*RelayServer, error) {
 	baseDomain := extractBaseDomain(portalURL)
 	if baseDomain == "" {
@@ -50,8 +51,13 @@ func NewRelayServer(
 		stopch:       make(chan struct{}),
 	}
 
+	keyFile, err := keyless.EnsureSigningKey(ctx, portalURL, keylessKey, cloudflareToken)
+	if err != nil {
+		return nil, fmt.Errorf("ensure keyless signing key: %w", err)
+	}
+
 	signer, err := keyless.NewSigner(keyless.Config{
-		KeyFile: keylessKey,
+		KeyFile: keyFile,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("configure keyless signer: %w", err)
