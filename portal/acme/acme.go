@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/go-acme/lego/v4/certcrypto"
@@ -148,10 +149,30 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 
 	missingTargets := make([]certTarget, 0, len(targets))
 	for _, target := range targets {
-		if fileExists(target.KeyFile) && fileExists(target.CertFile) {
+		if !fileExists(target.KeyFile) || !fileExists(target.CertFile) {
+			missingTargets = append(missingTargets, target)
 			continue
 		}
-		missingTargets = append(missingTargets, target)
+
+		covered, coverageErr := certCoversDomains(target.CertFile, target.Domains)
+		if coverageErr != nil {
+			log.Warn().
+				Err(coverageErr).
+				Str("target", target.Name).
+				Str("cert_file", target.CertFile).
+				Msg("[signer] failed to validate existing certificate; re-issuing via ACME")
+			missingTargets = append(missingTargets, target)
+			continue
+		}
+		if !covered {
+			log.Warn().
+				Str("target", target.Name).
+				Str("cert_file", target.CertFile).
+				Strs("required_domains", target.Domains).
+				Msg("[signer] existing certificate does not cover required domains; re-issuing via ACME")
+			missingTargets = append(missingTargets, target)
+			continue
+		}
 	}
 	if len(missingTargets) == 0 {
 		return signerKeyFile, nil
@@ -182,7 +203,7 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 			Strs("domains", cfg.Domains).
 			Str("key_file", cfg.KeyFile).
 			Str("cert_file", cfg.CertFile).
-			Msg("[signer] ACME target is missing; issuing certificate with ACME DNS-01 via Cloudflare")
+			Msg("[signer] ACME target is missing or invalid; issuing certificate with ACME DNS-01 via Cloudflare")
 
 		if err := m.provisionCertificate(cfg); err != nil {
 			return "", err
@@ -260,6 +281,34 @@ func buildCertTargets(baseDomain, configuredKeyDir string) ([]certTarget, error)
 			Domains:  []string{"*." + base, base},
 		},
 	}, nil
+}
+
+func certCoversDomains(certFile string, domains []string) (bool, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return false, err
+	}
+
+	cert, err := ParseCertificatePEM(certPEM)
+	if err != nil {
+		return false, err
+	}
+
+	for _, domain := range domains {
+		if strings.HasPrefix(domain, "*.") {
+			probeHost := "acme-probe." + strings.TrimPrefix(domain, "*.")
+			if err := cert.VerifyHostname(probeHost); err != nil {
+				return false, nil
+			}
+			continue
+		}
+
+		if err := cert.VerifyHostname(domain); err != nil {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 func (m *AcmeManager) provisionCertificate(cfg provisionConfig) error {

@@ -88,7 +88,7 @@ func (m *AcmeManager) shouldRenew() bool {
 	}
 
 	for _, target := range targets {
-		needsRenewal, checkErr := certNeedsRenewal(target.CertFile)
+		needsRenewal, checkErr := certNeedsRenewal(target.CertFile, target.Domains)
 		if checkErr != nil {
 			log.Debug().
 				Err(checkErr).
@@ -104,7 +104,7 @@ func (m *AcmeManager) shouldRenew() bool {
 	return false
 }
 
-func certNeedsRenewal(certFile string) (bool, error) {
+func certNeedsRenewal(certFile string, domains []string) (bool, error) {
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
 		return false, err
@@ -117,6 +117,19 @@ func certNeedsRenewal(certFile string) (bool, error) {
 
 	timeUntilExpiry := time.Until(cert.NotAfter)
 	needsRenewal := timeUntilExpiry < RenewalThreshold
+	if !needsRenewal {
+		covered, coverageErr := certCoversDomains(certFile, domains)
+		if coverageErr != nil {
+			return false, coverageErr
+		}
+		if !covered {
+			log.Warn().
+				Str("cert_file", certFile).
+				Strs("required_domains", domains).
+				Msg("[acme] certificate does not cover required domains; renewal required")
+			needsRenewal = true
+		}
+	}
 	if needsRenewal {
 		log.Info().
 			Time("not_after", cert.NotAfter).
@@ -152,7 +165,7 @@ func (m *AcmeManager) renewCertificate(ctx context.Context) error {
 	}
 
 	for _, target := range targets {
-		needsRenewal, checkErr := certNeedsRenewal(target.CertFile)
+		needsRenewal, checkErr := certNeedsRenewal(target.CertFile, target.Domains)
 		if checkErr != nil {
 			continue
 		}
