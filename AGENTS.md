@@ -34,15 +34,16 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 ## Operational Truths (CI-Aligned, Minimal)
 
-1. **Default local lint behavior is `make lint-auto`.**
-   - Why: applies safe automatic rewrites before verification and reduces lint iteration churn.
+1. **Local lint workflow: run `make lint-auto` first, then `make lint`.**
+   - Why: `lint-auto` applies safe rewrites locally, while `lint` is the strict non-mutating gate that matches CI.
 
 2. **Use CI-equivalent verification when validating high-risk changes:**
-   - `make lint-auto`
+   - `make vet`
+   - `make lint`
    - `make test`
-   - `make tidy`
    - `make vuln`
    - Why: these are the enforced checks in `.github/workflows/ci.yml`.
+   - Note: `make tidy` is a local maintenance/pre-release step and is not currently part of the CI workflow.
 
 3. **Assume Go toolchain baseline from `go.mod` (currently 1.26.x).**
    - Why: CI resolves Go from `go.mod`; avoid stale version assumptions.
@@ -74,7 +75,7 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 ## Verbalized Sampling
 
-Before trival or non-trivial changes, AI agents **must**:
+Before trivial or non-trivial changes, AI agents **must**:
 
 1. **Sample 3–5 intent hypotheses** — rank by likelihood, note one weakness each
 2. **Explore edge cases** — at least 3 standard, 5 for architectural changes

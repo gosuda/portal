@@ -81,13 +81,19 @@ Contributions are welcome.
 
 ### Verification (CI-Aligned)
 
-Run the same checks enforced in CI (`.github/workflows/ci.yml`):
+Run the same checks enforced in CI (`.github/workflows/ci.yml`) in this order:
 
 ```bash
 make vet
 make lint
 make test
 make vuln
+```
+
+For local pre-PR cleanup (not enforced in CI), run:
+
+```bash
+make tidy
 ```
 
 ### Steps to Contribute

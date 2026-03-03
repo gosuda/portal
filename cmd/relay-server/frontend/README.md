@@ -100,12 +100,18 @@ Build output:
 
 ### NPM Scripts
 
-```bash
-npm run dev
-npm run build
-npm run lint
-npm run typecheck
-```
+| Script | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server (`http://localhost:5173`). |
+| `npm run build` | Type-check and build production assets into `dist/`. |
+| `npm run lint` | Run ESLint with warnings treated as errors. |
+| `npm run typecheck` | Run TypeScript checking with `--noEmit`. |
+| `npm test` | Run the frontend test suite with `vitest run`. |
+| `npm run test:watch` | Run Vitest in watch mode for local TDD cycles. |
+| `npm run test:coverage` | Run Vitest with coverage reporting. |
+| `npm run preview` | Preview the production bundle with Vite. |
+| `npm run build:go` | Build the relay server binary used by local serve flow. |
+| `npm run serve` | Build frontend + Go binary, then launch relay server on admin port `4017`. |
 
 ## Relay Server Integration
 
