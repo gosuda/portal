@@ -16,7 +16,6 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/sdk"
 )
 
 func isSecureRequest(r *http.Request) bool {
@@ -386,7 +385,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	}
 
 	kind := "http"
-	if sdk.TLSMode(lease.TLSMode) != sdk.TLSModeNoTLS {
+	if lease.TLS {
 		kind = "https"
 	}
 

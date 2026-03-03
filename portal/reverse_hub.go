@@ -44,6 +44,9 @@ const (
 	// ReverseIdleKeepaliveInterval sends an idle keepalive byte to reduce
 	// reverse websocket disconnections from intermediate idle timeouts.
 	ReverseIdleKeepaliveInterval = 25 * time.Second
+
+	// ReverseConnectTokenHeader is the websocket handshake header carrying reverse auth token.
+	ReverseConnectTokenHeader = "X-Portal-Reverse-Token"
 )
 
 // ReverseConn wraps a net.Conn with lifecycle management for the connection pool.
@@ -328,7 +331,7 @@ func parseReverseConnectCredentials(req *http.Request) (leaseID, token string) {
 		return "", ""
 	}
 	leaseID = strings.TrimSpace(req.URL.Query().Get("lease_id"))
-	token = strings.TrimSpace(req.URL.Query().Get("token"))
+	token = strings.TrimSpace(req.Header.Get(ReverseConnectTokenHeader))
 	return leaseID, token
 }
 

@@ -11,8 +11,56 @@ import (
 	"strings"
 	"time"
 
+	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/rs/zerolog/log"
 )
+
+// BuildClientTLSConfig builds a keyless TLS server config for tunnel-side TLS termination.
+// It returns the TLS config and a close callback for signer resources.
+func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Config, func(), error) {
+	if keylessServerName == "" {
+		return nil, nil, fmt.Errorf("keyless server name is required")
+	}
+	if domain == "" {
+		return nil, nil, fmt.Errorf("tls domain is required")
+	}
+	certPEM, rootCAPEM, err := ResolveMaterials(
+		context.Background(),
+		relayAddr,
+		keylessServerName,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
+	}
+
+	if err := VerifyCertificateHostname(certPEM, domain); err != nil {
+		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, err)
+	}
+
+	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
+		Endpoint:   relayAddr,
+		ServerName: keylessServerName,
+		KeyID:      RelayKeyID,
+		RootCAPEM:  rootCAPEM,
+	}, certPEM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
+	}
+
+	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
+		CertPEM: certPEM,
+		Signer:  remoteSigner,
+	})
+	if err != nil {
+		_ = remoteSigner.Close()
+		return nil, nil, fmt.Errorf("create keyless TLS config: %w", err)
+	}
+	tlsConfig.NextProtos = []string{"http/1.1"}
+
+	return tlsConfig, func() { _ = remoteSigner.Close() }, nil
+}
 
 // ResolveMaterials prepares certificate chain and root CAs for keyless TLS mode.
 func ResolveMaterials(

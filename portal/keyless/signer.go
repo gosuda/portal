@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultKeyID       = "relay-cert"
+	RelayKeyID         = "relay-cert"
 	defaultAllowedSkew = 30 * time.Second
 )
 
@@ -57,7 +57,7 @@ func NewSigner(cfg Config) (*Signer, error) {
 	}
 
 	store := ksigner.NewStaticKeyStore()
-	if err := store.Put(defaultKeyID, signingKey); err != nil {
+	if err := store.Put(RelayKeyID, signingKey); err != nil {
 		return nil, fmt.Errorf("register keyless signing key: %w", err)
 	}
 
@@ -68,7 +68,7 @@ func NewSigner(cfg Config) (*Signer, error) {
 
 	return &Signer{
 		service: svc,
-		keyID:   defaultKeyID,
+		keyID:   RelayKeyID,
 	}, nil
 }
 

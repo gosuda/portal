@@ -23,8 +23,8 @@ type Lease struct {
 	Name         string    `json:"name"`
 	Metadata     Metadata  `json:"metadata"`
 	Expires      time.Time `json:"expires"`
-	TLSMode      string    `json:"tls_mode"` // no-tls, self, keyless
-	ReverseToken string    `json:"-"`        // shared secret for reverse connect authentication
+	TLS          bool      `json:"tls"`
+	ReverseToken string    `json:"-"` // shared secret for reverse connect authentication
 }
 
 // Metadata holds service metadata

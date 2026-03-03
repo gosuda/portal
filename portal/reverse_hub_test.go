@@ -3,6 +3,7 @@ package portal
 import (
 	"io"
 	"net"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -117,5 +118,30 @@ func TestAcquireForHTTPSendsStartMarker(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for start marker")
+	}
+}
+
+func TestParseReverseConnectCredentials_HeaderTokenPreferred(t *testing.T) {
+	req := httptest.NewRequest("GET", "/sdk/connect?lease_id=lease-1&token=query-token", nil)
+	req.Header.Set(ReverseConnectTokenHeader, "header-token")
+
+	leaseID, token := parseReverseConnectCredentials(req)
+	if leaseID != "lease-1" {
+		t.Fatalf("unexpected lease_id: %q", leaseID)
+	}
+	if token != "header-token" {
+		t.Fatalf("expected header token, got %q", token)
+	}
+}
+
+func TestParseReverseConnectCredentials_QueryTokenIgnored(t *testing.T) {
+	req := httptest.NewRequest("GET", "/sdk/connect?lease_id=lease-2&token=query-token", nil)
+
+	leaseID, token := parseReverseConnectCredentials(req)
+	if leaseID != "lease-2" {
+		t.Fatalf("unexpected lease_id: %q", leaseID)
+	}
+	if token != "" {
+		t.Fatalf("expected empty token when header is missing, got %q", token)
 	}
 }

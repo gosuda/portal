@@ -87,9 +87,7 @@ Portal uses environment variables for domain and TLS configuration:
 | Variable | Description |
 |----------|-------------|
 | `RELAYS` | Relay API URLs for tunnel client (comma-separated) |
-| `TLS_MODE` | `no-tls`, `self`, or `keyless` |
-| `TLS_CERT_FILE` | Self TLS certificate chain path (self mode only) |
-| `TLS_KEY_FILE` | Self TLS private key path (self mode only) |
+| `TLS` | Enable TLS keyless mode (`1`/`true`) |
 | `TLS_BASE_DOMAIN` | Base domain used for keyless certificate hostname validation (keyless mode) |
 
 ### Domain Derivation
@@ -98,12 +96,11 @@ Portal uses environment variables for domain and TLS configuration:
 - Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
 - SNI routes registered in `portal/sni/router.go`
 
-### TLS Modes
+### TLS
 
-1. **`no-tls`**: HTTP proxy mode for development.
-2. **`self`**: Tunnel uses locally provided certificate and key (`TLS_CERT_FILE` + `TLS_KEY_FILE`).
-3. **`keyless`**: Tunnel uses SDK keyless mode with auto defaults.
-   - Keyless signer endpoint defaults to relay URL unless explicitly overridden in SDK options.
+1. **`TLS` disabled**: HTTP proxy mode for development.
+2. **`TLS` enabled**: Tunnel uses SDK keyless TLS mode.
+   - Keyless signer endpoint defaults to relay URL.
    - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
    - Auto-discovery requires an HTTPS signer endpoint.
    - Relay signer key comes from `KEYLESS_DIR/privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.

@@ -17,7 +17,6 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/sdk"
 )
 
 //go:embed dist/*
@@ -169,11 +168,11 @@ func shouldProxyHTTP(host string, serv *portal.RelayServer) (string, *portal.Lea
 		return leaseName, nil, true
 	}
 
-	// If TLS mode is no-tls, we can proxy via HTTP.
-	shouldProxy := sdk.TLSMode(entry.Lease.TLSMode) == sdk.TLSModeNoTLS
+	// If TLS is disabled, we can proxy via HTTP.
+	shouldProxy := !entry.Lease.TLS
 	log.Debug().
 		Str("lease_name", leaseName).
-		Str("tls_mode", entry.Lease.TLSMode).
+		Bool("tls", entry.Lease.TLS).
 		Msg("[proxy] shouldProxyHTTP")
 	return leaseName, entry, shouldProxy
 }
@@ -189,7 +188,7 @@ func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServe
 		return
 	}
 
-	if sdk.TLSMode(entry.Lease.TLSMode) != sdk.TLSModeNoTLS {
+	if entry.Lease.TLS {
 		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
 		return
 	}

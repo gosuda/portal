@@ -65,8 +65,8 @@ func TestRelayConnectURL(t *testing.T) {
 	if !strings.Contains(got, "lease_id=lease-1") {
 		t.Fatalf("missing lease_id in URL: %q", got)
 	}
-	if !strings.Contains(got, "token=token-1") {
-		t.Fatalf("missing token in URL: %q", got)
+	if strings.Contains(got, "token=token-1") {
+		t.Fatalf("token must not be present in URL query: %q", got)
 	}
 
 	if _, err := relayConnectURL("http://localhost:4017", "", "token-1"); err == nil {

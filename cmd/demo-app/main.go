@@ -34,9 +34,7 @@ var (
 	flagTags      string
 	flagOwner     string
 	flagHide      bool
-	flagTLSMode   string
-	flagTLSCert   string
-	flagTLSKey    string
+	flagTLS       bool
 )
 
 func main() {
@@ -47,13 +45,8 @@ func main() {
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
-	defaultTLSMode := os.Getenv("TLS_MODE")
-	if defaultTLSMode == "" {
-		defaultTLSMode = string(sdk.TLSModeNoTLS)
-	}
-	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
-	flag.StringVar(&flagTLSCert, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "certificate chain PEM file for --tls-mode self [env: TLS_CERT_FILE]")
-	flag.StringVar(&flagTLSKey, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "private key PEM file for --tls-mode self [env: TLS_KEY_FILE]")
+	defaultTLS := strings.EqualFold(strings.TrimSpace(os.Getenv("TLS")), "true") || strings.TrimSpace(os.Getenv("TLS")) == "1"
+	flag.BoolVar(&flagTLS, "tls", defaultTLS, "Enable TLS (keyless) [env: TLS]")
 
 	flag.Parse()
 
@@ -65,15 +58,8 @@ func main() {
 func runDemo() error {
 	// 1) Create SDK client and connect to relay(s)
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers([]string{flagServerURL})}
-	mode := sdk.TLSMode(flagTLSMode)
-	switch mode {
-	case sdk.TLSModeNoTLS:
-	case sdk.TLSModeSelf:
-		opts = append(opts, sdk.WithTLSSelfCertificateFiles(flagTLSCert, flagTLSKey))
-	case sdk.TLSModeKeyless:
-		opts = append(opts, sdk.WithTLSKeylessDefaults())
-	default:
-		return fmt.Errorf("unsupported tls mode: %s", flagTLSMode)
+	if flagTLS {
+		opts = append(opts, sdk.WithTLS())
 	}
 	client, err := sdk.NewClient(opts...)
 	if err != nil {

@@ -2,7 +2,6 @@
 package sdk
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
@@ -32,7 +30,7 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	config := &ClientConfig{
 		BootstrapServers:   []string{},
 		ReverseDialTimeout: 5 * time.Second,
-		TLSMode:            TLSModeNoTLS,
+		TLS:                false,
 	}
 
 	for _, o := range opt {
@@ -118,18 +116,17 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		listener = newMultiRelayListener(lease.ID, listeners)
 	}
 
-	if c.config.TLSMode != TLSModeNoTLS {
+	if c.config.TLS {
 		log.Info().
 			Str("lease_id", lease.ID).
 			Str("name", name).
 			Bool("tls", true).
-			Str("tls_mode", string(c.config.TLSMode)).
 			Msg("[SDK] Lease registered with TLS")
 	} else {
 		log.Info().
 			Str("lease_id", lease.ID).
 			Str("name", name).
-			Str("tls_mode", string(TLSModeNoTLS)).
+			Bool("tls", false).
 			Msg("[SDK] Lease registered")
 	}
 
@@ -142,16 +139,21 @@ func (c *Client) newLease(name string, options ...MetadataOption) (*portal.Lease
 		option(&metadata)
 	}
 
-	reverseToken, err := generateToken(16)
-	if err != nil {
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		return nil, fmt.Errorf("generate lease ID: %w", err)
+	}
+
+	tokenBytes := make([]byte, 16)
+	if _, err := rand.Read(tokenBytes); err != nil {
 		return nil, fmt.Errorf("generate reverse token: %w", err)
 	}
 
 	lease := &portal.Lease{
-		ID:           generateID(),
+		ID:           hex.EncodeToString(idBytes),
 		Name:         name,
-		TLSMode:      string(c.config.TLSMode),
-		ReverseToken: reverseToken,
+		TLS:          c.config.TLS,
+		ReverseToken: hex.EncodeToString(tokenBytes),
 		Metadata: portal.Metadata{
 			Description: metadata.Description,
 			Tags:        metadata.Tags,
@@ -162,6 +164,37 @@ func (c *Client) newLease(name string, options ...MetadataOption) (*portal.Lease
 		Expires: time.Now().Add(30 * time.Second),
 	}
 	return lease, nil
+}
+
+func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
+	if !c.config.TLS {
+		return nil, nil, nil
+	}
+
+	parsed, err := url.Parse(relayAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid relay address: %s, %w", relayAddr, err)
+	}
+	keylessServerName := parsed.Hostname()
+	if keylessServerName == "" {
+		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
+	}
+	baseDomain := ExtractBaseDomain(relayAddr)
+	if baseDomain == "" {
+		return nil, nil, fmt.Errorf("keyless base domain is required for relay %s", relayAddr)
+	}
+	domain := leaseName + "." + baseDomain
+
+	tlsConfig, closeFn, err := keyless.BuildClientTLSConfig(relayAddr, keylessServerName, domain)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tlsConfig, []func(){closeFn}, nil
+}
+
+// Close closes the client.
+func (c *Client) Close() error {
+	return nil
 }
 
 func ExtractBaseDomain(rawURL string) string {
@@ -209,117 +242,4 @@ func normalizeRelayAPIURLs(bootstrapServers []string) ([]string, error) {
 		return nil, ErrNoAvailableRelay
 	}
 	return out, nil
-}
-
-func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
-	tlsMode := c.config.TLSMode
-	if tlsMode == TLSModeNoTLS {
-		return nil, nil, nil
-	}
-
-	switch tlsMode {
-	case TLSModeSelf:
-		if c.config.TLSSelfCertFile == "" || c.config.TLSSelfKeyFile == "" {
-			return nil, nil, fmt.Errorf("self TLS mode requires certificate/key files (WithTLSSelfCertificateFiles)")
-		}
-		cert, err := tls.LoadX509KeyPair(c.config.TLSSelfCertFile, c.config.TLSSelfKeyFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load self TLS certificate files: %w", err)
-		}
-
-		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-		tlsConfig.NextProtos = []string{"http/1.1"}
-		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return &cert, nil
-		}
-		return tlsConfig, nil, nil
-
-	case TLSModeKeyless:
-		keylessEndpoint := c.config.TLSKeylessEndpoint
-		if keylessEndpoint == "" {
-			keylessEndpoint = relayAddr
-		}
-
-		keylessKeyID := "relay-cert"
-
-		keylessServerName := ""
-		if parsed, err := url.Parse(keylessEndpoint); err == nil {
-			keylessServerName = parsed.Hostname()
-		}
-
-		certPEM, rootCAPEM, err := keyless.ResolveMaterials(
-			context.Background(),
-			keylessEndpoint,
-			keylessServerName,
-			nil,
-			nil,
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
-		}
-
-		baseDomain := c.config.TLSKeylessBaseDomain
-		if baseDomain == "" {
-			baseDomain = ExtractBaseDomain(relayAddr)
-		}
-		if baseDomain == "" {
-			baseDomain = ExtractBaseDomain(keylessEndpoint)
-		}
-		if baseDomain == "" {
-			return nil, nil, fmt.Errorf("keyless base domain is required for relay %s", relayAddr)
-		}
-		domain := leaseName + "." + baseDomain
-		if err := keyless.VerifyCertificateHostname(certPEM, domain); err != nil {
-			return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, err)
-		}
-
-		remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
-			Endpoint:   keylessEndpoint,
-			ServerName: keylessServerName,
-			KeyID:      keylessKeyID,
-			RootCAPEM:  rootCAPEM,
-		}, certPEM)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
-		}
-
-		tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
-			CertPEM: certPEM,
-			Signer:  remoteSigner,
-		})
-		if err != nil {
-			_ = remoteSigner.Close()
-			return nil, nil, fmt.Errorf("create keyless TLS config: %w", err)
-		}
-		tlsConfig.NextProtos = []string{"http/1.1"}
-
-		return tlsConfig, []func(){
-			func() { _ = remoteSigner.Close() },
-		}, nil
-	default:
-		return nil, nil, fmt.Errorf("unsupported TLS mode: %s", tlsMode)
-	}
-}
-
-// Close closes the client.
-func (c *Client) Close() error {
-	return nil
-}
-
-// generateID generates a unique ID for the lease.
-func generateID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func generateToken(size int) (string, error) {
-	if size <= 0 {
-		size = 16
-	}
-	b := make([]byte, size)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
 }

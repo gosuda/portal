@@ -54,10 +54,8 @@ set -- "$BIN_PATH" --relay "$RELAYS" --host "${APP_HOST:-localhost:3000}"
 if [ "${APP_HIDE:-}" = "1" ] || [ "${APP_HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
-[ -n "${TLS_MODE:-}" ] && set -- "$@" --tls-mode "$TLS_MODE"
-if [ "${TLS_MODE:-}" = "self" ]; then
-  [ -n "${TLS_CERT_FILE:-}" ] && set -- "$@" --tls-cert-file "$TLS_CERT_FILE"
-  [ -n "${TLS_KEY_FILE:-}" ] && set -- "$@" --tls-key-file "$TLS_KEY_FILE"
+if [ "${TLS:-}" = "1" ] || [ "${TLS:-}" = "true" ]; then
+  set -- "$@" --tls
 fi
 
 echo "Starting portal-tunnel..." >&2
@@ -103,11 +101,7 @@ if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
 if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }
 if ($env:APP_OWNER) { $ArgsList += "--owner", $env:APP_OWNER }
 if ($env:APP_HIDE -eq "1" -or $env:APP_HIDE -eq "true") { $ArgsList += "--hide" }
-if ($env:TLS_MODE) { $ArgsList += "--tls-mode", $env:TLS_MODE }
-if ($env:TLS_MODE -eq "self") {
-    if ($env:TLS_CERT_FILE) { $ArgsList += "--tls-cert-file", $env:TLS_CERT_FILE }
-    if ($env:TLS_KEY_FILE) { $ArgsList += "--tls-key-file", $env:TLS_KEY_FILE }
-}
+if ($env:TLS -eq "1" -or $env:TLS -eq "true") { $ArgsList += "--tls" }
 
 Write-Host "Starting portal-tunnel..."
 try {

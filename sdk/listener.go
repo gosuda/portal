@@ -208,7 +208,7 @@ func (l *Listener) keepaliveLoop() {
 		case <-ticker.C:
 			if err := l.sendKeepalive(); err != nil {
 				if isLeaseNotFoundError(err) {
-					if rerr := l.reRegisterLease(); rerr != nil {
+					if rerr := l.registerWithRelay(); rerr != nil {
 						log.Warn().
 							Err(rerr).
 							Str("lease_id", l.lease.ID).
@@ -287,6 +287,7 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new reverse websocket config: %w", err)
 	}
+	cfg.Header.Set(portal.ReverseConnectTokenHeader, l.lease.ReverseToken)
 	cfg.Dialer = &net.Dialer{
 		Timeout: l.reverseDialTimeout,
 	}
@@ -340,18 +341,18 @@ func (l *Listener) registerWithRelay() error {
 		LeaseID:      l.lease.ID,
 		Name:         l.lease.Name,
 		Metadata:     l.lease.Metadata,
-		TLSMode:      TLSMode(l.lease.TLSMode),
+		TLS:          l.lease.TLS,
 		ReverseToken: l.lease.ReverseToken,
 	}
 
-	return l.postJSON("/sdk/register", reqBody)
+	return l.postJSON(SDKPathRegister, reqBody)
 }
 
 func (l *Listener) unregisterFromRelay() error {
 	reqBody := UnregisterRequest{
 		LeaseID: l.lease.ID,
 	}
-	return l.postJSON("/sdk/unregister", reqBody)
+	return l.postJSON(SDKPathUnregister, reqBody)
 }
 
 func (l *Listener) sendKeepalive() error {
@@ -359,11 +360,7 @@ func (l *Listener) sendKeepalive() error {
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
-	return l.postJSON("/sdk/renew", reqBody)
-}
-
-func (l *Listener) reRegisterLease() error {
-	return l.registerWithRelay()
+	return l.postJSON(SDKPathRenew, reqBody)
 }
 
 func (l *Listener) postJSON(path string, body any) error {
@@ -477,10 +474,9 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported relay URL scheme: %q", u.Scheme)
 	}
-	u.Path = "/sdk/connect"
+	u.Path = SDKPathConnect
 	q := u.Query()
 	q.Set("lease_id", leaseID)
-	q.Set("token", token)
 	u.RawQuery = q.Encode()
 	u.Fragment = ""
 	return u.String(), nil

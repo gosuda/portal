@@ -20,18 +20,18 @@ type SDKRegistry struct{}
 
 // HandleSDKRequest routes /sdk/* requests.
 func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
-	route := strings.Trim(strings.TrimPrefix(req.URL.Path, "/sdk"), "/")
+	path := strings.TrimSuffix(req.URL.Path, "/")
 
-	switch route {
-	case "register":
+	switch path {
+	case sdk.SDKPathRegister:
 		r.handleRegister(w, req, serv)
-	case "unregister":
+	case sdk.SDKPathUnregister:
 		r.handleUnregister(w, req, serv)
-	case "renew":
+	case sdk.SDKPathRenew:
 		r.handleRenew(w, req, serv)
-	case "domain":
+	case sdk.SDKPathDomain:
 		r.handleDomain(w, req, serv)
-	case "connect":
+	case sdk.SDKPathConnect:
 		r.handleConnect(w, req, serv)
 	default:
 		http.NotFound(w, req)
@@ -97,7 +97,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		Name:         registerReq.Name,
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(30 * time.Second),
-		TLSMode:      string(registerReq.TLSMode),
+		TLS:          registerReq.TLS,
 		ReverseToken: registerReq.ReverseToken,
 	}
 
@@ -114,7 +114,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	serv.GetReverseHub().ClearDropped(registerReq.LeaseID)
 
 	// Only register SNI route for TLS leases.
-	if registerReq.TLSMode != sdk.TLSModeNoTLS {
+	if registerReq.TLS {
 		sniName := strings.ToLower(strings.TrimSpace(registerReq.Name)) + "." + serv.BaseHost
 		if err := serv.GetSNIRouter().RegisterRoute(sniName, registerReq.LeaseID, registerReq.Name); err != nil {
 			// Keep lease and route state consistent on partial failure.
@@ -130,7 +130,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	log.Info().
 		Str("lease_id", registerReq.LeaseID).
 		Str("name", registerReq.Name).
-		Str("tls_mode", string(registerReq.TLSMode)).
+		Bool("tls", registerReq.TLS).
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
@@ -230,7 +230,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 
 	// Re-register route if needed (e.g., router restarted while lease remained active).
 	// Only TLS leases need SNI routes.
-	if sdk.TLSMode(entry.Lease.TLSMode) != sdk.TLSModeNoTLS {
+	if entry.Lease.TLS {
 		sniName := strings.ToLower(strings.TrimSpace(entry.Lease.Name)) + "." + serv.BaseHost
 		if err := serv.GetSNIRouter().RegisterRoute(sniName, entry.Lease.ID, entry.Lease.Name); err != nil {
 			log.Warn().

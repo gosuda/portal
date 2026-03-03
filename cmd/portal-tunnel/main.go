@@ -28,9 +28,7 @@ var (
 	flagThumbnail string
 	flagOwner     string
 	flagHide      bool
-	flagTLSMode   string
-	flagTLSCert   string
-	flagTLSKey    string
+	flagTLS       bool
 )
 
 func main() {
@@ -45,13 +43,8 @@ func main() {
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
 
-	defaultTLSMode := os.Getenv("TLS_MODE")
-	if defaultTLSMode == "" {
-		defaultTLSMode = string(sdk.TLSModeNoTLS)
-	}
-	flag.StringVar(&flagTLSMode, "tls-mode", defaultTLSMode, "TLS mode: no-tls, self, or keyless [env: TLS_MODE]")
-	flag.StringVar(&flagTLSCert, "tls-cert-file", os.Getenv("TLS_CERT_FILE"), "PEM certificate chain for --tls-mode self [env: TLS_CERT_FILE]")
-	flag.StringVar(&flagTLSKey, "tls-key-file", os.Getenv("TLS_KEY_FILE"), "PEM private key for --tls-mode self [env: TLS_KEY_FILE]")
+	defaultTLS := strings.EqualFold(strings.TrimSpace(os.Getenv("TLS")), "true") || strings.TrimSpace(os.Getenv("TLS")) == "1"
+	flag.BoolVar(&flagTLS, "tls", defaultTLS, "Enable TLS (keyless) [env: TLS]")
 
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
@@ -81,20 +74,12 @@ func runTunnel() error {
 	log.Info().Msg("Starting Portal Tunnel...")
 	log.Info().Msgf("  Local:    %s", flagHost)
 	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Msgf("  TLS Mode: %s", flagTLSMode)
+	log.Info().Msgf("  TLS:      %t", flagTLS)
 
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers(relayURLs)}
-	mode := sdk.TLSMode(flagTLSMode)
-	switch mode {
-	case sdk.TLSModeNoTLS:
-	case sdk.TLSModeSelf:
-		opts = append(opts, sdk.WithTLSSelfCertificateFiles(flagTLSCert, flagTLSKey))
-	case sdk.TLSModeKeyless:
-		opts = append(opts, sdk.WithTLSKeylessDefaults())
-	default:
-		return fmt.Errorf("unsupported tls mode: %s", flagTLSMode)
+	if flagTLS {
+		opts = append(opts, sdk.WithTLS())
 	}
-
 	client, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
@@ -125,7 +110,7 @@ func runTunnel() error {
 	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
 		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
-	if flagTLSMode != string(sdk.TLSModeNoTLS) {
+	if flagTLS {
 		log.Info().Msg("- TLS:      Enabled")
 	}
 
@@ -160,7 +145,7 @@ loop:
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
-			tlsEnabled := flagTLSMode != string(sdk.TLSModeNoTLS)
+			tlsEnabled := flagTLS
 			proxyType := "TCP"
 			if tlsEnabled {
 				proxyType = "TLS→TCP"
