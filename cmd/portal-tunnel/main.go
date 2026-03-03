@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -183,11 +184,16 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, tlsEnabled bool) error {
 	defer relayConn.Close()
 
+	targetAddr, err := normalizeTargetAddr(localAddr)
+	if err != nil {
+		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
+	}
+
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
+	localConn, err := dialer.DialContext(ctx, "tcp", targetAddr)
 	if err != nil {
 		log.Debug().
-			Str("addr", localAddr).
+			Str("addr", targetAddr).
 			Err(err).
 			Msg("Local service unavailable")
 		if tlsEnabled {
@@ -197,7 +203,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 	}
 	defer localConn.Close()
 
-	log.Info().Str("addr", localAddr).Msg("Connected to local service")
+	log.Info().Str("addr", targetAddr).Msg("Connected to local service")
 
 	errCh := make(chan error, 2)
 	stopCh := make(chan struct{})
@@ -274,4 +280,21 @@ func splitCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+func normalizeTargetAddr(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("empty host")
+	}
+
+	u, err := url.Parse(raw)
+	if err == nil && u.Scheme != "" {
+		if strings.TrimSpace(u.Host) == "" {
+			return "", fmt.Errorf("missing host in URL")
+		}
+		return u.Host, nil
+	}
+
+	return raw, nil
 }

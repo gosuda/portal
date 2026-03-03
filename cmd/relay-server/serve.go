@@ -271,7 +271,7 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr strin
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
+	http.Redirect(w, r, target, http.StatusPermanentRedirect)
 }
 
 func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.Signer) {

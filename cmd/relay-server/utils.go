@@ -418,7 +418,11 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	r.LastSeenISO = entry.LastSeen.UTC().Format(time.RFC3339)
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
 	r.TTL = r.formatDuration(time.Until(entry.Expires))
-	r.Link = fmt.Sprintf("//%s.%s/", lease.Name, portalHostPort(portalURL))
+	linkLabel := strings.TrimSpace(lease.Name)
+	if linkLabel == "" {
+		linkLabel = identityID
+	}
+	r.Link = fmt.Sprintf("//%s.%s/", linkLabel, portalHostPort(portalURL))
 	r.StaleRed = !connected && since >= 15*time.Second
 	r.Hide = entry.ParsedMetadata != nil && entry.ParsedMetadata.Hide
 	r.Metadata = metadataStr

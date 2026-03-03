@@ -114,7 +114,13 @@ func runServer(cfg relayServerConfig) error {
 				Str("sni", route.SNI).
 				Msg("[SNI] Lease not active; dropping connection and unregistering route")
 			serv.GetSNIRouter().UnregisterRouteByLeaseID(route.LeaseID)
-			clientConn.Close()
+			if err := clientConn.Close(); err != nil {
+				log.Debug().
+					Err(err).
+					Str("lease_id", route.LeaseID).
+					Str("sni", route.SNI).
+					Msg("[SNI] failed to close client connection")
+			}
 			return
 		}
 
@@ -128,7 +134,13 @@ func runServer(cfg relayServerConfig) error {
 				Str("lease_id", route.LeaseID).
 				Str("sni", route.SNI).
 				Msg("[SNI] Reverse tunnel unavailable")
-			clientConn.Close()
+			if err := clientConn.Close(); err != nil {
+				log.Debug().
+					Err(err).
+					Str("lease_id", route.LeaseID).
+					Str("sni", route.SNI).
+					Msg("[SNI] failed to close client connection")
+			}
 			return
 		}
 
