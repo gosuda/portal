@@ -32,11 +32,19 @@ func reverseTokenMatches(expected, provided string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
+func normalizeLeaseID(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
+func normalizeLeaseCredentials(leaseID, reverseToken string) (string, string) {
+	return normalizeLeaseID(leaseID), strings.TrimSpace(reverseToken)
+}
+
 func lookupLeaseEntry(serv *portal.RelayServer, leaseID string) (*portal.LeaseEntry, bool) {
 	if serv == nil {
 		return nil, false
 	}
-	entry, ok := serv.GetLeaseManager().GetLeaseByID(strings.TrimSpace(leaseID))
+	entry, ok := serv.GetLeaseManager().GetLeaseByID(normalizeLeaseID(leaseID))
 	if !ok || entry == nil || entry.Lease == nil {
 		return nil, false
 	}
@@ -64,6 +72,34 @@ func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, me
 	return false
 }
 
+func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request, dst any, logMessage string) bool {
+	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
+		log.Error().Err(err).Msg(logMessage)
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return false
+	}
+	return true
+}
+
+func (r *SDKRegistry) validateLeaseCredentials(w http.ResponseWriter, leaseID, reverseToken string) bool {
+	if leaseID == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
+		return false
+	}
+	if reverseToken == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
+		return false
+	}
+	return true
+}
+
+func isWebSocketUpgrade(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(req.Header.Get("Upgrade")), "websocket")
+}
+
 // HandleSDKRequest routes /sdk/* requests.
 func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	path := strings.TrimSuffix(req.URL.Path, "/")
@@ -89,17 +125,24 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		return
 	}
 
-	leaseID := strings.TrimSpace(req.URL.Query().Get("lease_id"))
+	leaseID, token := normalizeLeaseCredentials(
+		req.URL.Query().Get("lease_id"),
+		req.Header.Get(portal.ReverseConnectTokenHeader),
+	)
 	if leaseID == "" {
 		http.Error(w, "missing lease_id", http.StatusBadRequest)
 		return
 	}
-	token := strings.TrimSpace(req.Header.Get(portal.ReverseConnectTokenHeader))
 	if token == "" {
 		http.Error(w, "missing reverse token", http.StatusUnauthorized)
 		return
 	}
-	clientIP := r.extractClientIP(req)
+	if isWebSocketUpgrade(req) {
+		http.Error(w, "websocket transport is not supported", http.StatusBadRequest)
+		return
+	}
+
+	clientIP := strings.TrimSpace(r.extractClientIP(req))
 	if r.isClientIPBanned(clientIP) {
 		http.Error(w, "ip is banned", http.StatusForbidden)
 		return
@@ -126,11 +169,15 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		return
 	}
 	if _, err := rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"); err != nil {
-		_ = conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("[Registry] failed to close hijacked connection after write failure")
+		}
 		return
 	}
 	if err := rw.Flush(); err != nil {
-		_ = conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("[Registry] failed to close hijacked connection after flush failure")
+		}
 		return
 	}
 
@@ -144,23 +191,14 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	}
 
 	var registerReq types.RegisterRequest
-	if err := json.NewDecoder(req.Body).Decode(&registerReq); err != nil {
-		log.Error().Err(err).Msg("[Registry] Failed to decode registration request")
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+	if !r.decodeRequestBody(w, req, &registerReq, "[Registry] Failed to decode registration request") {
 		return
 	}
 
-	registerReq.LeaseID = strings.TrimSpace(registerReq.LeaseID)
+	registerReq.LeaseID, registerReq.ReverseToken = normalizeLeaseCredentials(registerReq.LeaseID, registerReq.ReverseToken)
 	registerReq.Name = strings.TrimSpace(registerReq.Name)
-	registerReq.ReverseToken = strings.TrimSpace(registerReq.ReverseToken)
 
-	if registerReq.LeaseID == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
-		return
-	}
-
-	if registerReq.ReverseToken == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
+	if !r.validateLeaseCredentials(w, registerReq.LeaseID, registerReq.ReverseToken) {
 		return
 	}
 	name := registerReq.Name
@@ -240,12 +278,10 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 	}
 
 	var unregisterReq types.UnregisterRequest
-	if err := json.NewDecoder(req.Body).Decode(&unregisterReq); err != nil {
-		log.Error().Err(err).Msg("[Registry] Failed to decode unregistration request")
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+	if !r.decodeRequestBody(w, req, &unregisterReq, "[Registry] Failed to decode unregistration request") {
 		return
 	}
-	unregisterReq.LeaseID = strings.TrimSpace(unregisterReq.LeaseID)
+	unregisterReq.LeaseID = normalizeLeaseID(unregisterReq.LeaseID)
 
 	// Delete from lease manager
 	if serv.GetLeaseManager().DeleteLease(unregisterReq.LeaseID) {
@@ -266,20 +302,12 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	}
 
 	var renewReq types.RenewRequest
-	if err := json.NewDecoder(req.Body).Decode(&renewReq); err != nil {
-		log.Error().Err(err).Msg("[Registry] Failed to decode renewal request")
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+	if !r.decodeRequestBody(w, req, &renewReq, "[Registry] Failed to decode renewal request") {
 		return
 	}
 
-	renewReq.LeaseID = strings.TrimSpace(renewReq.LeaseID)
-	renewReq.ReverseToken = strings.TrimSpace(renewReq.ReverseToken)
-	if renewReq.LeaseID == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
-		return
-	}
-	if renewReq.ReverseToken == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
+	renewReq.LeaseID, renewReq.ReverseToken = normalizeLeaseCredentials(renewReq.LeaseID, renewReq.ReverseToken)
+	if !r.validateLeaseCredentials(w, renewReq.LeaseID, renewReq.ReverseToken) {
 		return
 	}
 

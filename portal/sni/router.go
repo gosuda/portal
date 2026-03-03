@@ -235,9 +235,7 @@ func (r *Router) Stop() error {
 
 		r.mu.Lock()
 		if r.listener != nil {
-			if err := r.listener.Close(); err != nil {
-				log.Debug().Err(err).Msg("[SNI] failed to close listener")
-			}
+			closeWithDebugLog(r.listener, "[SNI] failed to close listener")
 		}
 		r.mu.Unlock()
 	})
@@ -295,9 +293,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 			Err(err).
 			Str("remote", clientConn.RemoteAddr().String()).
 			Msg("[SNI] Failed to extract SNI")
-		if closeErr := clientConn.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close client connection")
-		}
+		closeWithDebugLog(clientConn, "[SNI] failed to close client connection")
 		return
 	}
 
@@ -315,9 +311,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	// Find the route
 	route, ok := r.GetRoute(sni)
 	if !ok {
-		r.mu.RLock()
-		onNoRoute := r.onNoRoute
-		r.mu.RUnlock()
+		onNoRoute := r.getNoRouteHandler()
 		if onNoRoute != nil && onNoRoute(wrappedConn, sni) {
 			return
 		}
@@ -326,9 +320,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 			Str("sni", sni).
 			Str("remote", clientConn.RemoteAddr().String()).
 			Msg("[SNI] No route found")
-		if closeErr := clientConn.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close unrouted client connection")
-		}
+		closeWithDebugLog(clientConn, "[SNI] failed to close unrouted client connection")
 		return
 	}
 
@@ -339,9 +331,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 		Msg("[SNI] Route found")
 
 	// Call the connection callback if set
-	r.mu.RLock()
-	onConnection := r.onConnection
-	r.mu.RUnlock()
+	onConnection := r.getConnectionHandler()
 
 	if onConnection != nil {
 		onConnection(wrappedConn, route)
@@ -352,9 +342,28 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	log.Warn().
 		Str("sni", sni).
 		Msg("[SNI] No connection callback configured, closing connection")
-	if err := clientConn.Close(); err != nil {
-		log.Debug().Err(err).Msg("[SNI] failed to close client connection")
+	closeWithDebugLog(clientConn, "[SNI] failed to close client connection")
+}
+
+func closeWithDebugLog(closer io.Closer, msg string) {
+	if closer == nil {
+		return
 	}
+	if err := closer.Close(); err != nil {
+		log.Debug().Err(err).Msg(msg)
+	}
+}
+
+func (r *Router) getNoRouteHandler() func(conn net.Conn, sni string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.onNoRoute
+}
+
+func (r *Router) getConnectionHandler() func(conn net.Conn, route *Route) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.onConnection
 }
 
 // BridgeConnections bridges two connections.
@@ -368,18 +377,14 @@ func BridgeConnections(conn1, conn2 net.Conn) {
 	go func() {
 		_, err := io.Copy(conn2, conn1)
 		errCh <- err
-		if closeErr := conn2.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close bridged connection 2")
-		}
+		closeWithDebugLog(conn2, "[SNI] failed to close bridged connection 2")
 	}()
 
 	// Conn2 -> Conn1
 	go func() {
 		_, err := io.Copy(conn1, conn2)
 		errCh <- err
-		if closeErr := conn1.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close bridged connection 1")
-		}
+		closeWithDebugLog(conn1, "[SNI] failed to close bridged connection 1")
 	}()
 
 	// Wait for either direction to close

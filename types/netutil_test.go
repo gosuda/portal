@@ -250,3 +250,31 @@ func TestParsePortalAddressHostOnlyUsesFallbackScheme(t *testing.T) {
 		t.Fatalf("hostPort=%q, want portal.edge.example.com:9443", hostPort)
 	}
 }
+
+func TestParsePortalAddressNormalizesTrailingDotAndCase(t *testing.T) {
+	t.Parallel()
+
+	scheme, rootHost, hostPort, ok := parsePortalAddress("HTTPS://Portal.Edge.Example.COM.:7443", "http")
+	if !ok {
+		t.Fatalf("expected parsePortalAddress success")
+	}
+	if scheme != "https" {
+		t.Fatalf("scheme=%q, want https", scheme)
+	}
+	if rootHost != "portal.edge.example.com" {
+		t.Fatalf("rootHost=%q, want portal.edge.example.com", rootHost)
+	}
+	if hostPort != "portal.edge.example.com:7443" {
+		t.Fatalf("hostPort=%q, want portal.edge.example.com:7443", hostPort)
+	}
+}
+
+func TestBuildSNINameFallbackNormalizesRootHost(t *testing.T) {
+	t.Parallel()
+
+	got := BuildSNIName("Api-Gateway", " *.Portal.Edge.Example.COM. ")
+	want := "api-gateway.portal.edge.example.com"
+	if got != want {
+		t.Fatalf("BuildSNIName fallback=%q, want %q", got, want)
+	}
+}

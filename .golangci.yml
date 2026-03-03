@@ -43,6 +43,9 @@ linters:
     - mirror
 
   exclusions:
+    paths:
+      - ^cmd/relay-server/frontend/node_modules/
+      - ^cmd/relay-server/dist/
     rules:
       - linters: [errcheck]
         source: "^\\s*defer\\s+"

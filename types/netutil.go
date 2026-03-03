@@ -1,3 +1,4 @@
+//nolint:revive // Package name is intentionally aligned with the existing module-wide convention.
 package types
 
 import (
@@ -8,6 +9,14 @@ import (
 	"strconv"
 	"strings"
 )
+
+const defaultBootstrapURL = "http://localhost:4017"
+
+func normalizeRootHost(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "."), "*.")
+	return normalized
+}
 
 // StripScheme removes http:// or https:// prefix from a string.
 func StripScheme(s string) string {
@@ -88,8 +97,7 @@ func parsePortalAddress(raw, fallbackScheme string) (scheme, rootHost, hostPort 
 		return "", "", "", false
 	}
 
-	rootHost = strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	rootHost = strings.TrimPrefix(strings.TrimSuffix(rootHost, "."), "*.")
+	rootHost = normalizeRootHost(parsed.Hostname())
 	if rootHost == "" {
 		return "", "", "", false
 	}
@@ -187,7 +195,7 @@ func PortalRootHost(portalURL string) string {
 func DefaultBootstrapFrom(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 
 	if !strings.Contains(base, "://") {
@@ -196,13 +204,13 @@ func DefaultBootstrapFrom(base string) string {
 
 	u, err := url.Parse(strings.TrimSuffix(base, "/"))
 	if err != nil || u.Host == "" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 
 	u.Path = ""
@@ -249,9 +257,7 @@ func BuildSNIName(leaseName, baseHost string) string {
 
 	normalizedBaseHost := PortalRootHost(baseHost)
 	if normalizedBaseHost == "" {
-		normalizedBaseHost = strings.ToLower(strings.TrimSpace(
-			strings.TrimPrefix(strings.TrimSuffix(baseHost, "."), "*."),
-		))
+		normalizedBaseHost = normalizeRootHost(baseHost)
 	}
 	if normalizedBaseHost == "" {
 		return ""

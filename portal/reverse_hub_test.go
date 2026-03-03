@@ -27,6 +27,81 @@ func TestReverseHubAuthorization(t *testing.T) {
 	}
 }
 
+func TestReverseHubOfferRejectsInvalidInput(t *testing.T) {
+	hub := NewReverseHub()
+
+	if ok := hub.Offer("", nil); ok {
+		t.Fatal("expected offer with empty lease and nil connection to fail")
+	}
+	if ok := hub.Offer("   ", nil); ok {
+		t.Fatal("expected offer with whitespace lease and nil connection to fail")
+	}
+}
+
+func TestHandleConnectTrimsLeaseIDAndToken(t *testing.T) {
+	hub := NewReverseHub()
+	leaseID := "lease-connect-trim"
+	token := "token-connect-trim"
+	hub.SetAuthorizer(func(gotLeaseID, gotToken string) bool {
+		return gotLeaseID == leaseID && gotToken == token
+	})
+
+	local, peer := net.Pipe()
+	defer func() {
+		_ = peer.Close()
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		hub.HandleConnect(local, " "+leaseID+" ", " "+token+" ", " 127.0.0.1 ")
+		close(done)
+	}()
+
+	markerRead := make(chan byte, 1)
+	readErr := make(chan error, 1)
+	go func() {
+		var b [1]byte
+		_, err := io.ReadFull(peer, b[:])
+		if err != nil {
+			readErr <- err
+			return
+		}
+		markerRead <- b[0]
+	}()
+
+	got, err := hub.AcquireForTLS(leaseID, 500*time.Millisecond)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for err != nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("AcquireForTLS failed: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+		got, err = hub.AcquireForTLS(leaseID, 25*time.Millisecond)
+	}
+	if got == nil {
+		t.Fatal("AcquireForTLS returned nil connection")
+	}
+
+	select {
+	case err := <-readErr:
+		t.Fatalf("failed to read marker: %v", err)
+	case marker := <-markerRead:
+		if marker != TLSStartMarker {
+			t.Fatalf("unexpected marker: %d", marker)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for start marker")
+	}
+
+	got.Close()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("HandleConnect did not return after connection close")
+	}
+}
+
 func TestAcquireForTLSSendsStartMarker(t *testing.T) {
 	hub := NewReverseHub()
 	leaseID := "lease-tls-marker"

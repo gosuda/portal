@@ -2,7 +2,9 @@ package sni
 
 import (
 	"errors"
+	"net"
 	"testing"
+	"time"
 )
 
 func TestRouter_RegisterRoute(t *testing.T) {
@@ -231,4 +233,115 @@ func TestRouter_Stop(t *testing.T) {
 	if !errors.Is(err, ErrRouterClosed) {
 		t.Errorf("expected ErrRouterClosed, got %v", err)
 	}
+}
+
+func TestRouter_HandleConnectionNoRouteHandlerHandled(t *testing.T) {
+	router := NewRouter("")
+	noRouteCalls := make(chan string, 1)
+	router.SetNoRouteHandler(func(_ net.Conn, sni string) bool {
+		select {
+		case noRouteCalls <- sni:
+		default:
+		}
+		return true
+	})
+
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	done := make(chan struct{})
+	router.wg.Add(1)
+	go func() {
+		router.handleConnection(server)
+		close(done)
+	}()
+
+	if _, err := client.Write(buildClientHello("tenant.example.com", true)); err != nil {
+		t.Fatalf("write client hello: %v", err)
+	}
+
+	select {
+	case gotSNI := <-noRouteCalls:
+		if gotSNI != "tenant.example.com" {
+			t.Fatalf("no-route handler sni=%q, want %q", gotSNI, "tenant.example.com")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no-route handler was not called")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handleConnection did not return after handled no-route callback")
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(75 * time.Millisecond))
+	var b [1]byte
+	_, err := client.Read(b[:])
+	if err == nil {
+		t.Fatal("expected read timeout while connection remains open")
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("expected timeout error to indicate open connection, got: %v", err)
+	}
+}
+
+func TestRouter_HandleConnectionNoRouteHandlerDeclined(t *testing.T) {
+	router := NewRouter("")
+	noRouteCalls := make(chan string, 1)
+	router.SetNoRouteHandler(func(_ net.Conn, sni string) bool {
+		select {
+		case noRouteCalls <- sni:
+		default:
+		}
+		return false
+	})
+
+	client, server := net.Pipe()
+	defer func() {
+		_ = client.Close()
+		_ = server.Close()
+	}()
+
+	done := make(chan struct{})
+	router.wg.Add(1)
+	go func() {
+		router.handleConnection(server)
+		close(done)
+	}()
+
+	if _, err := client.Write(buildClientHello("tenant.example.com", true)); err != nil {
+		t.Fatalf("write client hello: %v", err)
+	}
+
+	select {
+	case <-noRouteCalls:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("no-route handler was not called")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handleConnection did not return after declined no-route callback")
+	}
+
+	_ = client.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var b [1]byte
+	_, err := client.Read(b[:])
+	if err == nil {
+		t.Fatal("expected closed connection after declined no-route callback")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		t.Fatalf("expected closed-connection error, got timeout: %v", err)
+	}
+}
+
+func TestCloseWithDebugLogNilCloser(_ *testing.T) {
+	closeWithDebugLog(nil, "noop")
 }

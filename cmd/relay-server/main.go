@@ -147,44 +147,35 @@ func runServer(cfg relayServerConfig) error {
 
 	// Set up SNI connection callback to route to tunnel backends
 	serv.GetSNIRouter().SetConnectionCallback(func(clientConn net.Conn, route *sni.Route) {
-		if _, ok := serv.GetLeaseManager().GetLeaseByID(route.LeaseID); !ok {
-			log.Warn().
-				Str("lease_id", route.LeaseID).
-				Str("sni", route.SNI).
-				Msg("[SNI] Lease not active; dropping connection and unregistering route")
-			serv.GetSNIRouter().UnregisterRouteByLeaseID(route.LeaseID)
-			if err := clientConn.Close(); err != nil {
-				log.Debug().
-					Err(err).
-					Str("lease_id", route.LeaseID).
-					Str("sni", route.SNI).
-					Msg("[SNI] failed to close client connection")
-			}
+		leaseID := ""
+		if route != nil {
+			leaseID = strings.TrimSpace(route.LeaseID)
+		}
+		if leaseID == "" {
+			logSNIRouteWarning(route, nil, "[SNI] Missing lease id in route; dropping connection")
+			closeSNIClientConn(clientConn, route)
+			return
+		}
+
+		if _, ok := serv.GetLeaseManager().GetLeaseByID(leaseID); !ok {
+			logSNIRouteWarning(route, nil, "[SNI] Lease not active; dropping connection and unregistering route")
+			serv.GetSNIRouter().UnregisterRouteByLeaseID(leaseID)
+			closeSNIClientConn(clientConn, route)
 			return
 		}
 
 		// Get BPS manager for rate limiting
 		bpsManager := admin.GetBPSManager()
 
-		reverseConn, err := serv.GetReverseHub().AcquireForTLS(route.LeaseID, portal.TLSAcquireWait)
+		reverseConn, err := serv.GetReverseHub().AcquireForTLS(leaseID, portal.TLSAcquireWait)
 		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("lease_id", route.LeaseID).
-				Str("sni", route.SNI).
-				Msg("[SNI] Reverse tunnel unavailable")
-			if err := clientConn.Close(); err != nil {
-				log.Debug().
-					Err(err).
-					Str("lease_id", route.LeaseID).
-					Str("sni", route.SNI).
-					Msg("[SNI] failed to close client connection")
-			}
+			logSNIRouteWarning(route, err, "[SNI] Reverse tunnel unavailable")
+			closeSNIClientConn(clientConn, route)
 			return
 		}
 
 		// SNI path is reverse-only (NAT-friendly): relay never dials app directly.
-		manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, route.LeaseID, bpsManager)
+		manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, leaseID, bpsManager)
 		reverseConn.Close()
 	})
 
@@ -210,6 +201,27 @@ func runServer(cfg relayServerConfig) error {
 
 	log.Info().Msg("[server] shutdown complete")
 	return nil
+}
+
+func closeSNIClientConn(clientConn net.Conn, route *sni.Route) {
+	if err := clientConn.Close(); err != nil {
+		withSNIRouteFields(log.Debug().Err(err), route).Msg("[SNI] failed to close client connection")
+	}
+}
+
+func logSNIRouteWarning(route *sni.Route, err error, msg string) {
+	event := log.Warn()
+	if err != nil {
+		event = event.Err(err)
+	}
+	withSNIRouteFields(event, route).Msg(msg)
+}
+
+func withSNIRouteFields(event *zerolog.Event, route *sni.Route) *zerolog.Event {
+	if route == nil {
+		return event
+	}
+	return event.Str("lease_id", route.LeaseID).Str("sni", route.SNI)
 }
 
 func trimmedEnv(name string) string {

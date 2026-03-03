@@ -135,3 +135,51 @@ func TestSDKRegistryHandleConnectRejectsBannedIP(t *testing.T) {
 		t.Fatalf("expected banned ip error body, got %q", rec.Body.String())
 	}
 }
+
+func TestIsWebSocketUpgrade(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header string
+		want   bool
+	}{
+		{name: "empty", header: "", want: false},
+		{name: "websocket lowercase", header: "websocket", want: true},
+		{name: "websocket mixed case", header: "WebSocket", want: true},
+		{name: "other upgrade", header: "h2c", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
+			if tt.header != "" {
+				req.Header.Set("Upgrade", tt.header)
+			}
+			if got := isWebSocketUpgrade(req); got != tt.want {
+				t.Fatalf("isWebSocketUpgrade(%q)=%v, want %v", tt.header, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSDKRegistryHandleConnectRejectsWebSocketUpgrade(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-websocket", http.NoBody)
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "websocket") {
+		t.Fatalf("expected websocket rejection body, got %q", rec.Body.String())
+	}
+}

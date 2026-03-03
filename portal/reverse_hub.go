@@ -3,6 +3,7 @@ package portal
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -201,6 +202,11 @@ func (h *ReverseHub) notifyAccepted(leaseID, ip string) {
 }
 
 func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" || conn == nil || conn.Conn == nil {
+		return false
+	}
+
 	pool := h.getOrCreatePool(leaseID)
 	if pool == nil {
 		return false
@@ -227,6 +233,8 @@ func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
 }
 
 func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*ReverseConn, error) {
+	leaseID = strings.TrimSpace(leaseID)
+
 	pool, ok := h.getPool(leaseID)
 	if !ok {
 		return nil, fmt.Errorf("no tunnel available for lease %s", leaseID)
@@ -278,6 +286,11 @@ func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*Reve
 }
 
 func (h *ReverseHub) DropLease(leaseID string) {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return
+	}
+
 	h.mu.Lock()
 	pool, ok := h.pools[leaseID]
 	if ok {
@@ -306,6 +319,11 @@ func (h *ReverseHub) DropLease(leaseID string) {
 // ClearDropped removes a lease from the dropped set, allowing it to be re-registered.
 // This should be called when a lease is re-registered after being dropped.
 func (h *ReverseHub) ClearDropped(leaseID string) {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return
+	}
+
 	h.mu.Lock()
 	delete(h.dropped, leaseID)
 	h.mu.Unlock()
@@ -315,6 +333,10 @@ func (h *ReverseHub) HandleConnect(conn net.Conn, leaseID, token, remoteIP strin
 	if conn == nil {
 		return
 	}
+
+	leaseID = strings.TrimSpace(leaseID)
+	token = strings.TrimSpace(token)
+	remoteIP = strings.TrimSpace(remoteIP)
 
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
@@ -357,6 +379,9 @@ func (h *ReverseHub) rejectConn(conn net.Conn, debugCloseMessage string) {
 }
 
 func (h *ReverseHub) closeConn(conn net.Conn, debugCloseMessage string) {
+	if conn == nil {
+		return
+	}
 	if err := conn.Close(); err != nil {
 		log.Debug().Err(err).Msg(debugCloseMessage)
 	}
