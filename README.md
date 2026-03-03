@@ -8,6 +8,7 @@ Expose your local application to the public internet —
 no ports, no NAT, no DNS setup.
 
 Portal is an open, self-hosted, permissionless relay network — not a SaaS tunnel.
+
 Connect to any relay to publish your service — or run your own relay.
 
 ## Why Portal?
