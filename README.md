@@ -4,87 +4,73 @@
   <img src="/portal.jpg" alt="Portal logo" width="540" />
 </p>
 
-Portal is a permissionless, open hosting network that transforms your local project into a public web endpoint. [Learn more.](https://gosuda.org/portal/)
+Expose your local application to the public internet —
+no ports, no NAT, no DNS setup.
 
-## Overview
+Portal is an open, self-hosted, permissionless relay network — not a SaaS tunnel.
+Connect to any relay to publish your service — or run your own relay.
 
-Portal connects local applications to web users through a secure relay layer.
-Each application is assigned a subdomain within Portal, and all traffic between endpoints is end-to-end encrypted.
-This enables developers to publish local services globally without managing servers or cloud infrastructure.
+## Why Portal?
+
+Publishing a local service typically requires:
+
+- Opening inbound ports
+- Configuring NAT or firewall rules
+- Managing DNS records
+- Terminating TLS at a gateway
+
+Portal removes these steps by inverting the connection model.
+Applications establish outbound connections to a relay.
+The relay runs on a public base domain, assigns each service a subdomain,
+and routes incoming traffic while preserving end-to-end TLS.
 
 ## Features
 
-- 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network
-- **Subdomain NAT Routing**: lease names to public subdomains (myapp.<base-domain>) and routes traffic to your local service without opening inbound ports
+- 🔄 **Connection Behind NAT**: Works behind NAT or firewalls without opening inbound ports
+- 🌐 **Automatic Subdomain Routing**: Give each app its own subdomain ( your-app.<base-domain> )
 - 🔐 **End-to-End Encryption**: TLS passthrough with relay keyless certificates
 - 🕊️ **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
-- ⚙️ **Simple Setup**: Quick start with Tunnel client
+- ⚙️ **One-Command Setup**: Expose any local app with a single command
+
+## Components
+
+- **Relay**: A server that routes public requests to the right connected app.
+- **Tunnel**: A CLI agent that proxies your local app through the relay.
+
+For details, see [docs/glossary.md](docs/glossary.md).
 
 ## Quick Start
 
 ### Run Portal Relay
 
 ```bash
-# Start with Docker Compose
+git clone https://github.com/gosuda/portal
+cd portal
 docker compose up
-
-# Access at http://localhost:4017
-# Admin panel at http://localhost:4017/admin
-# Set your own admin key (recommended):
-ADMIN_SECRET_KEY=your-secret-key docker compose up
-
-# Keyless auto-issuance (optional):
-# if KEYLESS_DIR is missing and CLOUDFLARE_TOKEN is set,
-# relay issues keyless certs via ACME DNS-01.
-# relay uses one unified cert/key pair:
-#   KEYLESS_DIR/fullchain.pem
-#   KEYLESS_DIR/privatekey.pem
-# when both files exist, admin/API listener on --adminport auto-switches to HTTPS (HTTP/1.1 only).
-CLOUDFLARE_TOKEN=your-cloudflare-dns-token docker compose up
 ```
 
-```bash
-# Run relay binary directly
-./bin/relay-server --adminport 4017
-```
-
-For production deployment (DNS, TLS, reverse proxy), see [docs/portal-deploy-guide.md](docs/portal-deploy-guide.md).
+For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
 
-```bash
-# Windows PowerShell
-$env:APP_HOST="localhost:3000"; $env:APP_NAME="myapp"; irm http://localhost:4017/tunnel | iex
+1. Open the relay page in your browser.
+2. Click `Add your server`.
+3. Use the generated command to connect your local service.
 
-# macOS/Linux
-curl -fsSL http://localhost:4017/tunnel | APP_HOST=localhost:3000 APP_NAME=myapp sh
-```
+With Tunnel, you can expose almost any local app in one step, without changing your app code.
+Run your app locally, execute the generated command, and Portal publishes it on a public subdomain.
 
-### Use Go SDK
-
-```go
-import "gosuda.org/portal/sdk"
-
-client, _ := sdk.NewClient(sdk.WithBootstrapServers([]string{"http://localhost:4017"}))
-listener, _ := client.Listen("myapp")
-http.Serve(listener, handler)
-```
+### Use Go SDK (Advanced)
 
 See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
 ## Architecture
 
-- **Relay Server**: TLS passthrough relay with SNI routing, admin UI, lease management
-- **SDK**: Go library for native app integration
-- **Tunnel**: CLI client for exposing local services without code changes
-
-For details, see [docs/architecture.md](docs/architecture.md).
+See [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
 
 We welcome contributions from the community!
-Before getting started, please check the [development guide](docs/development.md)
- for setup instructions and best practices.
 
 ### Steps to Contribute
 1. Fork the repository
@@ -92,6 +78,7 @@ Before getting started, please check the [development guide](docs/development.md
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
+
 ## License
 
 MIT License — see [LICENSE](LICENSE)

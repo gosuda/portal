@@ -1,36 +1,65 @@
-Portal is unlike traditional server–client architectures, both the App and the Client act as clients within the Portal network, which can easily cause terminology confusion. In addition, names such as "Portal" (relay server) and legacy RD-related function names often overlap. This glossary clarifies those terms.
+# Glossary
 
-### Portal (Relay Server)
+This glossary defines key terms used in Portal.
 
-The Portal is the relay hub provided by this project.
-It acts as a central mediator, while other components either advertise themselves to the Portal or discover their counterparts through it.
+## Portal / Relay
 
-* Handles lease registration/deletion/query, connection forwarding, and traffic control (BPS).
-* Does not decrypt TLS payloads and only provides SNI-based routing. TLS mode provides end-to-end encryption between client and tunnel.
+The central server that handles lease registration, routing, and reverse connection brokering.
+It does not terminate end-to-end app payload in TLS passthrough mode.
 
-### App (Service Publisher)
+## App (Service Publisher)
 
-An App is a service-providing entity that publishes services to the Portal.
-In practice, server-side code that uses the Portal SDK to communicate with the Portal is considered an App.
+A service provider connected to Portal through Tunnel or Native SDK.
+An app publishes one or more leases and serves traffic from local services.
 
-* Holds at least one credential, connects to the Portal with it, and registers a Lease that represents the App.
-* Maintains a TCP connection with the Portal and proxies incoming connection requests to a local service (TCP/HTTP, etc.).
-* Updates metadata, ALPN, and other advertising attributes via the Portal Frontend or API to improve discoverability.
+## Client (Service Consumer)
 
-### Client (Service Consumer)
+The external user or browser that accesses a published service through the relay domain.
 
-A Client is the end-user entity that attempts to access services published by an App through the Portal.
+## Tunnel
 
-* Currently, this is primarily the browser connecting via TLS.
-* A Client requests a connection to the Portal by specifying a Lease ID or name. The Portal matches this request to the App owning that Lease, then routes the TLS connection by SNI.
-* TLS mode provides end-to-end encryption between client and tunnel.
+The CLI-based publisher path (`cmd/portal-tunnel`).
+It exposes existing local apps without code changes by forwarding relay traffic to a local host/port.
 
-### Lease (Advertising Slot)
+## Native SDK
 
-A Lease is the advertisement unit an App publishes to the Portal.
+The code integration path (`sdk/`) for Go applications.
+It provides relay-backed listener APIs and metadata control for direct app integration.
 
-* Consists of an identity (App credential), expiration time, display name, allowed ALPN list, and optional metadata (JSON).
-* Managed by the Portal’s LeaseManager, which handles registration, renewal, expiration, deletion, and enforces name conflict rules, banned IDs, and TTL/BPS policies.
-* A Client requests a connection from the Portal using a Lease ID (= credential ID) or name, and the Portal uses this information to locate the corresponding App’s RelayClient.
+## Lease
 
-A Lease is the fundamental routing unit: **one Lease equals one public endpoint.**
+The routing and advertisement unit in Portal.
+Each lease maps to one public endpoint and includes identity, name, metadata, TLS flag, and reverse token.
+
+## Lease Name
+
+The human-readable lease identifier used for subdomain routing (for example, `myapp` -> `myapp.example.com`).
+
+## Reverse Token
+
+A per-lease secret used to authenticate reverse connections (`/sdk/connect`) from backend to relay.
+
+## ReverseHub
+
+The relay-side pool of authenticated reverse connections, keyed by lease ID.
+It provides connections for TLS SNI forwarding and HTTP proxy forwarding.
+
+## SNI Router
+
+The TCP router on relay SNI port (default `443`) that selects lease routes by TLS Server Name Indication (SNI).
+
+## Keyless TLS
+
+A mode where the backend handles TLS with remote signing support via relay signer endpoint (`/v1/sign`), without local private key distribution.
+
+## ACME DNS-01
+
+The certificate issuance/renewal method used with Cloudflare DNS API token when keyless materials are missing.
+
+## Base Domain
+
+The root domain derived from `PORTAL_URL` (for example, `example.com`) used to build service subdomains.
+
+## Admin/API Server
+
+The relay HTTP server (default `:4017`) that serves admin UI and SDK/control endpoints such as `/sdk/*`, `/admin`, and `/healthz`.
