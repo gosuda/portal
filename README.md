@@ -51,12 +51,10 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
 
-1. Open the relay page in your browser.
-2. Click `Add your server`.
-3. Use the generated command to connect your local service.
-
-With Tunnel, you can expose almost any local app in one step, without changing your app code.
-Run your app locally, execute the generated command, and Portal publishes it on a public subdomain.
+1. Run your local service.
+2. Open any Portal relay site.
+3. Click `Add your server` button.
+4. Use the generated command to connect your local service.
 
 ### Use Go SDK (Advanced)
 
