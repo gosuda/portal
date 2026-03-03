@@ -131,9 +131,8 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 	}
 
 	tlsConn := tls.Client(rawConn, &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ServerName:         serverName,
-		InsecureSkipVerify: true,
+		MinVersion: tls.VersionTLS12,
+		ServerName: serverName,
 	})
 	defer tlsConn.Close()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {

@@ -64,6 +64,33 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		return
 	}
 
+	if registerReq.LeaseID == "" {
+		writeJSON(w, sdk.RegisterResponse{
+			Success: false,
+			Message: "lease_id is required",
+		})
+		return
+	}
+
+	if registerReq.ReverseToken == "" {
+		writeJSON(w, sdk.RegisterResponse{
+			Success: false,
+			Message: "reverse_token is required",
+		})
+		return
+	}
+
+	// Ownership semantics: re-registration of an existing lease ID requires the same reverse token.
+	if entry, ok := serv.GetLeaseManager().GetLeaseByID(registerReq.LeaseID); ok && entry != nil && entry.Lease != nil {
+		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(registerReq.ReverseToken)) != 1 {
+			writeJSON(w, sdk.RegisterResponse{
+				Success: false,
+				Message: "unauthorized lease registration",
+			})
+			return
+		}
+	}
+
 	// Create lease
 	lease := &portal.Lease{
 		ID:           registerReq.LeaseID,
@@ -71,7 +98,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(30 * time.Second),
 		TLSMode:      string(registerReq.TLSMode),
-		ReverseToken: strings.TrimSpace(registerReq.ReverseToken),
+		ReverseToken: registerReq.ReverseToken,
 	}
 
 	// Register with lease manager
@@ -166,6 +193,14 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		return
 	}
 
+	if renewReq.ReverseToken == "" {
+		writeJSON(w, sdk.RegisterResponse{
+			Success: false,
+			Message: "reverse_token is required",
+		})
+		return
+	}
+
 	// Get existing lease
 	entry, ok := serv.GetLeaseManager().GetLeaseByID(renewReq.LeaseID)
 	if !ok {
@@ -175,7 +210,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		})
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(strings.TrimSpace(renewReq.ReverseToken))) != 1 {
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(renewReq.ReverseToken)) != 1 {
 		writeJSON(w, sdk.APIResponse{
 			Success: false,
 			Message: "unauthorized lease renewal",
