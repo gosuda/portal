@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -138,15 +139,23 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 	// Client -> Lease
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(leaseConn, clientConn, leaseID)
-		leaseConn.Close()
+		if _, err := bpsManager.Copy(leaseConn, clientConn, leaseID); err != nil && !errors.Is(err, io.EOF) {
+			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] client->lease copy ended with error")
+		}
+		if err := leaseConn.Close(); err != nil {
+			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close lease connection")
+		}
 	}()
 
 	// Lease -> Client
 	go func() {
 		defer wg.Done()
-		bpsManager.Copy(clientConn, leaseConn, leaseID)
-		clientConn.Close()
+		if _, err := bpsManager.Copy(clientConn, leaseConn, leaseID); err != nil && !errors.Is(err, io.EOF) {
+			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] lease->client copy ended with error")
+		}
+		if err := clientConn.Close(); err != nil {
+			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close client connection")
+		}
 	}()
 
 	wg.Wait()

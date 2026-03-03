@@ -250,7 +250,7 @@ func isValidSNIHostname(hostname string) bool {
 			// Check label characters
 			for j, c := range []byte(label) {
 				// Allow a-z, A-Z, 0-9, and hyphen
-				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' {
 					return false
 				}
 				// Label cannot start or end with hyphen

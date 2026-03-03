@@ -211,8 +211,12 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 	go func() {
 		select {
 		case <-ctx.Done():
-			relayConn.Close()
-			localConn.Close()
+			if closeErr := relayConn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("failed to close relay connection on shutdown")
+			}
+			if closeErr := localConn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("failed to close local connection on shutdown")
+			}
 		case <-stopCh:
 		}
 	}()
@@ -225,7 +229,9 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 			log.Debug().Err(err).Msg("relay->local copy ended")
 		}
 		if tcpConn, ok := localConn.(*net.TCPConn); ok {
-			tcpConn.CloseWrite()
+			if closeErr := tcpConn.CloseWrite(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("failed to close local write side")
+			}
 		}
 		errCh <- err
 	}()

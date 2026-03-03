@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	keylesstls "github.com/gosuda/keyless_tls/keyless"
 	"github.com/rs/zerolog/log"
+
+	keylesstls "github.com/gosuda/keyless_tls/keyless"
 )
 
 // BuildClientTLSConfig builds a keyless TLS server config for tunnel-side TLS termination.

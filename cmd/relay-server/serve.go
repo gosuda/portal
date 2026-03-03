@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -75,7 +76,9 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 
 	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{\"status\":\"ok\"}"))
+		if _, err := w.Write([]byte("{\"status\":\"ok\"}")); err != nil {
+			log.Debug().Err(err).Msg("[healthz] failed to write response")
+		}
 	})
 
 	// Admin API
@@ -126,9 +129,10 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	tlsCertFile, tlsKeyFile := "", ""
 	if acmeManager := serv.GetACMEManager(); acmeManager != nil {

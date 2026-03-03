@@ -3,6 +3,7 @@ package sni
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestExtractSNI_NoSNI(t *testing.T) {
 	clientHello := buildClientHello("", false)
 
 	_, err := ExtractSNI(bytes.NewReader(clientHello))
-	if err != ErrNoSNI {
+	if !errors.Is(err, ErrNoSNI) {
 		t.Errorf("Expected ErrNoSNI, got: %v", err)
 	}
 }
@@ -33,7 +34,7 @@ func TestExtractSNI_NotClientHello(t *testing.T) {
 	serverHello := buildTLSRecord(0x02, nil)
 
 	_, err := ExtractSNI(bytes.NewReader(serverHello))
-	if err != ErrNotClientHello {
+	if !errors.Is(err, ErrNotClientHello) {
 		t.Errorf("Expected ErrNotClientHello, got: %v", err)
 	}
 }
@@ -62,7 +63,7 @@ func TestPeekSNI(t *testing.T) {
 func TestExtractSNI_TruncatedClientHello(t *testing.T) {
 	record := buildTLSRecord(0x01, make([]byte, 34)) // 1 byte short for session_id_len field access
 	_, err := ExtractSNI(bytes.NewReader(record))
-	if err != ErrInvalidTLSRecord {
+	if !errors.Is(err, ErrInvalidTLSRecord) {
 		t.Fatalf("expected ErrInvalidTLSRecord, got: %v", err)
 	}
 }
@@ -75,7 +76,7 @@ func TestExtractSNI_InvalidHandshakeLength(t *testing.T) {
 	record[8] = 0x00
 
 	_, err := ExtractSNI(bytes.NewReader(record))
-	if err != ErrInvalidTLSRecord {
+	if !errors.Is(err, ErrInvalidTLSRecord) {
 		t.Fatalf("expected ErrInvalidTLSRecord, got: %v", err)
 	}
 }
@@ -85,7 +86,7 @@ func TestPeekSNI_NotClientHelloPreservesData(t *testing.T) {
 	buf := append([]byte{0x17, 0x03, 0x03, 0x00, byte(len(payload))}, payload...)
 
 	_, reader, err := PeekSNI(bytes.NewReader(buf), 4096)
-	if err != ErrNotClientHello {
+	if !errors.Is(err, ErrNotClientHello) {
 		t.Fatalf("expected ErrNotClientHello, got: %v", err)
 	}
 

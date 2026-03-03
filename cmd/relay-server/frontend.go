@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal"
 )
 
@@ -91,7 +92,9 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request
 
 	// Send response
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(injectedHTML))
+	if _, err := w.Write([]byte(injectedHTML)); err != nil {
+		log.Debug().Err(err).Msg("failed to write portal HTML response")
+	}
 
 	log.Debug().Msg("Served portal.html with SSR data")
 }
@@ -302,7 +305,9 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 
 	w.Header().Set("Cache-Control", "public, max-age=3600")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		log.Debug().Err(err).Str("path", appPath).Msg("failed to write app static response")
+	}
 
 	log.Debug().
 		Str("path", appPath).

@@ -17,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/websocket"
+
 	"gosuda.org/portal/portal"
 )
 
@@ -149,8 +150,10 @@ func (l *Listener) Accept() (net.Conn, error) {
 	// If TLS is enabled, wrap the connection and perform handshake
 	if tlsConfig != nil {
 		tlsConn := tls.Server(conn, tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
-			conn.Close()
+		if err := tlsConn.HandshakeContext(context.Background()); err != nil {
+			if closeErr := conn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("[SDK] failed to close TLS connection after handshake error")
+			}
 			return nil, fmt.Errorf("TLS handshake failed: %w", err)
 		}
 		return tlsConn, nil
@@ -253,7 +256,9 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 		}
 
 		if err := l.waitForReverseStart(conn, expectedMarker); err != nil {
-			conn.Close()
+			if closeErr := conn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("[SDK] failed to close reverse connection")
+			}
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
@@ -270,7 +275,9 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 
 		select {
 		case <-l.stopCh:
-			conn.Close()
+			if closeErr := conn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Msg("[SDK] failed to close reverse connection on shutdown")
+			}
 			return
 		case l.acceptCh <- conn:
 		}
@@ -318,7 +325,8 @@ func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error
 			return fmt.Errorf("invalid reverse marker: %d", marker[0])
 		}
 
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			select {
 			case <-l.stopCh:
 				return net.ErrClosed
@@ -370,7 +378,13 @@ func (l *Listener) postJSON(path string, body any) error {
 	}
 
 	endpoint := strings.TrimSuffix(l.relayAddr, "/") + path
-	resp, err := l.httpClient.Post(endpoint, "application/json", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build POST %s request: %w", path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", path, err)
 	}

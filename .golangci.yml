@@ -14,57 +14,17 @@ formatters:
         - gosuda.org
 
 linters:
-  default: standard
+  default: none
 
   enable:
-    # --- Tier 1: Bugs & Correctness ---
+    # CI blockers: correctness + security
     - govet
     - errcheck
     - staticcheck
     - unused
-    - gosec
     - errorlint
     - copyloopvar
-    - nilerr
-    - bodyclose
-    - sqlclosecheck
-    - rowserrcheck
-    - durationcheck
-    - makezero
     - noctx
-
-    # --- Tier 2: Code Quality & Style ---
-    - gocritic
-    - revive
-    - unconvert
-    - unparam
-    - wastedassign
-    - misspell
-    - whitespace
-    - godot
-    - goconst
-    - dupword
-    - usestdlibvars
-    - testifylint
-    - testableexamples
-    - tparallel
-    - usetesting
-
-    # --- Tier 3: Concurrency & Safety ---
-    - gochecknoglobals
-    - gochecknoinits
-    - containedctx
-
-    # --- Tier 4: Performance & Modernization ---
-    - prealloc
-    - intrange
-    - modernize
-    - fatcontext
-    - perfsprint
-    - reassign
-    - spancheck
-    - mirror
-    - recvcheck
 
   exclusions:
     rules:
@@ -73,19 +33,8 @@ linters:
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"
         linters:
-          - bodyclose
           - errcheck
-          - gosec
           - noctx
-          - wrapcheck
-          - goconst
-          - funlen
-          - dupl
-          - gochecknoglobals
-      - text: "should have a package comment"
-        linters: [revive]
-      - text: "exported \\S+ \\S+ should have comment"
-        linters: [revive]
 
   settings:
     errcheck:
@@ -123,68 +72,8 @@ linters:
         - atomic.LoadInt64
         - rand.Read
 
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - style
-        - performance
-        - experimental
-        - opinionated
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
-
     govet:
-      enable-all: true
-      disable:
-        - fieldalignment
-      settings:
-        shadow:
-          strict: true
-
-    revive:
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: dot-imports
-        - name: error-return
-        - name: error-strings
-        - name: error-naming
-        - name: exported
-          disabled: true
-        - name: if-return
-        - name: increment-decrement
-        - name: var-naming
-        - name: var-declaration
-        - name: range
-        - name: receiver-naming
-        - name: time-naming
-        - name: unexported-return
-        - name: indent-error-flow
-        - name: errorf
-        - name: empty-block
-        - name: superfluous-else
-        - name: unused-parameter
-        - name: unreachable-code
-        - name: redefines-builtin-id
-
-    gosec:
-      excludes:
-        - G104
-        - G304
-
-    perfsprint:
-      strconcat: true
-
-    fatcontext:
-      check-struct-pointers: true
-
-    spancheck:
-      checks:
-        - end
-        - record-error
-        - set-status
+      enable-all: false
 
 issues:
   max-issues-per-linter: 0

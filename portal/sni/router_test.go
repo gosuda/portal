@@ -1,6 +1,7 @@
 package sni
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -227,7 +228,7 @@ func TestRouter_Stop(t *testing.T) {
 
 	// Registration after stop should fail
 	err = router.RegisterRoute("other.com", "lease-2", "test2")
-	if err != ErrRouterClosed {
+	if !errors.Is(err, ErrRouterClosed) {
 		t.Errorf("expected ErrRouterClosed, got %v", err)
 	}
 }

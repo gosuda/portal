@@ -95,7 +95,7 @@ func runDemo() error {
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
 	// Simple HTTP ping endpoint for connectivity checks
-	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
 			"message": "pong",
@@ -127,7 +127,7 @@ func runDemo() error {
 
 	// Test endpoint for multiple Set-Cookie headers
 	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)
-	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, _ *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:   "session_id",
 			Value:  "abc123",
@@ -153,9 +153,11 @@ func runDemo() error {
 			MaxAge: 86400,
 		})
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		if encodeErr := json.NewEncoder(w).Encode(map[string]any{
 			"message": "4 cookies set: session_id, auth_token, csrf_token, user_pref",
-		})
+		}); encodeErr != nil {
+			log.Error().Err(encodeErr).Msg("write test-cookies response")
+		}
 	})
 
 	// 5) Serve HTTP over relay listener
@@ -165,14 +167,23 @@ func runDemo() error {
 	go func() {
 		localAddr := fmt.Sprintf(":%d", flagPort)
 		log.Info().Msgf("[demo] also serving on local port %s for direct testing", localAddr)
-		if err := http.ListenAndServe(localAddr, mux); err != nil {
+		localSrv := &http.Server{
+			Addr:              localAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		if err := localSrv.ListenAndServe(); err != nil {
 			log.Error().Err(err).Msg("local http serve error")
 		}
 	}()
 
 	srvErr := make(chan error, 1)
 	go func() {
-		srvErr <- http.Serve(listener, mux)
+		relaySrv := &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		srvErr <- relaySrv.Serve(listener)
 	}()
 
 	sig := make(chan os.Signal, 1)

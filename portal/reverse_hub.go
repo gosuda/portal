@@ -75,7 +75,9 @@ func NewReverseConn(conn net.Conn) *ReverseConn {
 // Close closes the connection and signals completion.
 func (c *ReverseConn) Close() {
 	c.closed.Store(true)
-	c.Conn.Close()
+	if err := c.Conn.Close(); err != nil {
+		log.Debug().Err(err).Msg("[ReverseHub] failed to close reverse connection")
+	}
 	c.once.Do(func() {
 		close(c.done)
 	})
@@ -302,14 +304,18 @@ func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
 		time.Sleep(AuthFailureDelay)
-		ws.Close()
+		if err := ws.Close(); err != nil {
+			log.Debug().Err(err).Msg("[ReverseHub] failed to close unauthorized websocket")
+		}
 		return
 	}
 
 	if !h.isAuthorized(leaseID, token) {
 		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Unauthorized reverse connect")
 		time.Sleep(AuthFailureDelay)
-		ws.Close()
+		if err := ws.Close(); err != nil {
+			log.Debug().Err(err).Msg("[ReverseHub] failed to close unauthorized websocket")
+		}
 		return
 	}
 

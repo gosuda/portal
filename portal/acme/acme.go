@@ -298,13 +298,13 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 		if after, ok := strings.CutPrefix(domain, "*."); ok {
 			probeHost := "acme-probe." + after
 			if err := cert.VerifyHostname(probeHost); err != nil {
-				return false, nil
+				return false, err
 			}
 			continue
 		}
 
 		if err := cert.VerifyHostname(domain); err != nil {
-			return false, nil
+			return false, err
 		}
 	}
 

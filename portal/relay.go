@@ -147,14 +147,17 @@ func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) 
 			return false
 		}
 
-		upstreamConn, err := net.DialTimeout("tcp", upstreamAddr, 5*time.Second)
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		upstreamConn, err := dialer.DialContext(context.Background(), "tcp", upstreamAddr)
 		if err != nil {
 			log.Warn().
 				Err(err).
 				Str("sni", serverName).
 				Str("upstream", upstreamAddr).
 				Msg("[SNI] failed to forward root domain to admin/API listener")
-			clientConn.Close()
+			if closeErr := clientConn.Close(); closeErr != nil {
+				log.Debug().Err(closeErr).Str("sni", serverName).Msg("[SNI] failed to close client connection")
+			}
 			return true
 		}
 
@@ -190,7 +193,9 @@ func (g *RelayServer) Start() error {
 func (g *RelayServer) Stop() {
 	close(g.stopch)
 	g.leaseManager.Stop()
-	g.sniRouter.Stop()
+	if err := g.sniRouter.Stop(); err != nil {
+		log.Warn().Err(err).Msg("[RelayServer] Failed to stop SNI router")
+	}
 	if g.acmeManager != nil {
 		g.acmeManager.Stop()
 	}

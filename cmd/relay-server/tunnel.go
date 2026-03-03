@@ -150,7 +150,9 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		w.Write([]byte(script))
+		if _, err := w.Write([]byte(script)); err != nil {
+			log.Debug().Err(err).Msg("failed to write tunnel script")
+		}
 	}
 }
 
@@ -189,6 +191,8 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			log.Debug().Err(err).Str("slug", slug).Msg("failed to write tunnel binary")
+		}
 	}
 }
