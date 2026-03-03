@@ -1,86 +1,91 @@
-# Portal Relay Deploy Guide
+# Portal Relay Deployment Guide
 
-## Prerequisites
+This guide covers production-style deployment of Portal Relay on a public domain.
+It includes DNS setup, environment configuration, startup, validation, and basic operations.
 
-- Public domain (example: `example.com`)
-- Public server with public IP
-- Docker, Docker Compose
+## 1. Prerequisites
 
-## Quick Start
+You need:
 
-### 1. Register Domain in Cloudflare
+- A public domain (example: `example.com`)
+- A public Linux server with a static public IP
+- Open inbound ports: `443/tcp`, `4017/tcp`
+- Docker and Docker Compose
+- Cloudflare-managed DNS zone for your domain (required for automatic ACME DNS-01 flow)
 
-In Cloudflare Dashboard:
-1. Go to `Websites`
-2. Click `Add a Site`
-3. Enter your domain (example: `example.com`)
-4. Select a plan and complete setup
-5. Update nameservers at your registrar to the nameservers provided by Cloudflare
-6. Confirm the zone status is `Active`
+## 2. DNS and Cloudflare Setup
 
-### 2. Register DNS Records
+### 2.1 Add Domain to Cloudflare
 
-In Cloudflare Dashboard:
-1. Open your domain dashboard (`example.com`)
-2. Go to `DNS` -> `Records`
-3. Click `Add record`
+1. Cloudflare Dashboard -> `Websites` -> `Add a Site`
+2. Enter your domain (`example.com`)
+3. Complete onboarding and apply Cloudflare nameservers at your registrar
+4. Wait until zone status is `Active`
 
-Create record 1 (root domain):
-- Type: `A`
-- Name: `@`
-- IPv4 address: `<server-ip>`
-- Proxy status: `DNS only`
-- Save
+### 2.2 Create DNS Records
 
-Create record 2 (wildcard subdomain):
-- Type: `A`
-- Name: `*`
-- IPv4 address: `<server-ip>`
-- Proxy status: `DNS only`
-- Save
+Cloudflare Dashboard -> `DNS` -> `Records`:
 
-Example result:
+- Record 1 (apex)
+  - Type: `A`
+  - Name: `@`
+  - Content: `<server-ip>`
+  - Proxy status: `DNS only`
+- Record 2 (wildcard)
+  - Type: `A`
+  - Name: `*`
+  - Content: `<server-ip>`
+  - Proxy status: `DNS only`
+
+Expected:
+
 - `example.com -> <server-ip>`
 - `*.example.com -> <server-ip>`
 
-### 3. Create Cloudflare API Token
+### 2.3 Create Cloudflare API Token
 
-Create token in Cloudflare Dashboard:
-1. `My Profile` -> `API Tokens` -> `Create Token`
-2. Custom permissions:
-   - `Zone:Read`
-   - `DNS:Edit`
-3. Zone resources: include your target zone (`example.com`)
-4. Copy and save the token value (you will use it as `CLOUDFLARE_TOKEN`)
+Cloudflare Dashboard -> `My Profile` -> `API Tokens` -> `Create Token`.
 
-### 4. Run the Relay Server
+Grant:
 
-Create `.env` in repository root:
+- `Zone:Read`
+- `DNS:Edit`
+
+Scope:
+
+- Zone resources limited to your target zone (for example, `example.com`)
+
+Save this token for `CLOUDFLARE_TOKEN`.
+
+## 3. Run Relay Server
+
+### 3-1. Create `.env` at repository root:
 
 ```bash
 PORTAL_URL=https://example.com
-ADMIN_SECRET_KEY=your-admin-key
+BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
+ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/etc/portal/keyless
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
 
-Run Docker Compose
+### 3-2. Start Relay
 
 ```bash
-docker compose up -d
-docker compose logs -f
+docker compose up
 ```
 
-## Troubleshooting
+## 4. Troubleshooting
 
-### Inbound ports are blocked
+### 4.1 Ports blocked
 
-Required inbound ports:
+Required inbound:
+
 - `443/tcp`
 - `4017/tcp`
 
-Linux example (UFW):
+UFW example:
 
 ```bash
 sudo ufw allow 443/tcp
