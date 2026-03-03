@@ -1,174 +1,131 @@
 # AGENTS.md
 
-Repo-specific guidance for automated agents working on Portal.
+## Formatting & Style
 
-## Quick Commands
+**Mandatory** before every commit: `gofmt -w . && goimports -w .`
 
-Build:
-- `make build` (all artifacts)
-- `make build-server` (relay server binary)
-- `make build-frontend` (React admin UI)
-- `make build-tunnel` (portal-tunnel binaries)
+Import ordering: **stdlib → external → internal** (blank-line separated). Local prefix: `github.com/gosuda`.
 
-Run:
-- `make run` (run `./bin/relay-server`)
-- `docker compose up` (full stack, relay at :4017, admin at `/admin`)
+**Naming:** packages lowercase single-word (`httpwrap`) · interfaces as behavior verbs (`Reader`, `Handler`) · errors `Err` prefix sentinels (`ErrNotFound`), `Error` suffix types · context always first param `func Do(ctx context.Context, ...)`
 
-Lint/Format/Test:
-- `make fmt` (gofmt + goimports)
-- `make vet` (go vet)
-- `make lint` (golangci-lint)
-- `make test` (go test -v -race -coverprofile=coverage.out ./...)
-- `make vuln` (govulncheck)
-- `make tidy` (go mod tidy + go mod verify)
+**CGo:** always disabled — `CGO_ENABLED=0`. Pure Go only. No C dependencies.
 
-Single test:
-- `go test -v -run TestName ./path/to/pkg`
+---
 
-Frontend dev:
-- `cd cmd/relay-server/frontend && npm run dev`
-- `cd cmd/relay-server/frontend && npm run build`
-- `cd cmd/relay-server/frontend && npm run lint`
+## Error Handling
 
-## Architecture (Big Picture)
+1. **Wrap with `%w`** — always add call-site context: `return fmt.Errorf("repo.Find: %w", err)`
+2. **Sentinel errors** per package: `var ErrNotFound = errors.New("user: not found")`
+3. **Multi-error** — use `errors.Join(err1, err2)` or `fmt.Errorf("op: %w and %w", e1, e2)`
+4. **Never ignore errors** — `_ = fn()` only for `errcheck.exclude-functions`
+5. **Fail fast** — return immediately; no state accumulation after failure
+6. **Check with `errors.Is`/`errors.As`** — never string-match `err.Error()`
 
-Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
+---
 
-Core components:
-- Relay server: `cmd/relay-server` (HTTP API/admin + SNI router)
-- Relay core logic: `portal/` (lease manager, reverse connection hub, forwarding)
-- SNI router package: `portal/sni/`
-- SDK for Apps: `sdk/`
-- Tunnel client: `cmd/portal-tunnel/` (exposes local services)
-- Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
+## Iterators (Go 1.23+)
 
-## Connection Flow (High Level)
+Signatures: `func(yield func() bool)` · `func(yield func(V) bool)` · `func(yield func(K, V) bool)`
 
-1. App/Tunnel registers a Lease with relay via `/sdk/register` (name, metadata, TLS mode, reverse token).
-2. Tunnel maintains reverse WebSocket workers to relay via `/sdk/connect`.
-3. Client traffic enters relay:
-   - TLS traffic on SNI port is routed by SNI.
-   - Non-TLS traffic can use HTTP proxy mode.
-4. Relay acquires a reverse tunnel connection and forwards bytes end-to-end.
+**Rules:** always check yield return (panics on break if ignored) · avoid defer/recover in iterator bodies · use stdlib (`slices.All`, `slices.Backward`, `slices.Collect`, `maps.Keys`, `maps.Values`) · range over integers: `for i := range n {}`
 
-## Key Terms
+---
 
-- Portal / Relay: central mediator; never decrypts payloads.
-- App: service publisher using SDK or tunnel to register Leases.
-- Client: consumer connecting via relay.
-- Lease: advertising unit; one Lease maps to one public endpoint.
+## Context & Concurrency
 
-## Where to Look
+Every public I/O function **must** take `context.Context` first.
 
-- `cmd/relay-server/` (entrypoint, HTTP APIs, SNI callback wiring)
-- `portal/reverse_hub.go` (reverse WebSocket connection pool)
-- `portal/sni/` (SNI parser/router)
-- `sdk/` (App integration)
-- `cmd/portal-tunnel/` (tunnel client)
-- `docs/architecture.md` and `docs/glossary.md`
+| Pattern | Primitive |
+|---------|-----------|
+| Parallel work with errors | `errgroup.Group` (preferred over `WaitGroup`) |
+| Bounded concurrency | `errgroup.SetLimit` or buffered channel semaphore |
+| Fan-out/fan-in | Unbuffered chan + N producers + 1 consumer; `select` to merge |
+| Pipeline stages | `chan T` between stages, sender closes to signal done |
+| Cancellation/timeout | `context.WithCancel` / `context.WithTimeout` |
+| Concurrent read/write | `sync.RWMutex` (encapsulate behind methods) |
+| Lock-free counters | `atomic.Int64` / `atomic.Uint64` |
+| One-time init | `sync.Once` / `sync.OnceValue` / `sync.OnceFunc` |
+| Object reuse | `sync.Pool` (hot paths only, no lifetime guarantees) |
 
-## Domain Configuration
+**Goroutine rules:** creator owns lifecycle (start, stop, errors, panic recovery) · no bare `go func()` · every goroutine needs a clear exit (context, done channel, bounded work) · leaks are bugs — verify with `goleak` or `runtime.NumGoroutine()`
 
-Portal uses environment variables for domain and TLS configuration:
+**Channel rules:** use directional types (`chan<-`/`<-chan`) in signatures · only sender closes · nil channel blocks forever (use to disable `select` cases) · unbuffered = synchronization, buffered = decoupling/backpressure · `for v := range ch` until closed · `select` with `default` only for non-blocking try-send/try-receive
 
-### Core Environment Variables
+**Select patterns:** timeout via `context.WithTimeout` (not `time.After` in loops — leaks timers) · always check `ctx.Done()` · fan-in merges with multi-case `select` · rate-limit with `time.Ticker` not `time.Sleep`
 
-| Variable | Description |
-|----------|-------------|
-| `PORTAL_URL` | Base URL (e.g., `https://portal.example.com`) |
-| `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
-| `SNI_PORT` | SNI router port (default `443`) |
-| `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
-| `KEYLESS_DIR` | Relay keyless materials directory (default `/etc/portal/keyless`) |
-| `CLOUDFLARE_TOKEN` | Cloudflare DNS token for ACME DNS-01 auto-issuance when key file is missing |
+```go
+g, ctx := errgroup.WithContext(ctx)
+g.SetLimit(maxWorkers)
+for _, item := range items {
+    g.Go(func() error { return process(ctx, item) })
+}
+if err := g.Wait(); err != nil { return fmt.Errorf("processAll: %w", err) }
+```
 
-### Tunnel Environment Variables
+**Anti-patterns:** ❌ shared memory without sync · ❌ `sync.Mutex` in public APIs · ❌ goroutine without context · ❌ closing channel from receiver · ❌ sending on closed channel · ❌ `time.Sleep` for synchronization · ❌ unbounded goroutine spawn
 
-| Variable | Description |
-|----------|-------------|
-| `RELAYS` | Relay API URLs for tunnel client (comma-separated) |
-| `TLS` | Enable TLS keyless mode (`1`/`true`) |
-| `TLS_BASE_DOMAIN` | Base domain used for keyless certificate hostname validation (keyless mode) |
+---
 
-### Domain Derivation
+## Testing
 
-- Service URL: `{name}.{base_domain}` (e.g., `myapp.example.com`)
-- Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
-- SNI routes registered in `portal/sni/router.go`
+```bash
+go test -v -race -coverprofile=coverage.out ./...
+```
 
-### TLS
+- **Benchmarks (Go 1.24+):** `for b.Loop() {}` — prevents compiler opts, excludes setup from timing
+- **Test contexts (Go 1.24+):** `ctx := t.Context()` — auto-canceled when test ends
+- **Table-driven tests** as default · **race detection** (`-race`) mandatory in CI
+- **Fuzz testing:** `go test -fuzz=. -fuzztime=30s` — fast, deterministic targets
+- **testify** for assertions when stdlib `testing` is verbose
 
-1. **`TLS` disabled**: HTTP proxy mode for development.
-2. **`TLS` enabled**: Tunnel uses SDK keyless TLS mode.
-   - Keyless signer endpoint defaults to relay URL.
-   - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
-   - Auto-discovery requires an HTTPS signer endpoint.
-   - Relay signer key comes from `KEYLESS_DIR/privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
+---
 
-See `docs/deployment.md` for full deployment documentation.
+## Security
 
-## Repo Basics
+- **Vulnerability scanning:** `govulncheck ./...` — CI and pre-release
+- **Module integrity:** `go mod verify` — validates checksums against go.sum
+- **Supply chain:** always commit `go.sum` · audit with `go mod graph` · pin toolchain
+- **SBOM:** `syft packages . -o cyclonedx-json > sbom.json` on release
+- **Crypto:** FIPS 140-3, post-quantum X25519MLKEM768, `crypto/rand.Text()` for secure tokens
 
-- Module: `gosuda.org/portal`
-- Go version: 1.26.0 (from `go.mod`)
+---
 
-## Gosuda Go Standards
+## Performance
 
-Formatting & style:
-- Run formatting before commits (see Quick Commands).
-- Import order: stdlib -> external -> internal (blank-line separated).
-- Naming: packages lowercase single-word; interfaces as behavior verbs; errors use `Err` prefix for sentinels and `Error` suffix for types.
-- Do not add meaningless string normalization or utility wrapper functions unless they provide clear, demonstrated value.
-- Do not keep backward compatibility when changing code unless explicitly requested by the user.
-- Context first parameter for public I/O: `func Do(ctx context.Context, ...)`.
-- CGo disabled: `CGO_ENABLED=0`.
+- **Object reuse:** `sync.Pool` hot paths · `weak.Make` for cache-friendly patterns
+- **Benchmarking:** `go test -bench=. -benchmem` · `-cpuprofile`/`-memprofile`
+- **Avoid `reflect`:** ~30x slower than static code, defeats compile-time checks and linters · prefer generics (4–18x faster), type switches, interfaces, or `go generate` codegen for hot paths
+- **Escape analysis:** `go build -gcflags='-m'` to verify heap allocations
 
-Static analysis & linters:
-- Use `go vet`, `golangci-lint`, `go test -race`, and `govulncheck` (see Quick Commands).
-- Linter tiers: correctness, quality, concurrency safety, and performance/modernization (configured in `.golangci.yml`).
+---
 
-Error handling:
-- Wrap with `%w` and include call-site context.
-- Sentinel errors per package; use `errors.Is`/`errors.As`.
-- Use `errors.Join` for multi-error.
-- Never ignore errors unless explicitly excluded by errcheck.
+## Module Hygiene
 
-Iterators (Go 1.23+):
-- Signatures: `func(yield func() bool)`, `func(yield func(V) bool)`, `func(yield func(K, V) bool)`.
-- Always check yield return; prefer stdlib helpers like `slices.Collect` and `maps.Keys`.
+- **Always commit** `go.mod` and `go.sum` · **never commit** `go.work`
+- **Pin toolchain:** `toolchain go1.25.0` in go.mod
+- **Tool directive (Go 1.24+):** `tool golang.org/x/tools/cmd/stringer` in go.mod
+- **Pre-release:** `go mod tidy && go mod verify && govulncheck ./...`
+- **Sandboxed I/O (Go 1.24+):** `os.Root` for directory-scoped file operations
 
-Context & concurrency:
-- Prefer `errgroup.Group` for parallel work, `SetLimit` for bounds.
-- No goroutines without clear exit; creator owns lifecycle.
-- Directional channels in signatures; only sender closes.
-- Avoid `time.After` in loops; use `context.WithTimeout` or `time.Ticker`.
+---
 
-Testing:
-- Do not run tests on every execution. Run tests only when explicitly requested, before handoff, or when a change is high-risk.
-- Use race detector in normal test runs.
-- Use `t.Context()` in tests where applicable.
-- Benchmarks should use `for b.Loop() {}`.
+**Pre-commit:** `make all` or `gofmt -w . && goimports -w . && go vet ./... && golangci-lint run --fix && go test -race ./... && govulncheck ./...`
 
-Security:
-- Use `govulncheck` and `go mod verify` during release workflows.
-- Avoid `math/rand` for security-sensitive operations.
+---
 
-Performance:
-- Avoid `reflect` on hot paths; prefer generics or type switches.
-- Use `sync.Pool` for hot paths only.
+## Verbalized Sampling
 
-Module hygiene:
-- Always commit `go.mod` and `go.sum`; never commit `go.work`.
-- Pin toolchain version to match `go.mod`
+Before trival or non-trivial changes, AI agents **must**:
 
-CI/CD:
-- CI runs a single `verify` job: vet + lint + test + vuln (`.github/workflows/ci.yml`).
-- CD builds/pushes Docker images on `main` and `v*` tags, and deploys on `main` pushes (`.github/workflows/cd.yml`).
+1. **Sample 3–5 intent hypotheses** — rank by likelihood, note one weakness each
+2. **Explore edge cases** — at least 3 standard, 5 for architectural changes
+3. **Assess coupling** — structural (imports), temporal (co-changing files), semantic (shared concepts)
+4. **Tidy first** — high coupling → extract/split/rename before changing; low → change directly
+5. **Surface decisions** — ask the human when trade-offs exist; do exactly what is asked, no more
 
-Verbalized sampling:
-- For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
+## Project-specific rules [**ENFORCED**]
 
-Refactoring discipline:
-- Do not stack repeated "minimal patches" that leave logic fragmented across files.
-- For domain/URL parsing and normalization, keep a single source of truth and make all callers use it.
-- If a flow is being refactored (e.g., SDK client/listener TLS domain handling), complete consolidation in the same change instead of leaving temporary split logic.
+- Do not keep backward compatibility unless explicitly requested.
+- Do not add meaningless wrapper functions unless they provide demonstrated value.
+- Do not stack minimal patches that fragment logic — complete consolidation in one change.
+- Do not run tests on every execution — only when requested, before handoff, or for high-risk changes.
