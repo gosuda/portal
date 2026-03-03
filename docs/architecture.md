@@ -3,7 +3,7 @@
 ## Overview
 
 Portal is a relay network for publishing local services on public subdomains.
-The relay is the control and routing plane; service backends connect outward to the relay (NAT-friendly), and clients connect to the relay domain.
+The relay is both the control plane and routing plane. Service backends connect outward to the relay (NAT-friendly), and clients connect to the relay domain.
 
 High-level path:
 
@@ -41,25 +41,18 @@ Client (Browser)
 - CLI proxy for existing local apps without code changes
 - Registers lease via SDK and forwards relay traffic to local `--host`
 
-## Data Plane Modes
+## Transport Model
 
-### TLS mode (`lease.TLS=true`)
+### Raw reverse transport (`lease.TLS=true` only)
 
-1. Lease is registered with TLS enabled.
-2. Relay registers SNI route (`<lease>.<base-domain>`).
-3. Client connects via HTTPS to relay SNI port.
-4. Relay selects route by SNI and acquires reverse connection from `ReverseHub`.
-5. Tunnel-side listener performs TLS handshake (keyless-backed signer), relay forwards raw TCP.
+1. Relay requires registered leases to use TLS.
+2. Backend opens a raw TCP reverse connection via `GET /sdk/connect?lease_id=...`.
+3. Clients connect via HTTPS to relay SNI port.
+4. Relay resolves route by SNI and acquires a reverse connection from `ReverseHub`.
+5. Tunnel-side listener performs TLS handshake (keyless-backed signer), while relay forwards raw TCP transparently.
+6. No websocket or legacy compatibility transport is used.
 
-Result: relay does SNI-based routing and forwarding; app payload stays end-to-end encrypted.
-
-### Non-TLS mode (`lease.TLS=false`)
-
-1. Client connects over HTTP to relay/admin port.
-2. Relay resolves lease by subdomain and acquires reverse connection.
-3. Relay proxies HTTP request/response through reverse tunnel.
-
-Result: simple HTTP proxy path for development or non-TLS services.
+Result: the relay handles SNI-based routing and transparent raw TCP forwarding, preserving end-to-end TLS where applicable.
 
 ## Control Plane Flow
 
@@ -72,11 +65,11 @@ Result: simple HTTP proxy path for development or non-TLS services.
   - `tls`
   - `reverse_token`
 - Relay stores lease and (TLS only) registers SNI route.
-- Route hostnames are generated from normalized lease + normalized `PORTAL_URL` host (`scheme/path/port` removed).
+- Route hostnames are generated from normalized lease + normalized `PORTAL_URL` host (extract host from URL without scheme/port/path); path segments are ignored, so `https://portal.example.com:8443/admin` and `https://portal.example.com` both map to `portal.example.com`.
 
 ### 2. Reverse Connect
 
-- Backend opens raw TCP reverse channel to `GET /sdk/connect?lease_id=...` and upgrades into a long-lived stream
+- Backend opens a raw TCP reverse channel to `GET /sdk/connect?lease_id=...` and streams traffic over that long-lived connection
 - `X-Portal-Reverse-Token` is validated server-side.
 - Connection is pooled in `ReverseHub`.
 
@@ -96,10 +89,10 @@ Result: simple HTTP proxy path for development or non-TLS services.
 
 1. Exact host match
 2. Single-label wildcard (`*.example.com`)
-3. No-route handler (used for portal root-domain fallback)
+3. No-route handler (used for exact portal-root host fallback to admin/API listener on the `PORTAL_URL` root host)
 
-Note: wildcard does not match apex domain (`example.com`).
-For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, SNI/public hostnames are normalized to `<lease>.portal.example.com`.
+Note: wildcard does not match the portal root host itself (`example.com` or `portal.example.com`), so exact root-host matches trigger fallback to admin/API listener.
+`PORTAL_URL` is normalized to its host component (scheme/port/path removed), so non-apex values such as `https://portal.example.com:8443/admin` become `<lease>.portal.example.com` and exact host matches still resolve through no-route fallback.
 
 ## Keyless and Certificates
 
@@ -109,11 +102,11 @@ For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`
 - If materials are missing and Cloudflare token is configured, relay can provision via ACME DNS-01.
 - SDK/tunnel TLS mode uses keyless signer workflow and `/v1/sign` for remote signatures.
 
-## Important Design Properties
+## Design Properties
 
-- Reverse-only backend connectivity (no inbound port on app host required)
+- Reverse-only backend connectivity (no inbound port required on the app host)
 - Per-lease reverse token authorization
-- Separation of control plane (`/sdk/*`) and data plane (SNI/HTTP forwarding)
+- Separation of control plane (`/sdk/*`) and data plane (SNI + raw TCP forwarding)
 - Single transport policy: raw TCP reverse-connect only (no websocket/legacy compatibility mode)
 - Unified lease abstraction for routing, metadata, and lifecycle
 
