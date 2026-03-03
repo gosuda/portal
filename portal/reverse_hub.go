@@ -177,7 +177,7 @@ func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
 		return false
 	}
 
-	for i := 0; i < QueueSize+1; i++ {
+	for range QueueSize + 1 {
 		select {
 		case pool <- conn:
 			return true

@@ -3,6 +3,7 @@ package manager
 import (
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -57,9 +58,7 @@ func (m *BPSManager) GetAllBPSLimits() map[string]int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make(map[string]int64, len(m.bpsLimits))
-	for k, v := range m.bpsLimits {
-		result[k] = v
-	}
+	maps.Copy(result, m.bpsLimits)
 	return result
 }
 
