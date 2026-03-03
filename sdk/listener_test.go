@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
 
 func TestNormalizeRelayAPIURL(t *testing.T) {
@@ -34,7 +35,7 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := normalizeRelayAPIURL(tt.in)
+			got, err := types.NormalizeRelayAPIURL(tt.in)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for input %q, got none", tt.in)
@@ -45,7 +46,7 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 				t.Fatalf("unexpected error for input %q: %v", tt.in, err)
 			}
 			if got != tt.want {
-				t.Fatalf("normalizeRelayAPIURL(%q) = %q, want %q", tt.in, got, tt.want)
+				t.Fatalf("types.NormalizeRelayAPIURL(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

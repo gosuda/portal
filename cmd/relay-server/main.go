@@ -17,7 +17,7 @@ import (
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/sni"
-	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -53,9 +53,9 @@ func main() {
 	}
 	bootstrapsCSV := strings.TrimSpace(os.Getenv("BOOTSTRAP_URIS"))
 	if bootstrapsCSV == "" {
-		bootstrapsCSV = defaultBootstrapFrom(portalURL)
+		bootstrapsCSV = types.DefaultBootstrapFrom(portalURL)
 	}
-	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort, "SNI_PORT")
+	sniPort := types.ParsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	keylessDir := strings.TrimSpace(os.Getenv("KEYLESS_DIR"))
 	if keylessDir == "" {
 		keylessDir = defaultKeylessDir
@@ -73,7 +73,7 @@ func main() {
 	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
-	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	cfg.Bootstraps = types.ParseURLs(bootstrapsCSV)
 	flagPortalURL = cfg.PortalURL
 	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
@@ -90,9 +90,9 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	baseHost := sdk.ExtractBaseDomain(cfg.PortalURL)
-	rootSNI := portalRootHost(cfg.PortalURL)
-	apiUpstreamAddr := loopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
+	baseHost := types.ExtractBaseDomain(cfg.PortalURL)
+	rootSNI := types.PortalRootHost(cfg.PortalURL)
+	apiUpstreamAddr := types.LoopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
 	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, baseHost, cfg.KeylessDir, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)

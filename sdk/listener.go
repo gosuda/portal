@@ -19,6 +19,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -69,7 +70,7 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 		return nil, fmt.Errorf("lease reverse token is required")
 	}
 
-	apiURL, err := normalizeRelayAPIURL(relayAddr)
+	apiURL, err := types.NormalizeRelayAPIURL(relayAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +346,7 @@ func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error
 }
 
 func (l *Listener) registerWithRelay() error {
-	reqBody := RegisterRequest{
+	reqBody := types.RegisterRequest{
 		LeaseID:      l.lease.ID,
 		Name:         l.lease.Name,
 		Metadata:     l.lease.Metadata,
@@ -353,22 +354,22 @@ func (l *Listener) registerWithRelay() error {
 		ReverseToken: l.lease.ReverseToken,
 	}
 
-	return l.postJSON(SDKPathRegister, reqBody)
+	return l.postJSON(types.PathSDKRegister, reqBody)
 }
 
 func (l *Listener) unregisterFromRelay() error {
-	reqBody := UnregisterRequest{
+	reqBody := types.UnregisterRequest{
 		LeaseID: l.lease.ID,
 	}
-	return l.postJSON(SDKPathUnregister, reqBody)
+	return l.postJSON(types.PathSDKUnregister, reqBody)
 }
 
 func (l *Listener) sendKeepalive() error {
-	reqBody := RenewRequest{
+	reqBody := types.RenewRequest{
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
-	return l.postJSON(SDKPathRenew, reqBody)
+	return l.postJSON(types.PathSDKRenew, reqBody)
 }
 
 func (l *Listener) postJSON(path string, body any) error {
@@ -400,7 +401,7 @@ func (l *Listener) postJSON(path string, body any) error {
 		return nil
 	}
 
-	var apiResp APIResponse
+	var apiResp types.APIResponse
 	if err := json.Unmarshal(data, &apiResp); err != nil {
 		// Non-JSON success payloads are treated as successful.
 		return nil
@@ -423,51 +424,6 @@ func isLeaseNotFoundError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "lease not found")
 }
 
-func normalizeRelayAPIURL(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("empty relay URL")
-	}
-
-	// Accept host:port input.
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("parse relay URL: %w", err)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("relay URL missing host: %q", raw)
-	}
-
-	if host := strings.ToLower(strings.TrimSpace(u.Hostname())); strings.HasSuffix(host, ".localhost") {
-		port := u.Port()
-		if port != "" {
-			u.Host = net.JoinHostPort("localhost", port)
-		} else {
-			u.Host = "localhost"
-		}
-	}
-
-	switch u.Scheme {
-	case "http", "https":
-	default:
-		return "", fmt.Errorf("unsupported relay URL scheme: %q (use http/https)", u.Scheme)
-	}
-
-	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
-		return "", fmt.Errorf("relay URL must not include path: %q", raw)
-	}
-
-	u.RawQuery = ""
-	u.Fragment = ""
-	u.Path = ""
-
-	return strings.TrimSuffix(u.String(), "/"), nil
-}
-
 func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	if strings.TrimSpace(leaseID) == "" {
 		return "", fmt.Errorf("leaseID is required")
@@ -488,7 +444,7 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported relay URL scheme: %q", u.Scheme)
 	}
-	u.Path = SDKPathConnect
+	u.Path = types.PathSDKConnect
 	q := u.Query()
 	q.Set("lease_id", leaseID)
 	u.RawQuery = q.Encode()

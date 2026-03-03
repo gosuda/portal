@@ -18,6 +18,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
 )
 
 //go:embed dist/*
@@ -38,32 +39,32 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	frontend.ServeAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
-	appMux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		p := strings.TrimPrefix(r.URL.Path, "/app/")
+		p := strings.TrimPrefix(r.URL.Path, types.PathAppPrefix)
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
 	// Tunnel installer script and binaries
-	appMux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathTunnelScript, func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelScript(w, r)
 	})
-	appMux.HandleFunc("/tunnel/bin/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathTunnelBinary, func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelBinary(w, r)
 	})
 
-	// SDK Registry API for lease registration
+	// SDK registry API for /sdk/* endpoints
 	registry := &SDKRegistry{}
-	appMux.HandleFunc("/sdk/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathSDKPrefix, func(w http.ResponseWriter, r *http.Request) {
 		registry.HandleSDKRequest(w, r, serv)
 	})
 
 	// Keyless signer endpoint.
-	appMux.HandleFunc("/v1/sign", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathKeylessSign, func(w http.ResponseWriter, r *http.Request) {
 		handleKeylessSign(w, r, serv.GetKeylessSigner())
 	})
 
@@ -74,7 +75,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
-	appMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("{\"status\":\"ok\"}")); err != nil {
 			log.Debug().Err(err).Msg("[healthz] failed to write response")
@@ -82,12 +83,12 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	// Admin API
-	appMux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathAdminPrefix+"/", func(w http.ResponseWriter, r *http.Request) {
 		admin.HandleAdminRequest(w, r, serv)
 	})
 
 	// Create the main handler
-	appDomain := defaultAppPattern(flagPortalURL)
+	appDomain := types.DefaultAppPattern(flagPortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Compatibility endpoints for legacy webclient deployments.
 		// Handle before host-based routing so stale service workers can recover.
@@ -101,7 +102,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		}
 
 		// Handle subdomain requests
-		if isSubdomain(appDomain, r.Host) {
+		if types.IsSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
@@ -160,7 +161,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 // shouldProxyHTTP checks if the request should be proxied via HTTP.
 // It returns leaseName, lease entry, and whether HTTP proxying should be used.
 func shouldProxyHTTP(host string, serv *portal.RelayServer) (string, *portal.LeaseEntry, bool) {
-	leaseName, ok := leaseNameFromHost(host, defaultAppPattern(flagPortalURL))
+	leaseName, ok := types.LeaseNameFromHost(host, types.DefaultAppPattern(flagPortalURL))
 	if !ok {
 		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
 		return "", nil, false

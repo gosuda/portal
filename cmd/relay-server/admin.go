@@ -12,6 +12,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
 
 const adminCookieName = "portal_admin"
@@ -273,18 +274,16 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if a.authManager.IsIPLocked(clientIP) {
 		remaining := a.authManager.GetLockRemainingSeconds(clientIP)
 		w.WriteHeader(http.StatusTooManyRequests)
-		writeJSON(w, map[string]any{
-			"success":           false,
-			"error":             "Too many failed attempts. Please try again later.",
-			"locked":            true,
-			"remaining_seconds": remaining,
+		writeJSON(w, types.AdminLoginResponse{
+			Success:          false,
+			Error:            "Too many failed attempts. Please try again later.",
+			Locked:           true,
+			RemainingSeconds: remaining,
 		})
 		return
 	}
 
-	var req struct {
-		Key string `json:"key"`
-	}
+	var req types.AdminLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -295,13 +294,13 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 		nowLocked := a.authManager.RecordFailedLogin(clientIP)
 		log.Warn().Str("ip", clientIP).Bool("now_locked", nowLocked).Msg("[Admin] Failed login attempt")
 
-		response := map[string]any{
-			"success": false,
-			"error":   "Invalid key",
-			"locked":  nowLocked,
+		response := types.AdminLoginResponse{
+			Success: false,
+			Error:   "Invalid key",
+			Locked:  nowLocked,
 		}
 		if nowLocked {
-			response["remaining_seconds"] = 60
+			response.RemainingSeconds = 60
 		}
 		w.WriteHeader(http.StatusUnauthorized)
 		writeJSON(w, response)
@@ -324,8 +323,8 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	log.Info().Str("ip", clientIP).Msg("[Admin] Successful login")
-	writeJSON(w, map[string]any{
-		"success": true,
+	writeJSON(w, types.AdminLoginResponse{
+		Success: true,
 	})
 }
 
@@ -348,8 +347,8 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1, // Delete cookie
 	})
 
-	writeJSON(w, map[string]any{
-		"success": true,
+	writeJSON(w, types.AdminLoginResponse{
+		Success: true,
 	})
 }
 
@@ -360,9 +359,9 @@ func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	// Check if secret key is configured
 	authEnabled := a.authManager != nil && a.authManager.HasSecretKey()
 
-	writeJSON(w, map[string]any{
-		"authenticated": authenticated,
-		"auth_enabled":  authEnabled,
+	writeJSON(w, types.AdminAuthStatusResponse{
+		Authenticated: authenticated,
+		AuthEnabled:   authEnabled,
 	})
 }
 
@@ -394,23 +393,21 @@ func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, se
 }
 
 func (a *Admin) handleGetSettings(w http.ResponseWriter) {
-	writeJSON(w, map[string]any{
-		"approval_mode":   a.approveManager.GetApprovalMode(),
-		"approved_leases": a.approveManager.GetApprovedLeases(),
-		"denied_leases":   a.approveManager.GetDeniedLeases(),
+	writeJSON(w, types.AdminSettingsResponse{
+		ApprovalMode:   string(a.approveManager.GetApprovalMode()),
+		ApprovedLeases: a.approveManager.GetApprovedLeases(),
+		DeniedLeases:   a.approveManager.GetDeniedLeases(),
 	})
 }
 
 func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, map[string]any{
-			"approval_mode": a.approveManager.GetApprovalMode(),
+		writeJSON(w, types.AdminApprovalModeResponse{
+			ApprovalMode: string(a.approveManager.GetApprovalMode()),
 		})
 	case http.MethodPost:
-		var req struct {
-			Mode string `json:"mode"`
-		}
+		var req types.AdminApprovalModeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -423,8 +420,8 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 		a.approveManager.SetApprovalMode(mode)
 		a.SaveSettings(serv)
 		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
-		writeJSON(w, map[string]any{
-			"approval_mode": mode,
+		writeJSON(w, types.AdminApprovalModeResponse{
+			ApprovalMode: string(mode),
 		})
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -505,9 +502,7 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 
 	switch r.Method {
 	case http.MethodPost:
-		var req struct {
-			BPS int64 `json:"bps"`
-		}
+		var req types.AdminBPSRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return

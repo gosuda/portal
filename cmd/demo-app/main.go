@@ -18,6 +18,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 //go:embed static
@@ -61,23 +62,23 @@ func runDemo() error {
 	if flagTLS {
 		opts = append(opts, sdk.WithTLS())
 	}
-	client, err := sdk.NewClient(opts...)
+	sdkClient, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	defer client.Close()
+	defer sdkClient.Close()
 
 	// 2) Register lease
 	// Create base64 data URI from embedded thumbnail
 	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
 
-	listener, err := client.Listen(
+	listener, err := sdkClient.Listen(
 		flagName,
-		sdk.WithDescription(flagDesc),
-		sdk.WithTags(strings.Split(flagTags, ",")),
-		sdk.WithOwner(flagOwner),
-		sdk.WithThumbnail(thumbnailDataURI),
-		sdk.WithHide(flagHide),
+		types.WithDescription(flagDesc),
+		types.WithTags(strings.Split(flagTags, ",")),
+		types.WithOwner(flagOwner),
+		types.WithThumbnail(thumbnailDataURI),
+		types.WithHide(flagHide),
 	)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)

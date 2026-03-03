@@ -5,11 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +17,51 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
 )
+
+// SDK-specific errors.
+var (
+	ErrNoAvailableRelay     = errors.New("no available relay")
+	ErrClientClosed         = errors.New("client is closed")
+	ErrListenerExists       = errors.New("listener already exists for this credential")
+	ErrRelayExists          = errors.New("relay already exists")
+	ErrRelayNotFound        = errors.New("relay not found")
+	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
+	ErrFailedToCreateClient = errors.New("failed to create relay client")
+	ErrInvalidMetadata      = errors.New("invalid metadata")
+)
+
+// ClientConfig configures the SDK client.
+type ClientConfig struct {
+	BootstrapServers   []string
+	ReverseDialTimeout time.Duration // Reverse websocket dial timeout (default: 5 seconds)
+	TLS                bool
+}
+
+// ClientOption configures ClientConfig.
+type ClientOption func(*ClientConfig)
+
+// WithBootstrapServers sets the bootstrap relay servers.
+func WithBootstrapServers(servers []string) ClientOption {
+	return func(c *ClientConfig) {
+		c.BootstrapServers = servers
+	}
+}
+
+// WithReverseDialTimeout sets the reverse dial timeout.
+func WithReverseDialTimeout(timeout time.Duration) ClientOption {
+	return func(c *ClientConfig) {
+		c.ReverseDialTimeout = timeout
+	}
+}
+
+// WithTLS enables keyless TLS mode using relay-derived defaults.
+func WithTLS() ClientOption {
+	return func(c *ClientConfig) {
+		c.TLS = true
+	}
+}
 
 // Client is a minimal client for lease registration with the relay.
 type Client struct {
@@ -53,7 +97,7 @@ func isURLSafeName(name string) bool {
 // Listen creates a listener and registers it with the relay.
 // In TLS passthrough mode, this registers the lease and returns a listener
 // that accepts connections from the relay.
-func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, error) {
+func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Listener, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -64,9 +108,9 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 		return nil, ErrInvalidName
 	}
 
-	relayAddrs, err := normalizeRelayAPIURLs(c.config.BootstrapServers)
+	relayAddrs, err := types.NormalizeRelayAPIURLs(c.config.BootstrapServers)
 	if err != nil {
-		return nil, err
+		return nil, ErrNoAvailableRelay
 	}
 
 	lease, err := c.newLease(name, options...)
@@ -133,8 +177,8 @@ func (c *Client) Listen(name string, options ...MetadataOption) (net.Listener, e
 	return listener, nil
 }
 
-func (c *Client) newLease(name string, options ...MetadataOption) (*portal.Lease, error) {
-	var metadata portal.Metadata
+func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal.Lease, error) {
+	var metadata types.Metadata
 	for _, option := range options {
 		option(&metadata)
 	}
@@ -154,7 +198,7 @@ func (c *Client) newLease(name string, options ...MetadataOption) (*portal.Lease
 		Name:         name,
 		TLS:          c.config.TLS,
 		ReverseToken: hex.EncodeToString(tokenBytes),
-		Metadata: portal.Metadata{
+		Metadata: types.Metadata{
 			Description: metadata.Description,
 			Tags:        metadata.Tags,
 			Thumbnail:   metadata.Thumbnail,
@@ -179,7 +223,7 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 	if keylessServerName == "" {
 		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
 	}
-	baseDomain := ExtractBaseDomain(relayAddr)
+	baseDomain := types.ExtractBaseDomain(relayAddr)
 	if baseDomain == "" {
 		return nil, nil, fmt.Errorf("keyless base domain is required for relay %s", relayAddr)
 	}
@@ -195,51 +239,4 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 // Close closes the client.
 func (c *Client) Close() error {
 	return nil
-}
-
-func ExtractBaseDomain(rawURL string) string {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return ""
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + trimmed
-	}
-
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-
-	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
-}
-
-func normalizeRelayAPIURLs(bootstrapServers []string) ([]string, error) {
-	if len(bootstrapServers) == 0 {
-		return nil, ErrNoAvailableRelay
-	}
-
-	seen := make(map[string]struct{}, len(bootstrapServers))
-	out := make([]string, 0, len(bootstrapServers))
-	for _, relay := range bootstrapServers {
-		normalized, err := normalizeRelayAPIURL(relay)
-		if err != nil {
-			continue
-		}
-		if _, exists := seen[normalized]; exists {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		out = append(out, normalized)
-	}
-
-	if len(out) == 0 {
-		return nil, ErrNoAvailableRelay
-	}
-	return out, nil
 }

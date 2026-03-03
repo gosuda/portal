@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 var (
@@ -66,7 +66,7 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	relayURLs := splitCSV(flagRelayURLs)
+	relayURLs := types.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return fmt.Errorf("no relay URLs provided")
 	}
@@ -81,19 +81,19 @@ func runTunnel() error {
 	if flagTLS {
 		opts = append(opts, sdk.WithTLS())
 	}
-	client, err := sdk.NewClient(opts...)
+	sdkClient, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
 	}
-	defer client.Close()
+	defer sdkClient.Close()
 
-	listener, err := client.Listen(
+	listener, err := sdkClient.Listen(
 		flagName,
-		sdk.WithDescription(flagDesc),
-		sdk.WithTags(splitCSV(flagTags)),
-		sdk.WithOwner(flagOwner),
-		sdk.WithThumbnail(flagThumbnail),
-		sdk.WithHide(flagHide),
+		types.WithDescription(flagDesc),
+		types.WithTags(types.ParseURLs(flagTags)),
+		types.WithOwner(flagOwner),
+		types.WithThumbnail(flagThumbnail),
+		types.WithHide(flagHide),
 	)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", flagName, err)
@@ -184,7 +184,7 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, tlsEnabled bool) error {
 	defer relayConn.Close()
 
-	targetAddr, err := normalizeTargetAddr(localAddr)
+	targetAddr, err := types.NormalizeTargetAddr(localAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
 	}
@@ -274,33 +274,4 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 		"\r\n%s", len(htmlBody), htmlBody)
 	_, err := conn.Write([]byte(response))
 	return err
-}
-
-func splitCSV(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-func normalizeTargetAddr(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("empty host")
-	}
-
-	u, err := url.Parse(raw)
-	if err == nil && u.Scheme != "" {
-		if strings.TrimSpace(u.Host) == "" {
-			return "", fmt.Errorf("missing host in URL")
-		}
-		return u.Host, nil
-	}
-
-	return raw, nil
 }

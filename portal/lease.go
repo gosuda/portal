@@ -6,34 +6,18 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-// ParsedMetadata holds struct-parsed metadata for better access
-type ParsedMetadata struct {
-	Description string   `json:"description"`
-	Tags        []string `json:"tags"`
-	Thumbnail   string   `json:"thumbnail"`
-	Owner       string   `json:"owner"`
-	Hide        bool     `json:"hide"`
-}
+	"gosuda.org/portal/types"
+)
 
 // Lease represents a registered service.
 type Lease struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Metadata     Metadata  `json:"metadata"`
-	Expires      time.Time `json:"expires"`
-	TLS          bool      `json:"tls"`
-	ReverseToken string    `json:"-"` // shared secret for reverse connect authentication
-}
-
-// Metadata holds service metadata
-type Metadata struct {
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Thumbnail   string   `json:"thumbnail,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
-	Hide        bool     `json:"hide,omitempty"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Metadata     types.Metadata `json:"metadata"`
+	Expires      time.Time      `json:"expires"`
+	TLS          bool           `json:"tls"`
+	ReverseToken string         `json:"-"` // shared secret for reverse connect authentication
 }
 
 // LeaseEntry represents a registered lease with expiration tracking.
@@ -42,7 +26,7 @@ type LeaseEntry struct {
 	Expires        time.Time
 	LastSeen       time.Time
 	FirstSeen      time.Time
-	ParsedMetadata *ParsedMetadata // Cached parsed metadata
+	ParsedMetadata *types.ParsedMetadata // Cached parsed metadata
 }
 
 type LeaseManager struct {
@@ -156,10 +140,10 @@ func (lm *LeaseManager) UpdateLease(lease *Lease) bool {
 	}
 
 	// Parse metadata once for cached access
-	var parsedMeta *ParsedMetadata
+	var parsedMeta *types.ParsedMetadata
 	metadataJSON, _ := json.Marshal(lease.Metadata)
 	if len(metadataJSON) > 0 {
-		var meta ParsedMetadata
+		var meta types.ParsedMetadata
 		if err := json.Unmarshal(metadataJSON, &meta); err == nil {
 			parsedMeta = &meta
 		}

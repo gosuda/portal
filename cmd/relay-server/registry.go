@@ -12,10 +12,10 @@ import (
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
-// SDKRegistry handles HTTP API for SDK lease registration
+// SDKRegistry handles HTTP API for client lease registration
 type SDKRegistry struct{}
 
 // HandleSDKRequest routes /sdk/* requests.
@@ -23,15 +23,15 @@ func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request,
 	path := strings.TrimSuffix(req.URL.Path, "/")
 
 	switch path {
-	case sdk.SDKPathRegister:
+	case types.PathSDKRegister:
 		r.handleRegister(w, req, serv)
-	case sdk.SDKPathUnregister:
+	case types.PathSDKUnregister:
 		r.handleUnregister(w, req, serv)
-	case sdk.SDKPathRenew:
+	case types.PathSDKRenew:
 		r.handleRenew(w, req, serv)
-	case sdk.SDKPathDomain:
+	case types.PathSDKDomain:
 		r.handleDomain(w, req, serv)
-	case sdk.SDKPathConnect:
+	case types.PathSDKConnect:
 		r.handleConnect(w, req, serv)
 	default:
 		http.NotFound(w, req)
@@ -54,10 +54,10 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		return
 	}
 
-	var registerReq sdk.RegisterRequest
+	var registerReq types.RegisterRequest
 	if err := json.NewDecoder(req.Body).Decode(&registerReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode registration request")
-		writeJSON(w, sdk.RegisterResponse{
+		writeJSON(w, types.RegisterResponse{
 			Success: false,
 			Message: "invalid request body",
 		})
@@ -65,7 +65,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	}
 
 	if registerReq.LeaseID == "" {
-		writeJSON(w, sdk.RegisterResponse{
+		writeJSON(w, types.RegisterResponse{
 			Success: false,
 			Message: "lease_id is required",
 		})
@@ -73,7 +73,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	}
 
 	if registerReq.ReverseToken == "" {
-		writeJSON(w, sdk.RegisterResponse{
+		writeJSON(w, types.RegisterResponse{
 			Success: false,
 			Message: "reverse_token is required",
 		})
@@ -83,7 +83,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 	// Ownership semantics: re-registration of an existing lease ID requires the same reverse token.
 	if entry, ok := serv.GetLeaseManager().GetLeaseByID(registerReq.LeaseID); ok && entry != nil && entry.Lease != nil {
 		if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(registerReq.ReverseToken)) != 1 {
-			writeJSON(w, sdk.RegisterResponse{
+			writeJSON(w, types.RegisterResponse{
 				Success: false,
 				Message: "unauthorized lease registration",
 			})
@@ -103,7 +103,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 
 	// Register with lease manager
 	if !serv.GetLeaseManager().UpdateLease(lease) {
-		writeJSON(w, sdk.RegisterResponse{
+		writeJSON(w, types.RegisterResponse{
 			Success: false,
 			Message: "failed to register lease (name conflict or policy violation)",
 		})
@@ -119,7 +119,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		if err := serv.GetSNIRouter().RegisterRoute(sniName, registerReq.LeaseID, registerReq.Name); err != nil {
 			// Keep lease and route state consistent on partial failure.
 			serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
-			writeJSON(w, sdk.RegisterResponse{
+			writeJSON(w, types.RegisterResponse{
 				Success: false,
 				Message: fmt.Sprintf("failed to register SNI route: %v", err),
 			})
@@ -134,9 +134,9 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		Msg("[Registry] Lease registered")
 
 	// Build public URL
-	publicURL := servicePublicURL(flagPortalURL, registerReq.Name)
+	publicURL := types.ServicePublicURL(flagPortalURL, registerReq.Name)
 
-	writeJSON(w, sdk.RegisterResponse{
+	writeJSON(w, types.RegisterResponse{
 		Success:   true,
 		LeaseID:   registerReq.LeaseID,
 		PublicURL: publicURL,
@@ -151,10 +151,10 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 		return
 	}
 
-	var unregisterReq sdk.UnregisterRequest
+	var unregisterReq types.UnregisterRequest
 	if err := json.NewDecoder(req.Body).Decode(&unregisterReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode unregistration request")
-		writeJSON(w, sdk.APIResponse{
+		writeJSON(w, types.APIResponse{
 			Success: false,
 			Message: "invalid request body",
 		})
@@ -170,7 +170,7 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 	serv.GetSNIRouter().UnregisterRouteByLeaseID(unregisterReq.LeaseID)
 	serv.GetReverseHub().DropLease(unregisterReq.LeaseID)
 
-	writeJSON(w, sdk.APIResponse{
+	writeJSON(w, types.APIResponse{
 		Success: true,
 	})
 }
@@ -183,10 +183,10 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		return
 	}
 
-	var renewReq sdk.RenewRequest
+	var renewReq types.RenewRequest
 	if err := json.NewDecoder(req.Body).Decode(&renewReq); err != nil {
 		log.Error().Err(err).Msg("[Registry] Failed to decode renewal request")
-		writeJSON(w, sdk.APIResponse{
+		writeJSON(w, types.APIResponse{
 			Success: false,
 			Message: "invalid request body",
 		})
@@ -194,7 +194,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	}
 
 	if renewReq.ReverseToken == "" {
-		writeJSON(w, sdk.RegisterResponse{
+		writeJSON(w, types.RegisterResponse{
 			Success: false,
 			Message: "reverse_token is required",
 		})
@@ -204,14 +204,14 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	// Get existing lease
 	entry, ok := serv.GetLeaseManager().GetLeaseByID(renewReq.LeaseID)
 	if !ok {
-		writeJSON(w, sdk.APIResponse{
+		writeJSON(w, types.APIResponse{
 			Success: false,
 			Message: "lease not found",
 		})
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(entry.Lease.ReverseToken)), []byte(renewReq.ReverseToken)) != 1 {
-		writeJSON(w, sdk.APIResponse{
+		writeJSON(w, types.APIResponse{
 			Success: false,
 			Message: "unauthorized lease renewal",
 		})
@@ -221,7 +221,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 	// Update expiration
 	entry.Lease.Expires = time.Now().Add(30 * time.Second)
 	if !serv.GetLeaseManager().UpdateLease(entry.Lease) {
-		writeJSON(w, sdk.APIResponse{
+		writeJSON(w, types.APIResponse{
 			Success: false,
 			Message: "failed to renew lease",
 		})
@@ -241,7 +241,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		}
 	}
 
-	writeJSON(w, sdk.APIResponse{
+	writeJSON(w, types.APIResponse{
 		Success: true,
 	})
 }
