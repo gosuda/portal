@@ -6,7 +6,7 @@
 
 Expose your local application to the public internet — no ports, no NAT, no DNS setup.
 
-Portal is an open, self-hosted, permissionless relay network. It is not a SaaS tunnel, but a routing layer you can connect to — or run yourself.
+Portal is a **self-hosted**, **permissionless** relay network. It is not a SaaS tunnel, but a routing layer you can connect to — or run yourself.
 
 ## Why Portal?
 
@@ -52,7 +52,7 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 ### Expose Local Service via Tunnel
 
 1. Run your local service.
-2. Open any Portal relay site.
+2. Open a Portal relay site.
 3. Click `Add your server` button.
 4. Use the generated command to connect your local service.
 
