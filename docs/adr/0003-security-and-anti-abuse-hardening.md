@@ -15,6 +15,8 @@ Portal accepts unauthenticated internet traffic on relay/admin edges while manag
 - Enforce lease-token validation before bridging reverse connections.
 - Keep root-domain and tenant-subdomain traffic split through SNI routing rules to prevent accidental cross-path handling.
 - Standardize SDK endpoint handling: `/sdk/register` (and related SDK APIs) and `/sdk/connect` validation failures return JSON envelopes (`{ ok, error }`) with explicit error codes prior to connection hijack, and `/sdk/connect` remains subject to `ReverseHub` authorization before pooling.
+- Allow trusted-proxy forwarded HTTPS as a secure `/sdk/connect` transport signal only when the peer is in the configured trusted-proxy CIDR allowlist.
+- Enforce installer binary integrity with mandatory SHA256 sidecar verification (`${BIN_URL}.sha256`) and fail-closed behavior on verification errors.
 
 Operator setup remains unchanged: no new relay flags/env vars are introduced for anti-abuse behavior.
 

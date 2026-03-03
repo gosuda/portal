@@ -79,12 +79,7 @@ func (a *Admin) SaveSettings(serv *portal.RelayServer) {
 	defer a.settingsMu.Unlock()
 
 	lm := serv.GetLeaseManager()
-
-	bannedBytes := lm.GetBannedLeases()
-	banned := make([]string, len(bannedBytes))
-	for i, b := range bannedBytes {
-		banned[i] = string(b)
-	}
+	banned := lm.GetBannedLeases()
 
 	bpsLimits := map[string]int64{}
 	if a.bpsManager != nil {

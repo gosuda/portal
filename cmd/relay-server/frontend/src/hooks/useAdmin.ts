@@ -32,14 +32,6 @@ export interface AdminServer extends BaseServer {
   isIPBanned: boolean;
 }
 
-function decodeBase64URLSafe(input: string): string {
-  const normalized = input.trim().replace(/-/g, "+").replace(/_/g, "/");
-  const padded =
-    normalized.length % 4 === 0 ? normalized : normalized + "=".repeat(4 - (normalized.length % 4));
-  return padded;
-}
-
-const BASE64_URL_SAFE_PATTERN = /^[A-Za-z0-9_-]+$/;
 const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
   invalid_mode: "Invalid approval mode. Choose auto or manual and retry.",
   invalid_lease_id: "Selected lease identifier is invalid. Refresh and try again.",
@@ -48,33 +40,6 @@ const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
   unauthorized: "Admin authorization failed. Sign in again and retry.",
   method_not_allowed: "This action is not supported by the current server version.",
 };
-
-function decodeLeaseID(raw: string): string {
-  try {
-    return atob(decodeBase64URLSafe(raw));
-  } catch {
-    return "";
-  }
-}
-
-function decodeLeaseIDIfEncoded(raw: string): string {
-  const value = raw.trim();
-  if (!value) {
-    return "";
-  }
-
-  const unpadded = value.replace(/=+$/u, "");
-  if (!BASE64_URL_SAFE_PATTERN.test(unpadded)) {
-    return value;
-  }
-
-  const decoded = decodeLeaseID(unpadded);
-  if (!decoded) {
-    return value;
-  }
-
-  return encodeLeaseID(decoded) === unpadded ? decoded : value;
-}
 
 function toAdminErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof APIClientError) {
@@ -103,12 +68,7 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
 }
 
 function normalizeLeaseID(raw: string): string {
-  const value = raw.trim();
-  if (!value) {
-    return "";
-  }
-  const decoded = decodeLeaseIDIfEncoded(value).trim();
-  return decoded || value;
+  return raw.trim();
 }
 
 function encodeLeaseIDForPath(raw: string): string {

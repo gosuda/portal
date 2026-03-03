@@ -73,20 +73,29 @@ Result: the relay handles SNI-based routing and transparent raw TCP forwarding, 
 ### 2. Reverse Connect
 
 - Backend opens a raw TCP reverse connection to `GET /sdk/connect` and streams traffic over that long-lived connection
-  - `/sdk/connect` first validates TLS + lease/token/IP policy and rejects invalid attempts with HTTP status plus JSON envelope errors before hijacking:
+  - `/sdk/connect` first validates secure transport + lease/token/IP policy and rejects invalid attempts with HTTP status plus JSON envelope errors before hijacking:
     - `tls_required` (`426`), `missing_lease_id` (`400`), `missing_reverse_token` (`401`), `unsupported_transport` (`400`), `ip_banned` (`403`), `lease_not_found` (`404`), `unauthorized` (`401`)
+  - Secure transport is accepted when either direct TLS is present, or forwarded HTTPS headers come from an allowlisted trusted proxy.
 - `X-Portal-Reverse-Token` is validated at HTTP precheck, then validated again in `ReverseHub` with centralized policy callbacks before the connection is pooled.
 - Connection is pooled in `ReverseHub` only after token/IP checks pass.
 
 ### 3. Renew
 
 - Backend sends `POST /sdk/renew` keepalive.
+- `/sdk/renew` requires both `lease_id` and `reverse_token`.
 - Relay refreshes lease TTL and keeps route state current.
 
 ### 4. Unregister
 
 - Backend sends `POST /sdk/unregister`.
+- `/sdk/unregister` validates normalized `lease_id` before deletion.
 - Relay removes lease, route, and reverse pool.
+
+## Admin Lease ID Contract
+
+- `/admin/leases` returns plain lease IDs in `Peer`.
+- `/admin/leases/banned` returns plain lease IDs (`[]string`).
+- Base64URL encoding is used only in admin action path segments (`/admin/leases/{encodedLeaseID}/{action}`).
 
 ## Routing Behavior
 

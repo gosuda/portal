@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,6 +158,72 @@ func TestSDKRegistryHandleConnectRequiresTLS(t *testing.T) {
 	registry := &SDKRegistry{}
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-connect-tls", http.NoBody)
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUpgradeRequired)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected tls_required response to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "tls_required" || envelope.Error.Message != "tls reverse connect required" {
+		t.Fatalf("unexpected tls_required payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleConnectAcceptsTrustedProxyHTTPS(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{trustProxyHeaders: true}
+
+	_, trustedCIDR, err := net.ParseCIDR("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxy cidr: %v", err)
+	}
+	manager.SetTrustedProxyCIDRs([]*net.IPNet{trustedCIDR})
+	t.Cleanup(func() {
+		manager.SetTrustedProxyCIDRs(nil)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
+	req.RemoteAddr = "10.1.2.3:443"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected missing_lease_id response to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "missing_lease_id" || envelope.Error.Message != "lease_id is required" {
+		t.Fatalf("unexpected missing_lease_id payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleConnectRejectsUntrustedProxyHTTPS(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{trustProxyHeaders: true}
+
+	_, trustedCIDR, err := net.ParseCIDR("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse trusted proxy cidr: %v", err)
+	}
+	manager.SetTrustedProxyCIDRs([]*net.IPNet{trustedCIDR})
+	t.Cleanup(func() {
+		manager.SetTrustedProxyCIDRs(nil)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
+	req.RemoteAddr = "198.51.100.44:443"
+	req.Header.Set("X-Forwarded-Proto", "https")
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
 	rec := httptest.NewRecorder()
 

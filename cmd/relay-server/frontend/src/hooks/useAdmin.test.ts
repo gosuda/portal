@@ -83,13 +83,13 @@ describe("useAdmin", () => {
 
     mockGet.mockImplementation(async (path: string) => {
       if (path === API_PATHS.admin.leases) {
-        return [buildLease(encodeLeaseID("peer-a"))] as never;
+        return [buildLease("peer-a")] as never;
       }
       if (path === API_PATHS.admin.bannedLeases) {
         return [
-          `  ${encodeLeaseID("peer-a")} `,
-          encodeLeaseID("peer-a"),
-          encodeLeaseID("peer-b"),
+          "  peer-a ",
+          "peer-a",
+          "peer-b",
         ] as never;
       }
       if (path === API_PATHS.admin.settings) {
@@ -178,14 +178,15 @@ describe("useAdmin", () => {
   it("keeps plain lease IDs stable when building action targets", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
+    const plainLeaseID = "deadbeefcafebabe";
 
     await act(async () => {
-      await result.current.handleApproveStatus(" peer-a ", true);
+      await result.current.handleApproveStatus(` ${plainLeaseID} `, true);
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
     expect(calledPaths).toContain(
-      adminLeasePath(encodeLeaseID("peer-a"), "approve"),
+      adminLeasePath(encodeLeaseID(plainLeaseID), "approve"),
     );
   });
 
@@ -197,9 +198,9 @@ describe("useAdmin", () => {
 
     await act(async () => {
       await result.current.handleBulkDeny([
-        ` ${encodeLeaseID(normalizedPeerA)} `,
-        encodeLeaseID(normalizedPeerA),
-        encodeLeaseID(normalizedPeerB),
+        " peer-a ",
+        "peer-a",
+        "peer-b",
       ]);
     });
 

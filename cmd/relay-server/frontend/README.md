@@ -125,12 +125,19 @@ Relay server exposes:
 
 Admin endpoints use a JSON envelope contract (`{ ok, data, error }`) and reject malformed or non-JSON responses with explicit API client errors.
 
+Admin lease ID contract:
+
+- `/admin/leases` rows return plain lease IDs in `Peer`.
+- `/admin/leases/banned` returns plain lease IDs (`[]string`).
+- Frontend only Base64URL-encodes lease IDs when constructing admin action routes (`/admin/leases/{encodedLeaseID}/{action}`).
+
 ### SDK-Related Runtime Contract
 
 The relay enforces a consistent anti-abuse gate for both control APIs and reverse admission:
 
 - `/sdk/register`, `/sdk/unregister`, `/sdk/renew`, and `/sdk/domain` return JSON envelopes (`{ ok, data, error }`).
 - `/sdk/connect` is the raw transport endpoint and returns HTTP status + JSON envelope errors for validation failures before connection hijack (`tls_required`, `missing_lease_id`, `missing_reverse_token`, `unsupported_transport`, `ip_banned`, `lease_not_found`, `unauthorized`).
+- `/sdk/connect` treats transport as secure when direct TLS is present, or when forwarded HTTPS headers are received from an allowlisted trusted proxy (`TRUST_PROXY_HEADERS=true` + trusted proxy CIDRs).
 - `/sdk/connect` is additionally re-validated inside `ReverseHub` before pooling so token and IP authorization are applied at both admission layers.
 
 ### Run with Relay Server

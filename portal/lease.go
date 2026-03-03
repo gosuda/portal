@@ -284,12 +284,12 @@ func (lm *LeaseManager) UnbanLease(leaseID string) {
 	lm.leasesLock.Unlock()
 }
 
-func (lm *LeaseManager) GetBannedLeases() [][]byte {
+func (lm *LeaseManager) GetBannedLeases() []string {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
-	banned := make([][]byte, 0, len(lm.bannedLeases))
+	banned := make([]string, 0, len(lm.bannedLeases))
 	for id := range lm.bannedLeases {
-		banned = append(banned, []byte(id))
+		banned = append(banned, id)
 	}
 	return banned
 }

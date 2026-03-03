@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -34,6 +36,7 @@ esac
 BASE_URL="${BASE_URL:-%s}"
 RELAYS="${RELAYS:-$BASE_URL}"
 BIN_URL="${BIN_URL:-$BASE_URL/tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH}"
+CHECKSUM_URL="${BIN_URL}.sha256"
 
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/portal-tunnel.XXXXXX" 2>/dev/null || mktemp -d -t portal-tunnel)"
@@ -43,6 +46,28 @@ trap cleanup EXIT INT TERM
 
 echo "Downloading portal-tunnel ($TUNNEL_OS/$TUNNEL_ARCH)..." >&2
 curl -fsSL "$BIN_URL" -o "$BIN_PATH"
+
+echo "Verifying SHA256 checksum..." >&2
+CHECKSUM_PAYLOAD="$(curl -fsSL "$CHECKSUM_URL")" || {
+  echo "Failed to download checksum from $CHECKSUM_URL. Aborting (fail-closed)." >&2
+  echo "Hint: verify relay artifact publishing or CDN cache freshness." >&2
+  exit 1
+}
+
+EXPECTED_SHA="$(printf '%%s\n' "$CHECKSUM_PAYLOAD" | awk '{print $1}' | tr 'A-Z' 'a-z')"
+if ! printf '%%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+  echo "Invalid checksum payload from $CHECKSUM_URL. Aborting (fail-closed)." >&2
+  echo "Hint: expected SHA256 sidecar format '<sha256>  <filename>'." >&2
+  exit 1
+fi
+
+ACTUAL_SHA="$(sha256sum "$BIN_PATH" | awk '{print $1}')"
+if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+  echo "Checksum mismatch for portal-tunnel binary. Aborting (fail-closed)." >&2
+  echo "Hint: relay artifact and checksum may be out of sync or cached stale." >&2
+  exit 1
+fi
+
 chmod +x "$BIN_PATH"
 
 set -- "$BIN_PATH" --relay "$RELAYS" --host "${APP_HOST:-localhost:3000}"
@@ -76,6 +101,7 @@ if ($Arch -eq "AMD64") {
 }
 
 $BinUrl = if ($env:BIN_URL) { $env:BIN_URL } else { "$BaseUrl/tunnel/bin/windows-$TunnelArch" }
+$ChecksumUrl = "$BinUrl.sha256"
 
 $WorkDir = Join-Path $env:TEMP ("portal-tunnel-" + [Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -86,6 +112,33 @@ try {
     Invoke-WebRequest -Uri $BinUrl -OutFile $BinPath
 } catch {
     Write-Error "Failed to download portal-tunnel: $_"
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+try {
+    Write-Host "Verifying SHA256 checksum..."
+    $ChecksumPayload = (Invoke-WebRequest -Uri $ChecksumUrl).Content
+} catch {
+    Write-Error "Failed to download checksum from $ChecksumUrl. Aborting (fail-closed)."
+    Write-Error "Hint: verify relay artifact publishing or CDN cache freshness."
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ChecksumMatch = [regex]::Match($ChecksumPayload, '([A-Fa-f0-9]{64})')
+if (-not $ChecksumMatch.Success) {
+    Write-Error "Invalid checksum payload from $ChecksumUrl. Aborting (fail-closed)."
+    Write-Error "Hint: expected SHA256 sidecar format '<sha256>  <filename>'."
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ExpectedHash = $ChecksumMatch.Groups[1].Value.ToLowerInvariant()
+$ActualHash = (Get-FileHash -Algorithm SHA256 -Path $BinPath).Hash.ToLowerInvariant()
+if ($ActualHash -ne $ExpectedHash) {
+    Write-Error "Checksum mismatch for portal-tunnel binary. Aborting (fail-closed)."
+    Write-Error "Hint: relay artifact and checksum may be out of sync or cached stale."
     Remove-Item -Recurse -Force $WorkDir
     exit 1
 }
@@ -164,15 +217,13 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 
 	slug := strings.TrimPrefix(r.URL.Path, "/tunnel/bin/")
 	slug = strings.Trim(slug, "/")
-	path, ok := map[string]string{
-		"linux-amd64":   "dist/tunnel/portal-tunnel-linux-amd64",
-		"linux-arm64":   "dist/tunnel/portal-tunnel-linux-arm64",
-		"darwin-amd64":  "dist/tunnel/portal-tunnel-darwin-amd64",
-		"darwin-arm64":  "dist/tunnel/portal-tunnel-darwin-arm64",
-		"windows-amd64": "dist/tunnel/portal-tunnel-windows-amd64.exe",
-		"windows-arm64": "dist/tunnel/portal-tunnel-windows-arm64.exe",
-	}[slug]
-	if !ok {
+	checksumRequest := strings.HasSuffix(slug, ".sha256")
+	if checksumRequest {
+		slug = strings.TrimSuffix(slug, ".sha256")
+	}
+
+	path, ok := tunnelBinaryAssetBySlug[slug]
+	if !ok || strings.TrimSpace(path) == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -184,13 +235,38 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sum := sha256.Sum256(data)
+	checksumHex := hex.EncodeToString(sum[:])
+
+	if checksumRequest {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=600")
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			if _, err := fmt.Fprintf(w, "%s  portal-tunnel-%s\n", checksumHex, slug); err != nil {
+				log.Debug().Err(err).Str("slug", slug).Msg("failed to write tunnel checksum")
+			}
+		}
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"portal-tunnel-%s\"", slug))
 	w.Header().Set("Cache-Control", "public, max-age=600")
+	w.Header().Set("X-Checksum-Sha256", checksumHex)
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		if _, err := w.Write(data); err != nil {
 			log.Debug().Err(err).Str("slug", slug).Msg("failed to write tunnel binary")
 		}
 	}
+}
+
+var tunnelBinaryAssetBySlug = map[string]string{
+	"linux-amd64":   "dist/tunnel/portal-tunnel-linux-amd64",
+	"linux-arm64":   "dist/tunnel/portal-tunnel-linux-arm64",
+	"darwin-amd64":  "dist/tunnel/portal-tunnel-darwin-amd64",
+	"darwin-arm64":  "dist/tunnel/portal-tunnel-darwin-arm64",
+	"windows-amd64": "dist/tunnel/portal-tunnel-windows-amd64.exe",
+	"windows-arm64": "dist/tunnel/portal-tunnel-windows-arm64.exe",
 }

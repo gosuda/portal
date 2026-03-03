@@ -1,8 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
+
+	"gosuda.org/portal/cmd/relay-server/manager"
+	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
 
 func encodeLeaseIDForAdminRoute(leaseID string) string {
@@ -79,5 +88,49 @@ func TestParseLeaseActionRoute(t *testing.T) {
 				t.Fatalf("parseLeaseActionRoute(%q) action=%q, want %q", tt.route, gotAction, tt.wantAction)
 			}
 		})
+	}
+}
+
+func TestHandleAdminRequestBannedLeasesReturnsPlainIDs(t *testing.T) {
+	serv, err := portal.NewRelayServer(context.Background(), nil, ":0", "portal.example.com", "", "")
+	if err != nil {
+		t.Fatalf("create relay server: %v", err)
+	}
+	authManager := manager.NewAuthManager("test-secret")
+	admin := NewAdmin(0, NewFrontend(), authManager)
+
+	serv.GetLeaseManager().BanLease("lease-a")
+	serv.GetLeaseManager().BanLease("lease-b")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/leases/banned", http.NoBody)
+	req.AddCookie(&http.Cookie{
+		Name:  adminCookieName,
+		Value: authManager.CreateSession(),
+		Path:  "/admin",
+	})
+	rec := httptest.NewRecorder()
+
+	admin.HandleAdminRequest(rec, req, serv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HandleAdminRequest status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var envelope types.APIRawEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode envelope: %v (body=%q)", err, rec.Body.String())
+	}
+	if !envelope.OK {
+		t.Fatalf("expected success envelope, got %+v", envelope)
+	}
+
+	var banned []string
+	if err := json.Unmarshal(envelope.Data, &banned); err != nil {
+		t.Fatalf("decode banned leases: %v", err)
+	}
+	slices.Sort(banned)
+	want := []string{"lease-a", "lease-b"}
+	if !slices.Equal(banned, want) {
+		t.Fatalf("banned leases = %v, want %v", banned, want)
 	}
 }

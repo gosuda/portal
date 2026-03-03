@@ -222,7 +222,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 	bannedList := serv.GetLeaseManager().GetBannedLeases()
 	bannedMap := make(map[string]struct{}, len(bannedList))
 	for _, b := range bannedList {
-		bannedMap[string(b)] = struct{}{}
+		bannedMap[b] = struct{}{}
 	}
 
 	for _, entry := range leaseEntries {

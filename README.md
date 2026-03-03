@@ -46,6 +46,15 @@ For details, see [docs/glossary.md](docs/glossary.md).
 - Raw TCP reverse-connect is the only supported relay/tunnel transport.
 - No websocket compatibility path is provided for transport control or data-plane flow.
 
+## Runtime Contracts
+
+- Lease IDs in admin and SDK payloads are plain string IDs.
+- Base64URL lease-ID encoding is used only for admin action route path segments (`/admin/leases/{encodedLeaseID}/{action}`).
+- `/sdk/connect` accepts secure transport when either:
+  - direct TLS is present, or
+  - request comes from an allowlisted trusted proxy and forwarded HTTPS headers indicate HTTPS.
+- Tunnel installer scripts always fetch `${BIN_URL}.sha256` and fail closed on missing, malformed, or mismatched checksum.
+
 ### Routing Notes
 
 - SNI routing preserves an exact-match fallback for the portal root host. Requests that target the exact `PORTAL_URL` host (for example, `portal.example.com`) are handled by the admin/API listener via the no-route path.

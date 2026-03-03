@@ -55,6 +55,22 @@ func (r *SDKRegistry) extractClientIP(req *http.Request) string {
 	return manager.ExtractClientIP(req, r.trustProxyHeaders)
 }
 
+func (r *SDKRegistry) isSecureConnectRequest(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.TLS != nil {
+		return true
+	}
+	if !r.trustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(req.RemoteAddr) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Header.Get("X-Forwarded-Proto")), "https") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(req.Header.Get("X-Forwarded-Ssl")), "on")
+}
+
 func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
 	return manager.IsIPBannedByPolicy(r.ipManager, clientIP)
 }
@@ -123,7 +139,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	if req.TLS == nil {
+	if !r.isSecureConnectRequest(req) {
 		writeAPIError(w, http.StatusUpgradeRequired, "tls_required", "tls reverse connect required")
 		return
 	}
