@@ -1,10 +1,10 @@
-type APIErrorPayload = {
+export type APIErrorPayload = {
   code?: string;
   message?: string;
 };
 
-type APIEnvelope<T> = {
-  ok: boolean;
+export type APIEnvelope<T> = {
+  ok?: boolean;
   data?: T;
   error?: APIErrorPayload;
 };
@@ -23,10 +23,79 @@ export class APIClientError extends Error {
   }
 }
 
-async function decodeEnvelope<T>(response: Response): Promise<APIEnvelope<T>> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function headersToObject(headers?: HeadersInit): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    return Object.fromEntries(headers.entries());
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+  return { ...headers };
+}
+
+function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
+  if (!isRecord(raw)) {
+    throw new APIClientError(
+      `Unexpected API response for ${path}: envelope is not an object`,
+      0,
+      "invalid_envelope",
+      raw
+    );
+  }
+
+  const okValue = raw.ok;
+  if (typeof okValue !== "boolean") {
+    throw new APIClientError(
+      `Unexpected API response for ${path}: missing ok flag`,
+      0,
+      "invalid_envelope",
+      raw
+    );
+  }
+
+  const errorValue = raw.error;
+  if (errorValue !== undefined && !isRecord(errorValue)) {
+    throw new APIClientError(
+      `Unexpected API response for ${path}: invalid error payload`,
+      0,
+      "invalid_envelope",
+      errorValue
+    );
+  }
+
+  return {
+    ok: okValue,
+    data: (raw as { data?: T }).data,
+    error: errorValue
+      ? {
+          code: typeof errorValue.code === "string" ? errorValue.code : "request_failed",
+          message:
+            typeof errorValue.message === "string"
+              ? errorValue.message
+              : "Request failed",
+        }
+      : undefined,
+  };
+}
+
+async function decodeEnvelope<T>(path: string, response: Response): Promise<APIEnvelope<T>> {
   const text = await response.text();
   if (!text) {
-    throw new APIClientError("Empty API response", response.status, "empty_response");
+    if (response.ok) {
+      return { ok: true };
+    }
+    throw new APIClientError(
+      `Empty API response from ${path}`,
+      response.status,
+      "empty_response"
+    );
   }
 
   let payload: unknown;
@@ -34,46 +103,69 @@ async function decodeEnvelope<T>(response: Response): Promise<APIEnvelope<T>> {
     payload = JSON.parse(text);
   } catch {
     throw new APIClientError(
-      "API returned non-JSON payload",
+      `API response from ${path} was not valid JSON`,
       response.status,
       "invalid_json",
       text
     );
   }
 
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    !("ok" in payload) ||
-    typeof (payload as { ok?: unknown }).ok !== "boolean"
-  ) {
-    throw new APIClientError(
-      "API response did not match envelope format",
-      response.status,
-      "invalid_envelope",
-      payload
-    );
+  if (isRecord(payload) && typeof payload.ok === "boolean") {
+    return ensureJsonEnvelope<T>(payload, path);
   }
 
-  return payload as APIEnvelope<T>;
+  if (response.ok) {
+    return {
+      ok: true,
+      data: payload as T,
+    };
+  }
+
+  throw new APIClientError(
+    `Unexpected API response for ${path}: missing ok envelope`,
+    response.status,
+    "invalid_envelope",
+    payload
+  );
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
-  const envelope = await decodeEnvelope<T>(response);
+  let response: Response;
+  try {
+    const requestHeaders = headersToObject(init.headers);
+    response = await fetch(path, {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...requestHeaders,
+      },
+    });
+  } catch (error) {
+    const isAbortError =
+      error instanceof DOMException && error.name === "AbortError";
+    throw new APIClientError(
+      isAbortError ? "Request was aborted" : "Network request failed",
+      0,
+      isAbortError ? "aborted" : "network_error",
+      error
+    );
+  }
 
+  const envelope = await decodeEnvelope<T>(path, response);
   if (envelope.ok) {
     return envelope.data as T;
   }
 
-  const message = envelope.error?.message?.trim() || "Request failed";
+  const message =
+    envelope.error?.message?.trim() || response.statusText || "Request failed";
   const code = envelope.error?.code?.trim() || "request_failed";
   throw new APIClientError(message, response.status, code, envelope.data);
 }
 
 function jsonRequestInit(method: "POST" | "DELETE", body?: unknown): RequestInit {
   if (body === undefined) {
-    return { method };
+    return { method, headers: {} };
   }
 
   return {

@@ -38,9 +38,9 @@ export function adminLeasePath(
   encodedLeaseID: string,
   action: "ban" | "bps" | "approve" | "deny"
 ): string {
-  return `${API_PATHS.admin.leases}/${encodedLeaseID}/${action}`;
+  return `${API_PATHS.admin.leases}/${encodeURIComponent(encodedLeaseID.trim())}/${action}`;
 }
 
 export function adminIPBanPath(ip: string): string {
-  return `${API_PATHS.admin.prefix}/ips/${ip}/ban`;
+  return `${API_PATHS.admin.prefix}/ips/${encodeURIComponent(ip.trim())}/ban`;
 }

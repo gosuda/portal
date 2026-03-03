@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
-// Base server interface that both ClientServer and AdminServer extend
 export interface BaseServer {
   id: number;
   name: string;
@@ -19,26 +18,82 @@ export interface BaseServer {
 export interface UseListOptions<T extends BaseServer> {
   servers: T[];
   storageKey: string;
-  // Optional additional filter function for extended filtering (e.g., ban filter)
   additionalFilter?: (server: T) => boolean;
 }
 
 export interface UseListReturn<T extends BaseServer> {
-  // Filter states
   searchQuery: string;
   status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
   favorites: number[];
-  // Derived data
   availableTags: string[];
   filteredServers: T[];
-  // Handlers
   handleSearchChange: (value: string) => void;
   handleStatusChange: (value: StatusFilter) => void;
   handleSortByChange: (value: SortOption) => void;
   handleTagToggle: (tag: string) => void;
   handleToggleFavorite: (serverId: number) => void;
+}
+
+function dedupeNumbers(values: number[]): number[] {
+  const seen = new Set<number>();
+  const next: number[] = [];
+  values.forEach((value) => {
+    if (seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    next.push(value);
+  });
+  return next;
+}
+
+function readStoredFavorites(storageKey: string): number[] {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(storageKey);
+  } catch {
+    return [];
+  }
+
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return dedupeNumbers(
+      parsed.filter(
+        (value): value is number => Number.isInteger(value) && value > 0
+      )
+    );
+  } catch {
+    return [];
+  }
+}
+
+function parseTimestamp(value?: string, fallback = 0): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
+function matchesStatus(online: boolean, status: StatusFilter): boolean {
+  switch (status) {
+    case "online":
+      return online;
+    case "offline":
+      return !online;
+    default:
+      return true;
+  }
 }
 
 export function useList<T extends BaseServer>({
@@ -50,102 +105,133 @@ export function useList<T extends BaseServer>({
   const [status, setStatus] = useState<StatusFilter>("all");
   const [sortBy, setSortBy] = useState<SortOption>("duration");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<number[]>(() => {
-    const stored = localStorage.getItem(storageKey);
-    return stored ? JSON.parse(stored) : [];
-  });
+  const [favorites, setFavorites] = useState<number[]>(() =>
+    readStoredFavorites(storageKey)
+  );
 
-  // Save favorites to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(favorites));
+    setFavorites(readStoredFavorites(storageKey));
+  }, [storageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(favorites));
+    } catch {
+      // Ignore storage write failures (quota/private browsing).
+    }
   }, [favorites, storageKey]);
 
-  // Extract available tags
   const availableTags = useMemo(() => {
     const counts = new Map<string, number>();
     servers.forEach((server) => {
       server.tags.forEach((tag) => {
-        counts.set(tag, (counts.get(tag) || 0) + 1);
+        const normalizedTag = typeof tag === "string" ? tag.trim().toLowerCase() : "";
+        if (!normalizedTag) {
+          return;
+        }
+        counts.set(normalizedTag, (counts.get(normalizedTag) || 0) + 1);
       });
     });
+
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([tag]) => tag);
   }, [servers]);
 
-  // Filter and sort servers
-  const filteredServers = useMemo(() => {
-    const query = searchQuery.toLowerCase();
+  useEffect(() => {
+    const validIDs = new Set(servers.map((server) => server.id));
+    setFavorites((prev) => {
+      const next = dedupeNumbers(prev.filter((id) => validIDs.has(id)));
+      if (
+        next.length === prev.length &&
+        next.every((value, index) => value === prev[index])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [servers]);
 
-    const matchesTags = (server: T) => {
-      if (selectedTags.length === 0) return true;
-      const tagsLower = server.tags.map((t) => t.toLowerCase());
-      return selectedTags.some((tag) => tagsLower.includes(tag.toLowerCase()));
+  useEffect(() => {
+    const availableTagSet = new Set(availableTags);
+    setSelectedTags((prev) => {
+      const next = prev.filter((tag) => availableTagSet.has(tag));
+      if (
+        next.length === prev.length &&
+        next.every((value, index) => value === prev[index])
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [availableTags]);
+
+  const filteredServers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const selectedTagSet = new Set(selectedTags);
+    const favoriteSet = new Set(favorites);
+    const now = Date.now();
+
+    const matchesTags = (server: T): boolean => {
+      if (selectedTagSet.size === 0) {
+        return true;
+      }
+
+      return server.tags.some((tag) => selectedTagSet.has(tag.toLowerCase().trim()));
+    };
+
+    const matchesSearch = (server: T): boolean => {
+      if (query === "") {
+        return true;
+      }
+
+      return (
+        server.name.toLowerCase().includes(query) ||
+        server.description.toLowerCase().includes(query) ||
+        server.tags.some((tag) => tag.toLowerCase().includes(query))
+      );
     };
 
     const filtered = servers.filter((server) => {
-      const matchesSearch =
-        query === "" ||
-        server.name.toLowerCase().includes(query) ||
-        server.description.toLowerCase().includes(query) ||
-        server.tags.some((tag) => tag.toLowerCase().includes(query));
-
-      const matchesStatus =
-        status === "all" ||
-        (status === "online" && server.online) ||
-        (status === "offline" && !server.online);
-
       const matchesAdditional = additionalFilter ? additionalFilter(server) : true;
 
-      return matchesSearch && matchesStatus && matchesTags(server) && matchesAdditional;
+      return (
+        matchesSearch(server) &&
+        matchesStatus(server.online, status) &&
+        matchesTags(server) &&
+        matchesAdditional
+      );
     });
 
-    const sorted = [...filtered];
-    switch (sortBy) {
-      case "name-asc":
-        sorted.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "name-desc":
-        sorted.sort((a, b) => b.name.localeCompare(a.name));
-        break;
-      case "updated":
-        sorted.sort((a, b) => {
-          const aTime = a.lastUpdated ? Date.parse(a.lastUpdated) : 0;
-          const bTime = b.lastUpdated ? Date.parse(b.lastUpdated) : 0;
-          return bTime - aTime;
-        });
-        break;
-      case "duration":
-        sorted.sort((a, b) => {
-          // Duration = Now - FirstSeen.
-          // Longer duration = Older FirstSeen.
-          // Sort Descending (Longest/Oldest first) -> Ascending FirstSeen timestamp.
-          const aTime = a.firstSeen ? Date.parse(a.firstSeen) : Date.now();
-          const bTime = b.firstSeen ? Date.parse(b.firstSeen) : Date.now();
-          return aTime - bTime;
-        });
-        break;
-      case "description":
-        sorted.sort((a, b) => a.description.localeCompare(b.description));
-        break;
-      case "tags":
-        sorted.sort((a, b) => {
-          const aTag = a.tags[0] || "";
-          const bTag = b.tags[0] || "";
-          return aTag.localeCompare(bTag);
-        });
-        break;
-      case "owner":
-        sorted.sort((a, b) => a.owner.localeCompare(b.owner));
-        break;
-      default:
-        break;
-    }
+    const sortByField = (sortValue: SortOption) => {
+      switch (sortValue) {
+        case "name-asc":
+          return (a: T, b: T) => a.name.localeCompare(b.name);
+        case "name-desc":
+          return (a: T, b: T) => b.name.localeCompare(a.name);
+        case "updated":
+          return (a: T, b: T) =>
+            parseTimestamp(b.lastUpdated, 0) - parseTimestamp(a.lastUpdated, 0);
+        case "duration":
+          return (a: T, b: T) =>
+            parseTimestamp(a.firstSeen, now) - parseTimestamp(b.firstSeen, now);
+        case "description":
+          return (a: T, b: T) => a.description.localeCompare(b.description);
+        case "tags":
+          return (a: T, b: T) => (a.tags[0] || "").localeCompare(b.tags[0] || "");
+        case "owner":
+          return (a: T, b: T) => a.owner.localeCompare(b.owner);
+        case "default":
+          return (a: T, b: T) => a.id - b.id;
+        default:
+          return (a: T, b: T) => a.id - b.id;
+      }
+    };
 
-    // Sort by favorites first
+    const sorted = [...filtered].sort(sortByField(sortBy));
     sorted.sort((a, b) => {
-      const aIsFav = favorites.includes(a.id);
-      const bIsFav = favorites.includes(b.id);
+      const aIsFav = favoriteSet.has(a.id);
+      const bIsFav = favoriteSet.has(b.id);
       if (aIsFav && !bIsFav) return -1;
       if (!aIsFav && bIsFav) return 1;
       return 0;
@@ -154,7 +240,6 @@ export function useList<T extends BaseServer>({
     return sorted;
   }, [servers, searchQuery, status, sortBy, selectedTags, favorites, additionalFilter]);
 
-  // Handlers
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
   }, []);
@@ -168,8 +253,15 @@ export function useList<T extends BaseServer>({
   }, []);
 
   const handleTagToggle = useCallback((tag: string) => {
+    const normalizedTag = tag.trim().toLowerCase();
+    if (!normalizedTag) {
+      return;
+    }
+
     setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+      prev.includes(normalizedTag)
+        ? prev.filter((candidate) => candidate !== normalizedTag)
+        : [...prev, normalizedTag]
     );
   }, []);
 
@@ -182,16 +274,13 @@ export function useList<T extends BaseServer>({
   }, []);
 
   return {
-    // Filter states
     searchQuery,
     status,
     sortBy,
     selectedTags,
     favorites,
-    // Derived data
     availableTags,
     filteredServers,
-    // Handlers
     handleSearchChange,
     handleStatusChange,
     handleSortByChange,

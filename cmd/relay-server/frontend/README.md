@@ -1,102 +1,91 @@
 # Relay Server Frontend
 
-ServerShare-style frontend built with React + TypeScript + shadcn/ui, featuring dynamic GeoIP-based server filtering and SSR data integration.
+React + TypeScript frontend for relay server discovery and onboarding.
 
 ## Tech Stack
 
-- **React 19** - UI library
-- **TypeScript** - Type safety
-- **Vite 7** - Build tool
-- **Tailwind CSS 4** - CSS-first configuration styling
-- **shadcn/ui** - UI components (Radix UI-based)
-- **Lucide React** - Icons
+- React 19
+- TypeScript
+- Vite 7
+- Tailwind CSS 4
+- shadcn/ui (Radix-based)
+- Lucide React
 
 ## Project Structure
 
-```
+```text
 frontend/
 ├── src/
 │   ├── components/
 │   │   ├── ui/              # shadcn/ui base components
-│   │   │   ├── button.tsx
-│   │   │   ├── input.tsx
-│   │   │   └── select.tsx
-│   │   ├── Header.tsx       # Header component
-│   │   ├── SearchBar.tsx    # Search and filter bar (Country, Status, Sort By)
-│   │   ├── ServerCard.tsx   # Server card component
-│   │   └── Pagination.tsx   # Pagination component
+│   │   ├── Header.tsx       # Header + add-server entry point
+│   │   ├── SearchBar.tsx    # Search + filters (status, sort, tags)
+│   │   ├── ServerCard.tsx   # Server list card
+│   │   ├── ServerListView.tsx # Shared server/admin list view
+│   │   ├── TagCombobox.tsx  # Tag filter control
+│   │   └── FloatingActionBar.tsx # Admin bulk actions
 │   ├── hooks/
-│   │   └── useSSRData.ts    # SSR data hook (reads __SSR_DATA__ from Go backend)
+│   │   ├── useSSRData.ts    # Reads __SSR_DATA__ injected by Go backend
+│   │   ├── useServerList.ts  # Converts SSR payload into list models
+│   │   ├── useAdmin.ts       # Admin API integration and actions
+│   │   ├── useList.ts        # Shared list filtering/sorting state
+│   │   └── useAuth.ts        # Admin auth helper hooks
 │   ├── lib/
-│   │   ├── utils.ts         # Utility functions
-│   │   └── countries.ts     # ISO 3166-1 alpha-2 country code mapping (~200 countries)
-│   ├── App.tsx              # Main app component (filter logic, dynamic country extraction)
-│   ├── main.tsx             # Entry point
-│   └── index.css            # Global styles and Tailwind CSS 4 configuration
+│   │   ├── apiClient.ts
+│   │   ├── apiPaths.ts
+│   │   ├── testUtils.ts      # Optional test fixtures
+│   │   └── utils.ts
+│   ├── pages/
+│   │   ├── Admin.tsx         # Admin area shell
+│   │   ├── AdminLogin.tsx    # Login flow UI
+│   │   └── ServerList.tsx    # Listing pages and route assembly
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.css
 ├── index.html
 ├── package.json
 ├── tsconfig.json
-└── vite.config.ts           # @tailwindcss/vite plugin
+└── vite.config.ts
 ```
 
-## Key Features
+## Core Behavior
 
-### 1. Server-Side Rendering (SSR)
-- Go backend injects server data into HTML via `<script id="__SSR_DATA__">` tag
-- Frontend reads SSR data using `useSSRData()` hook
-- Zero initial loading time for server list
+### Server-Side Data Bootstrap
 
-### 2. GeoIP Integration
-- Backend uses MaxMind GeoLite2-Country.mmdb database
-- Automatically detects server location based on IP address
-- Provides ISO 3166-1 alpha-2 country codes (e.g., "US", "KR", "JP")
+1. Go backend injects lease data into `portal.html` using `<script id="__SSR_DATA__">`.
+2. Frontend reads it with `useSSRData()`.
+3. UI renders server list immediately without an initial fetch.
+4. Admin pages then call `/admin/*` endpoints through `apiClient` for stateful actions (approve, deny, ban, settings).
 
-### 3. Dynamic Country Filtering
-- Extracts unique countries from currently connected servers
-- Only displays countries that actually have servers online
-- Full country mapping (~200 countries) in `lib/countries.ts`
-- Converts country codes to human-readable names
+### List Filtering and Sort
 
-### 4. Advanced Filter System
-Three Select dropdowns:
-- **Country**: Filter by GeoIP-detected location (dynamic list)
-- **Status**: Filter by online/offline status
-- **Sort By**: Sort by Description, Tags, or Owner
+- List logic is centralized in `useList` and shared across admin and public server views.
+- Search fields include server name, description, and tags.
+- Filters include status and tag selection.
+- Sort options include default, description, tags, owner, and timestamp ordering.
 
-### 5. Search Functionality
-Search across:
-- Server names
-- Descriptions
-- Tags
+## Tailwind CSS v4 Notes
 
-### Tailwind CSS 4 Migration
+- Uses CSS-first config (`@theme` in `index.css`)
+- Uses `@tailwindcss/vite` plugin
+- Uses `@import "tailwindcss"` syntax
 
-This project uses Tailwind CSS v4:
+## Install and Build
 
-- ✅ CSS-first configuration (`@theme` directive in `index.css`)
-- ✅ `@tailwindcss/vite` plugin
-- ✅ Removed `tailwind.config.js` (config moved to CSS)
-- ✅ Removed `postcss.config.js` (auto-handled)
-- ✅ `@import "tailwindcss"` syntax
-
-For details, see [Tailwind CSS v4 Official Documentation](https://tailwindcss.com/docs/upgrade-guide).
-
-## Installation and Build
-
-### Install Dependencies
+### Install
 
 ```bash
 cd cmd/relay-server/frontend
 npm install
 ```
 
-### Development Server
+### Development
 
 ```bash
 npm run dev
 ```
 
-Development server runs at `http://localhost:5173`.
+Default dev URL: `http://localhost:5173`.
 
 ### Production Build
 
@@ -104,124 +93,64 @@ Development server runs at `http://localhost:5173`.
 npm run build
 ```
 
-Build output in `/dist` directory:
-- `portal.html` - Main HTML file (served by Go server with SSR data injection)
-- `assets/` - JS and CSS bundles
+Build output:
 
-### Using Makefile
+- `dist/portal.html` (entry HTML served by Go server)
+- `dist/assets/` (bundled JS/CSS)
+
+### NPM Scripts
 
 ```bash
-# Install dependencies
-make install
-
-# Build
-make build
-
-# Development server
-make dev
-
-# Clean
-make clean
+npm run dev
+npm run build
+npm run lint
+npm run typecheck
 ```
 
-## Go Server Integration
+## Relay Server Integration
 
-The relay-server serves the frontend at:
+Relay server exposes:
 
-- `/` - React frontend (ServerShare UI with SSR data)
-- `/app/` - React app static assets
-- `/healthz` - Health check endpoint
-- `/sdk/*` - SDK control and reverse-connect endpoints (`/sdk/connect` uses raw TCP stream after HTTP handshake)
+- `/` - React frontend with SSR bootstrap payload
+- `/app/` - Static frontend assets
+- `/healthz` - Health endpoint
+- `/admin/*` - Admin API/control endpoints used by server management UI
+- `/sdk/*` - SDK/control endpoints (`/sdk/connect` opens the raw TCP reverse channel used by the relay)
 
-### Running the Server
+Admin endpoints use a JSON envelope contract (`{ ok, data, error }`) and reject malformed or non-JSON responses with explicit API client errors.
+
+### Run with Relay Server
 
 ```bash
 # Build frontend
 cd cmd/relay-server/frontend
 npm run build
 
-# Run server
+# Run relay server
 cd ../../..
-go run cmd/relay-server/*.go -port 4017
+go run cmd/relay-server/*.go -adminport 4017
 ```
 
-Or specify static directory:
+Or with explicit static directory:
 
 ```bash
-STATIC_DIR=./dist go run cmd/relay-server/*.go -port 4017
+STATIC_DIR=./dist go run cmd/relay-server/*.go -adminport 4017
 ```
-
-### SSR Data Flow
-
-1. Go backend reads lease entries and GeoIP data
-2. Converts to JSON and injects into `portal.html` as `<script id="__SSR_DATA__">`
-3. React app reads SSR data via `useSSRData()` hook
-4. Displays server list with GeoIP-based filtering
-
-## Design System
-
-### Colors
-
-- **Primary**: `#47cdff` - Primary action buttons
-- **Background Light**: `#f5f8f8` - Light mode background
-- **Background Dark**: `#0f1e23` - Dark mode background (default)
-- **Green Status**: `#50E3C2` - Online status indicator
-
-### Components
-
-#### Header
-Navigation header with logo and "Add Your Server" button
-
-#### SearchBar
-Search input + three filter dropdowns:
-- Country (GeoIP-based, dynamic)
-- Status (All/Online/Offline)
-- Sort By (Default/Description/Tags/Owner)
-
-#### ServerCard
-Server information card displaying:
-- Thumbnail image
-- Online/offline status badge
-- Server name
-- Description
-- Tags (including country)
-- Owner information
-- Connect button
-
-#### Pagination
-Page navigation with previous/next buttons (6 items per page)
-
-## Implementation Status
-
-### Completed Features
-- ✅ Server-side rendering (SSR) with Go backend
-- ✅ GeoIP integration with MaxMind GeoLite2-Country database
-- ✅ Dynamic country filtering (shows only countries with connected servers)
-- ✅ Search functionality (name, description, tags)
-- ✅ Status filtering (online/offline)
-- ✅ Sort by Description, Tags, or Owner
-- ✅ Pagination (6 servers per page)
-- ✅ Dark mode UI (default)
-- ✅ Responsive design (mobile/tablet/desktop)
-- ✅ ISO 3166-1 alpha-2 country code mapping (~200 countries)
-- ✅ Radix UI Select components with proper value handling
 
 ## Technical Notes
 
-### Radix UI Select Constraints
-- Select values cannot be empty strings (`""`)
-- Use meaningful defaults: `"all"`, `"default"` instead of `""`
+- Backend transport is raw TCP reverse-connect only; there is no websocket control or data plane in relay transport semantics.
+- SNI routing keeps exact `PORTAL_URL` host fallbacks on the admin/API listener to preserve portal dashboard control-plane locality.
 
-### GeoIP Detection
-- Detects country based on server IP address
-- Localhost (::1) connections show no country
-- Requires external IP addresses for proper country detection
+### Radix Select Values
 
-### Dynamic Country List
-- Extracts unique countries from connected servers using `useMemo` and `Set`
-- Updates automatically as servers connect/disconnect
-- Maps country codes to human-readable names via `COUNTRY_NAMES`
+Radix Select values cannot be empty strings. Use stable values such as `"all"` and `"default"`.
+
+### API-Response Edge Cases
+
+- API responses are validated via `APIClient` envelope decoding; malformed payloads are surfaced as explicit runtime errors.
+- Non-admin rendering still works using SSR bootstrap data when admin calls are unavailable.
 
 ## License
 
-This project is part of gosuda/portal.
+Part of `gosuda/portal`.
