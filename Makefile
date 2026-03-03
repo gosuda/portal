@@ -12,6 +12,8 @@ help:
 	@echo "  make clean             - Remove build artifacts"
 
 fmt:
+	golangci-lint run --fix > /dev/null || true
+	go fix ./...
 	gofmt -w .
 	goimports -w .
 
