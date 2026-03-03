@@ -58,7 +58,8 @@ The certificate issuance/renewal method used with Cloudflare DNS API token when 
 
 ## Base Domain
 
-The root domain derived from `PORTAL_URL` (for example, `example.com`) used to build service subdomains.
+The normalized host derived from `PORTAL_URL` and used to build service subdomains.
+For non-apex values such as `https://portal.example.com:8443/admin`, the base domain is `portal.example.com` (scheme, path, and port are removed).
 
 ## Admin/API Server
 

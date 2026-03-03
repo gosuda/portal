@@ -45,10 +45,10 @@ type provisionConfig struct {
 	KeyFile          string
 	CertFile         string
 	Email            string
-	Domains          []string
 	AccountKeyFile   string
 	RegistrationFile string
 	CloudflareToken  string
+	Domains          []string
 }
 
 type Config struct {
@@ -57,17 +57,17 @@ type Config struct {
 	CloudflareToken string
 }
 
-type AcmeManager struct {
-	cfg       Config
-	mu        sync.RWMutex
+type Manager struct {
 	stopCh    chan struct{}
+	cfg       Config
 	waitGroup sync.WaitGroup
+	mu        sync.RWMutex
 	startOnce sync.Once
 	stopOnce  sync.Once
 }
 
-func NewManager(cfg Config) *AcmeManager {
-	return &AcmeManager{
+func NewManager(cfg Config) *Manager {
+	return &Manager{
 		cfg: Config{
 			BaseDomain:      cfg.BaseDomain,
 			KeyDir:          cfg.KeyDir,
@@ -77,7 +77,7 @@ func NewManager(cfg Config) *AcmeManager {
 	}
 }
 
-func (m *AcmeManager) keyDir() string {
+func (m *Manager) keyDir() string {
 	if m == nil {
 		return ""
 	}
@@ -85,7 +85,7 @@ func (m *AcmeManager) keyDir() string {
 }
 
 // SigningKeyFile returns the unified signer key path under configured key directory.
-func (m *AcmeManager) SigningKeyFile() string {
+func (m *Manager) SigningKeyFile() string {
 	if m == nil {
 		return ""
 	}
@@ -97,9 +97,9 @@ func (m *AcmeManager) SigningKeyFile() string {
 }
 
 type acmeUser struct {
-	Email        string
-	Registration *registration.Resource
 	Key          crypto.PrivateKey
+	Registration *registration.Resource
+	Email        string
 }
 
 func (u *acmeUser) GetEmail() string {
@@ -124,7 +124,7 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey {
 }
 
 // EnsureSigningKey provisions a keyless signing key via ACME DNS-01 when missing.
-func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
+func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
 	if m == nil {
 		return "", errors.New("acme manager is nil")
 	}
@@ -138,7 +138,7 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 
 	baseDomain := m.cfg.BaseDomain
 	if baseDomain == "" {
-		return "", fmt.Errorf("base domain is required for ACME provisioning")
+		return "", errors.New("base domain is required for ACME provisioning")
 	}
 
 	targets, err := buildCertTargets(baseDomain, configuredKeyDir)
@@ -213,7 +213,7 @@ func (m *AcmeManager) EnsureSigningKey(ctx context.Context) (string, error) {
 }
 
 // TLSFiles returns the unified fullchain and private key file paths when both exist.
-func (m *AcmeManager) TLSFiles() (string, string) {
+func (m *Manager) TLSFiles() (string, string) {
 	if m == nil {
 		return "", ""
 	}
@@ -311,7 +311,7 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 	return true, nil
 }
 
-func (m *AcmeManager) provisionCertificate(cfg provisionConfig) error {
+func (m *Manager) provisionCertificate(cfg provisionConfig) error {
 	for _, path := range []string{cfg.KeyFile, cfg.CertFile, cfg.AccountKeyFile, cfg.RegistrationFile} {
 		if err := ensureParentDir(path); err != nil {
 			return err
@@ -348,20 +348,21 @@ func (m *AcmeManager) provisionCertificate(cfg provisionConfig) error {
 	if err != nil {
 		return fmt.Errorf("create Cloudflare DNS provider: %w", err)
 	}
-	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
+	err = client.Challenge.SetDNS01Provider(provider)
+	if err != nil {
 		return fmt.Errorf("set DNS-01 challenge provider: %w", err)
 	}
 
 	if user.Registration == nil {
-		reg, err := client.Registration.Register(registration.RegisterOptions{
+		reg, regErr := client.Registration.Register(registration.RegisterOptions{
 			TermsOfServiceAgreed: true,
 		})
-		if err != nil {
-			return fmt.Errorf("register ACME account: %w", err)
+		if regErr != nil {
+			return fmt.Errorf("register ACME account: %w", regErr)
 		}
 		user.Registration = reg
-		if err := saveRegistration(cfg.RegistrationFile, reg); err != nil {
-			return fmt.Errorf("persist ACME registration: %w", err)
+		if saveErr := saveRegistration(cfg.RegistrationFile, reg); saveErr != nil {
+			return fmt.Errorf("persist ACME registration: %w", saveErr)
 		}
 	}
 
@@ -519,7 +520,6 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	_ = os.Remove(path)
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"sync"
 	"time"
 
@@ -27,7 +26,7 @@ var (
 	ErrListenerExists       = errors.New("listener already exists for this credential")
 	ErrRelayExists          = errors.New("relay already exists")
 	ErrRelayNotFound        = errors.New("relay not found")
-	ErrInvalidName          = errors.New("lease name contains invalid characters (only alphanumeric, hyphen, underscore allowed)")
+	ErrInvalidName          = errors.New("lease name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
 	ErrFailedToCreateClient = errors.New("failed to create relay client")
 	ErrInvalidMetadata      = errors.New("invalid metadata")
 )
@@ -35,8 +34,7 @@ var (
 // ClientConfig configures the SDK client.
 type ClientConfig struct {
 	BootstrapServers   []string
-	ReverseDialTimeout time.Duration // Reverse websocket dial timeout (default: 5 seconds)
-	TLS                bool
+	ReverseDialTimeout time.Duration // Reverse connect dial timeout (default: 5 seconds)
 }
 
 // ClientOption configures ClientConfig.
@@ -56,17 +54,10 @@ func WithReverseDialTimeout(timeout time.Duration) ClientOption {
 	}
 }
 
-// WithTLS enables keyless TLS mode using relay-derived defaults.
-func WithTLS() ClientOption {
-	return func(c *ClientConfig) {
-		c.TLS = true
-	}
-}
-
 // Client is a minimal client for lease registration with the relay.
 type Client struct {
-	mu     sync.Mutex
 	config *ClientConfig
+	mu     sync.Mutex
 }
 
 // NewClient creates a new SDK client.
@@ -74,7 +65,6 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	config := &ClientConfig{
 		BootstrapServers:   []string{},
 		ReverseDialTimeout: 5 * time.Second,
-		TLS:                false,
 	}
 
 	for _, o := range opt {
@@ -84,27 +74,17 @@ func NewClient(opt ...ClientOption) (*Client, error) {
 	return &Client{config: config}, nil
 }
 
-var urlSafeNameRegex = regexp.MustCompile(`^[\p{L}\p{N}_-]+$`)
-
-// isURLSafeName checks if a name contains only URL-safe characters.
-func isURLSafeName(name string) bool {
-	if name == "" {
-		return true
-	}
-	return urlSafeNameRegex.MatchString(name)
-}
-
 // Listen creates a listener and registers it with the relay.
-// In TLS passthrough mode, this registers the lease and returns a listener
-// that accepts connections from the relay.
+// In reverse-connect mode (TCP tunnel + TLS SNI routing), this registers the
+// lease and returns a listener that accepts relay-proxied connections.
 func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Listener, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, errors.New("name is required")
 	}
-	if !isURLSafeName(name) {
+	if !types.IsValidLeaseName(name) {
 		return nil, ErrInvalidName
 	}
 
@@ -119,60 +99,54 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	}
 
 	listeners := make([]net.Listener, 0, len(relayAddrs))
+	closeActiveListeners := func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	}
+
+	runCloseFns := func(closeFns []func()) {
+		for _, closeFn := range closeFns {
+			if closeFn != nil {
+				closeFn()
+			}
+		}
+	}
+
 	for _, relayAddr := range relayAddrs {
 		tlsConfig, listenerCloseFns, tlsErr := c.buildTLSConfig(relayAddr, name)
 		if tlsErr != nil {
-			for _, l := range listeners {
-				_ = l.Close()
-			}
+			closeActiveListeners()
 			return nil, tlsErr
 		}
 
 		leaseCopy := *lease
 		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, 0, c.config.ReverseDialTimeout, listenerCloseFns...)
 		if listenerErr != nil {
-			for _, closeFn := range listenerCloseFns {
-				if closeFn != nil {
-					closeFn()
-				}
-			}
-			for _, l := range listeners {
-				_ = l.Close()
-			}
+			runCloseFns(listenerCloseFns)
+			closeActiveListeners()
 			return nil, fmt.Errorf("create relay listener: %w", listenerErr)
 		}
 
 		if startErr := listener.Start(); startErr != nil {
 			_ = listener.Close()
-			for _, l := range listeners {
-				_ = l.Close()
-			}
+			closeActiveListeners()
 			return nil, fmt.Errorf("start relay listener: %w", startErr)
 		}
 
 		listeners = append(listeners, listener)
 	}
 
-	var listener net.Listener
+	listener := net.Listener(newMultiRelayListener(lease.ID, listeners))
 	if len(listeners) == 1 {
 		listener = listeners[0]
-	} else {
-		listener = newMultiRelayListener(lease.ID, listeners)
 	}
 
-	if c.config.TLS {
-		log.Info().
-			Str("lease_id", lease.ID).
-			Str("name", name).
-			Bool("tls", true).
-			Msg("[SDK] Lease registered with TLS")
-	} else {
-		log.Info().
-			Str("lease_id", lease.ID).
-			Str("name", name).
-			Bool("tls", false).
-			Msg("[SDK] Lease registered")
-	}
+	log.Info().
+		Str("lease_id", lease.ID).
+		Str("name", name).
+		Bool("tls", true).
+		Msg("[SDK] Lease registered with TLS")
 
 	return listener, nil
 }
@@ -196,7 +170,7 @@ func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal
 	lease := &portal.Lease{
 		ID:           hex.EncodeToString(idBytes),
 		Name:         name,
-		TLS:          c.config.TLS,
+		TLS:          true,
 		ReverseToken: hex.EncodeToString(tokenBytes),
 		Metadata: types.Metadata{
 			Description: metadata.Description,
@@ -211,10 +185,6 @@ func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal
 }
 
 func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
-	if !c.config.TLS {
-		return nil, nil, nil
-	}
-
 	parsed, err := url.Parse(relayAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid relay address: %s, %w", relayAddr, err)
@@ -223,11 +193,11 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 	if keylessServerName == "" {
 		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
 	}
-	baseDomain := types.ExtractBaseDomain(relayAddr)
-	if baseDomain == "" {
-		return nil, nil, fmt.Errorf("keyless base domain is required for relay %s", relayAddr)
+	baseHost := types.PortalRootHost(relayAddr)
+	if baseHost == "" {
+		return nil, nil, fmt.Errorf("keyless base host is required for relay %s", relayAddr)
 	}
-	domain := leaseName + "." + baseDomain
+	domain := leaseName + "." + baseHost
 
 	tlsConfig, closeFn, err := keyless.BuildClientTLSConfig(relayAddr, keylessServerName, domain)
 	if err != nil {

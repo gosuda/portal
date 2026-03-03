@@ -1,13 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"errors"
-	"io"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -16,10 +15,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/types"
 )
+
+const defaultHTTPSPort = "443"
 
 //go:embed dist/*
 var distFS embed.FS
@@ -58,7 +60,14 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	// SDK registry API for /sdk/* endpoints
-	registry := &SDKRegistry{}
+	var sdkIPManager *manager.IPManager
+	if admin != nil {
+		sdkIPManager = admin.GetIPManager()
+	}
+	registry := &SDKRegistry{
+		ipManager:         sdkIPManager,
+		trustProxyHeaders: flagTrustProxyHeaders,
+	}
 	appMux.HandleFunc(types.PathSDKPrefix, func(w http.ResponseWriter, r *http.Request) {
 		registry.HandleSDKRequest(w, r, serv)
 	})
@@ -75,7 +84,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
-	appMux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("{\"status\":\"ok\"}")); err != nil {
 			log.Debug().Err(err).Msg("[healthz] failed to write response")
@@ -90,30 +99,12 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	// Create the main handler
 	appDomain := types.DefaultAppPattern(flagPortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Compatibility endpoints for legacy webclient deployments.
-		// Handle before host-based routing so stale service workers can recover.
-		if r.URL.Path == "/service-worker.js" {
-			frontend.ServeLegacyServiceWorkerCleanup(w, r)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/frontend/") {
-			frontend.ServeLegacyFrontendCompat(w, r)
-			return
-		}
-
 		// Handle subdomain requests
 		if types.IsSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
 				Msg("[server] handling subdomain request")
-			leaseName, leaseEntry, shouldProxy := shouldProxyHTTP(r.Host, serv)
-			if shouldProxy {
-				// TLS is not enabled on the tunnel, proxy via HTTP
-				log.Debug().Str("host", r.Host).Msg("[server] proxying to HTTP")
-				proxyToHTTP(w, r, serv, leaseName, leaseEntry)
-				return
-			}
 			// TLS-enabled subdomains should terminate on SNI passthrough.
 			// Redirect only insecure requests; secure requests here would loop.
 			if !isSecureRequest(r) {
@@ -135,16 +126,41 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
-	tlsCertFile, tlsKeyFile := "", ""
-	if acmeManager := serv.GetACMEManager(); acmeManager != nil {
-		tlsCertFile, tlsKeyFile = acmeManager.TLSFiles()
+	rootHost := types.PortalRootHost(flagPortalURL)
+	acmeManager := serv.GetACMEManager()
+	if acmeManager != nil && rootHost != "" {
+		srv.TLSConfig = &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				if hello == nil {
+					return nil, errors.New("missing TLS client hello")
+				}
+
+				serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))
+				if serverName != "" && !strings.EqualFold(serverName, rootHost) {
+					return nil, fmt.Errorf("acme certificate is only served for portal root host %q", rootHost)
+				}
+
+				certFile, keyFile := acmeManager.TLSFiles()
+				if certFile == "" || keyFile == "" {
+					return nil, errors.New("acme certificate files are not ready")
+				}
+
+				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+				if err != nil {
+					return nil, fmt.Errorf("load acme certificate: %w", err)
+				}
+				return &cert, nil
+			},
+		}
+	} else if acmeManager != nil && rootHost == "" {
+		log.Warn().Msg("[server] portal root host is empty; ACME TLS disabled for admin/API listener")
 	}
 
 	go func() {
 		var err error
-		if tlsCertFile != "" && tlsKeyFile != "" {
-			log.Info().Str("addr", addr).Str("cert_file", tlsCertFile).Str("key_file", tlsKeyFile).Msg("[server] https api enabled")
-			err = srv.ListenAndServeTLS(tlsCertFile, tlsKeyFile)
+		if srv.TLSConfig != nil {
+			log.Info().Str("addr", addr).Str("root_host", rootHost).Msg("[server] https api enabled via ACME")
+			err = srv.ListenAndServeTLS("", "")
 		} else {
 			log.Info().Str("addr", addr).Msgf("[server] http api enabled")
 			err = srv.ListenAndServe()
@@ -158,91 +174,6 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	return srv
 }
 
-// shouldProxyHTTP checks if the request should be proxied via HTTP.
-// It returns leaseName, lease entry, and whether HTTP proxying should be used.
-func shouldProxyHTTP(host string, serv *portal.RelayServer) (string, *portal.LeaseEntry, bool) {
-	leaseName, ok := types.LeaseNameFromHost(host, types.DefaultAppPattern(flagPortalURL))
-	if !ok {
-		log.Debug().Str("host", host).Msg("[proxy] shouldProxyHTTP: failed to extract lease name")
-		return "", nil, false
-	}
-
-	entry, ok := serv.GetLeaseManager().GetLeaseByName(leaseName)
-	if !ok {
-		log.Debug().Str("lease_name", leaseName).Msg("[proxy] shouldProxyHTTP: lease not found")
-		return leaseName, nil, true
-	}
-
-	// If TLS is disabled, we can proxy via HTTP.
-	shouldProxy := !entry.Lease.TLS
-	log.Debug().
-		Str("lease_name", leaseName).
-		Bool("tls", entry.Lease.TLS).
-		Msg("[proxy] shouldProxyHTTP")
-	return leaseName, entry, shouldProxy
-}
-
-func proxyToHTTP(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseName string, entry *portal.LeaseEntry) {
-	if leaseName == "" {
-		http.Error(w, "invalid subdomain", http.StatusBadRequest)
-		return
-	}
-
-	if entry == nil {
-		http.Error(w, "service not found", http.StatusNotFound)
-		return
-	}
-
-	if entry.Lease.TLS {
-		http.Error(w, "TLS enabled requires HTTPS access", http.StatusBadRequest)
-		return
-	}
-
-	reverseConn, err := serv.GetReverseHub().AcquireForHTTP(entry.Lease.ID, portal.HTTPProxyWait)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("lease", leaseName).
-			Str("lease_id", entry.Lease.ID).
-			Msg("[proxy] failed to connect to backend")
-		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	defer reverseConn.Close()
-	targetConn := reverseConn.Conn
-
-	// Write the HTTP request to the tunnel
-	if err := r.Write(targetConn); err != nil {
-		log.Error().Err(err).Msg("[proxy] failed to write request to tunnel")
-		http.Error(w, "proxy error", http.StatusInternalServerError)
-		return
-	}
-
-	// Read the response from the tunnel
-	resp, err := http.ReadResponse(bufio.NewReader(targetConn), r)
-	if err != nil {
-		log.Error().Err(err).Msg("[proxy] failed to read response from tunnel")
-		http.Error(w, "proxy error", http.StatusInternalServerError)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Copy headers
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	// Write status code
-	w.WriteHeader(resp.StatusCode)
-
-	// Copy body
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Debug().Err(err).Msg("[proxy] error copying response body")
-	}
-}
-
 // redirectToHTTPS redirects the request to HTTPS using the configured SNI port.
 func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr string) {
 	host := strings.TrimSpace(r.Host)
@@ -251,7 +182,7 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr strin
 	}
 
 	// Extract port from sniListenAddr (e.g., ":443", "443", "example.com:443")
-	port := "443"
+	port := defaultHTTPSPort
 	if raw := strings.TrimSpace(sniListenAddr); raw != "" {
 		switch {
 		case strings.HasPrefix(raw, ":"):
@@ -264,11 +195,11 @@ func redirectToHTTPS(w http.ResponseWriter, r *http.Request, sniListenAddr strin
 			}
 		}
 		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-			port = "443"
+			port = defaultHTTPSPort
 		}
 	}
 
-	if port != "443" {
+	if port != defaultHTTPSPort {
 		host = net.JoinHostPort(host, port)
 	}
 

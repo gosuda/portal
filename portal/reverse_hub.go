@@ -3,27 +3,20 @@ package portal
 import (
 	"fmt"
 	"net"
-	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/websocket"
 )
 
 const (
-	// ReverseKeepaliveMarker keeps idle reverse websocket connections alive
+	// ReverseKeepaliveMarker keeps idle reverse connections alive
 	// before they are activated for a real client request.
 	ReverseKeepaliveMarker = byte(0x00)
 
-	// HTTPStartMarker is sent by the relay to activate a reverse connection
-	// for HTTP proxy mode.
-	HTTPStartMarker = byte(0x01)
-
 	// TLSStartMarker is sent by the relay to activate a reverse connection
-	// for TLS passthrough mode.
+	// for TLS reverse-connect mode.
 	TLSStartMarker = byte(0x02)
 
 	// QueueSize is the maximum number of pending reverse connections per lease.
@@ -32,20 +25,20 @@ const (
 	// DefaultAcquireTimeout is the default timeout for acquiring a reverse connection.
 	DefaultAcquireTimeout = 2 * time.Second
 
-	// HTTPProxyWait is the timeout for HTTP proxy connections (shorter for better UX).
-	HTTPProxyWait = 1500 * time.Millisecond
-
 	// TLSAcquireWait is the timeout for TLS passthrough connections.
 	TLSAcquireWait = 2 * time.Second
 
 	// AuthFailureDelay is the delay before closing unauthorized connections (rate limiting).
 	AuthFailureDelay = 2 * time.Second
 
+	// controlWriteTimeout bounds control-marker writes on reverse connections.
+	controlWriteTimeout = 2 * time.Second
+
 	// ReverseIdleKeepaliveInterval sends an idle keepalive byte to reduce
-	// reverse websocket disconnections from intermediate idle timeouts.
+	// reverse connection disconnections from intermediate idle timeouts.
 	ReverseIdleKeepaliveInterval = 25 * time.Second
 
-	// ReverseConnectTokenHeader is the websocket handshake header carrying reverse auth token.
+	// ReverseConnectTokenHeader carries reverse auth token on /sdk/connect requests.
 	ReverseConnectTokenHeader = "X-Portal-Reverse-Token"
 )
 
@@ -117,10 +110,12 @@ func (c *ReverseConn) WriteControlByte(marker byte, timeout time.Duration) error
 }
 
 type ReverseHub struct {
-	mu         sync.RWMutex
-	pools      map[string]chan *ReverseConn
-	dropped    map[string]struct{}
-	authorizer func(leaseID, token string) bool
+	pools        map[string]chan *ReverseConn
+	dropped      map[string]struct{}
+	authorizer   func(leaseID, token string) bool
+	ipBanChecker func(ip string) bool
+	onAccepted   func(leaseID, ip string)
+	mu           sync.RWMutex
 }
 
 // NewReverseHub creates a new reverse connection hub.
@@ -161,6 +156,20 @@ func (h *ReverseHub) SetAuthorizer(authorizer func(leaseID, token string) bool) 
 	h.authorizer = authorizer
 }
 
+// SetIPBanChecker sets optional IP ban check for reverse connections.
+func (h *ReverseHub) SetIPBanChecker(checker func(ip string) bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ipBanChecker = checker
+}
+
+// SetOnAccepted sets optional callback for authorized reverse connections.
+func (h *ReverseHub) SetOnAccepted(onAccepted func(leaseID, ip string)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onAccepted = onAccepted
+}
+
 func (h *ReverseHub) isAuthorized(leaseID, token string) bool {
 	h.mu.RLock()
 	authorizer := h.authorizer
@@ -169,6 +178,26 @@ func (h *ReverseHub) isAuthorized(leaseID, token string) bool {
 		return false
 	}
 	return authorizer(leaseID, token)
+}
+
+func (h *ReverseHub) isIPBanned(ip string) bool {
+	h.mu.RLock()
+	checker := h.ipBanChecker
+	h.mu.RUnlock()
+	if checker == nil || ip == "" {
+		return false
+	}
+	return checker(ip)
+}
+
+func (h *ReverseHub) notifyAccepted(leaseID, ip string) {
+	h.mu.RLock()
+	onAccepted := h.onAccepted
+	h.mu.RUnlock()
+	if onAccepted == nil {
+		return
+	}
+	onAccepted(leaseID, ip)
 }
 
 func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
@@ -198,16 +227,6 @@ func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
 }
 
 func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*ReverseConn, error) {
-	return h.acquireWithStartMarker(leaseID, timeout, TLSStartMarker, "TLS")
-}
-
-// AcquireForHTTP retrieves a connection for HTTP proxy mode.
-// A mode-specific start marker is sent before returning the connection.
-func (h *ReverseHub) AcquireForHTTP(leaseID string, timeout time.Duration) (*ReverseConn, error) {
-	return h.acquireWithStartMarker(leaseID, timeout, HTTPStartMarker, "HTTP")
-}
-
-func (h *ReverseHub) acquireWithStartMarker(leaseID string, timeout time.Duration, marker byte, mode string) (*ReverseConn, error) {
 	pool, ok := h.getPool(leaseID)
 	if !ok {
 		return nil, fmt.Errorf("no tunnel available for lease %s", leaseID)
@@ -241,7 +260,7 @@ func (h *ReverseHub) acquireWithStartMarker(leaseID string, timeout time.Duratio
 			}
 			// Stop idle keepalive and signal tunnel worker to release this connection.
 			conn.Activate()
-			err := conn.WriteControlByte(marker, 2*time.Second)
+			err := conn.WriteControlByte(TLSStartMarker, controlWriteTimeout)
 			if err == nil {
 				return conn, nil
 			}
@@ -249,8 +268,7 @@ func (h *ReverseHub) acquireWithStartMarker(leaseID string, timeout time.Duratio
 			log.Warn().
 				Err(err).
 				Str("lease_id", leaseID).
-				Str("mode", mode).
-				Msg("[ReverseHub] Failed to send start marker; retrying with new connection")
+				Msg("[ReverseHub] Failed to send TLS start marker; retrying with new connection")
 			conn.Close()
 			continue
 		case <-timer.C:
@@ -293,52 +311,55 @@ func (h *ReverseHub) ClearDropped(leaseID string) {
 	h.mu.Unlock()
 }
 
-func (h *ReverseHub) HandleConnect(ws *websocket.Conn) {
-	if ws == nil {
+func (h *ReverseHub) HandleConnect(conn net.Conn, leaseID, token, remoteIP string) {
+	if conn == nil {
 		return
 	}
-	ws.PayloadType = websocket.BinaryFrame
-
-	leaseID, token := parseReverseConnectCredentials(ws.Request())
 
 	if leaseID == "" {
 		log.Warn().Msg("[ReverseHub] Missing lease_id on reverse connect")
-		time.Sleep(AuthFailureDelay)
-		if err := ws.Close(); err != nil {
-			log.Debug().Err(err).Msg("[ReverseHub] failed to close unauthorized websocket")
-		}
+		h.rejectConn(conn, "[ReverseHub] failed to close unauthorized reverse connection")
+		return
+	}
+
+	if h.isIPBanned(remoteIP) {
+		log.Warn().
+			Str("lease_id", leaseID).
+			Str("ip", remoteIP).
+			Msg("[ReverseHub] IP banned for reverse connect")
+		h.rejectConn(conn, "[ReverseHub] failed to close banned reverse connection")
 		return
 	}
 
 	if !h.isAuthorized(leaseID, token) {
 		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Unauthorized reverse connect")
-		time.Sleep(AuthFailureDelay)
-		if err := ws.Close(); err != nil {
-			log.Debug().Err(err).Msg("[ReverseHub] failed to close unauthorized websocket")
-		}
+		h.rejectConn(conn, "[ReverseHub] failed to close unauthorized reverse connection")
 		return
 	}
 
-	conn := NewReverseConn(ws)
-	if !h.Offer(leaseID, conn) {
+	h.notifyAccepted(leaseID, remoteIP)
+	reverseConn := NewReverseConn(conn)
+	if !h.Offer(leaseID, reverseConn) {
 		log.Warn().Str("lease_id", leaseID).Msg("[ReverseHub] Connection pool full for lease")
-		conn.Close()
+		reverseConn.Close()
 		return
 	}
 
-	h.keepAliveWhileIdle(conn, leaseID)
+	h.keepAliveWhileIdle(reverseConn, leaseID)
 
 	// Wait until the connection is used and closed
-	conn.Wait()
+	reverseConn.Wait()
 }
 
-func parseReverseConnectCredentials(req *http.Request) (leaseID, token string) {
-	if req == nil || req.URL == nil {
-		return "", ""
+func (h *ReverseHub) rejectConn(conn net.Conn, debugCloseMessage string) {
+	time.Sleep(AuthFailureDelay)
+	h.closeConn(conn, debugCloseMessage)
+}
+
+func (h *ReverseHub) closeConn(conn net.Conn, debugCloseMessage string) {
+	if err := conn.Close(); err != nil {
+		log.Debug().Err(err).Msg(debugCloseMessage)
 	}
-	leaseID = strings.TrimSpace(req.URL.Query().Get("lease_id"))
-	token = strings.TrimSpace(req.Header.Get(ReverseConnectTokenHeader))
-	return leaseID, token
 }
 
 func (h *ReverseHub) keepAliveWhileIdle(conn *ReverseConn, leaseID string) {
@@ -352,7 +373,7 @@ func (h *ReverseHub) keepAliveWhileIdle(conn *ReverseConn, leaseID string) {
 		case <-conn.active:
 			return
 		case <-ticker.C:
-			if err := conn.WriteControlByte(ReverseKeepaliveMarker, 2*time.Second); err != nil {
+			if err := conn.WriteControlByte(ReverseKeepaliveMarker, controlWriteTimeout); err != nil {
 				log.Debug().
 					Err(err).
 					Str("lease_id", leaseID).

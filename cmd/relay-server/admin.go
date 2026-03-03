@@ -19,15 +19,13 @@ const adminCookieName = "portal_admin"
 
 // Admin manages approval state and persistence for relay-server.
 type Admin struct {
-	settingsPath string
-	settingsMu   sync.Mutex
-
 	approveManager *manager.ApproveManager
 	bpsManager     *manager.BPSManager
 	ipManager      *manager.IPManager
 	authManager    *manager.AuthManager
-
-	frontend *Frontend
+	frontend       *Frontend
+	settingsPath   string
+	settingsMu     sync.Mutex
 }
 
 func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
@@ -60,7 +58,7 @@ func (a *Admin) GetIPManager() *manager.IPManager {
 	return a.ipManager
 }
 
-// adminSettings stores persistent admin configuration
+// adminSettings stores persistent admin configuration.
 type adminSettings struct {
 	BannedLeases   []string             `json:"banned_leases"`
 	BPSLimits      map[string]int64     `json:"bps_limits"`
@@ -187,7 +185,7 @@ func (a *Admin) LoadSettings(serv *portal.RelayServer) {
 		Msg("[Admin] Loaded admin settings")
 }
 
-// isAuthenticated checks if the request has a valid admin session
+// isAuthenticated checks if the request has a valid admin session.
 func (a *Admin) isAuthenticated(r *http.Request) bool {
 	// If no secret key is configured, deny all access
 	if a.authManager == nil || !a.authManager.HasSecretKey() {
@@ -204,7 +202,7 @@ func (a *Admin) isAuthenticated(r *http.Request) bool {
 
 // HandleAdminRequest routes /admin/* requests.
 func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	route := strings.Trim(strings.TrimPrefix(r.URL.Path, "/admin"), "/")
+	route := strings.Trim(strings.TrimPrefix(r.URL.Path, types.PathAdminPrefix), "/")
 
 	// Public routes (no authentication required)
 	switch {
@@ -230,8 +228,8 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 			a.frontend.ServeAppStatic(w, r, "", serv)
 			return
 		}
-		// For API requests, return 401
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		// For API requests, return 401 envelope.
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
 
@@ -239,11 +237,11 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	case route == "":
 		a.frontend.ServeAppStatic(w, r, "", serv)
 	case route == "leases" && r.Method == http.MethodGet:
-		writeJSON(w, convertLeaseEntriesToRows(serv, a, true))
+		writeAPIData(w, http.StatusOK, convertLeaseEntriesToRows(serv, a, true))
 	case route == "leases/banned" && r.Method == http.MethodGet:
-		writeJSON(w, serv.GetLeaseManager().GetBannedLeases())
+		writeAPIData(w, http.StatusOK, serv.GetLeaseManager().GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
-		writeJSON(w, map[string]any{
+		writeAPIData(w, http.StatusOK, map[string]any{
 			"leases_count": len(serv.GetLeaseManager().GetAllLeaseEntries()),
 			"uptime":       "TODO",
 		})
@@ -266,26 +264,29 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	}
 }
 
-// handleLogin handles POST /admin/login
+// handleLogin handles POST /admin/login.
 func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
-	clientIP := manager.ExtractClientIP(r)
+	clientIP := manager.ExtractClientIP(r, flagTrustProxyHeaders)
 
 	// Check if IP is locked
 	if a.authManager.IsIPLocked(clientIP) {
 		remaining := a.authManager.GetLockRemainingSeconds(clientIP)
-		w.WriteHeader(http.StatusTooManyRequests)
-		writeJSON(w, types.AdminLoginResponse{
-			Success:          false,
-			Error:            "Too many failed attempts. Please try again later.",
-			Locked:           true,
-			RemainingSeconds: remaining,
-		})
+		writeAPIErrorWithData(
+			w,
+			http.StatusTooManyRequests,
+			"auth_locked",
+			"Too many failed attempts. Please try again later.",
+			types.AdminLoginResponse{
+				Locked:           true,
+				RemainingSeconds: remaining,
+			},
+		)
 		return
 	}
 
 	var req types.AdminLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
 	}
 
@@ -295,15 +296,12 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 		log.Warn().Str("ip", clientIP).Bool("now_locked", nowLocked).Msg("[Admin] Failed login attempt")
 
 		response := types.AdminLoginResponse{
-			Success: false,
-			Error:   "Invalid key",
-			Locked:  nowLocked,
+			Locked: nowLocked,
 		}
 		if nowLocked {
-			response.RemainingSeconds = 60
+			response.RemainingSeconds = a.authManager.GetLockRemainingSeconds(clientIP)
 		}
-		w.WriteHeader(http.StatusUnauthorized)
-		writeJSON(w, response)
+		writeAPIErrorWithData(w, http.StatusUnauthorized, "invalid_key", "Invalid key", response)
 		return
 	}
 
@@ -323,12 +321,10 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	log.Info().Str("ip", clientIP).Msg("[Admin] Successful login")
-	writeJSON(w, types.AdminLoginResponse{
-		Success: true,
-	})
+	writeAPIData(w, http.StatusOK, types.AdminLoginResponse{Success: true})
 }
 
-// handleLogout handles POST /admin/logout
+// handleLogout handles POST /admin/logout.
 func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(adminCookieName)
 	if err == nil && cookie.Value != "" {
@@ -347,19 +343,17 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1, // Delete cookie
 	})
 
-	writeJSON(w, types.AdminLoginResponse{
-		Success: true,
-	})
+	writeAPIOK(w, http.StatusOK)
 }
 
-// handleAuthStatus handles GET /admin/auth/status
+// handleAuthStatus handles GET /admin/auth/status.
 func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	authenticated := a.isAuthenticated(r)
 
 	// Check if secret key is configured
 	authEnabled := a.authManager != nil && a.authManager.HasSecretKey()
 
-	writeJSON(w, types.AdminAuthStatusResponse{
+	writeAPIData(w, http.StatusOK, types.AdminAuthStatusResponse{
 		Authenticated: authenticated,
 		AuthEnabled:   authEnabled,
 	})
@@ -374,7 +368,7 @@ func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, se
 
 	leaseID, ok := decodeLeaseID(parts[1])
 	if !ok {
-		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
 
@@ -382,18 +376,18 @@ func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, se
 	case http.MethodPost:
 		serv.GetLeaseManager().BanLease(leaseID)
 		a.SaveSettings(serv)
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		serv.GetLeaseManager().UnbanLease(leaseID)
 		a.SaveSettings(serv)
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
 func (a *Admin) handleGetSettings(w http.ResponseWriter) {
-	writeJSON(w, types.AdminSettingsResponse{
+	writeAPIData(w, http.StatusOK, types.AdminSettingsResponse{
 		ApprovalMode:   string(a.approveManager.GetApprovalMode()),
 		ApprovedLeases: a.approveManager.GetApprovedLeases(),
 		DeniedLeases:   a.approveManager.GetDeniedLeases(),
@@ -403,28 +397,28 @@ func (a *Admin) handleGetSettings(w http.ResponseWriter) {
 func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, types.AdminApprovalModeResponse{
+		writeAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{
 			ApprovalMode: string(a.approveManager.GetApprovalMode()),
 		})
 	case http.MethodPost:
 		var req types.AdminApprovalModeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 			return
 		}
 		mode := manager.ApprovalMode(req.Mode)
 		if mode != manager.ApprovalModeAuto && mode != manager.ApprovalModeManual {
-			http.Error(w, "Invalid mode (must be 'auto' or 'manual')", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_mode", "invalid mode (must be 'auto' or 'manual')")
 			return
 		}
 		a.approveManager.SetApprovalMode(mode)
 		a.SaveSettings(serv)
 		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
-		writeJSON(w, types.AdminApprovalModeResponse{
+		writeAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{
 			ApprovalMode: string(mode),
 		})
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
@@ -437,7 +431,7 @@ func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request
 
 	leaseID, ok := decodeLeaseID(parts[1])
 	if !ok {
-		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
 
@@ -447,14 +441,14 @@ func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request
 		a.approveManager.UndenyLease(leaseID) // Remove from denied if exists
 		a.SaveSettings(serv)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approved")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		a.approveManager.RevokeLease(leaseID)
 		a.SaveSettings(serv)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approval revoked")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
@@ -467,7 +461,7 @@ func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, s
 
 	leaseID, ok := decodeLeaseID(parts[1])
 	if !ok {
-		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
 
@@ -476,14 +470,14 @@ func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, s
 		a.approveManager.DenyLease(leaseID)
 		a.SaveSettings(serv)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denied")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		a.approveManager.UndenyLease(leaseID)
 		a.SaveSettings(serv)
 		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denial removed")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
@@ -496,7 +490,7 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 
 	leaseID, ok := decodeLeaseID(parts[1])
 	if !ok {
-		http.Error(w, "Invalid lease ID", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
 
@@ -504,11 +498,11 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 	case http.MethodPost:
 		var req types.AdminBPSRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 			return
 		}
 		if a.bpsManager == nil {
-			http.Error(w, "BPS manager not initialized", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "bps_manager_unavailable", "bps manager not initialized")
 			return
 		}
 		oldBPS := a.bpsManager.GetBPSLimit(leaseID)
@@ -519,10 +513,10 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 			Int64("new_bps", req.BPS).
 			Msg("[Admin] BPS limit updated")
 		a.SaveSettings(serv)
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		if a.bpsManager == nil {
-			http.Error(w, "BPS manager not initialized", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "bps_manager_unavailable", "bps manager not initialized")
 			return
 		}
 		oldBPS := a.bpsManager.GetBPSLimit(leaseID)
@@ -532,9 +526,9 @@ func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, se
 			Int64("old_bps", oldBPS).
 			Msg("[Admin] BPS limit removed (now unlimited)")
 		a.SaveSettings(serv)
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }
 
@@ -548,12 +542,12 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 
 	ip := parts[1]
 	if ip == "" {
-		http.Error(w, "Invalid IP address", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "invalid_ip", "invalid IP address")
 		return
 	}
 
 	if a.ipManager == nil {
-		http.Error(w, "IP manager not initialized", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "ip_manager_unavailable", "ip manager not initialized")
 		return
 	}
 
@@ -562,13 +556,13 @@ func (a *Admin) handleIPBanRequest(w http.ResponseWriter, r *http.Request, serv 
 		a.ipManager.BanIP(ip)
 		a.SaveSettings(serv)
 		log.Info().Str("ip", ip).Msg("[Admin] IP banned")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		a.ipManager.UnbanIP(ip)
 		a.SaveSettings(serv)
 		log.Info().Str("ip", ip).Msg("[Admin] IP unbanned")
-		w.WriteHeader(http.StatusOK)
+		writeAPIOK(w, http.StatusOK)
 	default:
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
 }

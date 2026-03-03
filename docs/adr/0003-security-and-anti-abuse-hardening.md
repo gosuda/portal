@@ -1,0 +1,43 @@
+# ADR 0003: Security and Anti-Abuse Hardening
+
+- Status: `Accepted`
+- Date: `2026-03-03`
+- Owners: `Portal maintainers`
+
+## Context
+
+Portal accepts unauthenticated internet traffic on relay/admin edges while managing long-lived reverse tunnel sessions. Abuse controls and security boundaries must be first-class or operational risk rises quickly.
+
+## Decision
+
+- Treat admin-authenticated controls (approval, settings, bans) as authoritative for runtime policy.
+- Wire IP ban checks into SDK registration and reverse-connection acceptance paths.
+- Enforce lease-token validation before bridging reverse connections.
+- Keep root-domain and tenant-subdomain traffic split through SNI routing rules to prevent accidental cross-path handling.
+
+## Consequences
+
+### Benefits
+
+- Faster blocking response to abusive sources with centralized IP policy.
+- Stronger boundary between control-plane actions and data-plane forwarding.
+- Reduced chance of unauthorized reverse-connection use.
+
+### Trade-offs
+
+- Extra checks in critical paths may increase operational complexity during debugging.
+- Incorrect ban-list management can block legitimate clients if policy operations are misused.
+
+### Risks and Mitigations
+
+- Risk: policy drift between admin state and runtime enforcement.
+  Mitigation: initialize runtime components from admin-managed settings and keep a single IP manager source.
+- Risk: abuse pressure shifts from one endpoint to another.
+  Mitigation: enforce checks at multiple ingress points (SDK registration and reverse-hub admission).
+- Risk: accidental weakening during refactors.
+  Mitigation: require explicit ADR-aware review for security-sensitive path changes.
+
+## Alternatives Considered
+
+- Endpoint-local ad hoc checks only: rejected because policy diverges and creates inconsistent enforcement.
+- Rely solely on external perimeter controls: rejected because application-level lease/auth context is required for accurate decisions.

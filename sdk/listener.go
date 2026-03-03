@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -16,58 +17,56 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/types"
 )
 
 const (
-	relayKeepaliveInterval    = 10 * time.Second
-	reverseReadTimeout        = 1 * time.Second
-	defaultReverseWorkers     = 16
-	defaultReverseDialTimeout = 5 * time.Second
+	relayKeepaliveInterval     = 10 * time.Second
+	reverseReadTimeout         = 1 * time.Second
+	defaultReverseWorkers      = 16
+	defaultReverseDialTimeout  = 5 * time.Second
+	defaultTLSHandshakeTimeout = 10 * time.Second
 )
 
 // Listener is a net.Listener backed by relay tunnel registration.
 // The relay connects to this listener after SNI routing resolves the lease.
 type Listener struct {
-	relayAddr string
-	lease     *portal.Lease
-
-	httpClient *http.Client
-
-	mu                 sync.RWMutex
-	closed             bool
+	tlsConfig          *tls.Config
+	lease              *portal.Lease
+	httpClient         *http.Client
+	stopCh             chan struct{}
 	acceptCh           chan net.Conn
+	relayAddr          string
+	closeFns           []func()
+	wg                 sync.WaitGroup
 	reverseWorkers     int
 	reverseDialTimeout time.Duration
-
-	// TLS configuration
-	tlsConfig *tls.Config
-	closeFns  []func()
-
-	stopCh    chan struct{}
-	closeOnce sync.Once
-	wg        sync.WaitGroup
+	mu                 sync.RWMutex
+	closeOnce          sync.Once
+	closed             bool
 }
 
 var _ net.Listener = (*Listener)(nil)
 
 // NewListener creates a relay-backed listener.
-// If tlsConfig is provided, the listener will perform TLS handshake on incoming connections.
+// If tlsConfig is provided, reverse workers complete TLS handshakes before enqueueing connections.
 func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
 	if lease == nil {
-		return nil, fmt.Errorf("lease is required")
+		return nil, errors.New("lease is required")
 	}
 	if lease.ID == "" {
-		return nil, fmt.Errorf("lease ID is required")
+		return nil, errors.New("lease ID is required")
 	}
 	if lease.Name == "" {
-		return nil, fmt.Errorf("lease name is required")
+		return nil, errors.New("lease name is required")
 	}
 	if lease.ReverseToken == "" {
-		return nil, fmt.Errorf("lease reverse token is required")
+		return nil, errors.New("lease reverse token is required")
+	}
+	if tlsConfig == nil {
+		return nil, errors.New("tls config is required")
 	}
 
 	apiURL, err := types.NormalizeRelayAPIURL(relayAddr)
@@ -81,6 +80,7 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 	if reverseDialTimeout <= 0 {
 		reverseDialTimeout = defaultReverseDialTimeout
 	}
+	lease.TLS = true
 
 	return &Listener{
 		relayAddr: apiURL,
@@ -112,7 +112,7 @@ func (l *Listener) Start() error {
 
 	l.wg.Add(1)
 	go l.keepaliveLoop()
-	for i := 0; i < l.reverseWorkers; i++ {
+	for i := range l.reverseWorkers {
 		l.wg.Add(1)
 		go l.reverseAcceptWorker(i)
 	}
@@ -128,11 +128,10 @@ func (l *Listener) Start() error {
 }
 
 // Accept waits for the next connection from relay.
-// If TLS is enabled, it performs TLS handshake before returning the connection.
+// Reverse workers deliver ready connections to acceptCh.
 func (l *Listener) Accept() (net.Conn, error) {
 	l.mu.RLock()
 	closed := l.closed
-	tlsConfig := l.tlsConfig
 	l.mu.RUnlock()
 	if closed {
 		return nil, net.ErrClosed
@@ -147,19 +146,6 @@ func (l *Listener) Accept() (net.Conn, error) {
 			return nil, net.ErrClosed
 		}
 	}
-
-	// If TLS is enabled, wrap the connection and perform handshake
-	if tlsConfig != nil {
-		tlsConn := tls.Server(conn, tlsConfig)
-		if err := tlsConn.HandshakeContext(context.Background()); err != nil {
-			if closeErr := conn.Close(); closeErr != nil {
-				log.Debug().Err(closeErr).Msg("[SDK] failed to close TLS connection after handshake error")
-			}
-			return nil, fmt.Errorf("TLS handshake failed: %w", err)
-		}
-		return tlsConn, nil
-	}
-
 	return conn, nil
 }
 
@@ -251,12 +237,8 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 			continue
 		}
 
-		expectedMarker := portal.HTTPStartMarker
-		if l.tlsConfig != nil {
-			expectedMarker = portal.TLSStartMarker
-		}
-
-		if err := l.waitForReverseStart(conn, expectedMarker); err != nil {
+		err = l.waitForReverseStart(conn, portal.TLSStartMarker)
+		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				log.Debug().Err(closeErr).Msg("[SDK] failed to close reverse connection")
 			}
@@ -274,6 +256,22 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 			continue
 		}
 
+		conn, err = l.prepareAcceptedConnection(conn)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if errors.Is(err, io.EOF) {
+				continue
+			}
+			log.Debug().
+				Err(err).
+				Str("lease_id", l.lease.ID).
+				Int("worker_id", workerID).
+				Msg("[SDK] Reverse connection preparation failed")
+			continue
+		}
+
 		select {
 		case <-l.stopCh:
 			if closeErr := conn.Close(); closeErr != nil {
@@ -286,28 +284,225 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 }
 
 func (l *Listener) openReverseConnection() (net.Conn, error) {
+	if l.isStopping() {
+		return nil, net.ErrClosed
+	}
 	connectURL, err := relayConnectURL(l.relayAddr, l.lease.ID, l.lease.ReverseToken)
 	if err != nil {
 		return nil, err
 	}
-
-	cfg, err := websocket.NewConfig(connectURL, l.relayAddr)
+	u, err := url.Parse(connectURL)
 	if err != nil {
-		return nil, fmt.Errorf("new reverse websocket config: %w", err)
+		return nil, fmt.Errorf("parse reverse connect URL: %w", err)
 	}
-	cfg.Header.Set(portal.ReverseConnectTokenHeader, l.lease.ReverseToken)
-	cfg.Dialer = &net.Dialer{
-		Timeout: l.reverseDialTimeout,
+	address := u.Host
+	if address == "" {
+		return nil, errors.New("reverse connect URL missing host")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), l.reverseDialTimeout)
+	if u.Scheme != "https" {
+		return nil, errors.New("reverse connect must use https scheme")
+	}
+	if _, _, splitErr := net.SplitHostPort(address); splitErr != nil {
+		address = net.JoinHostPort(address, "443")
+	}
+
+	timeout := l.reverseSetupTimeout()
+	ctx, cancel := l.newStopAwareContext(timeout)
 	defer cancel()
-
-	conn, err := cfg.DialContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("dial reverse websocket: %w", err)
+	dialer := &net.Dialer{
+		Timeout: timeout,
 	}
-	conn.PayloadType = websocket.BinaryFrame
-	return conn, nil
+	rawConn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		if l.isStopping() || errors.Is(err, context.Canceled) {
+			return nil, net.ErrClosed
+		}
+		return nil, fmt.Errorf("dial reverse tcp: %w", err)
+	}
+	stopConnWatch := l.closeConnOnStop(rawConn)
+	defer stopConnWatch()
+
+	serverName := u.Hostname()
+	if serverName == "" {
+		_ = rawConn.Close()
+		return nil, errors.New("reverse connect URL missing TLS server name")
+	}
+	tlsConn := tls.Client(rawConn, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: serverName,
+	})
+	err = tlsConn.HandshakeContext(ctx)
+	if err != nil {
+		_ = rawConn.Close()
+		if l.isStopping() || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+			return nil, net.ErrClosed
+		}
+		return nil, fmt.Errorf("reverse TLS handshake: %w", err)
+	}
+	conn := net.Conn(tlsConn)
+
+	err = l.writeReverseConnectRequest(conn, u)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	reader, err := l.readReverseConnectResponse(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if l.isStopping() {
+		_ = conn.Close()
+		return nil, net.ErrClosed
+	}
+
+	return &bufferedConn{Conn: conn, reader: reader}, nil
+}
+
+func (l *Listener) prepareAcceptedConnection(conn net.Conn) (net.Conn, error) {
+	l.mu.RLock()
+	tlsConfig := l.tlsConfig
+	l.mu.RUnlock()
+	if tlsConfig == nil {
+		return conn, nil
+	}
+
+	tlsConn := tls.Server(conn, tlsConfig)
+	handshakeCtx, cancel := l.newStopAwareContext(defaultTLSHandshakeTimeout)
+	defer cancel()
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+		_ = conn.Close()
+		if l.isStopping() || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+			return nil, net.ErrClosed
+		}
+		return nil, fmt.Errorf("TLS handshake failed: %w", err)
+	}
+	return tlsConn, nil
+}
+
+func buildReverseConnectRequest(u *url.URL, reverseToken string) (*http.Request, error) {
+	if u == nil {
+		return nil, errors.New("reverse connect URL is required")
+	}
+	if u.Host == "" {
+		return nil, errors.New("reverse connect URL missing host")
+	}
+
+	token := strings.TrimSpace(reverseToken)
+	if token == "" {
+		return nil, errors.New("reverse token is required")
+	}
+
+	requestPath := u.EscapedPath()
+	if requestPath == "" {
+		requestPath = "/"
+	}
+
+	requestURL := &url.URL{
+		Path:     requestPath,
+		RawPath:  u.RawPath,
+		RawQuery: u.RawQuery,
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, requestURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build reverse connect request: %w", err)
+	}
+	req.Host = u.Host
+	req.Header.Set(portal.ReverseConnectTokenHeader, token)
+	req.Header.Set("Connection", "keep-alive")
+	return req, nil
+}
+
+func (l *Listener) writeReverseConnectRequest(conn net.Conn, u *url.URL) error {
+	timeout := l.reverseSetupTimeout()
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("set reverse connect write deadline: %w", err)
+	}
+	defer func() {
+		_ = conn.SetWriteDeadline(time.Time{})
+	}()
+
+	req, err := buildReverseConnectRequest(u, l.lease.ReverseToken)
+	if err != nil {
+		return err
+	}
+	if err := req.Write(conn); err != nil {
+		if l.isStopping() || errors.Is(err, net.ErrClosed) {
+			return net.ErrClosed
+		}
+		return fmt.Errorf("write reverse connect request: %w", err)
+	}
+	return nil
+}
+
+func (l *Listener) readReverseConnectResponse(conn net.Conn) (*bufio.Reader, error) {
+	timeout := l.reverseSetupTimeout()
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, fmt.Errorf("set reverse connect read deadline: %w", err)
+	}
+	defer func() {
+		_ = conn.SetReadDeadline(time.Time{})
+	}()
+
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
+	if err != nil {
+		if l.isStopping() || errors.Is(err, net.ErrClosed) {
+			return nil, net.ErrClosed
+		}
+		return nil, fmt.Errorf("read reverse connect response: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("reverse connect rejected: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return reader, nil
+}
+
+func (l *Listener) reverseSetupTimeout() time.Duration {
+	if l.reverseDialTimeout <= 0 {
+		return defaultReverseDialTimeout
+	}
+	return l.reverseDialTimeout
+}
+
+func (l *Listener) newStopAwareContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = defaultReverseDialTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		select {
+		case <-l.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
+func (l *Listener) closeConnOnStop(conn net.Conn) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-l.stopCh:
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}
+
+func (l *Listener) isStopping() bool {
+	select {
+	case <-l.stopCh:
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error {
@@ -391,30 +586,39 @@ func (l *Listener) postJSON(path string, body any) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
 	data, _ := io.ReadAll(resp.Body)
 	if len(data) == 0 {
-		return nil
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return nil
+		}
+		return fmt.Errorf("POST %s failed: status=%d", path, resp.StatusCode)
 	}
 
-	var apiResp types.APIResponse
-	if err := json.Unmarshal(data, &apiResp); err != nil {
-		// Non-JSON success payloads are treated as successful.
-		return nil
-	}
-	if !apiResp.Success {
-		msg := strings.TrimSpace(apiResp.Message)
+	var envelope types.APIRawEnvelope
+	if err := json.Unmarshal(data, &envelope); err == nil {
+		if envelope.OK {
+			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+				return nil
+			}
+			return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+		}
+
+		msg := ""
+		if envelope.Error != nil {
+			msg = strings.TrimSpace(envelope.Error.Message)
+		}
 		if msg == "" {
 			msg = strings.TrimSpace(string(data))
 		}
 		return fmt.Errorf("POST %s rejected: %s", path, msg)
 	}
 
-	return nil
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		// Non-envelope successful payloads are treated as successful.
+		return nil
+	}
+
+	return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 }
 
 func isLeaseNotFoundError(err error) bool {
@@ -426,23 +630,18 @@ func isLeaseNotFoundError(err error) bool {
 
 func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	if strings.TrimSpace(leaseID) == "" {
-		return "", fmt.Errorf("leaseID is required")
+		return "", errors.New("leaseID is required")
 	}
 	if strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("reverse token is required")
+		return "", errors.New("reverse token is required")
 	}
 
 	u, err := url.Parse(relayAddr)
 	if err != nil {
 		return "", fmt.Errorf("parse relay URL: %w", err)
 	}
-	switch u.Scheme {
-	case "http":
-		u.Scheme = "ws"
-	case "https":
-		u.Scheme = "wss"
-	default:
-		return "", fmt.Errorf("unsupported relay URL scheme: %q", u.Scheme)
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("unsupported relay URL scheme: %q (use https)", u.Scheme)
 	}
 	u.Path = types.PathSDKConnect
 	q := u.Query()
@@ -452,15 +651,22 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	return u.String(), nil
 }
 
+type bufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
+}
+
 type multiRelayListener struct {
+	acceptCh  chan net.Conn
+	stopCh    chan struct{}
 	leaseID   string
 	listeners []net.Listener
-
-	acceptCh chan net.Conn
-	stopCh   chan struct{}
-
-	closeOnce sync.Once
 	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 func newMultiRelayListener(leaseID string, listeners []net.Listener) *multiRelayListener {

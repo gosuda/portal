@@ -12,10 +12,10 @@ const (
 
 // ApproveManager manages approval/denial state for leases.
 type ApproveManager struct {
-	mu             sync.RWMutex
-	approvalMode   ApprovalMode
 	approvedLeases map[string]struct{}
 	deniedLeases   map[string]struct{}
+	approvalMode   ApprovalMode
+	mu             sync.RWMutex
 }
 
 func NewApproveManager() *ApproveManager {

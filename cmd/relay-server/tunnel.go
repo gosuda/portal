@@ -122,7 +122,7 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetOS := r.URL.Query().Get("os")
-	isWindows := false
+	var isWindows bool
 	if targetOS != "" {
 		isWindows = strings.EqualFold(targetOS, "windows")
 	} else {

@@ -1,9 +1,10 @@
-.PHONY: help fmt vet lint test vuln tidy all run build build-frontend build-tunnel build-server clean
+.PHONY: help fmt vet lint lint-auto test vuln tidy all run build build-frontend build-tunnel build-server clean
 
-.DEFAULT_GOAL := help
+.DEFAULT_GOAL := lint-auto
 
 help:
 	@echo "Available targets:"
+	@echo "  make lint-auto         - Default local lint autofix pipeline"
 	@echo "  make build             - Build everything (frontend, tunnel, server)"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-tunnel      - Build portal-tunnel binaries"
@@ -13,15 +14,22 @@ help:
 
 fmt:
 	golangci-lint run --fix > /dev/null || true
-	go fix ./...
 	gofmt -w .
 	goimports -w .
+	go fix ./...
 
 vet:
 	go vet ./...
 
 lint:
 	golangci-lint run
+
+lint-auto:
+	gofmt -w .
+	goimports -w .
+	go fix ./...
+	golangci-lint run --fix
+	go mod tidy
 
 test:
 	go test -v -race -coverprofile=coverage.out ./...

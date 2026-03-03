@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
+import { API_PATHS } from "@/lib/apiPaths";
+import { APIClientError, apiClient } from "@/lib/apiClient";
 
 const STORAGE_KEY = "admin_login_attempts";
 const MAX_ATTEMPTS = 3;
@@ -18,6 +20,17 @@ interface AuthState {
 interface LoginResult {
   success: boolean;
   error?: string;
+  locked?: boolean;
+  remaining_seconds?: number;
+}
+
+interface AdminAuthStatusPayload {
+  authenticated: boolean;
+  auth_enabled: boolean;
+}
+
+interface AdminLoginPayload {
+  success?: boolean;
   locked?: boolean;
   remaining_seconds?: number;
 }
@@ -57,7 +70,7 @@ export function useAuth() {
     remainingSeconds: 0,
   });
 
-  // Check client-side lock status
+  // Check browser-side lock status.
   const checkClientLock = useCallback(() => {
     const attempts = getStoredAttempts();
     if (attempts.lockedUntil) {
@@ -69,7 +82,7 @@ export function useAuth() {
         });
         return true;
       } else {
-        // Lock expired, clear it
+        // Lock expired.
         clearStoredAttempts();
         setClientLock({ isLocked: false, remainingSeconds: 0 });
       }
@@ -77,7 +90,7 @@ export function useAuth() {
     return false;
   }, []);
 
-  // Update countdown timer
+  // Keep lock countdown in sync.
   useEffect(() => {
     if (!clientLock.isLocked) return;
 
@@ -100,24 +113,15 @@ export function useAuth() {
     return () => clearInterval(interval);
   }, [clientLock.isLocked]);
 
-  // Check authentication status on mount
+  // Load current auth state from server.
   const checkAuth = useCallback(async () => {
     try {
-      const res = await fetch("/admin/auth/status");
-      if (res.ok) {
-        const data = await res.json();
-        setAuthState({
-          isAuthenticated: data.authenticated,
-          isLoading: false,
-          authEnabled: data.auth_enabled,
-        });
-      } else {
-        setAuthState({
-          isAuthenticated: false,
-          isLoading: false,
-          authEnabled: true,
-        });
-      }
+      const data = await apiClient.get<AdminAuthStatusPayload>(API_PATHS.admin.authStatus);
+      setAuthState({
+        isAuthenticated: data.authenticated,
+        isLoading: false,
+        authEnabled: data.auth_enabled,
+      });
     } catch {
       setAuthState({
         isAuthenticated: false,
@@ -132,10 +136,10 @@ export function useAuth() {
     checkClientLock();
   }, [checkAuth, checkClientLock]);
 
-  // Login function
+  // Try admin sign-in.
   const login = useCallback(
     async (key: string): Promise<LoginResult> => {
-      // Check client-side lock first
+      // Apply local lock before calling server.
       if (checkClientLock()) {
         const attempts = getStoredAttempts();
         const remaining = attempts.lockedUntil
@@ -143,60 +147,79 @@ export function useAuth() {
           : 60;
         return {
           success: false,
-          error: "Too many failed attempts. Please try again later.",
+          error: "Too many failed attempts. Try again in 1 minute.",
           locked: true,
           remaining_seconds: remaining,
         };
       }
 
       try {
-        const res = await fetch("/admin/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key }),
-        });
+        const data = await apiClient.post<AdminLoginPayload>(API_PATHS.admin.login, { key });
 
-        const data = await res.json();
-
-        if (data.success) {
-          // Clear failed attempts on success
+        if (data?.success) {
+          // Reset local lock state on success.
           clearStoredAttempts();
           setClientLock({ isLocked: false, remainingSeconds: 0 });
           setAuthState((prev) => ({ ...prev, isAuthenticated: true }));
           return { success: true };
         }
 
-        // Record failed attempt client-side
-        const attempts = getStoredAttempts();
-        attempts.count++;
+        return { success: false, error: "Secret key is invalid." };
+      } catch (err: unknown) {
+        if (err instanceof APIClientError) {
+          const payload =
+            typeof err.details === "object" && err.details !== null
+              ? (err.details as AdminLoginPayload)
+              : undefined;
 
-        if (attempts.count >= MAX_ATTEMPTS) {
-          attempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
-          setClientLock({ isLocked: true, remainingSeconds: 60 });
+          const lockedByServer =
+            err.code === "auth_locked" || payload?.locked === true;
+
+          if (lockedByServer) {
+            const remainingSeconds = payload?.remaining_seconds ?? 60;
+            const attempts = getStoredAttempts();
+            attempts.lockedUntil = Date.now() + remainingSeconds * 1000;
+            setStoredAttempts(attempts);
+            setClientLock({ isLocked: true, remainingSeconds });
+
+            return {
+              success: false,
+              error: err.message,
+              locked: true,
+              remaining_seconds: remainingSeconds,
+            };
+          }
+
+          // Record failed attempt locally for invalid-key style failures.
+          const attempts = getStoredAttempts();
+          attempts.count++;
+          if (attempts.count >= MAX_ATTEMPTS) {
+            attempts.lockedUntil = Date.now() + LOCK_DURATION_MS;
+            setClientLock({ isLocked: true, remainingSeconds: 60 });
+          }
+          setStoredAttempts(attempts);
+
+          return {
+            success: false,
+            error: err.message || "Secret key is invalid.",
+            locked: attempts.count >= MAX_ATTEMPTS,
+            remaining_seconds: payload?.remaining_seconds || 60,
+          };
         }
 
-        setStoredAttempts(attempts);
-
         return {
           success: false,
-          error: data.error || "Invalid key",
-          locked: data.locked || attempts.count >= MAX_ATTEMPTS,
-          remaining_seconds: data.remaining_seconds || 60,
-        };
-      } catch (err) {
-        return {
-          success: false,
-          error: err instanceof Error ? err.message : "Login failed",
+          error: err instanceof Error ? err.message : "Could not sign in.",
         };
       }
     },
     [checkClientLock]
   );
 
-  // Logout function
+  // End current admin session.
   const logout = useCallback(async () => {
     try {
-      await fetch("/admin/logout", { method: "POST" });
+      await apiClient.post<unknown>(API_PATHS.admin.logout);
     } catch {
       // Ignore errors
     }

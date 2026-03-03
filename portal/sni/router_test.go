@@ -72,14 +72,14 @@ func TestRouter_GetRoute_Wildcard(t *testing.T) {
 
 	tests := []struct {
 		sni      string
-		wantOK   bool
 		wantName string
+		wantOK   bool
 	}{
-		{"foo.example.com", true, "*.example.com"}, // should match
-		{"bar.example.com", true, "*.example.com"}, // should match
-		{"example.com", false, ""},                 // should NOT match (no subdomain)
-		{"foo.bar.example.com", false, ""},         // should NOT match (TLS wildcard only matches one level)
-		{"other.com", false, ""},                   // should NOT match
+		{"foo.example.com", "*.example.com", true}, // should match
+		{"bar.example.com", "*.example.com", true}, // should match
+		{"example.com", "", false},                 // should NOT match (no subdomain)
+		{"foo.bar.example.com", "", false},         // should NOT match (TLS wildcard only matches one level)
+		{"other.com", "", false},                   // should NOT match
 	}
 
 	for _, tt := range tests {

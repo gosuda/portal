@@ -68,3 +68,11 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 		t.Fatal("expected active-1 to remain")
 	}
 }
+
+func TestLeaseManagerStopIsIdempotent(_ *testing.T) {
+	lm := NewLeaseManager(10 * time.Millisecond)
+
+	lm.Start()
+	lm.Stop()
+	lm.Stop()
+}

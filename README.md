@@ -37,6 +37,11 @@ and routes incoming traffic while preserving end-to-end TLS.
 
 For details, see [docs/glossary.md](docs/glossary.md).
 
+## Protocol Scope
+
+- Raw TCP reverse-connect is the only supported relay/tunnel transport.
+- WebSocket and legacy compatibility paths are intentionally unsupported.
+
 ## Quick Start
 
 ### Run Portal Relay
@@ -63,10 +68,22 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
+For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
 ## Contributing
 
 We welcome contributions from the community!
+
+### Verification (CI-Aligned)
+
+Run the same checks enforced in CI:
+
+```bash
+make vet
+make lint
+make test
+make vuln
+```
 
 ### Steps to Contribute
 1. Fork the repository

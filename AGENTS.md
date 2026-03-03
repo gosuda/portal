@@ -1,115 +1,74 @@
 # AGENTS.md
 
-## Formatting & Style
+## Purpose
 
-**Mandatory** before every commit: `gofmt -w . && goimports -w .`
+This file is a high-signal rulebook for future agents.
+Include only constraints that are expensive to rediscover from quick code search.
 
-Import ordering: **stdlib → external → internal** (blank-line separated). Local prefix: `github.com/gosuda`.
+Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs.
 
-**Naming:** packages lowercase single-word (`httpwrap`) · interfaces as behavior verbs (`Reader`, `Handler`) · errors `Err` prefix sentinels (`ErrNotFound`), `Error` suffix types · context always first param `func Do(ctx context.Context, ...)`
+## Non-Negotiable Architecture Invariants
 
-**CGo:** always disabled — `CGO_ENABLED=0`. Pure Go only. No C dependencies.
+1. **Raw TCP reverse-connect is the canonical transport.**
+   - Why: ADR-0001 and ADR-0002 accepted this to keep NAT-friendly behavior and reduce protocol complexity.
 
----
+2. **Do not introduce websocket or legacy compatibility paths unless a new ADR supersedes ADR-0002.**
+   - Why: dual transport paths increase security and test surface and reintroduce drift.
 
-## Error Handling
+3. **Derive routing hostnames from full portal root host in `PORTAL_URL` (supports non-apex), not apex extraction.**
+   - Why: prevents SNI/public URL mismatches in non-apex deployments (ADR-0001).
 
-1. **Wrap with `%w`** — always add call-site context: `return fmt.Errorf("repo.Find: %w", err)`
-2. **Sentinel errors** per package: `var ErrNotFound = errors.New("user: not found")`
-3. **Multi-error** — use `errors.Join(err1, err2)` or `fmt.Errorf("op: %w and %w", e1, e2)`
-4. **Never ignore errors** — `_ = fn()` only for `errcheck.exclude-functions`
-5. **Fail fast** — return immediately; no state accumulation after failure
-6. **Check with `errors.Is`/`errors.As`** — never string-match `err.Error()`
+4. **Keep explicit root-domain fallback behavior through SNI no-route handling to admin/API listener.**
+   - Why: preserves intended control-plane vs tenant routing split (ADR-0001).
 
----
+## Security and Anti-Abuse Invariants
 
-## Iterators (Go 1.23+)
+1. **Admin-managed policy is authoritative for runtime security controls.**
+   - Why: ADR-0003 requires central policy ownership to avoid endpoint-local drift.
 
-Signatures: `func(yield func() bool)` · `func(yield func(V) bool)` · `func(yield func(K, V) bool)`
+2. **Do not rely on single-endpoint checks for abuse controls.**
+   - Why: ADR-0003 expects enforcement across critical ingress paths (registration and reverse admission class paths).
 
-**Rules:** always check yield return (panics on break if ignored) · avoid defer/recover in iterator bodies · use stdlib (`slices.All`, `slices.Backward`, `slices.Collect`, `maps.Keys`, `maps.Values`) · range over integers: `for i := range n {}`
+3. **Reverse connection authorization must remain lease-token validated before bridge/forwarding.**
+   - Why: prevents unauthorized tunnel attachment (ADR-0003).
 
----
+## Operational Truths (CI-Aligned, Minimal)
 
-## Context & Concurrency
+1. **Default local lint behavior is `make lint-auto`.**
+   - Why: applies safe automatic rewrites before verification and reduces lint iteration churn.
 
-Every public I/O function **must** take `context.Context` first.
+2. **Use CI-equivalent verification when validating high-risk changes:**
+   - `make lint-auto`
+   - `make test`
+   - `make tidy`
+   - `make vuln`
+   - Why: these are the enforced checks in `.github/workflows/ci.yml`.
 
-| Pattern | Primitive |
-|---------|-----------|
-| Parallel work with errors | `errgroup.Group` (preferred over `WaitGroup`) |
-| Bounded concurrency | `errgroup.SetLimit` or buffered channel semaphore |
-| Fan-out/fan-in | Unbuffered chan + N producers + 1 consumer; `select` to merge |
-| Pipeline stages | `chan T` between stages, sender closes to signal done |
-| Cancellation/timeout | `context.WithCancel` / `context.WithTimeout` |
-| Concurrent read/write | `sync.RWMutex` (encapsulate behind methods) |
-| Lock-free counters | `atomic.Int64` / `atomic.Uint64` |
-| One-time init | `sync.Once` / `sync.OnceValue` / `sync.OnceFunc` |
-| Object reuse | `sync.Pool` (hot paths only, no lifetime guarantees) |
+3. **Assume Go toolchain baseline from `go.mod` (currently 1.26.x).**
+   - Why: CI resolves Go from `go.mod`; avoid stale version assumptions.
 
-**Goroutine rules:** creator owns lifecycle (start, stop, errors, panic recovery) · no bare `go func()` · every goroutine needs a clear exit (context, done channel, bounded work) · leaks are bugs — verify with `goleak` or `runtime.NumGoroutine()`
+4. **Use `Makefile` as build and verification authority; do not reference absent tooling (for example, no `justfile` in this repo).**
+   - Why: reduces operational drift and broken command guidance.
 
-**Channel rules:** use directional types (`chan<-`/`<-chan`) in signatures · only sender closes · nil channel blocks forever (use to disable `select` cases) · unbuffered = synchronization, buffered = decoupling/backpressure · `for v := range ch` until closed · `select` with `default` only for non-blocking try-send/try-receive
+## Change Discipline
 
-**Select patterns:** timeout via `context.WithTimeout` (not `time.After` in loops — leaks timers) · always check `ctx.Done()` · fan-in merges with multi-case `select` · rate-limit with `time.Ticker` not `time.Sleep`
+1. If a code change violates any invariant above, update or add ADR and AGENTS in the same change set.
+   - Why: keeps architecture docs and implementation synchronized.
 
-```go
-g, ctx := errgroup.WithContext(ctx)
-g.SetLimit(maxWorkers)
-for _, item := range items {
-    g.Go(func() error { return process(ctx, item) })
-}
-if err := g.Wait(); err != nil { return fmt.Errorf("processAll: %w", err) }
-```
+2. Do not expand this file into repo summary, file tree guide, or generic handbook.
+   - Why: high-noise AGENTS degrades future agent effectiveness.
 
-**Anti-patterns:** ❌ shared memory without sync · ❌ `sync.Mutex` in public APIs · ❌ goroutine without context · ❌ closing channel from receiver · ❌ sending on closed channel · ❌ `time.Sleep` for synchronization · ❌ unbounded goroutine spawn
+## Go Conventions
 
----
+**Format:** `gofmt -w . && goimports -w .` before every commit.
 
-## Testing
+**Imports:** stdlib → external → internal (blank-line separated). Local prefix: `github.com/gosuda`.
 
-```bash
-go test -v -race -coverprofile=coverage.out ./...
-```
+**CGo:** always disabled — `CGO_ENABLED=0`. Pure Go only.
 
-- **Benchmarks (Go 1.24+):** `for b.Loop() {}` — prevents compiler opts, excludes setup from timing
-- **Test contexts (Go 1.24+):** `ctx := t.Context()` — auto-canceled when test ends
-- **Table-driven tests** as default · **race detection** (`-race`) mandatory in CI
-- **Fuzz testing:** `go test -fuzz=. -fuzztime=30s` — fast, deterministic targets
-- **testify** for assertions when stdlib `testing` is verbose
+**Module:** commit `go.mod`+`go.sum`, never `go.work` · pin toolchain in `go.mod` · `go mod tidy && go mod verify && govulncheck ./...` pre-release · `os.Root` (Go 1.24+) for directory-scoped I/O.
 
----
-
-## Security
-
-- **Vulnerability scanning:** `govulncheck ./...` — CI and pre-release
-- **Module integrity:** `go mod verify` — validates checksums against go.sum
-- **Supply chain:** always commit `go.sum` · audit with `go mod graph` · pin toolchain
-- **SBOM:** `syft packages . -o cyclonedx-json > sbom.json` on release
-- **Crypto:** FIPS 140-3, post-quantum X25519MLKEM768, `crypto/rand.Text()` for secure tokens
-
----
-
-## Performance
-
-- **Object reuse:** `sync.Pool` hot paths · `weak.Make` for cache-friendly patterns
-- **Benchmarking:** `go test -bench=. -benchmem` · `-cpuprofile`/`-memprofile`
-- **Avoid `reflect`:** ~30x slower than static code, defeats compile-time checks and linters · prefer generics (4–18x faster), type switches, interfaces, or `go generate` codegen for hot paths
-- **Escape analysis:** `go build -gcflags='-m'` to verify heap allocations
-
----
-
-## Module Hygiene
-
-- **Always commit** `go.mod` and `go.sum` · **never commit** `go.work`
-- **Pin toolchain:** `toolchain go1.25.0` in go.mod
-- **Tool directive (Go 1.24+):** `tool golang.org/x/tools/cmd/stringer` in go.mod
-- **Pre-release:** `go mod tidy && go mod verify && govulncheck ./...`
-- **Sandboxed I/O (Go 1.24+):** `os.Root` for directory-scoped file operations
-
----
-
-**Pre-commit:** `make all` or `gofmt -w . && goimports -w . && go vet ./... && golangci-lint run --fix && go test -race ./... && govulncheck ./...`
+**Concurrency:** `errgroup.Group` over `WaitGroup` · `errgroup.SetLimit` for bounded work · `context.WithTimeout` over `time.After` in loops (timer leak) · no bare `go func()` — creator owns lifecycle.
 
 ---
 

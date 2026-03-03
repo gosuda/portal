@@ -131,7 +131,7 @@ The relay-server serves the frontend at:
 - `/` - React frontend (ServerShare UI with SSR data)
 - `/app/` - React app static assets
 - `/healthz` - Health check endpoint
-- `/relay` - WebSocket relay endpoint
+- `/sdk/*` - SDK control and reverse-connect endpoints (`/sdk/connect` uses raw TCP stream after HTTP handshake)
 
 ### Running the Server
 

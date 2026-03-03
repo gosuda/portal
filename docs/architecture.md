@@ -72,10 +72,11 @@ Result: simple HTTP proxy path for development or non-TLS services.
   - `tls`
   - `reverse_token`
 - Relay stores lease and (TLS only) registers SNI route.
+- Route hostnames are generated from normalized lease + normalized `PORTAL_URL` host (`scheme/path/port` removed).
 
 ### 2. Reverse Connect
 
-- Backend opens websocket to `GET /sdk/connect?lease_id=...`
+- Backend opens raw TCP reverse channel to `GET /sdk/connect?lease_id=...` and upgrades into a long-lived stream
 - `X-Portal-Reverse-Token` is validated server-side.
 - Connection is pooled in `ReverseHub`.
 
@@ -98,6 +99,7 @@ Result: simple HTTP proxy path for development or non-TLS services.
 3. No-route handler (used for portal root-domain fallback)
 
 Note: wildcard does not match apex domain (`example.com`).
+For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, SNI/public hostnames are normalized to `<lease>.portal.example.com`.
 
 ## Keyless and Certificates
 
@@ -112,4 +114,9 @@ Note: wildcard does not match apex domain (`example.com`).
 - Reverse-only backend connectivity (no inbound port on app host required)
 - Per-lease reverse token authorization
 - Separation of control plane (`/sdk/*`) and data plane (SNI/HTTP forwarding)
+- Single transport policy: raw TCP reverse-connect only (no websocket/legacy compatibility mode)
 - Unified lease abstraction for routing, metadata, and lifecycle
+
+## ADRs
+
+- Decision records: [docs/adr/README.md](./adr/README.md)

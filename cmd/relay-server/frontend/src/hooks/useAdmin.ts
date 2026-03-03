@@ -2,6 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ServerData, Metadata } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
+import {
+  API_PATHS,
+  adminIPBanPath,
+  adminLeasePath,
+  encodeLeaseID,
+} from "@/lib/apiPaths";
+import { apiClient } from "@/lib/apiClient";
 
 // Approval mode type
 export type ApprovalMode = "auto" | "manual";
@@ -68,6 +75,14 @@ function convertServerDataToAdminServer(
   };
 }
 
+function decodeLeaseID(value: string): string {
+  try {
+    return atob(value);
+  } catch {
+    return value;
+  }
+}
+
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
   const [bannedLeases, setBannedLeases] = useState<string[]>([]);
@@ -80,35 +95,15 @@ export function useAdmin() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [leasesRes, bannedRes, settingsRes] = await Promise.all([
-        fetch("/admin/leases"),
-        fetch("/admin/leases/banned"),
-        fetch("/admin/settings"),
+      const [leasesData, bannedData, settings] = await Promise.all([
+        apiClient.get<ServerData[]>(API_PATHS.admin.leases),
+        apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
+        apiClient.get<{ approval_mode?: ApprovalMode }>(API_PATHS.admin.settings),
       ]);
 
-      if (!leasesRes.ok || !bannedRes.ok) {
-        throw new Error("Failed to fetch admin data. Are you on localhost?");
-      }
-
-      const leasesData: ServerData[] = await leasesRes.json();
-      const bannedData: string[] = await bannedRes.json();
-
       setServerData(leasesData || []);
-      // bannedData is base64 encoded byte arrays, decode them
-      const decodedBanned = (bannedData || []).map((b64: string) => {
-        try {
-          return atob(b64);
-        } catch {
-          return b64;
-        }
-      });
-      setBannedLeases(decodedBanned);
-
-      // Load settings
-      if (settingsRes.ok) {
-        const settings = await settingsRes.json();
-        setApprovalMode(settings.approval_mode || "auto");
-      }
+      setBannedLeases((bannedData || []).map(decodeLeaseID));
+      setApprovalMode(settings?.approval_mode || "auto");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -130,10 +125,14 @@ export function useAdmin() {
   // Additional filter for ban status
   const additionalFilter = useCallback(
     (server: AdminServer) => {
-      if (banFilter === "all") return true;
-      if (banFilter === "banned") return server.isBanned;
-      if (banFilter === "active") return !server.isBanned;
-      return true;
+      switch (banFilter) {
+        case "banned":
+          return server.isBanned;
+        case "active":
+          return !server.isBanned;
+        default:
+          return true;
+      }
     },
     [banFilter]
   );
@@ -153,15 +152,13 @@ export function useAdmin() {
   const handleBanStatus = useCallback(
     async (peerId: string, isBan: boolean) => {
       try {
-        // URL-safe base64 encode the peer ID
-        const safeId = btoa(peerId)
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-        await fetch(`/admin/leases/${safeId}/ban`, {
-          method: isBan ? "POST" : "DELETE",
-        });
-        fetchData();
+        const encodedLeaseID = encodeLeaseID(peerId);
+        if (isBan) {
+          await apiClient.post<unknown>(adminLeasePath(encodedLeaseID, "ban"));
+        } else {
+          await apiClient.delete<unknown>(adminLeasePath(encodedLeaseID, "ban"));
+        }
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
@@ -172,21 +169,15 @@ export function useAdmin() {
   const handleBPSChange = useCallback(
     async (peerId: string, bps: number) => {
       try {
-        // URL-safe base64 encode the peer ID
-        const safeId = btoa(peerId)
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
+        const encodedLeaseID = encodeLeaseID(peerId);
         if (bps <= 0) {
-          await fetch(`/admin/leases/${safeId}/bps`, { method: "DELETE" });
+          await apiClient.delete<unknown>(adminLeasePath(encodedLeaseID, "bps"));
         } else {
-          await fetch(`/admin/leases/${safeId}/bps`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ bps }),
+          await apiClient.post<unknown>(adminLeasePath(encodedLeaseID, "bps"), {
+            bps,
           });
         }
-        fetchData();
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
@@ -196,11 +187,7 @@ export function useAdmin() {
 
   const handleApprovalModeChange = useCallback(async (mode: ApprovalMode) => {
     try {
-      await fetch("/admin/settings/approval-mode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
+      await apiClient.post<unknown>(API_PATHS.admin.approvalMode, { mode });
       setApprovalMode(mode);
     } catch (err) {
       console.error(err);
@@ -210,14 +197,13 @@ export function useAdmin() {
   const handleApproveStatus = useCallback(
     async (peerId: string, approve: boolean) => {
       try {
-        const safeId = btoa(peerId)
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-        await fetch(`/admin/leases/${safeId}/approve`, {
-          method: approve ? "POST" : "DELETE",
-        });
-        fetchData();
+        const encodedLeaseID = encodeLeaseID(peerId);
+        if (approve) {
+          await apiClient.post<unknown>(adminLeasePath(encodedLeaseID, "approve"));
+        } else {
+          await apiClient.delete<unknown>(adminLeasePath(encodedLeaseID, "approve"));
+        }
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
@@ -228,14 +214,13 @@ export function useAdmin() {
   const handleDenyStatus = useCallback(
     async (peerId: string, deny: boolean) => {
       try {
-        const safeId = btoa(peerId)
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-        await fetch(`/admin/leases/${safeId}/deny`, {
-          method: deny ? "POST" : "DELETE",
-        });
-        fetchData();
+        const encodedLeaseID = encodeLeaseID(peerId);
+        if (deny) {
+          await apiClient.post<unknown>(adminLeasePath(encodedLeaseID, "deny"));
+        } else {
+          await apiClient.delete<unknown>(adminLeasePath(encodedLeaseID, "deny"));
+        }
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
@@ -246,10 +231,12 @@ export function useAdmin() {
   const handleIPBanStatus = useCallback(
     async (ip: string, isBan: boolean) => {
       try {
-        await fetch(`/admin/ips/${ip}/ban`, {
-          method: isBan ? "POST" : "DELETE",
-        });
-        fetchData();
+        if (isBan) {
+          await apiClient.post<unknown>(adminIPBanPath(ip));
+        } else {
+          await apiClient.delete<unknown>(adminIPBanPath(ip));
+        }
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
@@ -258,64 +245,51 @@ export function useAdmin() {
   );
 
   // Bulk action handlers
+  const runBulkLeaseAction = useCallback(
+    async (peerIds: string[], action: "approve" | "deny" | "ban") => {
+      await Promise.all(
+        peerIds.map((peerId) =>
+          apiClient.post<unknown>(adminLeasePath(encodeLeaseID(peerId), action))
+        )
+      );
+    },
+    []
+  );
+
   const handleBulkApprove = useCallback(
     async (peerIds: string[]) => {
       try {
-        await Promise.all(
-          peerIds.map((peerId) => {
-            const safeId = btoa(peerId)
-              .replace(/\+/g, "-")
-              .replace(/\//g, "_")
-              .replace(/=+$/, "");
-            return fetch(`/admin/leases/${safeId}/approve`, { method: "POST" });
-          })
-        );
-        fetchData();
+        await runBulkLeaseAction(peerIds, "approve");
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
     },
-    [fetchData]
+    [fetchData, runBulkLeaseAction]
   );
 
   const handleBulkDeny = useCallback(
     async (peerIds: string[]) => {
       try {
-        await Promise.all(
-          peerIds.map((peerId) => {
-            const safeId = btoa(peerId)
-              .replace(/\+/g, "-")
-              .replace(/\//g, "_")
-              .replace(/=+$/, "");
-            return fetch(`/admin/leases/${safeId}/deny`, { method: "POST" });
-          })
-        );
-        fetchData();
+        await runBulkLeaseAction(peerIds, "deny");
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
     },
-    [fetchData]
+    [fetchData, runBulkLeaseAction]
   );
 
   const handleBulkBan = useCallback(
     async (peerIds: string[]) => {
       try {
-        await Promise.all(
-          peerIds.map((peerId) => {
-            const safeId = btoa(peerId)
-              .replace(/\+/g, "-")
-              .replace(/\//g, "_")
-              .replace(/=+$/, "");
-            return fetch(`/admin/leases/${safeId}/ban`, { method: "POST" });
-          })
-        );
-        fetchData();
+        await runBulkLeaseAction(peerIds, "ban");
+        await fetchData();
       } catch (err) {
         console.error(err);
       }
     },
-    [fetchData]
+    [fetchData, runBulkLeaseAction]
   );
 
   return {

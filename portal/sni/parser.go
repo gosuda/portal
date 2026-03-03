@@ -11,13 +11,13 @@ import (
 )
 
 var (
-	// ErrInvalidTLSRecord is returned when the TLS record is malformed
+	// ErrInvalidTLSRecord is returned when the TLS record is malformed.
 	ErrInvalidTLSRecord = errors.New("invalid TLS record")
-	// ErrNotClientHello is returned when the record is not a ClientHello
+	// ErrNotClientHello is returned when the record is not a ClientHello.
 	ErrNotClientHello = errors.New("not a ClientHello message")
-	// ErrNoSNI is returned when the ClientHello doesn't contain SNI
+	// ErrNoSNI is returned when the ClientHello doesn't contain SNI.
 	ErrNoSNI = errors.New("no SNI found in ClientHello")
-	// ErrInvalidSNI is returned when the SNI hostname is invalid
+	// ErrInvalidSNI is returned when the SNI hostname is invalid.
 	ErrInvalidSNI = errors.New("invalid SNI hostname")
 )
 
@@ -227,14 +227,14 @@ func parseSNIExtension(data []byte) (string, error) {
 // - Labels must be 1-63 characters
 // - Labels can contain a-z, A-Z, 0-9, and hyphen
 // - Labels cannot start or end with hyphen
-// - No null bytes or other control characters
+// - No null bytes or other control characters.
 func isValidSNIHostname(hostname string) bool {
 	if len(hostname) == 0 || len(hostname) > 253 {
 		return false
 	}
 
 	// Check for null bytes and other control characters
-	for i := 0; i < len(hostname); i++ {
+	for i := range len(hostname) {
 		if hostname[i] < 0x20 || hostname[i] > 0x7E {
 			return false
 		}

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -37,14 +39,18 @@ func main() {
 
 	defaultRelayURLs := os.Getenv("RELAYS")
 	if defaultRelayURLs == "" {
-		defaultRelayURLs = "http://localhost:4017"
+		defaultRelayURLs = "https://localhost:4017"
 	}
 
-	flag.StringVar(&flagRelayURLs, "relay", defaultRelayURLs, "Portal relay server API URLs (comma-separated, http/https) [env: RELAYS]")
+	flag.StringVar(&flagRelayURLs, "relay", defaultRelayURLs, "Portal relay server API URLs (comma-separated, https only) [env: RELAYS]")
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
 
-	defaultTLS := strings.EqualFold(strings.TrimSpace(os.Getenv("TLS")), "true") || strings.TrimSpace(os.Getenv("TLS")) == "1"
+	tlsEnv := strings.TrimSpace(os.Getenv("TLS"))
+	defaultTLS := true
+	if tlsEnv != "" {
+		defaultTLS = strings.EqualFold(tlsEnv, "true") || tlsEnv == "1"
+	}
 	flag.BoolVar(&flagTLS, "tls", defaultTLS, "Enable TLS (keyless) [env: TLS]")
 
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
@@ -68,7 +74,13 @@ func runTunnel() error {
 
 	relayURLs := types.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
-		return fmt.Errorf("no relay URLs provided")
+		return errors.New("no relay URLs provided")
+	}
+	if !flagTLS {
+		return errors.New("reverse connect architecture requires TLS; set --tls=true")
+	}
+	if err := validateRelayURLsForReverseConnect(relayURLs); err != nil {
+		return err
 	}
 
 	log.Info().Msgf("Local service is reachable at %s", flagHost)
@@ -78,9 +90,6 @@ func runTunnel() error {
 	log.Info().Msgf("  TLS:      %t", flagTLS)
 
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers(relayURLs)}
-	if flagTLS {
-		opts = append(opts, sdk.WithTLS())
-	}
 	sdkClient, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
@@ -151,7 +160,7 @@ loop:
 			if tlsEnabled {
 				proxyType = "TLS→TCP"
 			}
-			if err := proxyConnection(ctx, flagHost, relayConn, tlsEnabled); err != nil {
+			if err := proxyConnection(ctx, flagHost, relayConn); err != nil {
 				log.Error().Str("proxy", proxyType).Err(err).Msg("Proxy error")
 			}
 			log.Info().Str("proxy", proxyType).Msg("Connection closed")
@@ -174,6 +183,19 @@ loop:
 	return nil
 }
 
+func validateRelayURLsForReverseConnect(relayURLs []string) error {
+	for _, relayURL := range relayURLs {
+		parsedURL, err := url.Parse(relayURL)
+		if err != nil {
+			return fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
+		}
+		if !strings.EqualFold(parsedURL.Scheme, "https") {
+			return fmt.Errorf("reverse connect requires https relay URLs, got %q", relayURL)
+		}
+	}
+	return nil
+}
+
 var bufferPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 64*1024)
@@ -181,7 +203,7 @@ var bufferPool = sync.Pool{
 	},
 }
 
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, tlsEnabled bool) error {
+func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
 	targetAddr, err := types.NormalizeTargetAddr(localAddr)
@@ -196,10 +218,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 			Str("addr", targetAddr).
 			Err(err).
 			Msg("Local service unavailable")
-		if tlsEnabled {
-			return fmt.Errorf("local service unavailable: %w", err)
-		}
-		return writeEmptyHTTPResponse(relayConn)
+		return fmt.Errorf("local service unavailable: %w", err)
 	}
 	defer localConn.Close()
 
@@ -255,23 +274,4 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn, 
 
 	close(stopCh)
 	return firstErr
-}
-
-func writeEmptyHTTPResponse(conn net.Conn) error {
-	htmlBody := `<!DOCTYPE html>
-<html>
-<head><title>Service Unavailable</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:50px;">
-<h1>🔌 Service Unavailable</h1>
-<p>The local service is not currently running.</p>
-<p>Please start your local application and refresh this page.</p>
-</body>
-</html>`
-	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\n"+
-		"Content-Type: text/html; charset=utf-8\r\n"+
-		"Content-Length: %d\r\n"+
-		"Connection: close\r\n"+
-		"\r\n%s", len(htmlBody), htmlBody)
-	_, err := conn.Write([]byte(response))
-	return err
 }

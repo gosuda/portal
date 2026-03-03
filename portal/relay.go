@@ -17,17 +17,14 @@ import (
 )
 
 type RelayServer struct {
-	address  []string
-	BaseHost string
-
 	leaseManager  *LeaseManager
 	reverseHub    *ReverseHub
 	sniRouter     *sni.Router
-	acmeManager   *acme.AcmeManager
+	acmeManager   *acme.Manager
 	keylessSigner *keyless.Signer
-
-	stopch    chan struct{}
-	waitgroup sync.WaitGroup
+	BaseHost      string
+	address       []string
+	stopOnce      sync.Once
 }
 
 // NewRelayServer creates a new relay server.
@@ -45,7 +42,6 @@ func NewRelayServer(
 		leaseManager: NewLeaseManager(30 * time.Second),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
-		stopch:       make(chan struct{}),
 	}
 
 	keyFile := ""
@@ -86,19 +82,56 @@ func NewRelayServer(
 			Msg("[signer] keyless signer enabled at /v1/sign")
 	}
 
-	server.leaseManager.SetOnLeaseDeleted(server.reverseHub.DropLease)
-	server.reverseHub.SetAuthorizer(func(leaseID, token string) bool {
-		entry, ok := server.leaseManager.GetLeaseByID(leaseID)
-		if !ok || entry == nil || entry.Lease == nil {
-			return false
-		}
-		expected := entry.Lease.ReverseToken
-		if expected == "" {
-			return false
-		}
-		return subtle.ConstantTimeCompare([]byte(expected), []byte(token)) == 1
-	})
+	server.bindLeaseLifecycleHooks()
+	server.bindReverseConnectAuthorizer()
 	return server, nil
+}
+
+func (g *RelayServer) bindLeaseLifecycleHooks() {
+	if g == nil || g.leaseManager == nil {
+		return
+	}
+	g.leaseManager.SetOnLeaseDeleted(g.handleLeaseDeleted)
+}
+
+func (g *RelayServer) handleLeaseDeleted(leaseID string) {
+	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return
+	}
+
+	if g.reverseHub != nil {
+		g.reverseHub.DropLease(leaseID)
+	}
+	if g.sniRouter != nil {
+		g.sniRouter.UnregisterRouteByLeaseID(leaseID)
+	}
+}
+
+func (g *RelayServer) bindReverseConnectAuthorizer() {
+	if g == nil || g.reverseHub == nil {
+		return
+	}
+	g.reverseHub.SetAuthorizer(g.authorizeReverseConnect)
+}
+
+func (g *RelayServer) authorizeReverseConnect(leaseID, token string) bool {
+	if g == nil || g.leaseManager == nil {
+		return false
+	}
+
+	entry, ok := g.leaseManager.GetLeaseByID(leaseID)
+	if !ok || entry == nil || entry.Lease == nil {
+		return false
+	}
+
+	expected := strings.TrimSpace(entry.Lease.ReverseToken)
+	provided := strings.TrimSpace(token)
+	if expected == "" || provided == "" {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
 // GetLeaseManager returns the lease manager instance.
@@ -122,7 +155,7 @@ func (g *RelayServer) GetKeylessSigner() *keyless.Signer {
 }
 
 // GetACMEManager returns relay ACME manager.
-func (g *RelayServer) GetACMEManager() *acme.AcmeManager {
+func (g *RelayServer) GetACMEManager() *acme.Manager {
 	return g.acmeManager
 }
 
@@ -132,10 +165,12 @@ func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) 
 		return
 	}
 
+	rootSNI = strings.TrimSpace(rootSNI)
 	if rootSNI == "" {
 		return
 	}
 
+	upstreamAddr = strings.TrimSpace(upstreamAddr)
 	if upstreamAddr == "" {
 		log.Warn().
 			Msg("[RelayServer] root-domain SNI fallback upstream is empty; fallback disabled")
@@ -143,31 +178,35 @@ func (g *RelayServer) ConfigurePortalRootFallback(rootSNI, upstreamAddr string) 
 	}
 
 	g.sniRouter.SetNoRouteHandler(func(clientConn net.Conn, serverName string) bool {
-		if !strings.EqualFold(serverName, rootSNI) {
-			return false
-		}
+		return g.handleRootFallback(clientConn, serverName, rootSNI, upstreamAddr)
+	})
+}
 
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		upstreamConn, err := dialer.DialContext(context.Background(), "tcp", upstreamAddr)
-		if err != nil {
-			log.Warn().
-				Err(err).
-				Str("sni", serverName).
-				Str("upstream", upstreamAddr).
-				Msg("[SNI] failed to forward root domain to admin/API listener")
-			if closeErr := clientConn.Close(); closeErr != nil {
-				log.Debug().Err(closeErr).Str("sni", serverName).Msg("[SNI] failed to close client connection")
-			}
-			return true
-		}
+func (g *RelayServer) handleRootFallback(clientConn net.Conn, serverName, rootSNI, upstreamAddr string) bool {
+	if !strings.EqualFold(strings.TrimSpace(serverName), rootSNI) {
+		return false
+	}
 
-		log.Debug().
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	upstreamConn, err := dialer.DialContext(context.Background(), "tcp", upstreamAddr)
+	if err != nil {
+		log.Warn().
+			Err(err).
 			Str("sni", serverName).
 			Str("upstream", upstreamAddr).
-			Msg("[SNI] forwarding root domain to admin/API listener")
-		sni.BridgeConnections(clientConn, upstreamConn)
+			Msg("[SNI] failed to forward root domain to admin/API listener")
+		if closeErr := clientConn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Str("sni", serverName).Msg("[SNI] failed to close client connection")
+		}
 		return true
-	})
+	}
+
+	log.Debug().
+		Str("sni", serverName).
+		Str("upstream", upstreamAddr).
+		Msg("[SNI] forwarding root domain to admin/API listener")
+	sni.BridgeConnections(clientConn, upstreamConn)
+	return true
 }
 
 // Start starts the relay server.
@@ -191,14 +230,18 @@ func (g *RelayServer) Start() error {
 
 // Stop stops the relay server.
 func (g *RelayServer) Stop() {
-	close(g.stopch)
-	g.leaseManager.Stop()
-	if err := g.sniRouter.Stop(); err != nil {
-		log.Warn().Err(err).Msg("[RelayServer] Failed to stop SNI router")
-	}
-	if g.acmeManager != nil {
-		g.acmeManager.Stop()
-	}
-	g.waitgroup.Wait()
-	log.Info().Msg("[RelayServer] Stopped")
+	g.stopOnce.Do(func() {
+		if g.leaseManager != nil {
+			g.leaseManager.Stop()
+		}
+		if g.sniRouter != nil {
+			if err := g.sniRouter.Stop(); err != nil {
+				log.Warn().Err(err).Msg("[RelayServer] Failed to stop SNI router")
+			}
+		}
+		if g.acmeManager != nil {
+			g.acmeManager.Stop()
+		}
+		log.Info().Msg("[RelayServer] Stopped")
+	})
 }

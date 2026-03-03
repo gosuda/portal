@@ -42,6 +42,13 @@ Expected:
 - `example.com -> <server-ip>`
 - `*.example.com -> <server-ip>`
 
+If you run Portal on a non-apex host (for example, `PORTAL_URL=https://portal.example.com:8443`), use host-specific records instead:
+
+- `portal.example.com -> <server-ip>`
+- `*.portal.example.com -> <server-ip>`
+
+Portal normalizes `PORTAL_URL` to its host for routing, so service SNI/public hosts become `<lease>.portal.example.com`.
+
 ### 2.3 Create Cloudflare API Token
 
 Cloudflare Dashboard -> `My Profile` -> `API Tokens` -> `Create Token`.
@@ -69,6 +76,8 @@ ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/etc/portal/keyless
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
+
+For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).
 
 ### 3-2. Start Relay
 
