@@ -6,7 +6,7 @@
 
 Expose your local application to the public internet — no ports, no NAT, no DNS setup.
 
-Portal is a **self-hosted**, **permissionless** relay network. It is not a SaaS tunnel, but a routing layer you can connect to — or run yourself.
+Portal is a **self-hosted**, **permissionless** relay network. Portal is not a SaaS tunnel, but a routing layer you can connect to — or run yourself.
 
 ## Why Portal?
 
