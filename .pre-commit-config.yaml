@@ -21,22 +21,6 @@ repos:
   - repo: https://github.com/golangci/golangci-lint
     rev: v2.6.2
     hooks:
-      # - id: golangci-lint
-      #   name: golangci-lint
-      #   description: Fast linters runner for Go. Note that only modified files are linted, so linters like 'unused' that need to scan all files won't work as expected.
-      #   entry: golangci-lint run --new-from-rev HEAD --fix
-      #   types: [go]
-      #   language: golang
-      #   require_serial: true
-      #   pass_filenames: false
-      # - id: golangci-lint-full
-      #   name: golangci-lint-full
-      #   description: Fast linters runner for Go. Runs on all files in the module. Use this hook if you use pre-commit in CI.
-      #   entry: golangci-lint run --fix > /dev/null || true
-      #   types: [go]
-      #   language: golang
-      #   require_serial: true
-      #   pass_filenames: false
       - id: golangci-lint-config-verify
         name: golangci-lint-config-verify
         description: Verifies the configuration file
@@ -46,10 +30,18 @@ repos:
 
   - repo: local
     hooks:
-      - id: gofmt
-        name: gofmt
-        description: Formats Go source code.
-        entry: gofmt -w .
+      - id: make-fmt
+        name: make fmt
+        description: Formats Go source code with gofmt and goimports.
+        entry: make fmt
+        types: [go]
+        language: system
+        pass_filenames: false
+
+      - id: go-vet
+        name: go vet
+        description: Runs go vet checks.
+        entry: go vet ./...
         types: [go]
         language: system
         pass_filenames: false

@@ -15,9 +15,10 @@ This enables developers to publish local services globally without managing serv
 ## Features
 
 - 🔄 **Connection Relay**: Connects clients behind NAT or firewalls through the Portal network
+- **Subdomain NAT Routing**: lease names to public subdomains (myapp.<base-domain>) and routes traffic to your local service without opening inbound ports
 - 🔐 **End-to-End Encryption**: TLS passthrough with relay keyless certificates
 - 🕊️ **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
-- ⚙️ **Simple Setup**: Quick start with Tunnel client or Go SDK
+- ⚙️ **Simple Setup**: Quick start with Tunnel client
 
 ## Quick Start
 

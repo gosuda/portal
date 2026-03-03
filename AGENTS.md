@@ -18,7 +18,7 @@ Lint/Format/Test:
 - `make fmt` (gofmt + goimports)
 - `make vet` (go vet)
 - `make lint` (golangci-lint)
-- `make test` (go test -v -race ./...)
+- `make test` (go test -v -race -coverprofile=coverage.out ./...)
 - `make vuln` (govulncheck)
 - `make tidy` (go mod tidy + go mod verify)
 
@@ -113,7 +113,7 @@ See `docs/portal-deploy-guide.md` for full deployment documentation.
 ## Repo Basics
 
 - Module: `gosuda.org/portal`
-- Go version: 1.25.3 (from `go.mod`)
+- Go version: 1.26.0 (from `go.mod`)
 
 ## Gosuda Go Standards
 
@@ -162,10 +162,11 @@ Performance:
 
 Module hygiene:
 - Always commit `go.mod` and `go.sum`; never commit `go.work`.
-- Pin toolchain version to match `go.mod` (currently 1.25.3).
+- Pin toolchain version to match `go.mod`
 
 CI/CD:
-- CI runs test -> lint -> security -> build (`.github/workflows/ci.yml`).
+- CI runs a single `verify` job: vet + lint + test + vuln (`.github/workflows/ci.yml`).
+- CD builds/pushes Docker images on `main` and `v*` tags, and deploys on `main` pushes (`.github/workflows/cd.yml`).
 
 Verbalized sampling:
 - For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
@@ -174,4 +175,3 @@ Refactoring discipline:
 - Do not stack repeated "minimal patches" that leave logic fragmented across files.
 - For domain/URL parsing and normalization, keep a single source of truth and make all callers use it.
 - If a flow is being refactored (e.g., SDK client/listener TLS domain handling), complete consolidation in the same change instead of leaving temporary split logic.
-
