@@ -30,6 +30,8 @@ Client (Browser)
 - `sni.Router`: TCP listener that peeks SNI and routes to lease backends
 - `acme` + `keyless`: ACME provisioning and remote signing support
 
+Anti-abuse policy is driven from admin-managed state and applied consistently for both registration and reverse admission.
+
 ### SDK (`sdk/`)
 
 - `Client`: bootstrap relay URLs and optional TLS/keyless setup
@@ -66,12 +68,15 @@ Result: the relay handles SNI-based routing and transparent raw TCP forwarding, 
   - `reverse_token`
 - Relay stores lease and (TLS only) registers SNI route.
 - Route hostnames are generated from normalized lease + normalized `PORTAL_URL` host (extract host from URL without scheme/port/path); path segments are ignored, so `https://portal.example.com:8443/admin` and `https://portal.example.com` both map to `portal.example.com`.
+- `/sdk/register` and `/sdk/connect` both apply the admin policy gate path before a tunnel is allowed to stay active.
 
 ### 2. Reverse Connect
 
-- Backend opens a raw TCP reverse channel to `GET /sdk/connect?lease_id=...` and streams traffic over that long-lived connection
-- `X-Portal-Reverse-Token` is validated server-side.
-- Connection is pooled in `ReverseHub`.
+- Backend opens a raw TCP reverse connection to `GET /sdk/connect` and streams traffic over that long-lived connection
+  - `/sdk/connect` first validates TLS + lease/token/IP policy and rejects invalid attempts with HTTP status plus JSON envelope errors before hijacking:
+    - `tls_required` (`426`), `missing_lease_id` (`400`), `missing_reverse_token` (`401`), `unsupported_transport` (`400`), `ip_banned` (`403`), `lease_not_found` (`404`), `unauthorized` (`401`)
+- `X-Portal-Reverse-Token` is validated at HTTP precheck, then validated again in `ReverseHub` with centralized policy callbacks before the connection is pooled.
+- Connection is pooled in `ReverseHub` only after token/IP checks pass.
 
 ### 3. Renew
 
@@ -109,6 +114,7 @@ Note: wildcard does not match the portal root host itself (`example.com` or `por
 - Separation of control plane (`/sdk/*`) and data plane (SNI + raw TCP forwarding)
 - Single transport policy: raw TCP reverse-connect only (no websocket/legacy compatibility mode)
 - Unified lease abstraction for routing, metadata, and lifecycle
+- Shared anti-abuse path: admin-managed bans and lease authorization are enforced both in SDK registration and reverse admission
 
 ## ADRs
 

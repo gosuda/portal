@@ -3,6 +3,8 @@ package sdk
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -307,6 +309,158 @@ func TestReadReverseConnectResponse_RespectsReadDeadline(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for read result")
+	}
+}
+
+func TestFormatReverseConnectRejectionDetail(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "envelope with code and message",
+			body: `{"ok":false,"error":{"code":"ip_banned","message":"ip is banned"}}`,
+			want: "ip is banned (code=ip_banned)",
+		},
+		{
+			name: "envelope with message only",
+			body: `{"ok":false,"error":{"code":"","message":"missing lease_id"}}`,
+			want: "missing lease_id",
+		},
+		{
+			name: "plain text body",
+			body: " unauthorized reverse connect ",
+			want: "unauthorized reverse connect",
+		},
+		{
+			name: "empty body",
+			body: "  ",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatReverseConnectRejectionDetail([]byte(tt.body)); got != tt.want {
+				t.Fatalf("formatReverseConnectRejectionDetail(%q)=%q, want %q", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadReverseConnectResponseParsesEnvelopeError(t *testing.T) {
+	t.Parallel()
+
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+
+	l := &Listener{
+		reverseDialTimeout: 500 * time.Millisecond,
+		stopCh:             make(chan struct{}),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := l.readReverseConnectResponse(local)
+		errCh <- err
+	}()
+
+	body := `{"ok":false,"error":{"code":"ip_banned","message":"ip is banned"}}`
+	response := fmt.Sprintf(
+		"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+		len(body),
+		body,
+	)
+	if _, err := io.WriteString(peer, response); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected readReverseConnectResponse to fail for 403 response")
+		}
+		var rejectionErr *reverseConnectRejectionError
+		if !errors.As(err, &rejectionErr) {
+			t.Fatalf("expected reverseConnectRejectionError, got: %T %v", err, err)
+		}
+		if rejectionErr.statusCode != http.StatusForbidden {
+			t.Fatalf("rejection statusCode=%d, want %d", rejectionErr.statusCode, http.StatusForbidden)
+		}
+		if rejectionErr.code != "ip_banned" {
+			t.Fatalf("rejection code=%q, want %q", rejectionErr.code, "ip_banned")
+		}
+		if rejectionErr.detail != "ip is banned (code=ip_banned)" {
+			t.Fatalf("rejection detail=%q, want %q", rejectionErr.detail, "ip is banned (code=ip_banned)")
+		}
+		if !rejectionErr.IsFatal() {
+			t.Fatalf("expected ip_banned rejection to be fatal: %+v", rejectionErr)
+		}
+		if strings.Contains(err.Error(), `{\"ok\":false`) {
+			t.Fatalf("expected formatted error detail instead of raw JSON: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for readReverseConnectResponse error")
+	}
+}
+
+func TestReverseConnectRejectionErrorIsFatal(t *testing.T) {
+	t.Parallel()
+
+	var nilErr *reverseConnectRejectionError
+	if nilErr.IsFatal() {
+		t.Fatal("nil rejection error must not be fatal")
+	}
+
+	tests := []struct {
+		err  *reverseConnectRejectionError
+		name string
+		want bool
+	}{
+		{
+			name: "fatal by known code",
+			err: &reverseConnectRejectionError{
+				statusCode: http.StatusTooManyRequests,
+				code:       "ip_banned",
+			},
+			want: true,
+		},
+		{
+			name: "fatal by status code",
+			err: &reverseConnectRejectionError{
+				statusCode: http.StatusUpgradeRequired,
+			},
+			want: true,
+		},
+		{
+			name: "transient retry status",
+			err: &reverseConnectRejectionError{
+				statusCode: http.StatusServiceUnavailable,
+			},
+			want: false,
+		},
+		{
+			name: "unknown code and status",
+			err: &reverseConnectRejectionError{
+				statusCode: http.StatusInternalServerError,
+				code:       "unexpected_failure",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.err.IsFatal(); got != tt.want {
+				t.Fatalf("IsFatal()=%t, want %t for %+v", got, tt.want, tt.err)
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,16 @@ import (
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/types"
 )
+
+func decodeAPIRawEnvelope(t *testing.T, rec *httptest.ResponseRecorder) types.APIRawEnvelope {
+	t.Helper()
+
+	var envelope types.APIRawEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode API envelope: %v (body=%q)", err, rec.Body.String())
+	}
+	return envelope
+}
 
 func newRegistryTestRelayServer(t *testing.T) *portal.RelayServer {
 	t.Helper()
@@ -122,6 +133,7 @@ func TestSDKRegistryHandleConnectRejectsBannedIP(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-connect-ban", http.NoBody)
+	req.TLS = &tls.ConnectionState{}
 	req.RemoteAddr = "203.0.113.22:45000"
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
 	rec := httptest.NewRecorder()
@@ -131,8 +143,57 @@ func TestSDKRegistryHandleConnectRejectsBannedIP(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if !strings.Contains(rec.Body.String(), "ip is banned") {
-		t.Fatalf("expected banned ip error body, got %q", rec.Body.String())
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected banned IP response to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "ip_banned" || envelope.Error.Message != "ip is banned" {
+		t.Fatalf("unexpected banned IP error payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleConnectRequiresTLS(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-connect-tls", http.NoBody)
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusUpgradeRequired {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUpgradeRequired)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected tls_required response to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "tls_required" || envelope.Error.Message != "tls reverse connect required" {
+		t.Fatalf("unexpected tls_required payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleConnectMissingLeaseIDReturnsEnvelope(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
+	req.TLS = &tls.ConnectionState{}
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected missing lease_id response to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "missing_lease_id" || envelope.Error.Message != "lease_id is required" {
+		t.Fatalf("unexpected missing lease_id payload: %+v", envelope.Error)
 	}
 }
 
@@ -170,6 +231,7 @@ func TestSDKRegistryHandleConnectRejectsWebSocketUpgrade(t *testing.T) {
 	registry := &SDKRegistry{}
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-websocket", http.NoBody)
+	req.TLS = &tls.ConnectionState{}
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
 	req.Header.Set("Upgrade", "websocket")
 	rec := httptest.NewRecorder()
@@ -179,7 +241,14 @@ func TestSDKRegistryHandleConnectRejectsWebSocketUpgrade(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
-	if !strings.Contains(strings.ToLower(rec.Body.String()), "websocket") {
-		t.Fatalf("expected websocket rejection body, got %q", rec.Body.String())
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected websocket rejection to fail, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "unsupported_transport" {
+		t.Fatalf("unexpected websocket rejection payload: %+v", envelope.Error)
+	}
+	if !strings.Contains(strings.ToLower(envelope.Error.Message), "websocket") {
+		t.Fatalf("unexpected websocket rejection message: %+v", envelope.Error)
 	}
 }

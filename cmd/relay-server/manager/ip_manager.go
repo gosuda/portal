@@ -124,6 +124,18 @@ func (m *IPManager) IsIPBanned(ip string) bool {
 	return banned
 }
 
+// IsIPBannedByPolicy applies shared runtime policy rules before checking the ban map.
+func IsIPBannedByPolicy(ipManager *IPManager, candidate string) bool {
+	if ipManager == nil {
+		return false
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	return ipManager.IsIPBanned(candidate)
+}
+
 // GetBannedIPs returns all banned IPs.
 func (m *IPManager) GetBannedIPs() []string {
 	m.mu.RLock()

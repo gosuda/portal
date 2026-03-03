@@ -140,6 +140,27 @@ describe("useAdmin", () => {
     expect(result.current.error).toBe("failed to load leases");
   });
 
+  it("maps contract error codes to resilient admin messages", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    mockPost.mockRejectedValueOnce(
+      new APIClientError("request failed", 400, "invalid_mode"),
+    );
+
+    await act(async () => {
+      await expect(result.current.handleApprovalModeChange("manual")).rejects.toBeInstanceOf(
+        APIClientError,
+      );
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).toBe(
+        "Invalid approval mode. Choose auto or manual and retry.",
+      );
+    });
+  });
+
   it("validates missing IP in handleIPBanStatus", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
@@ -152,6 +173,20 @@ describe("useAdmin", () => {
     await waitFor(() => {
       expect(result.current.error).toContain("Missing IP address");
     });
+  });
+
+  it("keeps plain lease IDs stable when building action targets", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    await act(async () => {
+      await result.current.handleApproveStatus(" peer-a ", true);
+    });
+
+    const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
+    expect(calledPaths).toContain(
+      adminLeasePath(encodeLeaseID("peer-a"), "approve"),
+    );
   });
 
   it("bulk deny posts normalized, deduped lease IDs", async () => {

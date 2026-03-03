@@ -27,6 +27,33 @@ func TestReverseHubAuthorization(t *testing.T) {
 	}
 }
 
+func TestReverseHubIsIPBannedTrimsInput(t *testing.T) {
+	hub := NewReverseHub()
+	hub.SetIPBanChecker(func(ip string) bool {
+		return ip == "203.0.113.50"
+	})
+
+	if !hub.isIPBanned(" 203.0.113.50 ") {
+		t.Fatal("expected trimmed IP to be checked as banned")
+	}
+}
+
+func TestReverseHubIsIPBannedSkipsEmptyInput(t *testing.T) {
+	hub := NewReverseHub()
+	called := false
+	hub.SetIPBanChecker(func(string) bool {
+		called = true
+		return true
+	})
+
+	if hub.isIPBanned("   ") {
+		t.Fatal("expected whitespace IP to be treated as not banned")
+	}
+	if called {
+		t.Fatal("expected checker to be skipped for empty IP candidate")
+	}
+}
+
 func TestReverseHubOfferRejectsInvalidInput(t *testing.T) {
 	hub := NewReverseHub()
 

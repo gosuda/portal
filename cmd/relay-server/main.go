@@ -135,7 +135,7 @@ func runServer(cfg relayServerConfig) error {
 	})
 	if ipMgr != nil {
 		serv.GetReverseHub().SetIPBanChecker(func(ip string) bool {
-			return ipMgr.IsIPBanned(ip)
+			return manager.IsIPBannedByPolicy(ipMgr, ip)
 		})
 		serv.GetReverseHub().SetOnAccepted(func(leaseID, ip string) {
 			if strings.TrimSpace(leaseID) == "" || strings.TrimSpace(ip) == "" {

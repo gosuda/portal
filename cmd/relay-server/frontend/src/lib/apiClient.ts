@@ -85,6 +85,37 @@ function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
   };
 }
 
+function coerceErrorPayload(value: unknown): APIErrorPayload | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const code = typeof value.code === "string" ? value.code.trim() : "";
+  const message = typeof value.message === "string" ? value.message.trim() : "";
+
+  if (!code && !message) {
+    return null;
+  }
+
+  return {
+    code: code || undefined,
+    message: message || undefined,
+  };
+}
+
+function extractErrorPayload(raw: unknown): APIErrorPayload | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const nested = coerceErrorPayload(raw.error);
+  if (nested) {
+    return nested;
+  }
+
+  return coerceErrorPayload(raw);
+}
+
 async function decodeEnvelope<T>(path: string, response: Response): Promise<APIEnvelope<T>> {
   const text = await response.text();
   if (!text) {
@@ -118,6 +149,18 @@ async function decodeEnvelope<T>(path: string, response: Response): Promise<APIE
     return {
       ok: true,
       data: payload as T,
+    };
+  }
+
+  const fallbackError = extractErrorPayload(payload);
+  if (fallbackError) {
+    return {
+      ok: false,
+      data: payload as T,
+      error: {
+        code: fallbackError.code || "request_failed",
+        message: fallbackError.message || response.statusText || "Request failed",
+      },
     };
   }
 

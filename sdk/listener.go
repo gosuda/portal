@@ -30,6 +30,53 @@ const (
 	defaultTLSHandshakeTimeout = 10 * time.Second
 )
 
+var fatalReverseConnectRejectionCodes = map[string]struct{}{
+	"ip_banned":             {},
+	"lease_not_found":       {},
+	"method_not_allowed":    {},
+	"missing_lease_id":      {},
+	"missing_reverse_token": {},
+	"tls_required":          {},
+	"unauthorized":          {},
+	"unsupported_transport": {},
+}
+
+type reverseConnectRejectionError struct {
+	code       string
+	detail     string
+	statusCode int
+}
+
+func (e *reverseConnectRejectionError) Error() string {
+	if e == nil {
+		return "reverse connect rejected"
+	}
+	if e.detail == "" {
+		return fmt.Sprintf("reverse connect rejected: status=%d", e.statusCode)
+	}
+	return fmt.Sprintf("reverse connect rejected: status=%d error=%s", e.statusCode, e.detail)
+}
+
+func (e *reverseConnectRejectionError) IsFatal() bool {
+	if e == nil {
+		return false
+	}
+	if _, ok := fatalReverseConnectRejectionCodes[e.code]; ok {
+		return true
+	}
+	switch e.statusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusUpgradeRequired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Listener is a net.Listener backed by relay tunnel registration.
 // The relay connects to this listener after SNI routing resolves the lease.
 type Listener struct {
@@ -229,6 +276,19 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 
 		conn, err := l.openReverseConnection()
 		if err != nil {
+			var rejectionErr *reverseConnectRejectionError
+			if errors.As(err, &rejectionErr) && rejectionErr.IsFatal() {
+				event := log.Error().
+					Err(err).
+					Str("lease_id", l.lease.ID).
+					Int("worker_id", workerID).
+					Int("status_code", rejectionErr.statusCode)
+				if rejectionErr.code != "" {
+					event = event.Str("relay_error_code", rejectionErr.code)
+				}
+				event.Msg("[SDK] Fatal reverse connect rejection; stopping worker")
+				return
+			}
 			select {
 			case <-l.stopCh:
 				return
@@ -455,9 +515,47 @@ func (l *Listener) readReverseConnectResponse(conn net.Conn) (*bufio.Reader, err
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("reverse connect rejected: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		code, detail := parseReverseConnectRejection(body)
+		if detail == "" {
+			detail = strings.TrimSpace(http.StatusText(resp.StatusCode))
+		}
+		return nil, &reverseConnectRejectionError{
+			statusCode: resp.StatusCode,
+			code:       code,
+			detail:     detail,
+		}
 	}
 	return reader, nil
+}
+
+func parseReverseConnectRejection(body []byte) (string, string) {
+	trimmedBody := strings.TrimSpace(string(body))
+	if trimmedBody == "" {
+		return "", ""
+	}
+
+	var envelope types.APIRawEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Error == nil {
+		return "", trimmedBody
+	}
+
+	code := strings.TrimSpace(envelope.Error.Code)
+	message := strings.TrimSpace(envelope.Error.Message)
+	switch {
+	case message != "" && code != "":
+		return code, fmt.Sprintf("%s (code=%s)", message, code)
+	case message != "":
+		return code, message
+	case code != "":
+		return code, code
+	default:
+		return "", trimmedBody
+	}
+}
+
+func formatReverseConnectRejectionDetail(body []byte) string {
+	_, detail := parseReverseConnectRejection(body)
+	return detail
 }
 
 func (l *Listener) reverseSetupTimeout() time.Duration {

@@ -140,6 +140,10 @@ loop:
 
 		relayConn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				log.Info().Msg("[tunnel] listener closed")
+				break loop
+			}
 			select {
 			case <-ctx.Done():
 				break loop

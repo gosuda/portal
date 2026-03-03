@@ -56,10 +56,7 @@ func (r *SDKRegistry) extractClientIP(req *http.Request) string {
 }
 
 func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
-	if r.ipManager == nil || clientIP == "" {
-		return false
-	}
-	return r.ipManager.IsIPBanned(clientIP)
+	return manager.IsIPBannedByPolicy(r.ipManager, clientIP)
 }
 
 func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, method string) bool {
@@ -121,7 +118,13 @@ func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request,
 }
 
 func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
-	if !r.requireMethod(w, req, http.MethodGet) {
+	if req.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		return
+	}
+	if req.TLS == nil {
+		writeAPIError(w, http.StatusUpgradeRequired, "tls_required", "tls reverse connect required")
 		return
 	}
 
@@ -130,42 +133,42 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		req.Header.Get(portal.ReverseConnectTokenHeader),
 	)
 	if leaseID == "" {
-		http.Error(w, "missing lease_id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
 		return
 	}
 	if token == "" {
-		http.Error(w, "missing reverse token", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, "missing_reverse_token", "reverse_token is required")
 		return
 	}
 	if isWebSocketUpgrade(req) {
-		http.Error(w, "websocket transport is not supported", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, "unsupported_transport", "websocket transport is not supported")
 		return
 	}
 
-	clientIP := strings.TrimSpace(r.extractClientIP(req))
+	clientIP := r.extractClientIP(req)
 	if r.isClientIPBanned(clientIP) {
-		http.Error(w, "ip is banned", http.StatusForbidden)
+		writeAPIError(w, http.StatusForbidden, "ip_banned", "ip is banned")
 		return
 	}
 
 	entry, ok := lookupLeaseEntry(serv, leaseID)
 	if !ok {
-		http.Error(w, "lease not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, "lease_not_found", "lease not found")
 		return
 	}
 	if !reverseTokenMatches(entry.Lease.ReverseToken, token) {
-		http.Error(w, "unauthorized reverse connect", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized reverse connect")
 		return
 	}
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "server does not support connection hijacking", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "hijacker_unavailable", "server does not support connection hijacking")
 		return
 	}
 	conn, rw, err := hijacker.Hijack()
 	if err != nil {
-		http.Error(w, "failed to hijack connection", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, "hijack_failed", "failed to hijack connection")
 		return
 	}
 	if _, err := rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"); err != nil {

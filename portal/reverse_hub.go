@@ -185,6 +185,7 @@ func (h *ReverseHub) isIPBanned(ip string) bool {
 	h.mu.RLock()
 	checker := h.ipBanChecker
 	h.mu.RUnlock()
+	ip = strings.TrimSpace(ip)
 	if checker == nil || ip == "" {
 		return false
 	}

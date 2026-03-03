@@ -55,9 +55,25 @@ describe("apiClient", () => {
     } satisfies Partial<APIClientError>);
   });
 
-  it("throws invalid_envelope when a failed response has no envelope", async () => {
+  it("parses structured non-envelope errors for resilience", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({ message: "not wrapped" }, { status: 400 }),
+      jsonResponse(
+        { code: "lease_rejected", message: "failed to register lease" },
+        { status: 409, statusText: "Conflict" },
+      ),
+    );
+
+    await expect(apiClient.get("/api/test")).rejects.toMatchObject({
+      name: "APIClientError",
+      status: 409,
+      code: "lease_rejected",
+      message: "failed to register lease",
+    } satisfies Partial<APIClientError>);
+  });
+
+  it("throws invalid_envelope when a failed response has no parseable error payload", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: "not wrapped" }, { status: 400 }),
     );
 
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({

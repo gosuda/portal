@@ -30,6 +30,9 @@ and routes incoming traffic while preserving end-to-end TLS.
 - **End-to-end encryption**: Supports TLS passthrough with relay keyless certificates
 - **Self-hosted by design**: You can run your own Portal relay
 - **Fast setup**: Expose a local app with a short command flow
+- **Central anti-abuse enforcement**: `/sdk/register` and `/sdk/connect` use the same admin-managed policy controls (IP bans, lease authorization) before accepting a tunnel
+
+Security policy hardening in this refactor does not require operator setup changes.
 
 ## Components
 

@@ -31,6 +31,11 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 3. **Reverse connection authorization must remain lease-token validated before bridge/forwarding.**
    - Why: prevents unauthorized tunnel attachment (ADR-0003).
+4. **`/sdk/connect` must share the same policy source as `/sdk/register`.**
+   - Why: ensures registration and reverse admission apply identical IP-ban + token checks in one enforcement pipeline.
+
+5. **Operator setup is not changed by this hardening.**
+   - Why: anti-abuse changes are behavior-only and reuse existing flags/env/settings for policy management.
 
 ## Operational Truths (CI-Aligned, Minimal)
 

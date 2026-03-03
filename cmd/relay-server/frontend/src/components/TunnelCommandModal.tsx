@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Copy, Check, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { API_PATHS } from "@/lib/apiPaths";
 
 interface TunnelCommandModalProps {
   trigger?: React.ReactNode;
@@ -34,25 +35,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
-  const [tls, setTls] = useState(true);
-  const tlsAvailable = useMemo(() => {
-    if (relayUrls.length === 0) {
-      return false;
-    }
-    return relayUrls.every((raw) => {
-      try {
-        return new URL(raw).protocol === "https:";
-      } catch {
-        return false;
-      }
-    });
-  }, [relayUrls]);
-
-  useEffect(() => {
-    if (!tlsAvailable && tls) {
-      setTls(false);
-    }
-  }, [tlsAvailable, tls]);
 
   const addRelayUrl = (url: string) => {
     const trimmed = url.trim();
@@ -91,15 +73,16 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     const nameVal = name === "" ? defaultName : name;
     const relayUrlVal =
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
+    const tunnelScriptURL = new URL(API_PATHS.tunnel, currentOrigin).toString();
 
     if (os === "windows") {
-      const tlsEnv = tls ? `$env:TLS="1"; ` : "";
-      return `$ProgressPreference = 'SilentlyContinue'; ${tlsEnv}$env:APP_HOST="${hostVal}"; $env:APP_NAME="${nameVal}"; $env:RELAYS="${relayUrlVal}"; irm ${currentOrigin}/tunnel?os=windows | iex`;
+      const windowsScriptURL = new URL(tunnelScriptURL);
+      windowsScriptURL.searchParams.set("os", "windows");
+      return `$ProgressPreference = 'SilentlyContinue'; $env:APP_HOST="${hostVal}"; $env:APP_NAME="${nameVal}"; $env:RELAYS="${relayUrlVal}"; irm ${windowsScriptURL.toString()} | iex`;
     }
 
-    const tlsEnv = tls ? "TLS=1 " : "";
-    return `curl -fsSL ${currentOrigin}/tunnel | ${tlsEnv}APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
-  }, [currentOrigin, host, name, relayUrls, os, tls]);
+    return `curl -fsSL ${tunnelScriptURL} | APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
+  }, [currentOrigin, host, name, relayUrls, os]);
 
   const handleCopy = async () => {
     try {
@@ -247,34 +230,14 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </div>
           </div>
 
-          {/* TLS Mode */}
+          {/* Transport */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
-              TLS Mode
+              Transport
             </label>
-            <div className="space-y-2 rounded-md border border-input/80 px-3 py-2">
-              <label className="flex items-center justify-between gap-3 text-sm text-foreground">
-                <span className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={tls}
-                    onChange={(e) => setTls(e.target.checked)}
-                    disabled={!tlsAvailable}
-                    className="h-4 w-4 disabled:opacity-50 disabled:cursor-not-allowed"
-                  />
-                  TLS Enabled
-                </span>
-                <span className="text-xs text-text-muted text-right">
-                  {tlsAvailable
-                    ? "Recommended: keyless TLS."
-                    : "TLS is not available on this relay."}
-                </span>
-              </label>
-            </div>
             <p className="text-xs text-text-muted">
-              {tls
-                ? "TLS is enabled (keyless mode)."
-                : "TLS is disabled (no-tls mode)."}
+              Reverse connect is TLS-only. Generated commands run tunnel in
+              keyless TLS mode.
             </p>
           </div>
 

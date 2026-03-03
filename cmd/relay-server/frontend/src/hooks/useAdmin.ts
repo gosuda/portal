@@ -39,17 +39,67 @@ function decodeBase64URLSafe(input: string): string {
   return padded;
 }
 
+const BASE64_URL_SAFE_PATTERN = /^[A-Za-z0-9_-]+$/;
+const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
+  invalid_mode: "Invalid approval mode. Choose auto or manual and retry.",
+  invalid_lease_id: "Selected lease identifier is invalid. Refresh and try again.",
+  lease_rejected: "Request was rejected by policy. Review conflicts and retry.",
+  ip_banned: "Request denied because the source IP is banned.",
+  unauthorized: "Admin authorization failed. Sign in again and retry.",
+  method_not_allowed: "This action is not supported by the current server version.",
+};
+
 function decodeLeaseID(raw: string): string {
+  try {
+    return atob(decodeBase64URLSafe(raw));
+  } catch {
+    return "";
+  }
+}
+
+function decodeLeaseIDIfEncoded(raw: string): string {
   const value = raw.trim();
   if (!value) {
     return "";
   }
 
-  try {
-    return atob(decodeBase64URLSafe(value));
-  } catch {
+  const unpadded = value.replace(/=+$/u, "");
+  if (!BASE64_URL_SAFE_PATTERN.test(unpadded)) {
     return value;
   }
+
+  const decoded = decodeLeaseID(unpadded);
+  if (!decoded) {
+    return value;
+  }
+
+  return encodeLeaseID(decoded) === unpadded ? decoded : value;
+}
+
+function toAdminErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof APIClientError) {
+    const mappedMessage = ADMIN_ERROR_MESSAGE_BY_CODE[error.code];
+    if (mappedMessage) {
+      return mappedMessage;
+    }
+
+    if (error.status === 401 || error.status === 403) {
+      return "Admin authorization failed. Sign in again and retry.";
+    }
+    if (error.status === 409) {
+      return "Request was rejected by policy. Refresh and retry.";
+    }
+
+    const message = error.message.trim();
+    return message || fallback;
+  }
+
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    return message || fallback;
+  }
+
+  return fallback;
 }
 
 function normalizeLeaseID(raw: string): string {
@@ -57,7 +107,7 @@ function normalizeLeaseID(raw: string): string {
   if (!value) {
     return "";
   }
-  const decoded = decodeLeaseID(value).trim();
+  const decoded = decodeLeaseIDIfEncoded(value).trim();
   return decoded || value;
 }
 
@@ -205,11 +255,7 @@ export function useAdmin() {
       setBannedLeases(dedupeStrings(normalizedBans));
       setApprovalMode(normalizeApprovalMode(settings?.approval_mode));
     } catch (err: unknown) {
-      if (err instanceof APIClientError) {
-        setError(err.message);
-      } else {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      setError(toAdminErrorMessage(err, "Failed to load admin data"));
     } finally {
       setLoading(false);
     }
@@ -257,12 +303,7 @@ export function useAdmin() {
         await action();
         await fetchData();
       } catch (err: unknown) {
-        const message =
-          err instanceof APIClientError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Action failed";
+        const message = toAdminErrorMessage(err, "Action failed");
         console.error(err);
         setError(message);
         throw err;

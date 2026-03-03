@@ -249,14 +249,10 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 		a.handleGetSettings(w)
 	case route == "settings/approval-mode":
 		a.handleApprovalModeRequest(w, r, serv)
-	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/ban"):
-		a.handleLeaseBanRequest(w, r, serv, route)
-	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/bps"):
-		a.handleLeaseBPSRequest(w, r, serv, route)
-	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/approve"):
-		a.handleLeaseApproveRequest(w, r, serv, route)
-	case strings.HasPrefix(route, "leases/") && strings.HasSuffix(route, "/deny"):
-		a.handleLeaseDenyRequest(w, r, serv, route)
+	case strings.HasPrefix(route, "leases/"):
+		if !a.handleLeaseActionRouteRequest(w, r, serv, route) {
+			http.NotFound(w, r)
+		}
 	case strings.HasPrefix(route, "ips/") && strings.HasSuffix(route, "/ban"):
 		a.handleIPBanRequest(w, r, serv, route)
 	default:
@@ -359,15 +355,63 @@ func (a *Admin) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
+type leaseActionRouteStatus uint8
+
+const (
+	leaseActionRouteNotFound leaseActionRouteStatus = iota
+	leaseActionRouteInvalidLeaseID
+	leaseActionRouteOK
+)
+
+func parseLeaseActionRoute(route string) (leaseID, action string, status leaseActionRouteStatus) {
 	parts := strings.Split(route, "/")
-	if len(parts) != 3 {
-		http.NotFound(w, r)
-		return
+	if len(parts) != 3 || parts[0] != "leases" {
+		return "", "", leaseActionRouteNotFound
+	}
+
+	action = parts[2]
+	switch action {
+	case "ban", "bps", "approve", "deny":
+	default:
+		return "", "", leaseActionRouteNotFound
 	}
 
 	leaseID, ok := decodeLeaseID(parts[1])
 	if !ok {
+		return "", action, leaseActionRouteInvalidLeaseID
+	}
+
+	return leaseID, action, leaseActionRouteOK
+}
+
+func (a *Admin) handleLeaseActionRouteRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) bool {
+	leaseID, action, status := parseLeaseActionRoute(route)
+	switch status {
+	case leaseActionRouteNotFound:
+		return false
+	case leaseActionRouteInvalidLeaseID:
+		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
+		return true
+	}
+
+	switch action {
+	case "ban":
+		a.handleLeaseBanRequest(w, r, serv, leaseID)
+	case "bps":
+		a.handleLeaseBPSRequest(w, r, serv, leaseID)
+	case "approve":
+		a.handleLeaseApproveRequest(w, r, serv, leaseID)
+	case "deny":
+		a.handleLeaseDenyRequest(w, r, serv, leaseID)
+	default:
+		return false
+	}
+
+	return true
+}
+
+func (a *Admin) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+	if strings.TrimSpace(leaseID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
@@ -422,15 +466,8 @@ func (a *Admin) handleApprovalModeRequest(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
-	parts := strings.Split(route, "/")
-	if len(parts) != 3 {
-		http.NotFound(w, r)
-		return
-	}
-
-	leaseID, ok := decodeLeaseID(parts[1])
-	if !ok {
+func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+	if strings.TrimSpace(leaseID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
@@ -452,15 +489,8 @@ func (a *Admin) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
-	parts := strings.Split(route, "/")
-	if len(parts) != 3 {
-		http.NotFound(w, r)
-		return
-	}
-
-	leaseID, ok := decodeLeaseID(parts[1])
-	if !ok {
+func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+	if strings.TrimSpace(leaseID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}
@@ -481,15 +511,8 @@ func (a *Admin) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, s
 	}
 }
 
-func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) {
-	parts := strings.Split(route, "/")
-	if len(parts) != 3 {
-		http.NotFound(w, r)
-		return
-	}
-
-	leaseID, ok := decodeLeaseID(parts[1])
-	if !ok {
+func (a *Admin) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+	if strings.TrimSpace(leaseID) == "" {
 		writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
 	}

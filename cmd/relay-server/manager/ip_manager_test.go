@@ -71,3 +71,48 @@ func TestIsTrustedProxyRemoteAddr(t *testing.T) {
 		t.Fatal("did not expect non-allowlisted remote to be trusted")
 	}
 }
+
+func TestIsIPBannedByPolicy(t *testing.T) {
+	ipManager := NewIPManager()
+	ipManager.BanIP("203.0.113.22")
+
+	tests := []struct {
+		name      string
+		manager   *IPManager
+		candidate string
+		want      bool
+	}{
+		{
+			name:      "nil manager",
+			manager:   nil,
+			candidate: "203.0.113.22",
+			want:      false,
+		},
+		{
+			name:      "empty candidate",
+			manager:   ipManager,
+			candidate: "   ",
+			want:      false,
+		},
+		{
+			name:      "trimmed banned ip",
+			manager:   ipManager,
+			candidate: " 203.0.113.22 ",
+			want:      true,
+		},
+		{
+			name:      "not banned ip",
+			manager:   ipManager,
+			candidate: "203.0.113.99",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsIPBannedByPolicy(tt.manager, tt.candidate); got != tt.want {
+				t.Fatalf("IsIPBannedByPolicy(%q)=%v, want %v", tt.candidate, got, tt.want)
+			}
+		})
+	}
+}
