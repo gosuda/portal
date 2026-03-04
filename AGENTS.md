@@ -31,11 +31,9 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 3. **Reverse connection authorization must remain lease-token validated before bridge/forwarding.**
    - Why: prevents unauthorized tunnel attachment (ADR-0003).
-4. **`/sdk/connect` must share the same policy source as `/sdk/register`.**
-   - Why: ensures registration and reverse admission apply identical IP-ban + token checks in one enforcement pipeline.
 
-5. **Operator setup is not changed by this hardening.**
-   - Why: anti-abuse changes are behavior-only and reuse existing flags/env/settings for policy management.
+4. **`/sdk/connect` must share the same policy source as `/sdk/register`.**
+   - Why: registration and reverse admission must apply identical IP-ban + token checks in one enforcement pipeline.
 
 ## Operational Truths (CI-Aligned, Minimal)
 
@@ -50,7 +48,7 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
    - Why: these are the enforced checks in `.github/workflows/ci.yml`.
    - Note: `make tidy` is a local maintenance/pre-release step and is not currently part of the CI workflow.
 
-3. **Assume Go toolchain baseline from `go.mod` (currently 1.26.x).**
+3. **Assume Go toolchain baseline from `go.mod`.**
    - Why: CI resolves Go from `go.mod`; avoid stale version assumptions.
 
 4. **Use `Makefile` as build and verification authority; do not reference absent tooling (for example, no `justfile` in this repo).**
@@ -66,9 +64,7 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 ## Go Conventions
 
-**Format:** `gofmt -w . && goimports -w .` before every commit.
-
-**Imports:** stdlib → external → internal (blank-line separated). Local prefix: `github.com/gosuda`.
+**Format:** `gofmt -w . && goimports -w .` before every commit. Imports: stdlib → external → internal (blank-line separated), local prefix `github.com/gosuda`.
 
 **CGo:** always disabled — `CGO_ENABLED=0`. Pure Go only.
 
