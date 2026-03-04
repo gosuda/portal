@@ -14,6 +14,16 @@ Client (Browser)
   -> Local service (App/Tunnel host)
 ```
 
+## Connection Responsibilities
+
+- Conn #1 (`browser -> app`) is the tenant-facing data plane.
+  - Data-plane TLS behavior remains end-to-end between client and app/tunnel host.
+  - Relay forwards tenant traffic and does not replace app identity policy.
+- Conn #2 (`relay -> tunnel`) is the control plane.
+  - `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` require lease-bound client mTLS identity.
+  - Control-plane admission order is strict and deterministic: `IP -> Lease -> CertBind -> Token`.
+  - Legacy non-mTLS clients are rejected at admission (hard-break behavior).
+
 ## Core Components
 
 ### Relay Server (`cmd/relay-server`)
@@ -52,7 +62,7 @@ Anti-abuse policy is driven from admin-managed state and applied consistently fo
 3. Clients connect via HTTPS to relay SNI port.
 4. Relay resolves route by SNI and acquires a reverse connection from `ReverseHub`.
 5. Tunnel-side listener performs TLS handshake (keyless-backed signer), while relay forwards raw TCP transparently.
-6. No websocket or legacy compatibility transport is used.
+6. No alternate control-plane transport is supported; relay/tunnel transport stays raw TCP reverse-connect only.
 
 Result: the relay handles SNI-based routing and transparent raw TCP forwarding, preserving end-to-end TLS where applicable.
 
@@ -68,27 +78,27 @@ Result: the relay handles SNI-based routing and transparent raw TCP forwarding, 
   - `reverse_token`
 - Relay stores lease and (TLS only) registers SNI route.
 - Route hostnames are generated from normalized lease + normalized `PORTAL_URL` host (extract host from URL without scheme/port/path); path segments are ignored, so `https://portal.example.com:8443/admin` and `https://portal.example.com` both map to `portal.example.com`.
-- `/sdk/register` and `/sdk/connect` both apply the admin policy gate path before a tunnel is allowed to stay active.
+- `/sdk/register` admission uses strict order: `IP -> Lease -> CertBind -> Token`.
 
 ### 2. Reverse Connect
 
 - Backend opens a raw TCP reverse connection to `GET /sdk/connect` and streams traffic over that long-lived connection
-  - `/sdk/connect` first validates secure transport + lease/token/IP policy and rejects invalid attempts with HTTP status plus JSON envelope errors before hijacking:
-    - `tls_required` (`426`), `missing_lease_id` (`400`), `missing_reverse_token` (`401`), `unsupported_transport` (`400`), `ip_banned` (`403`), `lease_not_found` (`404`), `unauthorized` (`401`)
-  - Secure transport is accepted when either direct TLS is present, or forwarded HTTPS headers come from an allowlisted trusted proxy.
+  - `/sdk/connect` requires lease-bound client mTLS and applies strict admission order before hijacking:
+    - `IP -> Lease -> CertBind -> Token`
+  - Cert binding validates lease identity in client cert SAN/subject against request lease context.
 - `X-Portal-Reverse-Token` is validated at HTTP precheck, then validated again in `ReverseHub` with centralized policy callbacks before the connection is pooled.
 - Connection is pooled in `ReverseHub` only after token/IP checks pass.
 
 ### 3. Renew
 
 - Backend sends `POST /sdk/renew` keepalive.
-- `/sdk/renew` requires both `lease_id` and `reverse_token`.
+- `/sdk/renew` requires both lease-bound mTLS identity and `reverse_token`.
 - Relay refreshes lease TTL and keeps route state current.
 
 ### 4. Unregister
 
 - Backend sends `POST /sdk/unregister`.
-- `/sdk/unregister` validates normalized `lease_id` before deletion.
+- `/sdk/unregister` validates normalized `lease_id`, lease-bound mTLS identity, and token before deletion.
 - Relay removes lease, route, and reverse pool.
 
 ## Admin Lease ID Contract
@@ -121,9 +131,16 @@ Note: wildcard does not match the portal root host itself (`example.com` or `por
 - Reverse-only backend connectivity (no inbound port required on the app host)
 - Per-lease reverse token authorization
 - Separation of control plane (`/sdk/*`) and data plane (SNI + raw TCP forwarding)
-- Single transport policy: raw TCP reverse-connect only (no websocket/legacy compatibility mode)
+- Single relay/tunnel transport policy: raw TCP reverse-connect only
+- Mandatory control-plane identity policy: lease-bound mTLS with deterministic admission order
 - Unified lease abstraction for routing, metadata, and lifecycle
 - Shared anti-abuse path: admin-managed bans and lease authorization are enforced both in SDK registration and reverse admission
+
+## Breaking-Change Upgrade Expectations
+
+- This architecture wave is a hard-break for control-plane identity.
+- Tunnels/SDK clients that do not present valid lease-bound mTLS identity are rejected deterministically.
+- There is no token-only fallback mode after cutover.
 
 ## ADRs
 

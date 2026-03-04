@@ -39,15 +39,24 @@ interface ServerListViewProps {
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
   onBanFilterChange?: (value: BanFilter) => void;
-  onBanStatusChange?: (leaseId: string, isBan: boolean) => void;
-  onBPSChange?: (leaseId: string, bps: number) => void;
+  onBanStatusChange?: (
+    leaseId: string,
+    isBan: boolean
+  ) => void | Promise<void>;
+  onBPSChange?: (leaseId: string, bps: number) => void | Promise<void>;
   onApprovalModeChange?: (mode: ApprovalMode) => void;
-  onApproveStatusChange?: (leaseId: string, approve: boolean) => void;
-  onDenyStatusChange?: (leaseId: string, deny: boolean) => void;
-  onIPBanStatusChange?: (ip: string, isBan: boolean) => void;
-  onBulkApprove?: (leaseIds: string[]) => void;
-  onBulkDeny?: (leaseIds: string[]) => void;
-  onBulkBan?: (leaseIds: string[]) => void;
+  onApproveStatusChange?: (
+    leaseId: string,
+    approve: boolean
+  ) => void | Promise<void>;
+  onDenyStatusChange?: (
+    leaseId: string,
+    deny: boolean
+  ) => void | Promise<void>;
+  onIPBanStatusChange?: (ip: string, isBan: boolean) => void | Promise<void>;
+  onBulkApprove?: (leaseIds: string[]) => void | Promise<void>;
+  onBulkDeny?: (leaseIds: string[]) => void | Promise<void>;
+  onBulkBan?: (leaseIds: string[]) => void | Promise<void>;
   onLogout?: () => void;
 }
 
@@ -57,20 +66,6 @@ function isAdminServer(server: ListServer): server is AdminServer {
 
 function toAdminServer(server: ListServer): AdminServer | undefined {
   return isAdminServer(server) ? server : undefined;
-}
-
-function wrapAdminHandler<Args extends unknown[]>(
-  handler?: (...args: Args) => void | Promise<void>
-): ((...args: Args) => void) | undefined {
-  if (!handler) {
-    return undefined;
-  }
-
-  return (...args: Args) => {
-    void Promise.resolve(handler(...args)).catch((error) => {
-      console.error("Failed admin action", error);
-    });
-  };
 }
 
 export function ServerListView({
@@ -189,29 +184,30 @@ export function ServerListView({
     }
   };
 
-  const runBulkAction = (handler?: (leaseIds: string[]) => void) => {
+  const runBulkAction = async (
+    handler?: (leaseIds: string[]) => void | Promise<void>
+  ) => {
     if (!handler || selectedLeaseIds.size === 0) {
       return;
     }
 
-    void Promise.resolve(handler(Array.from(selectedLeaseIds)))
-      .then(() => {
-        handleClearSelection();
-      })
-      .catch((err) => {
-        console.error("Failed bulk admin action", err);
-      });
+    try {
+      await handler(Array.from(selectedLeaseIds));
+      handleClearSelection();
+    } catch (err) {
+      console.error("Failed bulk admin action", err);
+    }
   };
 
-  const handleBulkApprove = () => runBulkAction(onBulkApprove);
-  const handleBulkDeny = () => runBulkAction(onBulkDeny);
-  const handleBulkBan = () => runBulkAction(onBulkBan);
-
-  const handleCardBanStatusChange = wrapAdminHandler(onBanStatusChange);
-  const handleCardBPSChange = wrapAdminHandler(onBPSChange);
-  const handleCardApproveStatusChange = wrapAdminHandler(onApproveStatusChange);
-  const handleCardDenyStatusChange = wrapAdminHandler(onDenyStatusChange);
-  const handleCardIPBanStatusChange = wrapAdminHandler(onIPBanStatusChange);
+  const handleBulkApprove = () => {
+    void runBulkAction(onBulkApprove);
+  };
+  const handleBulkDeny = () => {
+    void runBulkAction(onBulkDeny);
+  };
+  const handleBulkBan = () => {
+    void runBulkAction(onBulkBan);
+  };
 
   const adminFilterControls = (
     <>
@@ -321,11 +317,11 @@ export function ServerListView({
                         bps={adminServer?.bps}
                         ip={adminServer?.ip}
                         isIPBanned={adminServer?.isIPBanned}
-                        onBanStatusChange={handleCardBanStatusChange}
-                        onBPSChange={handleCardBPSChange}
-                        onApproveStatusChange={handleCardApproveStatusChange}
-                        onDenyStatusChange={handleCardDenyStatusChange}
-                        onIPBanStatusChange={handleCardIPBanStatusChange}
+                        onBanStatusChange={onBanStatusChange}
+                        onBPSChange={onBPSChange}
+                        onApproveStatusChange={onApproveStatusChange}
+                        onDenyStatusChange={onDenyStatusChange}
+                        onIPBanStatusChange={onIPBanStatusChange}
                         isSelected={isSelected}
                         onToggleSelect={handleToggleSelect}
                       />

@@ -136,8 +136,8 @@ Admin lease ID contract:
 The relay enforces a consistent anti-abuse gate for both control APIs and reverse admission:
 
 - `/sdk/register`, `/sdk/unregister`, `/sdk/renew`, and `/sdk/domain` return JSON envelopes (`{ ok, data, error }`).
-- `/sdk/connect` is the raw transport endpoint and returns HTTP status + JSON envelope errors for validation failures before connection hijack (`tls_required`, `missing_lease_id`, `missing_reverse_token`, `unsupported_transport`, `ip_banned`, `lease_not_found`, `unauthorized`).
-- `/sdk/connect` treats transport as secure when direct TLS is present, or when forwarded HTTPS headers are received from an allowlisted trusted proxy (`TRUST_PROXY_HEADERS=true` + trusted proxy CIDRs).
+- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` require lease-bound client mTLS identity.
+- Control-plane admission order is deterministic: `IP -> Lease -> CertBind -> Token`.
 - `/sdk/connect` is additionally re-validated inside `ReverseHub` before pooling so token and IP authorization are applied at both admission layers.
 
 ### Run with Relay Server
@@ -160,8 +160,18 @@ STATIC_DIR=./dist go run cmd/relay-server/*.go -adminport 4017
 
 ## Technical Notes
 
-- Backend transport is raw TCP reverse-connect only; there is no websocket control or data plane in relay transport semantics.
+- Backend relay/tunnel transport is raw TCP reverse-connect only.
 - SNI routing keeps exact `PORTAL_URL` host fallbacks on the admin/API listener to preserve portal dashboard control-plane locality.
+
+### Connection Responsibilities
+
+- Conn #1 (`browser -> app`) is the data plane and keeps existing tenant-facing TLS behavior.
+- Conn #2 (`relay -> tunnel`) is the control plane and enforces lease-bound mTLS identity.
+
+### Breaking-Change Expectation
+
+- Non-mTLS control-plane clients are expected to fail admission after cutover.
+- There is no token-only fallback mode.
 
 ### Radix Select Values
 

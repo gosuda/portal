@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ServerData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
@@ -116,6 +116,30 @@ function dedupeStrings(values: string[]): string[] {
   return output;
 }
 
+interface AdminSnapshot {
+  serverData: ServerData[];
+  bannedLeases: string[];
+  approvalMode: ApprovalMode;
+}
+
+async function loadAdminSnapshot(): Promise<AdminSnapshot> {
+  const [leasesData, bannedData, settings] = await Promise.all([
+    apiClient.get<ServerData[]>(API_PATHS.admin.leases),
+    apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
+    apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode),
+  ]);
+
+  const normalizedBans = (Array.isArray(bannedData) ? bannedData : []).filter(
+    (leaseID): leaseID is string => typeof leaseID === "string"
+  );
+
+  return {
+    serverData: Array.isArray(leasesData) ? leasesData : [],
+    bannedLeases: dedupeStrings(normalizedBans),
+    approvalMode: normalizeApprovalMode(settings?.approval_mode),
+  };
+}
+
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
   const [bannedLeases, setBannedLeases] = useState<string[]>([]);
@@ -125,34 +149,53 @@ export function useAdmin() {
 
   const [banFilter, setBanFilter] = useState<BanFilter>("all");
 
-  const fetchData = useCallback(async () => {
+  const applySnapshot = (snapshot: AdminSnapshot) => {
+    setServerData(snapshot.serverData);
+    setBannedLeases(snapshot.bannedLeases);
+    setApprovalMode(snapshot.approvalMode);
+  };
+
+  const fetchData = async () => {
     setError("");
     setLoading(true);
 
     try {
-      const [leasesData, bannedData, settings] = await Promise.all([
-        apiClient.get<ServerData[]>(API_PATHS.admin.leases),
-        apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
-        apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode),
-      ]);
-
-      const normalizedBans = (Array.isArray(bannedData) ? bannedData : []).filter(
-        (leaseID): leaseID is string => typeof leaseID === "string"
-      );
-
-      setServerData(Array.isArray(leasesData) ? leasesData : []);
-      setBannedLeases(dedupeStrings(normalizedBans));
-      setApprovalMode(normalizeApprovalMode(settings?.approval_mode));
+      applySnapshot(await loadAdminSnapshot());
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  };
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    let mounted = true;
+    const loadInitialData = async () => {
+      setError("");
+      setLoading(true);
+      try {
+        const snapshot = await loadAdminSnapshot();
+        if (!mounted) {
+          return;
+        }
+        applySnapshot(snapshot);
+      } catch (err: unknown) {
+        if (!mounted) {
+          return;
+        }
+        setError(toAdminErrorMessage(err, "Failed to load admin data"));
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadInitialData();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const bannedLeaseSet = useMemo(
     () => new Set(bannedLeases),

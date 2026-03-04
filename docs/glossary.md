@@ -6,7 +6,7 @@ Key terms used in Portal.
 
 The central server that handles lease registration, routing, and reverse-connection brokering.
 In TLS passthrough mode, it routes transport and does not terminate app payload TLS.
-All backend-to-relay ingress uses a long-lived raw TCP reverse-connect channel (`/sdk/connect`); websocket compatibility transport is not supported.
+All backend-to-relay ingress uses a long-lived raw TCP reverse-connect channel (`/sdk/connect`).
 
 ## App (Service Publisher)
 
@@ -16,6 +16,16 @@ An app publishes one or more leases and serves traffic from local services.
 ## Client (Service Consumer)
 
 A browser or external caller that accesses a published service through relay-managed domains.
+
+## Conn #1 (Data Plane)
+
+Tenant-facing traffic path between browser/client and app/tunnel endpoint.
+This connection keeps existing data-plane TLS behavior.
+
+## Conn #2 (Control Plane)
+
+Relay-to-tunnel control path used by `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister`.
+This connection requires lease-bound client mTLS identity with admission order `IP -> Lease -> CertBind -> Token`.
 
 ## Tunnel
 
@@ -39,6 +49,7 @@ The human-readable identifier used for subdomain routing (for example, `myapp` -
 ## Reverse Token
 
 A per-lease secret used to authenticate reverse connections (`/sdk/connect`) from backend to relay.
+Token validation is a required admission stage, but only after lease-bound mTLS cert binding passes.
 
 ## ReverseHub
 

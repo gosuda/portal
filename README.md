@@ -32,8 +32,6 @@ and routes incoming traffic while preserving end-to-end TLS.
 - **Fast setup**: Expose a local app with a short command flow
 - **Central anti-abuse enforcement**: `/sdk/register` and `/sdk/connect` use the same admin-managed policy controls (IP bans, lease authorization) before accepting a tunnel
 
-Security policy hardening in this refactor does not require operator setup changes.
-
 ## Components
 
 - **Relay**: A server that routes public requests to the right connected app.
@@ -44,16 +42,25 @@ For details, see [docs/glossary.md](docs/glossary.md).
 ## Protocol Scope
 
 - Raw TCP reverse-connect is the only supported relay/tunnel transport.
-- No websocket compatibility path is provided for transport control or data-plane flow.
+- Websocket transport is unsupported for relay/tunnel traffic.
+
+## Connection Model
+
+- Conn #1 (`browser -> app`) is the data plane and keeps existing tenant-facing TLS behavior.
+- Conn #2 (`relay -> tunnel`) is the control plane and requires lease-bound client mTLS identity on `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister`.
 
 ## Runtime Contracts
 
 - Lease IDs in admin and SDK payloads are plain string IDs.
 - Base64URL lease-ID encoding is used only for admin action route path segments (`/admin/leases/{encodedLeaseID}/{action}`).
-- `/sdk/connect` accepts secure transport when either:
-  - direct TLS is present, or
-  - request comes from an allowlisted trusted proxy and forwarded HTTPS headers indicate HTTPS.
+- Control-plane admission order is strict: `IP -> Lease -> CertBind -> Token`.
 - Tunnel installer scripts always fetch `${BIN_URL}.sha256` and fail closed on missing, malformed, or mismatched checksum.
+
+## Control-Plane Upgrade Requirement
+
+- This release wave is a hard-break for control-plane identity.
+- Clients without valid lease-bound mTLS identity fail deterministically at control-plane admission.
+- There is no token-only fallback mode after cutover.
 
 ### Routing Notes
 
