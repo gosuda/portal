@@ -122,22 +122,21 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, c
 	if tlsConfig == nil {
 		return nil, errors.New("tls config is required")
 	}
-	if len(controlPlaneCert.Certificate) == 0 {
-		return nil, errors.New("control plane client certificate is required")
-	}
-
 	apiURL, err := netutil.NormalizeRelayAPIURL(relayAddr)
 	if err != nil {
 		return nil, err
 	}
 	host := netutil.PortalRootHost(apiURL)
 	clientTransport := http.DefaultTransport.(*http.Transport).Clone()
-	clientTransport.TLSClientConfig = &tls.Config{
+	transportTLSConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         host,
 		InsecureSkipVerify: netutil.IsLocalhost(host),
-		Certificates:       []tls.Certificate{controlPlaneCert},
 	}
+	if len(controlPlaneCert.Certificate) > 0 {
+		transportTLSConfig.Certificates = []tls.Certificate{controlPlaneCert}
+	}
+	clientTransport.TLSClientConfig = transportTLSConfig
 
 	if reverseWorkers <= 0 {
 		reverseWorkers = defaultReverseWorkers
@@ -407,12 +406,15 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 		_ = rawConn.Close()
 		return nil, errors.New("reverse connect URL missing TLS server name")
 	}
-	tlsConn := tls.Client(rawConn, &tls.Config{
+	reverseTLSConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
 		InsecureSkipVerify: netutil.IsLocalhost(serverName),
-		Certificates:       []tls.Certificate{l.controlPlaneCert},
-	})
+	}
+	if len(l.controlPlaneCert.Certificate) > 0 {
+		reverseTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
+	}
+	tlsConn := tls.Client(rawConn, reverseTLSConfig)
 	err = tlsConn.HandshakeContext(ctx)
 	if err != nil {
 		_ = rawConn.Close()

@@ -108,9 +108,12 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if err != nil {
 		return nil, err
 	}
-	controlPlaneIdentity, err := acquireLifecycleIdentity(lease.ID)
-	if err != nil {
-		return nil, err
+	var controlPlaneIdentity tls.Certificate
+	if strings.TrimSpace(os.Getenv(keylessDirEnvVar)) != "" {
+		controlPlaneIdentity, err = acquireLifecycleIdentity(lease.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	listeners := make([]net.Listener, 0, len(relayAddrs))

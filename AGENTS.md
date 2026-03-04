@@ -40,8 +40,10 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 1. **Relay holds the TLS private key; SDK/tunnel never does.** SDK calls `/v1/sign` on the relay via `RemoteSigner` for all private key operations.
    - Why: prevents key material leakage to untrusted tunnel endpoints.
 
-2. **mTLS is mandatory for all `/sdk/*` control-plane paths.** No token-only fallback; hard-fail on missing client cert.
-   - Why: ADR-0003 admission order (IP ban → Lease → CertBind → Token) requires mTLS at the CertBind stage.
+2. **mTLS is implicit (optional) for `/sdk/*` control-plane paths.** When a client cert is presented, the relay validates it (CertBind stage). When absent, CertBind is skipped and token auth alone is used.
+   - `KEYLESS_DIR` env var presence triggers SDK lifecycle identity issuance and client cert presentation. When unset, the SDK operates in token-only mode.
+   - Keyless TLS (`RemoteSigner` for `/v1/sign`) is independent of mTLS — always used for TLS termination regardless of client cert presence.
+   - Why: ADR-0003 admission order is IP ban → Lease → [CertBind if cert present] → Token. Invalid certs are still rejected; absent certs skip CertBind.
 
 3. **All relay URLs must be `https://`.** `NormalizeRelayAPIURL` rejects non-HTTPS. SDK and tunnel hard-fail on `http://`.
    - Why: enforces transport security without opt-out.
