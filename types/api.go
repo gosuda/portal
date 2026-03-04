@@ -1,4 +1,3 @@
-//revive:disable:var-naming
 package types
 
 import "encoding/json"

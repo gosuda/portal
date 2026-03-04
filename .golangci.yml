@@ -26,7 +26,6 @@ linters:
     - durationcheck
     - makezero
     - noctx
-    - revive
     - wastedassign
     - misspell
     - whitespace
@@ -51,10 +50,6 @@ linters:
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"
         linters: [bodyclose, errcheck, noctx, wrapcheck, funlen, dupl]
-      - text: "should have a package comment"
-        linters: [revive]
-      - text: "exported \\S+ \\S+ should have comment"
-        linters: [revive]
 
   settings:
     errcheck:

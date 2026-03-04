@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"encoding/json"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,11 +21,10 @@ type Lease struct {
 
 // LeaseEntry represents a registered lease with expiration tracking.
 type LeaseEntry struct {
-	Lease          *Lease
-	Expires        time.Time
-	LastSeen       time.Time
-	FirstSeen      time.Time
-	ParsedMetadata *types.ParsedMetadata // Cached parsed metadata
+	Lease     *Lease
+	Expires   time.Time
+	LastSeen  time.Time
+	FirstSeen time.Time
 }
 
 type LeaseManager struct {
@@ -143,16 +141,6 @@ func (lm *LeaseManager) UpdateLease(lease *Lease) bool {
 		}
 	}
 
-	// Parse metadata once for cached access
-	var parsedMeta *types.ParsedMetadata
-	metadataJSON, _ := json.Marshal(lease.Metadata)
-	if len(metadataJSON) > 0 {
-		var meta types.ParsedMetadata
-		if err := json.Unmarshal(metadataJSON, &meta); err == nil {
-			parsedMeta = &meta
-		}
-	}
-
 	var firstSeen time.Time
 	if existing, exists := lm.leases[identityID]; exists {
 		firstSeen = existing.FirstSeen
@@ -162,11 +150,10 @@ func (lm *LeaseManager) UpdateLease(lease *Lease) bool {
 	}
 
 	lm.leases[identityID] = &LeaseEntry{
-		Lease:          lease,
-		Expires:        lease.Expires,
-		LastSeen:       time.Now(),
-		FirstSeen:      firstSeen,
-		ParsedMetadata: parsedMeta,
+		Lease:     lease,
+		Expires:   lease.Expires,
+		LastSeen:  time.Now(),
+		FirstSeen: firstSeen,
 	}
 
 	return true

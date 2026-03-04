@@ -1,4 +1,3 @@
-//nolint:revive // Package name is intentionally aligned with the existing module-wide convention.
 package types
 
 import (

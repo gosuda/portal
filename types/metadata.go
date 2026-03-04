@@ -1,7 +1,3 @@
-// Package types defines all API request/response types and path constants
-// for the Portal relay server and SDK.
-//
-//revive:disable-next-line:var-naming
 package types
 
 // Metadata holds service metadata for a lease.
@@ -11,15 +7,6 @@ type Metadata struct {
 	Owner       string   `json:"owner,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Hide        bool     `json:"hide,omitempty"`
-}
-
-// ParsedMetadata holds struct-parsed metadata for better access.
-type ParsedMetadata struct {
-	Description string   `json:"description"`
-	Thumbnail   string   `json:"thumbnail"`
-	Owner       string   `json:"owner"`
-	Tags        []string `json:"tags"`
-	Hide        bool     `json:"hide"`
 }
 
 // MetadataOption configures Metadata.

@@ -207,7 +207,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 		r.Link = ""
 	}
 	r.StaleRed = !connected && since >= leaseConnectedWindow
-	r.Hide = entry.ParsedMetadata != nil && entry.ParsedMetadata.Hide
+	r.Hide = metadata.Hide
 	r.Metadata = metadataStr
 	r.BPS = bps
 
