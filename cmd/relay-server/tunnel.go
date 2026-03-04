@@ -164,7 +164,7 @@ try {
 }
 `
 
-func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
+func serveTunnelScript(w http.ResponseWriter, r *http.Request, portalURL string) {
 	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
@@ -187,11 +187,11 @@ func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
 	var filename string
 
 	if isWindows {
-		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, flagPortalURL)
+		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, portalURL)
 		contentType = "text/plain" // or application/x-powershell
 		filename = "tunnel.ps1"
 	} else {
-		script = fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
+		script = fmt.Sprintf(tunnelScriptTemplate, portalURL)
 		contentType = "text/x-shellscript"
 		filename = "tunnel.sh"
 	}

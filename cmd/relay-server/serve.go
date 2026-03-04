@@ -27,7 +27,7 @@ const defaultHTTPSPort = "443"
 var distFS embed.FS
 
 // serveAPI builds the admin/API mux and returns the server.
-func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, cancel context.CancelFunc) *http.Server {
+func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Frontend, cfg relayServerConfig, cancel context.CancelFunc) *http.Server {
 	if addr == "" {
 		addr = ":0"
 	}
@@ -53,7 +53,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 
 	// Tunnel installer script and binaries
 	appMux.HandleFunc(types.PathTunnelScript, func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelScript(w, r)
+		serveTunnelScript(w, r, cfg.PortalURL)
 	})
 	appMux.HandleFunc(types.PathTunnelBinary, func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelBinary(w, r)
@@ -66,7 +66,8 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	}
 	registry := &SDKRegistry{
 		ipManager:         sdkIPManager,
-		trustProxyHeaders: flagTrustProxyHeaders,
+		portalURL:         cfg.PortalURL,
+		trustProxyHeaders: cfg.TrustProxyHeaders,
 	}
 	appMux.HandleFunc(types.PathSDKPrefix, func(w http.ResponseWriter, r *http.Request) {
 		registry.HandleSDKRequest(w, r, serv)
@@ -97,7 +98,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	// Create the main handler
-	appDomain := types.DefaultAppPattern(flagPortalURL)
+	appDomain := types.DefaultAppPattern(cfg.PortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle subdomain requests
 		if types.IsSubdomain(appDomain, r.Host) {
@@ -107,7 +108,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 				Msg("[server] handling subdomain request")
 			// TLS-enabled subdomains should terminate on SNI passthrough.
 			// Redirect only insecure requests; secure requests here would loop.
-			if !isSecureRequest(r) {
+			if !isSecureRequestWithPolicy(r, cfg.TrustProxyHeaders) {
 				log.Debug().Str("host", r.Host).Msg("[server] redirecting to HTTPS")
 				redirectToHTTPS(w, r, serv.GetSNIRouter().GetAddr())
 				return
@@ -127,7 +128,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
-	rootHost := types.PortalRootHost(flagPortalURL)
+	rootHost := types.PortalRootHost(cfg.PortalURL)
 	srv.TLSConfig = &tls.Config{
 		ClientAuth: tls.RequestClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {

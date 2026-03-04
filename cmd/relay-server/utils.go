@@ -21,10 +21,6 @@ const (
 	staleLeaseHideWindow = 3 * time.Minute
 )
 
-func isSecureRequest(r *http.Request) bool {
-	return isSecureRequestWithPolicy(r, flagTrustProxyHeaders)
-}
-
 func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
 	if r == nil {
 		return false
@@ -227,7 +223,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 // convertLeaseEntriesToRows converts LeaseEntry data to leaseRow format.
 // If forAdmin is true, includes all leases with admin-only fields.
 // If forAdmin is false, filters out banned, unapproved, hidden, and stale leases.
-func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin bool) []leaseRow {
+func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin bool, portalURL string) []leaseRow {
 	leaseEntries := serv.GetLeaseManager().GetAllLeaseEntries()
 	rows := []leaseRow{}
 	now := time.Now()
@@ -267,7 +263,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 		}
 
 		var row leaseRow
-		row.fromLeaseEntry(entry, admin, flagPortalURL)
+		row.fromLeaseEntry(entry, admin, portalURL)
 		rows = append(rows, row)
 	}
 

@@ -24,16 +24,20 @@ type Admin struct {
 	ipManager      *manager.IPManager
 	authManager    *manager.AuthManager
 	frontend       *Frontend
+	portalURL      string
+	trustProxy     bool
 	settingsPath   string
 	settingsMu     sync.Mutex
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager) *Admin {
+func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *manager.AuthManager, portalURL string, trustProxy bool) *Admin {
 	bpsManager := manager.NewBPSManager()
 	if defaultLeaseBPS > 0 {
 		bpsManager.SetDefaultBPS(defaultLeaseBPS)
 	}
 	return &Admin{
+		portalURL:      strings.TrimSpace(portalURL),
+		trustProxy:     trustProxy,
 		settingsPath:   "admin_settings.json",
 		approveManager: manager.NewApproveManager(),
 		bpsManager:     bpsManager,
@@ -232,7 +236,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 	case route == "":
 		a.frontend.ServeAppStatic(w, r, "", serv)
 	case route == "leases" && r.Method == http.MethodGet:
-		writeAPIData(w, http.StatusOK, convertLeaseEntriesToRows(serv, a, true))
+		writeAPIData(w, http.StatusOK, convertLeaseEntriesToRows(serv, a, true, a.portalURL))
 	case route == "leases/banned" && r.Method == http.MethodGet:
 		writeAPIData(w, http.StatusOK, serv.GetLeaseManager().GetBannedLeases())
 	case route == "stats" && r.Method == http.MethodGet:
@@ -257,7 +261,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request, serv 
 
 // handleLogin handles POST /admin/login.
 func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
-	clientIP := manager.ExtractClientIP(r, flagTrustProxyHeaders)
+	clientIP := manager.ExtractClientIP(r, a.trustProxy)
 
 	// Check if IP is locked
 	if a.authManager.IsIPLocked(clientIP) {
@@ -299,7 +303,7 @@ func (a *Admin) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Successful login
 	a.authManager.ResetFailedLogin(clientIP)
 	token := a.authManager.CreateSession()
-	secureCookie := isSecureRequest(r)
+	secureCookie := isSecureRequestWithPolicy(r, a.trustProxy)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
@@ -321,7 +325,7 @@ func (a *Admin) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && cookie.Value != "" {
 		a.authManager.DeleteSession(cookie.Value)
 	}
-	secureCookie := isSecureRequest(r)
+	secureCookie := isSecureRequestWithPolicy(r, a.trustProxy)
 
 	// Clear the cookie
 	http.SetCookie(w, &http.Cookie{

@@ -27,10 +27,6 @@ const (
 	defaultKeylessDir = "/etc/portal/keyless"
 )
 
-// flagPortalURL is kept for package-level consumers in other files.
-var flagPortalURL string
-var flagTrustProxyHeaders bool
-
 type relayServerConfig struct {
 	AdminSecretKey    string
 	PortalURL         string
@@ -85,8 +81,6 @@ func main() {
 		log.Fatal().Err(err).Msg("parse trusted proxy CIDRs")
 	}
 	manager.SetTrustedProxyCIDRs(parsedTrustedProxyCIDRs)
-	flagPortalURL = cfg.PortalURL
-	flagTrustProxyHeaders = cfg.TrustProxyHeaders
 	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -111,9 +105,9 @@ func runServer(cfg relayServerConfig) error {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	frontend := NewFrontend()
+	frontend := NewFrontend(cfg.PortalURL)
 	authManager := manager.NewAuthManager(cfg.AdminSecretKey)
-	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager)
+	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager, cfg.PortalURL, cfg.TrustProxyHeaders)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)
@@ -186,7 +180,7 @@ func runServer(cfg relayServerConfig) error {
 	}
 	defer serv.Stop()
 
-	apiServ := serveAPI(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, stop)
+	apiServ := serveAPI(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, cfg, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")

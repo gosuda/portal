@@ -14,11 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
-)
 
-const (
-	controlPlaneCertCNPrefix = "lease:"
-	controlPlaneLeaseURIPfx  = "spiffe://portal/lease/"
+	"gosuda.org/portal/types"
 )
 
 func issueControlPlaneIdentity(leaseID string) (tls.Certificate, error) {
@@ -39,7 +36,7 @@ func issueControlPlaneIdentity(leaseID string) (tls.Certificate, error) {
 	notBefore := time.Now().Add(-1 * time.Minute)
 	notAfter := notBefore.Add(24 * time.Hour)
 
-	leaseURI, err := url.Parse(controlPlaneLeaseURIPfx + leaseID)
+	leaseURI, err := url.Parse(types.ControlPlaneLeaseURIPrefix + leaseID)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("build lease URI: %w", err)
 	}
@@ -47,7 +44,7 @@ func issueControlPlaneIdentity(leaseID string) (tls.Certificate, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: controlPlaneCertCNPrefix + leaseID,
+			CommonName: types.ControlPlaneCertCNPrefix + leaseID,
 		},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,

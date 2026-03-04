@@ -23,14 +23,17 @@ type readDirFileFS interface {
 type Frontend struct {
 	distFS readDirFileFS
 	admin  *Admin
+	// portalURL is injected runtime config used for OG metadata and SSR links.
+	portalURL string
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 }
 
-func NewFrontend() *Frontend {
+func NewFrontend(portalURL string) *Frontend {
 	return &Frontend{
-		distFS: distFS,
+		distFS:    distFS,
+		portalURL: strings.TrimSpace(portalURL),
 	}
 }
 
@@ -106,7 +109,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 	}
 	if imageURL == "" {
 		// Use absolute URL if possible
-		base := strings.TrimSuffix(flagPortalURL, "/")
+		base := strings.TrimSuffix(f.portalURL, "/")
 		if !strings.HasPrefix(base, "http") {
 			base = "https://" + base
 		}
@@ -127,7 +130,7 @@ func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer
 	// Get server data from lease manager
 	rows := []leaseRow{}
 	if f.admin != nil {
-		rows = convertLeaseEntriesToRows(serv, f.admin, false)
+		rows = convertLeaseEntriesToRows(serv, f.admin, false, f.portalURL)
 	}
 
 	// Marshal to JSON

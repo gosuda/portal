@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gosuda.org/portal/types"
 )
 
 func TestIssueControlPlaneIdentity(t *testing.T) {
@@ -22,11 +24,11 @@ func TestIssueControlPlaneIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse issued certificate: %v", err)
 	}
-	if got := strings.TrimSpace(leaf.Subject.CommonName); got != controlPlaneCertCNPrefix+"lease-identity" {
-		t.Fatalf("certificate common name = %q, want %q", got, controlPlaneCertCNPrefix+"lease-identity")
+	if got := strings.TrimSpace(leaf.Subject.CommonName); got != types.ControlPlaneCertCNPrefix+"lease-identity" {
+		t.Fatalf("certificate common name = %q, want %q", got, types.ControlPlaneCertCNPrefix+"lease-identity")
 	}
-	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != controlPlaneLeaseURIPfx+"lease-identity" {
-		t.Fatalf("certificate lease URI = %v, want %q", leaf.URIs, controlPlaneLeaseURIPfx+"lease-identity")
+	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != types.ControlPlaneLeaseURIPrefix+"lease-identity" {
+		t.Fatalf("certificate lease URI = %v, want %q", leaf.URIs, types.ControlPlaneLeaseURIPrefix+"lease-identity")
 	}
 	if time.Now().Before(leaf.NotBefore) || time.Now().After(leaf.NotAfter) {
 		t.Fatalf("issued certificate validity window does not include current time")

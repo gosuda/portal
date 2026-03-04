@@ -17,6 +17,7 @@ import (
 // SDKRegistry handles HTTP API for client lease registration.
 type SDKRegistry struct {
 	ipManager         *manager.IPManager
+	portalURL         string
 	trustProxyHeaders bool
 }
 
@@ -215,7 +216,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		Bool("tls", true).
 		Msg("[Registry] Lease registered")
 
-	publicURL := types.ServicePublicURL(flagPortalURL, registerReq.Name)
+	publicURL := types.ServicePublicURL(r.portalURL, registerReq.Name)
 
 	writeAPIData(w, http.StatusOK, types.RegisterResponse{
 		LeaseID:   registerReq.LeaseID,

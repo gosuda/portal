@@ -10,11 +10,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal"
-)
-
-const (
-	controlPlaneCertCNPrefix = "lease:"
-	controlPlaneLeaseURIPfx  = "spiffe://portal/lease/"
+	"gosuda.org/portal/types"
 )
 
 type admissionConfig struct {
@@ -46,13 +42,13 @@ func extractLeaseIDFromPeerCertificate(cert *x509.Certificate) string {
 			continue
 		}
 		raw := strings.TrimSpace(uri.String())
-		if after, ok := strings.CutPrefix(raw, controlPlaneLeaseURIPfx); ok {
+		if after, ok := strings.CutPrefix(raw, types.ControlPlaneLeaseURIPrefix); ok {
 			return after
 		}
 	}
 
 	commonName := strings.TrimSpace(cert.Subject.CommonName)
-	if after, ok := strings.CutPrefix(commonName, controlPlaneCertCNPrefix); ok {
+	if after, ok := strings.CutPrefix(commonName, types.ControlPlaneCertCNPrefix); ok {
 		return after
 	}
 	return commonName
