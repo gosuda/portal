@@ -69,9 +69,7 @@ func NewReverseConn(conn net.Conn) *ReverseConn {
 // Close closes the connection and signals completion.
 func (c *ReverseConn) Close() {
 	c.closed.Store(true)
-	if err := c.Conn.Close(); err != nil {
-		log.Debug().Err(err).Msg("[ReverseHub] failed to close reverse connection")
-	}
+	_ = c.Conn.Close()
 	c.once.Do(func() {
 		close(c.done)
 	})

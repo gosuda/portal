@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"errors"
 	"io"
 	"maps"
 	"net"
@@ -138,9 +137,7 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 	// Client -> Lease
 	go func() {
 		defer wg.Done()
-		if _, err := bpsManager.Copy(leaseConn, clientConn, leaseID); err != nil && !errors.Is(err, io.EOF) {
-			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] client->lease copy ended with error")
-		}
+		_, _ = bpsManager.Copy(leaseConn, clientConn, leaseID)
 		if err := leaseConn.Close(); err != nil {
 			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close lease connection")
 		}
@@ -149,9 +146,7 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 	// Lease -> Client
 	go func() {
 		defer wg.Done()
-		if _, err := bpsManager.Copy(clientConn, leaseConn, leaseID); err != nil && !errors.Is(err, io.EOF) {
-			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] lease->client copy ended with error")
-		}
+		_, _ = bpsManager.Copy(clientConn, leaseConn, leaseID)
 		if err := clientConn.Close(); err != nil {
 			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close client connection")
 		}
