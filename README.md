@@ -1,7 +1,7 @@
 # PORTAL — Public Open Relay To Access Localhost
 
 <p align="center">
-  <img src="/portal.jpg" alt="Portal logo" width="540" />
+  <img src="/portal.png" alt="Portal logo" width="540" />
 </p>
 
 Expose your local application to the public internet — no ports, no NAT, no DNS setup.
