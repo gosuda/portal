@@ -222,7 +222,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 			Str("addr", targetAddr).
 			Err(err).
 			Msg("Local service unavailable")
-		return fmt.Errorf("local service unavailable: %w", err)
+		return writeEmptyHTTPResponse(relayConn)
 	}
 	defer localConn.Close()
 
@@ -278,4 +278,23 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	close(stopCh)
 	return firstErr
+}
+
+func writeEmptyHTTPResponse(conn net.Conn) error {
+	htmlBody := `<!DOCTYPE html>
+<html>
+<head><title>Service Unavailable</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:50px;">
+<h1>🔌 Service Unavailable</h1>
+<p>The local service is not currently running.</p>
+<p>Please start your local application and refresh this page.</p>
+</body>
+</html>`
+	response := fmt.Sprintf("HTTP/1.1 503 Service Unavailable\r\n"+
+		"Content-Type: text/html; charset=utf-8\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n"+
+		"\r\n%s", len(htmlBody), htmlBody)
+	_, err := conn.Write([]byte(response))
+	return err
 }

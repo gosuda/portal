@@ -54,7 +54,7 @@ func TestServeTunnelScriptIncludesPowerShellChecksumVerification(t *testing.T) {
 func TestServeTunnelBinaryServesChecksumSidecarAndHeader(t *testing.T) {
 	originalAssetMap := tunnelBinaryAssetBySlug
 	tunnelBinaryAssetBySlug = map[string]string{
-		"linux-amd64": "dist/app/portal.html",
+		"linux-amd64": "dist/.gitkeep",
 	}
 	t.Cleanup(func() {
 		tunnelBinaryAssetBySlug = originalAssetMap

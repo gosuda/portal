@@ -4,7 +4,6 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/types"
@@ -38,7 +38,7 @@ var (
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https)")
+	flag.StringVar(&flagServerURL, "server-url", "http://localhost:4017", "relay API URL (http/https)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
@@ -53,10 +53,6 @@ func main() {
 }
 
 func runDemo() error {
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(flagServerURL)), "https://") {
-		return errors.New("server-url must use https://")
-	}
-
 	// 1) Create SDK client and connect to relay(s)
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers([]string{flagServerURL})}
 	sdkClient, err := sdk.NewClient(opts...)
@@ -103,6 +99,25 @@ func runDemo() error {
 			log.Error().Err(err).Msg("write ping response")
 		}
 	})
+
+	// WebSocket echo endpoint
+	mux.Handle("/ws", websocket.Handler(func(conn *websocket.Conn) {
+		defer conn.Close()
+		for {
+			var msg string
+			if err := websocket.Message.Receive(conn, &msg); err != nil {
+				if err.Error() != "EOF" {
+					log.Error().Err(err).Msg("websocket read error")
+				}
+				break
+			}
+			log.Debug().Str("msg", msg).Msg("websocket received")
+			if err := websocket.Message.Send(conn, "echo: "+msg); err != nil {
+				log.Error().Err(err).Msg("websocket write error")
+				break
+			}
+		}
+	}))
 
 	// Test endpoint for multiple Set-Cookie headers
 	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)

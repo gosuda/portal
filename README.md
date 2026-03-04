@@ -4,7 +4,7 @@
   <img src="/portal.jpg" alt="Portal logo" width="540" />
 </p>
 
-Expose your local application on the public internet without opening inbound ports or managing NAT and DNS.
+Expose your local application to the public internet — no ports, no NAT, no DNS setup.
 
 Portal is a self-hosted relay network. You can run your own relay or connect to one that is already running.
 
@@ -78,7 +78,7 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 3. Click `Add your server` button.
 4. Use the generated command to connect your local service.
 
-### Use the Go SDK
+### Use the Go SDK (Advanced)
 
 See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
@@ -89,24 +89,7 @@ For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
 ## Contributing
 
-Contributions are welcome.
-
-### Verification (CI-Aligned)
-
-Run the same checks enforced in CI (`.github/workflows/ci.yml`) in this order:
-
-```bash
-make vet
-make lint
-make test
-make vuln
-```
-
-For local pre-PR cleanup (not enforced in CI), run:
-
-```bash
-make tidy
-```
+We welcome contributions from the community!
 
 ### Steps to Contribute
 1. Fork the repository
