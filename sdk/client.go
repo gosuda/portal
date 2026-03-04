@@ -24,7 +24,6 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/types"
 )
 
@@ -95,11 +94,11 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
-	if !netutil.IsValidLeaseName(name) {
+	if !types.IsValidLeaseName(name) {
 		return nil, ErrInvalidName
 	}
 
-	relayAddrs, err := netutil.NormalizeRelayAPIURLs(c.config.BootstrapServers)
+	relayAddrs, err := types.NormalizeRelayAPIURLs(c.config.BootstrapServers)
 	if err != nil {
 		return nil, ErrNoAvailableRelay
 	}
@@ -372,7 +371,7 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 	if keylessServerName == "" {
 		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
 	}
-	baseHost := netutil.PortalRootHost(relayAddr)
+	baseHost := types.PortalRootHost(relayAddr)
 	if baseHost == "" {
 		return nil, nil, fmt.Errorf("keyless base host is required for relay %s", relayAddr)
 	}

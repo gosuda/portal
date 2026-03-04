@@ -11,10 +11,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/contracts"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -195,15 +194,15 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
 	r.TTL = r.formatDuration(time.Until(entry.Expires))
 	linkLabel := identityID
-	if normalized, ok := netutil.NormalizeServiceName(lease.Name); ok {
+	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
 		linkLabel = normalized
-	} else if normalized, ok := netutil.NormalizeServiceName(identityID); ok {
+	} else if normalized, ok := types.NormalizeServiceName(identityID); ok {
 		linkLabel = normalized
 	}
 
-	publicHost := netutil.PortalRootHost(portalURL)
+	publicHost := types.PortalRootHost(portalURL)
 	if publicHost == "" {
-		publicHost = netutil.PortalHostPort(portalURL)
+		publicHost = types.PortalHostPort(portalURL)
 	}
 	if linkLabel != "" && publicHost != "" {
 		r.Link = fmt.Sprintf("//%s.%s/", linkLabel, publicHost)
@@ -281,7 +280,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 func writeAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
 		OK:   true,
 		Data: data,
 	}); err != nil {
@@ -292,7 +291,7 @@ func writeAPIData(w http.ResponseWriter, status int, data any) {
 func writeAPIOK(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{OK: true}); err != nil {
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{OK: true}); err != nil {
 		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
 	}
 }
@@ -304,10 +303,10 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
 		OK:   false,
 		Data: data,
-		Error: &contracts.APIError{
+		Error: &types.APIError{
 			Code:    code,
 			Message: message,
 		},

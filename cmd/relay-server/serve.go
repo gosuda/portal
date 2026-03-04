@@ -16,10 +16,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/contracts"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
+	"gosuda.org/portal/types"
 )
 
 const defaultHTTPSPort = "443"
@@ -42,21 +41,21 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	frontend.ServeAsset(appMux, "/favicon.svg", "favicon.svg", "image/svg+xml")
 
 	// Portal app assets (JS, CSS, etc.) - served from /app/
-	appMux.HandleFunc(contracts.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
 		setCORSHeaders(w)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		p := strings.TrimPrefix(r.URL.Path, contracts.PathAppPrefix)
+		p := strings.TrimPrefix(r.URL.Path, types.PathAppPrefix)
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
 	// Tunnel installer script and binaries
-	appMux.HandleFunc(contracts.PathTunnelScript, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathTunnelScript, func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelScript(w, r, cfg.PortalURL)
 	})
-	appMux.HandleFunc(contracts.PathTunnelBinary, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathTunnelBinary, func(w http.ResponseWriter, r *http.Request) {
 		serveTunnelBinary(w, r)
 	})
 
@@ -70,12 +69,12 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		portalURL:         cfg.PortalURL,
 		trustProxyHeaders: cfg.TrustProxyHeaders,
 	}
-	appMux.HandleFunc(contracts.PathSDKPrefix, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathSDKPrefix, func(w http.ResponseWriter, r *http.Request) {
 		registry.HandleSDKRequest(w, r, serv)
 	})
 
 	// Keyless signer endpoint.
-	appMux.HandleFunc(contracts.PathKeylessSign, func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathKeylessSign, func(w http.ResponseWriter, r *http.Request) {
 		handleKeylessSign(w, r, serv.GetKeylessSigner())
 	})
 
@@ -86,7 +85,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		frontend.ServeAppStatic(w, r, p, serv)
 	})
 
-	appMux.HandleFunc(contracts.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
+	appMux.HandleFunc(types.PathHealthz, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("{\"status\":\"ok\"}")); err != nil {
 			log.Debug().Err(err).Msg("[healthz] failed to write response")
@@ -94,15 +93,15 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	// Admin API
-	appMux.HandleFunc(contracts.PathAdminPrefix+"/", func(w http.ResponseWriter, r *http.Request) {
+	appMux.HandleFunc(types.PathAdminPrefix+"/", func(w http.ResponseWriter, r *http.Request) {
 		admin.HandleAdminRequest(w, r, serv)
 	})
 
 	// Create the main handler
-	appDomain := netutil.DefaultAppPattern(cfg.PortalURL)
+	appDomain := types.DefaultAppPattern(cfg.PortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle subdomain requests
-		if netutil.IsSubdomain(appDomain, r.Host) {
+		if types.IsSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
@@ -129,7 +128,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
-	rootHost := netutil.PortalRootHost(cfg.PortalURL)
+	rootHost := types.PortalRootHost(cfg.PortalURL)
 	srv.TLSConfig = &tls.Config{
 		ClientAuth: tls.RequestClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {

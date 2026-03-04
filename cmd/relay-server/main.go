@@ -15,9 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/portal/sni"
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -51,9 +51,9 @@ func main() {
 	}
 	bootstrapsCSV := trimmedEnv("BOOTSTRAP_URIS")
 	if bootstrapsCSV == "" {
-		bootstrapsCSV = netutil.DefaultBootstrapFrom(portalURL)
+		bootstrapsCSV = types.DefaultBootstrapFrom(portalURL)
 	}
-	sniPort := netutil.ParsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
+	sniPort := types.ParsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	keylessDir := trimmedEnv("KEYLESS_DIR")
 	if keylessDir == "" {
 		keylessDir = defaultKeylessDir
@@ -75,7 +75,7 @@ func main() {
 	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
-	cfg.Bootstraps = netutil.ParseURLs(bootstrapsCSV)
+	cfg.Bootstraps = types.ParseURLs(bootstrapsCSV)
 	parsedTrustedProxyCIDRs, err := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		log.Fatal().Err(err).Msg("parse trusted proxy CIDRs")
@@ -98,8 +98,8 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	rootHost := netutil.PortalRootHost(cfg.PortalURL)
-	apiUpstreamAddr := netutil.LoopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
+	rootHost := types.PortalRootHost(cfg.PortalURL)
+	apiUpstreamAddr := types.LoopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
 	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, rootHost, cfg.KeylessDir, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
