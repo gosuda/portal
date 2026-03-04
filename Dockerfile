@@ -7,7 +7,7 @@ WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
   make && rm -rf /var/lib/apt/lists/*
 
-COPY cmd/relay-server/frontend ./cmd/relay-server/frontend
+COPY frontend ./
 COPY Makefile ./
 
 RUN --mount=type=cache,target=/root/.npm \

@@ -26,6 +26,13 @@ Portal tunnel always runs in TLS reverse-connect mode:
 - Traffic is proxied from tunnel to local `--host` over TCP.
 - Public access is `https://<service>.<portal-root-host>/`.
 
+### Lifecycle Identity
+
+The tunnel automatically acquires a per-lease mTLS identity via the relay's control plane. Identity materials are managed by `keyless_tls/keyless/lifecycle` and stored encrypted on disk under `KEYLESS_DIR/lifecycle-identities/`.
+
+- `KEYLESS_DIR` defaults to `/etc/portal/keyless`. The tunnel must have read/write access to this directory.
+- If the relay's issuer certificate or key is unavailable, the tunnel fails at startup.
+
 ## Flags
 
 ```text
@@ -72,25 +79,7 @@ export APP_NAME=myapp
 ./bin/portal-tunnel
 ```
 
-Expected signer API contract (`/v1/sign`):
-
-```json
-{
-  "key_id": "relay-cert",
-  "algorithm": "RSA_PSS_SHA256",
-  "digest": "<base64>",
-  "timestamp_unix": 1735628400,
-  "nonce": "c4d76ad40f5d8f95a1fe4b2f1c922f4a"
-}
-```
-
-```json
-{
-  "key_id": "relay-cert",
-  "algorithm": "RSA_PSS_SHA256",
-  "signature": "<base64>"
-}
-```
+When the local service is unreachable, the tunnel returns an HTTP 503 "Service Unavailable" page to the browser.
 
 ### Multiple Relays (High Availability)
 

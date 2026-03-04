@@ -1,4 +1,4 @@
-package manager
+package policy
 
 import (
 	"fmt"
@@ -9,8 +9,8 @@ import (
 	"sync"
 )
 
-// IPManager manages IP-based bans and lease-to-IP mapping.
-type IPManager struct {
+// IPFilter manages IP-based bans and lease-to-IP mapping.
+type IPFilter struct {
 	bannedIPs  map[string]struct{}
 	leaseToIP  map[string]string
 	ipToLeases map[string][]string
@@ -27,9 +27,9 @@ const (
 	xRealIPHeader       = "X-Real-IP"
 )
 
-// NewIPManager creates a new IP manager.
-func NewIPManager() *IPManager {
-	return &IPManager{
+// NewIPFilter creates a new IP filter.
+func NewIPFilter() *IPFilter {
+	return &IPFilter{
 		bannedIPs:  make(map[string]struct{}),
 		leaseToIP:  make(map[string]string),
 		ipToLeases: make(map[string][]string),
@@ -103,21 +103,21 @@ func IsTrustedProxyRemoteAddr(remoteAddr string) bool {
 }
 
 // BanIP adds an IP to the ban list.
-func (m *IPManager) BanIP(ip string) {
+func (m *IPFilter) BanIP(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bannedIPs[ip] = struct{}{}
 }
 
 // UnbanIP removes an IP from the ban list.
-func (m *IPManager) UnbanIP(ip string) {
+func (m *IPFilter) UnbanIP(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.bannedIPs, ip)
 }
 
 // IsIPBanned checks if an IP is banned.
-func (m *IPManager) IsIPBanned(ip string) bool {
+func (m *IPFilter) IsIPBanned(ip string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	_, banned := m.bannedIPs[ip]
@@ -125,19 +125,19 @@ func (m *IPManager) IsIPBanned(ip string) bool {
 }
 
 // IsIPBannedByPolicy applies shared runtime policy rules before checking the ban map.
-func IsIPBannedByPolicy(ipManager *IPManager, candidate string) bool {
-	if ipManager == nil {
+func IsIPBannedByPolicy(ipFilter *IPFilter, candidate string) bool {
+	if ipFilter == nil {
 		return false
 	}
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
 		return false
 	}
-	return ipManager.IsIPBanned(candidate)
+	return ipFilter.IsIPBanned(candidate)
 }
 
 // GetBannedIPs returns all banned IPs.
-func (m *IPManager) GetBannedIPs() []string {
+func (m *IPFilter) GetBannedIPs() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]string, 0, len(m.bannedIPs))
@@ -148,7 +148,7 @@ func (m *IPManager) GetBannedIPs() []string {
 }
 
 // SetBannedIPs sets the banned IPs list (for loading from settings).
-func (m *IPManager) SetBannedIPs(ips []string) {
+func (m *IPFilter) SetBannedIPs(ips []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bannedIPs = make(map[string]struct{}, len(ips))
@@ -158,7 +158,7 @@ func (m *IPManager) SetBannedIPs(ips []string) {
 }
 
 // RegisterLeaseIP associates a lease ID with an IP address.
-func (m *IPManager) RegisterLeaseIP(leaseID, ip string) {
+func (m *IPFilter) RegisterLeaseIP(leaseID, ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if leaseID == "" || ip == "" {
@@ -184,7 +184,7 @@ func (m *IPManager) RegisterLeaseIP(leaseID, ip string) {
 }
 
 // removeLeaseFromIP removes a lease from IP's lease list (must hold lock).
-func (m *IPManager) removeLeaseFromIP(leaseID, ip string) {
+func (m *IPFilter) removeLeaseFromIP(leaseID, ip string) {
 	leases := m.ipToLeases[ip]
 	for i, id := range leases {
 		if id == leaseID {
@@ -198,14 +198,14 @@ func (m *IPManager) removeLeaseFromIP(leaseID, ip string) {
 }
 
 // GetLeaseIP returns the IP address for a lease ID.
-func (m *IPManager) GetLeaseIP(leaseID string) string {
+func (m *IPFilter) GetLeaseIP(leaseID string) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.leaseToIP[leaseID]
 }
 
 // GetIPLeases returns all lease IDs for an IP.
-func (m *IPManager) GetIPLeases(ip string) []string {
+func (m *IPFilter) GetIPLeases(ip string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	result := make([]string, len(m.ipToLeases[ip]))
@@ -214,7 +214,7 @@ func (m *IPManager) GetIPLeases(ip string) []string {
 }
 
 // RemoveLeaseIP removes lease-to-IP mapping for a lease ID.
-func (m *IPManager) RemoveLeaseIP(leaseID string) {
+func (m *IPFilter) RemoveLeaseIP(leaseID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

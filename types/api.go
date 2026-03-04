@@ -42,8 +42,9 @@ const (
 
 // APIError is the normalized API error payload.
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	StatusCode int    `json:"-"` // HTTP status code, not serialized
 }
 
 // APIEnvelope is the canonical response wrapper for relay APIs.

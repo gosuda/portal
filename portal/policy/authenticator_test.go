@@ -1,4 +1,4 @@
-package manager
+package policy
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ func TestGenerateTokenFromReaderFailsClosed(t *testing.T) {
 func TestRecordFailedLoginSweepsExpiredEntries(t *testing.T) {
 	t.Parallel()
 
-	m := NewAuthManager("test-secret")
+	m := NewAuthenticator("test-secret")
 	now := time.Now()
 
 	m.mu.Lock()
@@ -66,7 +66,7 @@ func TestRecordFailedLoginSweepsExpiredEntries(t *testing.T) {
 func TestRecordFailedLoginEnforcesEntryCap(t *testing.T) {
 	t.Parallel()
 
-	m := NewAuthManager("test-secret")
+	m := NewAuthenticator("test-secret")
 	base := time.Now().Add(-2 * time.Minute)
 
 	m.mu.Lock()
@@ -96,7 +96,7 @@ func TestRecordFailedLoginEnforcesEntryCap(t *testing.T) {
 	}
 }
 
-func TestAuthManagerDoesNotLogPlaintextSecretsOrSessionToken(t *testing.T) {
+func TestAuthenticatorDoesNotLogPlaintextSecretsOrSessionToken(t *testing.T) {
 	const secretKey = "super-secret-admin-key"
 
 	var buf bytes.Buffer
@@ -106,7 +106,7 @@ func TestAuthManagerDoesNotLogPlaintextSecretsOrSessionToken(t *testing.T) {
 		log.Logger = originalLogger
 	})
 
-	m := NewAuthManager(secretKey)
+	m := NewAuthenticator(secretKey)
 	logOutput := buf.String()
 	if strings.Contains(logOutput, secretKey) {
 		t.Fatalf("expected auth manager logs to omit plaintext secret key, got %q", logOutput)

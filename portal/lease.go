@@ -9,26 +9,14 @@ import (
 	"gosuda.org/portal/types"
 )
 
-// Lease represents a registered service.
-type Lease struct {
-	Expires      time.Time      `json:"expires"`
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	ReverseToken string         `json:"-"`
-	Metadata     types.Metadata `json:"metadata"`
-	TLS          bool           `json:"tls"`
-}
+// Lease is an alias for types.Lease for backward compatibility within the portal package.
+type Lease = types.Lease
 
-// LeaseEntry represents a registered lease with expiration tracking.
-type LeaseEntry struct {
-	Lease     *Lease
-	Expires   time.Time
-	LastSeen  time.Time
-	FirstSeen time.Time
-}
+// LeaseEntry is an alias for types.LeaseEntry for backward compatibility within the portal package.
+type LeaseEntry = types.LeaseEntry
 
 type LeaseManager struct {
-	leases         map[string]*LeaseEntry
+	leases         map[string]*types.LeaseEntry
 	stopCh         chan struct{}
 	bannedLeases   map[string]struct{}
 	namePattern    *regexp.Regexp

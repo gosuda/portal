@@ -76,6 +76,10 @@ cd portal
 docker compose up
 ```
 
+Set `PORTAL_URL` to your public domain. If `ADMIN_SECRET_KEY` is not set, one is auto-generated and logged at startup. Set `CLOUDFLARE_TOKEN` to enable automatic ACME DNS-01 certificate provisioning (required only when using Cloudflare for DNS).
+
+The compose file exposes port 443 (SNI routing) and 4017 (admin/API). The SNI port requires a wildcard DNS record (`*.<base-domain>`) pointing to the relay host.
+
 For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
@@ -89,6 +93,26 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 
+## Relay Server Configuration
+
+| Flag | Env Var | Default | Description |
+| --- | --- | --- | --- |
+| `--adminport` | — | `4017` | Admin/API HTTP(S) port |
+| `--admin-secret-key` | `ADMIN_SECRET_KEY` | auto-generated | Admin auth secret (auto-generated and logged if not set) |
+| `--portal-url` | `PORTAL_URL` | `https://localhost:4017` | Portal base URL |
+| `--bootstraps` | `BOOTSTRAP_URIS` | derived from `PORTAL_URL` | Comma-separated relay API URLs |
+| `--sni-port` | `SNI_PORT` | `443` | SNI TCP listener port |
+| `--keyless-dir` | `KEYLESS_DIR` | `/etc/portal/keyless` | TLS cert and keyless materials directory |
+| `--cloudflare-token` | `CLOUDFLARE_TOKEN` | `""` | Cloudflare DNS API token (Zone:Read + DNS:Edit) |
+| `--lease-bps` | — | `0` (unlimited) | Per-lease bandwidth cap (bytes/sec) |
+| `--trust-proxy-headers` | `TRUST_PROXY_HEADERS` | `false` | Trust X-Forwarded-For / X-Real-IP headers |
+| `--trusted-proxy-cidrs` | `TRUSTED_PROXY_CIDRS` | `""` | CIDR allowlist for trusted proxies |
+
+### Deployment Notes
+
+- `admin_settings.json` persists runtime state (ban lists, BPS limits, approval mode) in the process working directory. Mount CWD as a volume to preserve state across container restarts.
+- `keyless_tls/` is a local Go sub-module (`replace` directive in root `go.mod`), not a separately published package.
+
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md).
@@ -96,14 +120,9 @@ For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
 ## Contributing
 
-We welcome contributions from the community!
-
-### Steps to Contribute
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+1. Fork the repository.
+2. Create a feature branch and make your changes.
+3. Open a Pull Request.
 
 ## License
 

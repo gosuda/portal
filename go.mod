@@ -9,6 +9,8 @@ require (
 	golang.org/x/net v0.51.0
 )
 
+replace github.com/gosuda/keyless_tls => ./keyless_tls
+
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect

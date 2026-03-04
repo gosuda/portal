@@ -43,7 +43,7 @@ linters:
 
   exclusions:
     paths:
-      - ^cmd/relay-server/frontend/node_modules/
+      - ^frontend/node_modules/
       - ^cmd/relay-server/dist/
     rules:
       - linters: [errcheck]

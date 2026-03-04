@@ -1,4 +1,4 @@
-package manager
+package policy
 
 import (
 	"io"
@@ -11,17 +11,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// BPSManager manages per-lease bytes-per-second rate limiting.
-type BPSManager struct {
+// RateLimiter manages per-lease bytes-per-second rate limiting.
+type RateLimiter struct {
 	bpsLimits  map[string]int64
 	bpsBuckets map[string]*Bucket
 	defaultBPS int64
 	mu         sync.Mutex
 }
 
-// NewBPSManager creates a new BPS manager.
-func NewBPSManager() *BPSManager {
-	return &BPSManager{
+// NewRateLimiter creates a new BPS manager.
+func NewRateLimiter() *RateLimiter {
+	return &RateLimiter{
 		bpsLimits:  make(map[string]int64),
 		bpsBuckets: make(map[string]*Bucket),
 		defaultBPS: 0,
@@ -29,7 +29,7 @@ func NewBPSManager() *BPSManager {
 }
 
 // SetBPSLimit sets the BPS limit for a lease.
-func (m *BPSManager) SetBPSLimit(leaseID string, bps int64) {
+func (m *RateLimiter) SetBPSLimit(leaseID string, bps int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if bps <= 0 {
@@ -43,7 +43,7 @@ func (m *BPSManager) SetBPSLimit(leaseID string, bps int64) {
 }
 
 // GetBPSLimit returns the BPS limit for a lease (0 = unlimited).
-func (m *BPSManager) GetBPSLimit(leaseID string) int64 {
+func (m *RateLimiter) GetBPSLimit(leaseID string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if v, ok := m.bpsLimits[leaseID]; ok {
@@ -53,7 +53,7 @@ func (m *BPSManager) GetBPSLimit(leaseID string) int64 {
 }
 
 // GetAllBPSLimits returns a copy of all BPS limits.
-func (m *BPSManager) GetAllBPSLimits() map[string]int64 {
+func (m *RateLimiter) GetAllBPSLimits() map[string]int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	result := make(map[string]int64, len(m.bpsLimits))
@@ -62,7 +62,7 @@ func (m *BPSManager) GetAllBPSLimits() map[string]int64 {
 }
 
 // SetDefaultBPS sets the default BPS limit for new leases.
-func (m *BPSManager) SetDefaultBPS(bps int64) {
+func (m *RateLimiter) SetDefaultBPS(bps int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if bps < 0 {
@@ -72,14 +72,14 @@ func (m *BPSManager) SetDefaultBPS(bps int64) {
 }
 
 // GetDefaultBPS returns the default BPS limit.
-func (m *BPSManager) GetDefaultBPS() int64 {
+func (m *RateLimiter) GetDefaultBPS() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.defaultBPS
 }
 
 // GetBucket returns a rate limit bucket for a lease, creating one if needed.
-func (m *BPSManager) GetBucket(leaseID string) *Bucket {
+func (m *RateLimiter) GetBucket(leaseID string) *Bucket {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -103,7 +103,7 @@ func (m *BPSManager) GetBucket(leaseID string) *Bucket {
 }
 
 // CleanupLease removes BPS data for a lease.
-func (m *BPSManager) CleanupLease(leaseID string) {
+func (m *RateLimiter) CleanupLease(leaseID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.bpsLimits, leaseID)
@@ -111,14 +111,14 @@ func (m *BPSManager) CleanupLease(leaseID string) {
 }
 
 // Copy copies data with rate limiting.
-func (m *BPSManager) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, error) {
+func (m *RateLimiter) Copy(dst io.Writer, src io.Reader, leaseID string) (int64, error) {
 	bucket := m.GetBucket(leaseID)
 	return Copy(dst, src, bucket)
 }
 
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
 // In the new TLS passthrough architecture, this uses net.Conn.
-func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *BPSManager) {
+func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *RateLimiter) {
 	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().
 		Str("lease_id", leaseID).

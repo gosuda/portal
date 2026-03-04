@@ -1,4 +1,4 @@
-package manager
+package policy
 
 import (
 	"net"
@@ -73,36 +73,36 @@ func TestIsTrustedProxyRemoteAddr(t *testing.T) {
 }
 
 func TestIsIPBannedByPolicy(t *testing.T) {
-	ipManager := NewIPManager()
-	ipManager.BanIP("203.0.113.22")
+	ipFilter := NewIPFilter()
+	ipFilter.BanIP("203.0.113.22")
 
 	tests := []struct {
 		name      string
-		manager   *IPManager
+		filter    *IPFilter
 		candidate string
 		want      bool
 	}{
 		{
 			name:      "nil manager",
-			manager:   nil,
+			filter:    nil,
 			candidate: "203.0.113.22",
 			want:      false,
 		},
 		{
 			name:      "empty candidate",
-			manager:   ipManager,
+			filter:    ipFilter,
 			candidate: "   ",
 			want:      false,
 		},
 		{
 			name:      "trimmed banned ip",
-			manager:   ipManager,
+			filter:    ipFilter,
 			candidate: " 203.0.113.22 ",
 			want:      true,
 		},
 		{
 			name:      "not banned ip",
-			manager:   ipManager,
+			filter:    ipFilter,
 			candidate: "203.0.113.99",
 			want:      false,
 		},
@@ -110,7 +110,7 @@ func TestIsIPBannedByPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsIPBannedByPolicy(tt.manager, tt.candidate); got != tt.want {
+			if got := IsIPBannedByPolicy(tt.filter, tt.candidate); got != tt.want {
 				t.Fatalf("IsIPBannedByPolicy(%q)=%v, want %v", tt.candidate, got, tt.want)
 			}
 		})

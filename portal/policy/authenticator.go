@@ -1,4 +1,4 @@
-package manager
+package policy
 
 import (
 	"crypto/rand"
@@ -22,8 +22,8 @@ const (
 	maxFailedLoginEntries  = 4096
 )
 
-// AuthManager manages admin authentication with rate limiting.
-type AuthManager struct {
+// Authenticator manages admin authentication with rate limiting.
+type Authenticator struct {
 	lastSweepAt  time.Time
 	failedLogins map[string]*loginAttempt
 	sessions     map[string]time.Time
@@ -37,9 +37,9 @@ type loginAttempt struct {
 	count      int
 }
 
-// NewAuthManager creates a new AuthManager with the given secret key.
-func NewAuthManager(secretKey string) *AuthManager {
-	// Create AuthManager for admin authentication
+// NewAuthenticator creates a new Authenticator with the given secret key.
+func NewAuthenticator(secretKey string) *Authenticator {
+	// Create Authenticator for admin authentication
 	// Auto-generate secret key if not provided
 	if secretKey == "" {
 		randomBytes := make([]byte, 16)
@@ -52,7 +52,7 @@ func NewAuthManager(secretKey string) *AuthManager {
 		log.Info().Int("key_length", len(secretKey)).Msg("[server] admin authentication enabled")
 	}
 
-	return &AuthManager{
+	return &Authenticator{
 		secretKey:    secretKey,
 		failedLogins: make(map[string]*loginAttempt),
 		sessions:     make(map[string]time.Time),
@@ -60,7 +60,7 @@ func NewAuthManager(secretKey string) *AuthManager {
 }
 
 // IsIPLocked checks if an IP is currently locked out.
-func (m *AuthManager) IsIPLocked(ip string) bool {
+func (m *Authenticator) IsIPLocked(ip string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -72,7 +72,7 @@ func (m *AuthManager) IsIPLocked(ip string) bool {
 }
 
 // GetLockRemainingSeconds returns the remaining seconds until the IP is unlocked.
-func (m *AuthManager) GetLockRemainingSeconds(ip string) int {
+func (m *Authenticator) GetLockRemainingSeconds(ip string) int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -84,7 +84,7 @@ func (m *AuthManager) GetLockRemainingSeconds(ip string) int {
 }
 
 // RecordFailedLogin records a failed login attempt and returns true if the IP is now locked.
-func (m *AuthManager) RecordFailedLogin(ip string) bool {
+func (m *Authenticator) RecordFailedLogin(ip string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -116,7 +116,7 @@ func (m *AuthManager) RecordFailedLogin(ip string) bool {
 }
 
 // ResetFailedLogin resets the failed login count for an IP.
-func (m *AuthManager) ResetFailedLogin(ip string) {
+func (m *Authenticator) ResetFailedLogin(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -124,7 +124,7 @@ func (m *AuthManager) ResetFailedLogin(ip string) {
 }
 
 // ValidateKey checks if the provided key matches the secret key.
-func (m *AuthManager) ValidateKey(key string) bool {
+func (m *Authenticator) ValidateKey(key string) bool {
 	if m.secretKey == "" {
 		return false
 	}
@@ -132,12 +132,12 @@ func (m *AuthManager) ValidateKey(key string) bool {
 }
 
 // HasSecretKey returns true if a secret key is configured.
-func (m *AuthManager) HasSecretKey() bool {
+func (m *Authenticator) HasSecretKey() bool {
 	return m.secretKey != ""
 }
 
 // CreateSession creates a new session and returns the token.
-func (m *AuthManager) CreateSession() string {
+func (m *Authenticator) CreateSession() string {
 	token, err := generateToken()
 	if err != nil {
 		log.Fatal().Err(err).Msg("[server] failed to generate secure admin session token")
@@ -155,7 +155,7 @@ func (m *AuthManager) CreateSession() string {
 }
 
 // ValidateSession checks if a session token is valid.
-func (m *AuthManager) ValidateSession(token string) bool {
+func (m *Authenticator) ValidateSession(token string) bool {
 	if token == "" {
 		return false
 	}
@@ -172,7 +172,7 @@ func (m *AuthManager) ValidateSession(token string) bool {
 }
 
 // DeleteSession removes a session.
-func (m *AuthManager) DeleteSession(token string) {
+func (m *Authenticator) DeleteSession(token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -180,7 +180,7 @@ func (m *AuthManager) DeleteSession(token string) {
 }
 
 // cleanupExpiredSessions removes expired sessions (must be called with lock held).
-func (m *AuthManager) cleanupExpiredSessions() {
+func (m *Authenticator) cleanupExpiredSessions() {
 	now := time.Now()
 	for token, expiry := range m.sessions {
 		if now.After(expiry) {
@@ -202,7 +202,7 @@ func generateTokenFromReader(reader io.Reader) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func (m *AuthManager) maybeSweepFailedLoginsLocked(now time.Time) {
+func (m *Authenticator) maybeSweepFailedLoginsLocked(now time.Time) {
 	if !m.lastSweepAt.IsZero() && now.Sub(m.lastSweepAt) < failedLoginSweepWindow {
 		return
 	}
@@ -211,7 +211,7 @@ func (m *AuthManager) maybeSweepFailedLoginsLocked(now time.Time) {
 	m.lastSweepAt = now
 }
 
-func (m *AuthManager) sweepExpiredFailedLoginsLocked(now time.Time) {
+func (m *Authenticator) sweepExpiredFailedLoginsLocked(now time.Time) {
 	for ip, attempt := range m.failedLogins {
 		if attempt == nil {
 			delete(m.failedLogins, ip)
@@ -228,7 +228,7 @@ func (m *AuthManager) sweepExpiredFailedLoginsLocked(now time.Time) {
 	}
 }
 
-func (m *AuthManager) enforceFailedLoginCapLocked() {
+func (m *Authenticator) enforceFailedLoginCapLocked() {
 	if len(m.failedLogins) <= maxFailedLoginEntries {
 		return
 	}

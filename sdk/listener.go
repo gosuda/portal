@@ -19,6 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/contracts"
+	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/types"
 )
 
@@ -124,16 +126,16 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, c
 		return nil, errors.New("control plane client certificate is required")
 	}
 
-	apiURL, err := types.NormalizeRelayAPIURL(relayAddr)
+	apiURL, err := netutil.NormalizeRelayAPIURL(relayAddr)
 	if err != nil {
 		return nil, err
 	}
-	host := types.PortalRootHost(apiURL)
+	host := netutil.PortalRootHost(apiURL)
 	clientTransport := http.DefaultTransport.(*http.Transport).Clone()
 	clientTransport.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         host,
-		InsecureSkipVerify: types.IsLocalhost(host),
+		InsecureSkipVerify: netutil.IsLocalhost(host),
 		Certificates:       []tls.Certificate{controlPlaneCert},
 	}
 
@@ -408,7 +410,7 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
-		InsecureSkipVerify: types.IsLocalhost(serverName),
+		InsecureSkipVerify: netutil.IsLocalhost(serverName),
 		Certificates:       []tls.Certificate{l.controlPlaneCert},
 	})
 	err = tlsConn.HandshakeContext(ctx)
@@ -662,7 +664,7 @@ func (l *Listener) registerWithRelay() error {
 		ReverseToken: l.lease.ReverseToken,
 	}
 
-	return l.postJSON(types.PathSDKRegister, reqBody)
+	return l.postJSON(contracts.PathSDKRegister, reqBody)
 }
 
 func (l *Listener) unregisterFromRelay() error {
@@ -670,7 +672,7 @@ func (l *Listener) unregisterFromRelay() error {
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
-	return l.postJSON(types.PathSDKUnregister, reqBody)
+	return l.postJSON(contracts.PathSDKUnregister, reqBody)
 }
 
 func (l *Listener) sendKeepalive() error {
@@ -678,7 +680,7 @@ func (l *Listener) sendKeepalive() error {
 		LeaseID:      l.lease.ID,
 		ReverseToken: l.lease.ReverseToken,
 	}
-	return l.postJSON(types.PathSDKRenew, reqBody)
+	return l.postJSON(contracts.PathSDKRenew, reqBody)
 }
 
 func (l *Listener) postJSON(path string, body any) error {
@@ -757,7 +759,7 @@ func relayConnectURL(relayAddr, leaseID, token string) (string, error) {
 	if u.Scheme != "https" {
 		return "", fmt.Errorf("unsupported relay URL scheme: %q (use https)", u.Scheme)
 	}
-	u.Path = types.PathSDKConnect
+	u.Path = contracts.PathSDKConnect
 	q := u.Query()
 	q.Set("lease_id", leaseID)
 	u.RawQuery = q.Encode()

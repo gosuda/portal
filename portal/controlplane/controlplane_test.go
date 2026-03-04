@@ -107,6 +107,67 @@ func TestValidatePeerLeaseCertificateRequiresClientAuthEKU(t *testing.T) {
 	}
 }
 
+func TestValidatePeerLeaseCertificateRejectsMissingLeaseID(t *testing.T) {
+	t.Parallel()
+
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{mustIssuedLeafCertificate(t, "lease-identity")}}
+	if code, _, ok := ValidatePeerLeaseCertificate(state, " \t "); ok || code != "missing_lease_id" {
+		t.Fatalf("expected missing_lease_id, got code=%s ok=%v", code, ok)
+	}
+}
+
+func TestValidatePeerLeaseCertificateRequiresPeerCertificates(t *testing.T) {
+	t.Parallel()
+
+	if code, _, ok := ValidatePeerLeaseCertificate(nil, "lease-identity"); ok || code != "client_cert_required" {
+		t.Fatalf("expected client_cert_required, got code=%s ok=%v", code, ok)
+	}
+}
+
+func TestValidatePeerLeaseCertificateRejectsCertificateOutsideValidityWindow(t *testing.T) {
+	t.Parallel()
+
+	leaf := *mustIssuedLeafCertificate(t, "lease-identity")
+	leaf.NotBefore = time.Now().Add(-2 * time.Minute)
+	leaf.NotAfter = time.Now().Add(-1 * time.Minute)
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{&leaf}}
+	if code, _, ok := ValidatePeerLeaseCertificate(state, "lease-identity"); ok || code != "client_cert_invalid" {
+		t.Fatalf("expected client_cert_invalid for expired certificate, got code=%s ok=%v", code, ok)
+	}
+}
+
+func TestValidatePeerLeaseCertificateRejectsNonClientAuthEKU(t *testing.T) {
+	t.Parallel()
+
+	leaf := *mustIssuedLeafCertificate(t, "lease-identity")
+	leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{&leaf}}
+	if code, _, ok := ValidatePeerLeaseCertificate(state, "lease-identity"); ok || code != "client_cert_invalid" {
+		t.Fatalf("expected client_cert_invalid for non-client-auth EKU, got code=%s ok=%v", code, ok)
+	}
+}
+
+func TestValidatePeerLeaseCertificateRejectsMissingLeaseIdentity(t *testing.T) {
+	t.Parallel()
+
+	leaf := *mustIssuedLeafCertificate(t, "lease-identity")
+	leaf.Subject = pkix.Name{CommonName: "unrelated"}
+	leaf.URIs = nil
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{&leaf}}
+	if code, _, ok := ValidatePeerLeaseCertificate(state, "lease-identity"); ok || code != "cert_lease_missing" {
+		t.Fatalf("expected cert_lease_missing, got code=%s ok=%v", code, ok)
+	}
+}
+
+func TestValidatePeerLeaseCertificateRejectsLeaseIDMismatch(t *testing.T) {
+	t.Parallel()
+
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{mustIssuedLeafCertificate(t, "lease-identity")}}
+	if code, _, ok := ValidatePeerLeaseCertificate(state, "different-lease"); ok || code != "cert_lease_mismatch" {
+		t.Fatalf("expected cert_lease_mismatch, got code=%s ok=%v", code, ok)
+	}
+}
+
 func TestExtractLeaseIDFromPeerCertificateRejectsUnprefixedCN(t *testing.T) {
 	t.Parallel()
 
@@ -116,4 +177,18 @@ func TestExtractLeaseIDFromPeerCertificateRejectsUnprefixedCN(t *testing.T) {
 	if leaseID != "" {
 		t.Fatalf("expected empty lease id for unprefixed CN, got %q", leaseID)
 	}
+}
+
+func mustIssuedLeafCertificate(t *testing.T, leaseID string) *x509.Certificate {
+	t.Helper()
+
+	identity, err := IssueIdentity(leaseID)
+	if err != nil {
+		t.Fatalf("IssueIdentity returned error: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(identity.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse issued certificate: %v", err)
+	}
+	return leaf
 }

@@ -35,6 +35,31 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 4. **`/sdk/connect` must share the same policy source as `/sdk/register`.**
    - Why: registration and reverse admission must apply identical IP-ban + token checks in one enforcement pipeline.
 
+## TLS and Identity Invariants
+
+1. **Relay holds the TLS private key; SDK/tunnel never does.** SDK calls `/v1/sign` on the relay via `RemoteSigner` for all private key operations.
+   - Why: prevents key material leakage to untrusted tunnel endpoints.
+
+2. **mTLS is mandatory for all `/sdk/*` control-plane paths.** No token-only fallback; hard-fail on missing client cert.
+   - Why: ADR-0003 admission order (IP ban → Lease → CertBind → Token) requires mTLS at the CertBind stage.
+
+3. **All relay URLs must be `https://`.** `NormalizeRelayAPIURL` rejects non-HTTPS. SDK and tunnel hard-fail on `http://`.
+   - Why: enforces transport security without opt-out.
+
+4. **`keyless_tls/` is a local Go sub-module** (`replace` directive in root `go.mod`). Not published separately.
+   - Why: coupled evolution with the relay; separate `go.mod` for dependency isolation only.
+
+## SNI Routing Invariants
+
+1. **SNI wildcard matching is one-level only.** `sni.Router.GetRoute()` checks `*.parent.example.com` for `foo.parent.example.com` — not arbitrary depth.
+   - Why: matches RFC TLS wildcard semantics.
+
+2. **Protocol markers on reverse TCP connections:** `0x00` = keepalive, `0x02` = TLS passthrough activation.
+   - Why: binary protocol, not discoverable from HTTP-layer code.
+
+3. **HTTP/2 is intentionally disabled on the admin HTTP server** (`TLSNextProto: make(…)`).
+   - Why: the server hijacks connections for `/sdk/connect`; HTTP/2 multiplexing breaks hijack semantics.
+
 ## Operational Truths (CI-Aligned, Minimal)
 
 1. **Local lint workflow: run `make lint-auto` first, then `make lint`.**
@@ -53,6 +78,15 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 4. **Use `Makefile` as build and verification authority; do not reference absent tooling (for example, no `justfile` in this repo).**
    - Why: reduces operational drift and broken command guidance.
+
+5. **`make build-server` does NOT call `make build-frontend`.** If called alone, `//go:embed dist/*` will be stale or empty. The Dockerfile calls both explicitly in order.
+   - Why: prevents silent broken builds with missing frontend assets.
+
+6. **`admin_settings.json` persists in the process CWD**, not in `KEYLESS_DIR`. State is lost on container restart unless CWD is a mounted volume.
+   - Why: prevents state-loss surprises in production.
+
+7. **`onLeaseDeleted` has dual registration.** `portal/relay.go` registers one callback; `cmd/relay-server/main.go` overwrites it with a broader one (adds IP/BPS cleanup). The outer callback supersedes.
+   - Why: coupling hazard — modifying either registration without understanding both breaks cleanup.
 
 ## Change Discipline
 
@@ -74,19 +108,12 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 ---
 
-## Verbalized Sampling
+## Agent Behavior
 
-Before trivial or non-trivial changes, AI agents **must**:
+**Verbalized sampling:** Before changes, sample 3–5 intent hypotheses (rank by likelihood, note one weakness each), assess coupling (structural/temporal/semantic), and tidy-first when coupling is high. Ask the human when trade-offs exist.
 
-1. **Sample 3–5 intent hypotheses** — rank by likelihood, note one weakness each
-2. **Explore edge cases** — at least 3 standard, 5 for architectural changes
-3. **Assess coupling** — structural (imports), temporal (co-changing files), semantic (shared concepts)
-4. **Tidy first** — high coupling → extract/split/rename before changing; low → change directly
-5. **Surface decisions** — ask the human when trade-offs exist; do exactly what is asked, no more
-
-## Project-specific rules [**ENFORCED**]
-
-- Do not keep backward compatibility unless explicitly requested.
-- Do not add meaningless wrapper functions unless they provide demonstrated value.
-- Do not stack minimal patches that fragment logic — complete consolidation in one change.
-- Do not run tests on every execution — only when requested, before handoff, or for high-risk changes.
+**Project rules:**
+- No backward compatibility unless explicitly requested.
+- No wrapper functions without demonstrated value.
+- Consolidate changes in one pass — do not stack minimal patches.
+- Run tests only when requested, before handoff, or for high-risk changes.

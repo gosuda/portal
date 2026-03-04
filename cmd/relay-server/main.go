@@ -14,10 +14,10 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/netutil"
+	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/portal/sni"
-	"gosuda.org/portal/types"
 )
 
 const (
@@ -51,9 +51,9 @@ func main() {
 	}
 	bootstrapsCSV := trimmedEnv("BOOTSTRAP_URIS")
 	if bootstrapsCSV == "" {
-		bootstrapsCSV = types.DefaultBootstrapFrom(portalURL)
+		bootstrapsCSV = netutil.DefaultBootstrapFrom(portalURL)
 	}
-	sniPort := types.ParsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
+	sniPort := netutil.ParsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	keylessDir := trimmedEnv("KEYLESS_DIR")
 	if keylessDir == "" {
 		keylessDir = defaultKeylessDir
@@ -75,12 +75,12 @@ func main() {
 	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
-	cfg.Bootstraps = types.ParseURLs(bootstrapsCSV)
+	cfg.Bootstraps = netutil.ParseURLs(bootstrapsCSV)
 	parsedTrustedProxyCIDRs, err := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		log.Fatal().Err(err).Msg("parse trusted proxy CIDRs")
 	}
-	manager.SetTrustedProxyCIDRs(parsedTrustedProxyCIDRs)
+	policy.SetTrustedProxyCIDRs(parsedTrustedProxyCIDRs)
 	if err := runServer(cfg); err != nil {
 		log.Fatal().Err(err).Msg("execute root command")
 	}
@@ -98,15 +98,15 @@ func runServer(cfg relayServerConfig) error {
 		Strs("bootstrap_uris", cfg.Bootstraps).
 		Msg("[server] frontend configuration")
 
-	rootHost := types.PortalRootHost(cfg.PortalURL)
-	apiUpstreamAddr := types.LoopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
+	rootHost := netutil.PortalRootHost(cfg.PortalURL)
+	apiUpstreamAddr := netutil.LoopbackForwardAddr(fmt.Sprintf(":%d", cfg.AdminPort))
 	serv, err := portal.NewRelayServer(ctx, cfg.Bootstraps, sniListenAddr, rootHost, cfg.KeylessDir, cfg.CloudflareToken)
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
-	authManager := manager.NewAuthManager(cfg.AdminSecretKey)
+	authManager := policy.NewAuthenticator(cfg.AdminSecretKey)
 	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager, cfg.PortalURL, cfg.TrustProxyHeaders)
 	frontend.SetAdmin(admin)
 
@@ -129,7 +129,7 @@ func runServer(cfg relayServerConfig) error {
 	})
 	if ipMgr != nil {
 		serv.GetReverseHub().SetIPBanChecker(func(ip string) bool {
-			return manager.IsIPBannedByPolicy(ipMgr, ip)
+			return policy.IsIPBannedByPolicy(ipMgr, ip)
 		})
 		serv.GetReverseHub().SetOnAccepted(func(leaseID, ip string) {
 			if strings.TrimSpace(leaseID) == "" || strings.TrimSpace(ip) == "" {
@@ -169,7 +169,7 @@ func runServer(cfg relayServerConfig) error {
 		}
 
 		// SNI path is reverse-only (NAT-friendly): relay never dials app directly.
-		manager.EstablishRelayWithBPS(clientConn, reverseConn.Conn, leaseID, bpsManager)
+		policy.EstablishRelayWithBPS(clientConn, reverseConn.Conn, leaseID, bpsManager)
 		reverseConn.Close()
 	})
 
@@ -228,5 +228,5 @@ func parseBoolEnv(name string) bool {
 }
 
 func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
-	return manager.ParseTrustedProxyCIDRs(raw)
+	return policy.ParseTrustedProxyCIDRs(raw)
 }

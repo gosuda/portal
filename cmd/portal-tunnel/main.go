@@ -17,8 +17,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"gosuda.org/portal/portal/contracts"
+	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/types"
 )
 
 var (
@@ -63,7 +64,7 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	relayURLs := types.ParseURLs(flagRelayURLs)
+	relayURLs := netutil.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
@@ -85,11 +86,11 @@ func runTunnel() error {
 
 	listener, err := sdkClient.Listen(
 		flagName,
-		types.WithDescription(flagDesc),
-		types.WithTags(types.ParseURLs(flagTags)),
-		types.WithOwner(flagOwner),
-		types.WithThumbnail(flagThumbnail),
-		types.WithHide(flagHide),
+		contracts.WithDescription(flagDesc),
+		contracts.WithTags(netutil.ParseURLs(flagTags)),
+		contracts.WithOwner(flagOwner),
+		contracts.WithThumbnail(flagThumbnail),
+		contracts.WithHide(flagHide),
 	)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", flagName, err)
@@ -168,7 +169,7 @@ loop:
 func normalizeRelayURLsForReverseConnect(relayURLs []string) ([]string, error) {
 	normalized := make([]string, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
-		normalizedURL, err := types.NormalizeRelayAPIURL(relayURL)
+		normalizedURL, err := netutil.NormalizeRelayAPIURL(relayURL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
 		}
@@ -187,7 +188,7 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	targetAddr, err := types.NormalizeTargetAddr(localAddr)
+	targetAddr, err := netutil.NormalizeTargetAddr(localAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
 	}

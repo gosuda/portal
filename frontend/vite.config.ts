@@ -22,7 +22,7 @@ export default defineConfig({
           return;
         }
 
-        const appDir = resolve(process.cwd(), "../dist/app");
+        const appDir = resolve(process.cwd(), "../cmd/relay-server/dist/app");
         const indexPath = resolve(appDir, "index.html");
         const portalPath = resolve(appDir, "portal.html");
 
@@ -45,7 +45,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "../dist/app",
+    outDir: "../cmd/relay-server/dist/app",
     emptyOutDir: false,
     rollupOptions: {
       output: {

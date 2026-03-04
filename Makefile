@@ -38,6 +38,7 @@ vuln:
 	govulncheck ./...
 
 tidy:
+	go get -u ./...
 	go mod tidy
 	go mod verify
 
@@ -53,7 +54,7 @@ build: build-frontend build-tunnel build-server
 build-frontend:
 	@echo "[frontend] building React frontend..."
 	@mkdir -p cmd/relay-server/dist/app
-	@cd cmd/relay-server/frontend && npm i && npm run build
+	@cd frontend && npm i && npm run build
 	@echo "[frontend] build complete"
 
 # Build portal-tunnel binaries for distribution

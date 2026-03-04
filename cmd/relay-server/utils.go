@@ -10,10 +10,11 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/contracts"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/portal/netutil"
+	"gosuda.org/portal/portal/policy"
 )
 
 const (
@@ -28,7 +29,7 @@ func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if !trustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
+	if !trustProxyHeaders || !policy.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
 		return false
 	}
 	if hasForwardedToken(r.Header.Get("X-Forwarded-Proto"), "https") {
@@ -44,25 +45,6 @@ func hasForwardedToken(raw, target string) bool {
 		}
 	}
 	return false
-}
-
-func normalizeLeaseID(raw string) string {
-	return strings.TrimSpace(raw)
-}
-
-func normalizeLeaseCredentials(leaseID, reverseToken string) (string, string) {
-	return normalizeLeaseID(leaseID), strings.TrimSpace(reverseToken)
-}
-
-func lookupLeaseEntry(serv *portal.RelayServer, leaseID string) (*portal.LeaseEntry, bool) {
-	if serv == nil {
-		return nil, false
-	}
-	entry, ok := serv.GetLeaseManager().GetLeaseByID(normalizeLeaseID(leaseID))
-	if !ok || entry == nil || entry.Lease == nil {
-		return nil, false
-	}
-	return entry, true
 }
 
 func isWebSocketUpgrade(req *http.Request) bool {
@@ -213,15 +195,15 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
 	r.TTL = r.formatDuration(time.Until(entry.Expires))
 	linkLabel := identityID
-	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
+	if normalized, ok := netutil.NormalizeServiceName(lease.Name); ok {
 		linkLabel = normalized
-	} else if normalized, ok := types.NormalizeServiceName(identityID); ok {
+	} else if normalized, ok := netutil.NormalizeServiceName(identityID); ok {
 		linkLabel = normalized
 	}
 
-	publicHost := types.PortalRootHost(portalURL)
+	publicHost := netutil.PortalRootHost(portalURL)
 	if publicHost == "" {
-		publicHost = types.PortalHostPort(portalURL)
+		publicHost = netutil.PortalHostPort(portalURL)
 	}
 	if linkLabel != "" && publicHost != "" {
 		r.Link = fmt.Sprintf("//%s.%s/", linkLabel, publicHost)
@@ -234,7 +216,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	r.BPS = bps
 
 	if admin != nil {
-		r.IsApproved = admin.approveManager.GetApprovalMode() == manager.ApprovalModeAuto || admin.approveManager.IsLeaseApproved(identityID)
+		r.IsApproved = admin.approveManager.GetApprovalMode() == policy.ModeAuto || admin.approveManager.IsLeaseApproved(identityID)
 		r.IsDenied = admin.approveManager.IsLeaseDenied(identityID)
 
 		if admin.ipManager != nil {
@@ -274,7 +256,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 			}
 			if admin != nil {
 				approveManager := admin.GetApproveManager()
-				if approveManager.GetApprovalMode() == manager.ApprovalModeManual && !approveManager.IsLeaseApproved(identityID) {
+				if approveManager.GetApprovalMode() == policy.ModeManual && !approveManager.IsLeaseApproved(identityID) {
 					continue
 				}
 			}
@@ -299,7 +281,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 func writeAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
 		OK:   true,
 		Data: data,
 	}); err != nil {
@@ -310,7 +292,7 @@ func writeAPIData(w http.ResponseWriter, status int, data any) {
 func writeAPIOK(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{OK: true}); err != nil {
+	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{OK: true}); err != nil {
 		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
 	}
 }
@@ -322,10 +304,10 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
 		OK:   false,
 		Data: data,
-		Error: &types.APIError{
+		Error: &contracts.APIError{
 			Code:    code,
 			Message: message,
 		},

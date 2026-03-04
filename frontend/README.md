@@ -10,6 +10,8 @@ React + TypeScript frontend for relay server discovery and onboarding.
 - Tailwind CSS 4
 - shadcn/ui (Radix-based)
 - Lucide React
+- @ssgoi/react (page transitions)
+- React Compiler (`babel-plugin-react-compiler`, enabled in `vite.config.ts`) — do not use `useCallback` in new code
 
 ## Project Structure
 
@@ -38,6 +40,7 @@ frontend/
 │   ├── pages/
 │   │   ├── Admin.tsx         # Admin area shell
 │   │   ├── AdminLogin.tsx    # Login flow UI
+│   │   ├── ServerDetail.tsx  # Server detail view with page transition
 │   │   └── ServerList.tsx    # Listing pages and route assembly
 │   ├── App.tsx
 │   ├── main.tsx
@@ -75,7 +78,7 @@ frontend/
 ### Install
 
 ```bash
-cd cmd/relay-server/frontend
+cd frontend
 npm install
 ```
 
@@ -143,19 +146,20 @@ The relay enforces a consistent anti-abuse gate for both control APIs and revers
 ### Run with Relay Server
 
 ```bash
-# Build frontend
-cd cmd/relay-server/frontend
+# Build frontend (output: ../cmd/relay-server/dist/app/)
+cd frontend
 npm run build
 
-# Run relay server
-cd ../../..
-go run cmd/relay-server/*.go -adminport 4017
+# Run relay server (embeds dist/ at compile time)
+cd ..
+go run ./cmd/relay-server/*.go -adminport 4017
 ```
 
-Or with explicit static directory:
+Or use the combined script:
 
 ```bash
-STATIC_DIR=./dist go run cmd/relay-server/*.go -adminport 4017
+cd frontend
+npm run serve
 ```
 
 ## Technical Notes

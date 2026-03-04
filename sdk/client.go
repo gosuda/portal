@@ -2,22 +2,38 @@
 package sdk
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/keyless_tls/keyless/lifecycle"
+
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/types"
+)
+
+const (
+	keylessDirEnvVar            = "KEYLESS_DIR"
+	defaultKeylessDir           = "/etc/portal/keyless"
+	keylessFullChainFile        = "fullchain.pem"
+	keylessPrivateKeyFile       = "privatekey.pem"
+	keylessLifecycleStateSubdir = "lifecycle-identities"
 )
 
 // SDK-specific errors.
@@ -79,11 +95,11 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
-	if !types.IsValidLeaseName(name) {
+	if !netutil.IsValidLeaseName(name) {
 		return nil, ErrInvalidName
 	}
 
-	relayAddrs, err := types.NormalizeRelayAPIURLs(c.config.BootstrapServers)
+	relayAddrs, err := netutil.NormalizeRelayAPIURLs(c.config.BootstrapServers)
 	if err != nil {
 		return nil, ErrNoAvailableRelay
 	}
@@ -92,7 +108,7 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if err != nil {
 		return nil, err
 	}
-	controlPlaneIdentity, err := controlplane.IssueIdentity(lease.ID)
+	controlPlaneIdentity, err := acquireLifecycleIdentity(lease.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +199,167 @@ func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal
 	return lease, nil
 }
 
+func acquireLifecycleIdentity(leaseID string) (tls.Certificate, error) {
+	manager, err := newLifecycleManager()
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("initialize keyless lifecycle manager: %w", err)
+	}
+
+	ctx := context.Background()
+	bundle, err := loadOrAcquireLifecycleIdentityBundle(ctx, manager, leaseID)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("acquire lifecycle identity for lease %s: %w", leaseID, err)
+	}
+
+	cert, leaf, bundle, err := decodeLifecycleIdentityBundleWithReissue(ctx, manager, leaseID, bundle)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	if _, err := manager.ValidateIdentity(leaseID, leaf); err != nil {
+		bundle, err = repairLifecycleIdentityBundle(ctx, manager, leaseID, err)
+		if err != nil {
+			return tls.Certificate{}, err
+		}
+
+		cert, leaf, err = tlsCertificateFromLifecycleBundle(bundle)
+		if err != nil {
+			return tls.Certificate{}, err
+		}
+		if _, err := manager.ValidateIdentity(leaseID, leaf); err != nil {
+			return tls.Certificate{}, fmt.Errorf("validate renewed lifecycle identity for lease %s: %w", leaseID, err)
+		}
+	}
+
+	return cert, nil
+}
+
+func loadOrAcquireLifecycleIdentityBundle(ctx context.Context, manager *lifecycle.Manager, leaseID string) (*lifecycle.IdentityBundle, error) {
+	bundle, err := manager.LoadIdentity(ctx, leaseID)
+	switch {
+	case errors.Is(err, lifecycle.ErrLeaseNotFound):
+		bundle, err = manager.IssueIdentity(ctx, leaseID, lifecycle.ChallengeProof{}, nil)
+	case errors.Is(err, lifecycle.ErrCorruptStore):
+		bundle, err = manager.ReissueIdentity(ctx, leaseID, lifecycle.ChallengeProof{}, "corrupt_store")
+	}
+	return bundle, err
+}
+
+func decodeLifecycleIdentityBundleWithReissue(
+	ctx context.Context,
+	manager *lifecycle.Manager,
+	leaseID string,
+	bundle *lifecycle.IdentityBundle,
+) (tls.Certificate, *x509.Certificate, *lifecycle.IdentityBundle, error) {
+	cert, leaf, err := tlsCertificateFromLifecycleBundle(bundle)
+	if err == nil {
+		return cert, leaf, bundle, nil
+	}
+
+	reissued, reissueErr := manager.ReissueIdentity(ctx, leaseID, lifecycle.ChallengeProof{}, "bundle_parse_failure")
+	if reissueErr != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("decode lifecycle identity for lease %s: %w", leaseID, err)
+	}
+
+	cert, leaf, err = tlsCertificateFromLifecycleBundle(reissued)
+	if err != nil {
+		return tls.Certificate{}, nil, nil, fmt.Errorf("decode reissued lifecycle identity for lease %s: %w", leaseID, err)
+	}
+	return cert, leaf, reissued, nil
+}
+
+func repairLifecycleIdentityBundle(
+	ctx context.Context,
+	manager *lifecycle.Manager,
+	leaseID string,
+	validateErr error,
+) (*lifecycle.IdentityBundle, error) {
+	var (
+		bundle *lifecycle.IdentityBundle
+		err    error
+	)
+
+	switch {
+	case errors.Is(validateErr, lifecycle.ErrCorruptStore):
+		bundle, err = manager.ReissueIdentity(ctx, leaseID, lifecycle.ChallengeProof{}, "validate_corrupt_store")
+	case errors.Is(validateErr, lifecycle.ErrInvalidCert), errors.Is(validateErr, lifecycle.ErrOverlapExpired):
+		bundle, err = manager.RenewIdentity(ctx, leaseID)
+		if errors.Is(err, lifecycle.ErrCorruptStore) {
+			bundle, err = manager.ReissueIdentity(ctx, leaseID, lifecycle.ChallengeProof{}, "renew_corrupt_store")
+		}
+	default:
+		return nil, fmt.Errorf("validate lifecycle identity for lease %s: %w", leaseID, validateErr)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("repair lifecycle identity for lease %s: %w", leaseID, err)
+	}
+
+	return bundle, nil
+}
+
+func newLifecycleManager() (*lifecycle.Manager, error) {
+	keylessDir := strings.TrimSpace(os.Getenv(keylessDirEnvVar))
+	if keylessDir == "" {
+		keylessDir = defaultKeylessDir
+	}
+
+	certPath := filepath.Join(keylessDir, keylessFullChainFile)
+	keyPath := filepath.Join(keylessDir, keylessPrivateKeyFile)
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("read keyless issuer certificate %q: %w", certPath, err)
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("read keyless issuer private key %q: %w", keyPath, err)
+	}
+	if _, err = tls.X509KeyPair(certPEM, keyPEM); err != nil {
+		return nil, fmt.Errorf("load keyless issuer key pair from %q and %q: %w", certPath, keyPath, err)
+	}
+
+	secret := sha256.Sum256(keyPEM)
+	storeDir := filepath.Join(keylessDir, keylessLifecycleStateSubdir)
+	store, err := lifecycle.NewDiskStore(storeDir, secret[:])
+	if err != nil {
+		return nil, fmt.Errorf("create keyless lifecycle store %q: %w", storeDir, err)
+	}
+
+	manager, err := lifecycle.NewManager(lifecycle.ManagerConfig{
+		Store:         store,
+		IssuerCertPEM: certPEM,
+		IssuerKeyPEM:  keyPEM,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create keyless lifecycle manager: %w", err)
+	}
+	return manager, nil
+}
+
+func tlsCertificateFromLifecycleBundle(bundle *lifecycle.IdentityBundle) (tls.Certificate, *x509.Certificate, error) {
+	if bundle == nil {
+		return tls.Certificate{}, nil, errors.New("lifecycle identity bundle is required")
+	}
+	if len(bundle.ChainPEM) == 0 {
+		return tls.Certificate{}, nil, errors.New("lifecycle identity certificate chain is empty")
+	}
+	if len(bundle.KeyPEM) == 0 {
+		return tls.Certificate{}, nil, errors.New("lifecycle identity private key is empty")
+	}
+
+	cert, err := tls.X509KeyPair(bundle.ChainPEM, bundle.KeyPEM)
+	if err != nil {
+		return tls.Certificate{}, nil, fmt.Errorf("load lifecycle identity key pair for lease %s: %w", bundle.LeaseID, err)
+	}
+	if len(cert.Certificate) == 0 {
+		return tls.Certificate{}, nil, fmt.Errorf("lifecycle identity certificate chain missing leaf for lease %s", bundle.LeaseID)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return tls.Certificate{}, nil, fmt.Errorf("parse lifecycle identity leaf certificate for lease %s: %w", bundle.LeaseID, err)
+	}
+	return cert, leaf, nil
+}
+
 func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
 	parsed, err := url.Parse(relayAddr)
 	if err != nil {
@@ -192,7 +369,7 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 	if keylessServerName == "" {
 		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
 	}
-	baseHost := types.PortalRootHost(relayAddr)
+	baseHost := netutil.PortalRootHost(relayAddr)
 	if baseHost == "" {
 		return nil, nil, fmt.Errorf("keyless base host is required for relay %s", relayAddr)
 	}

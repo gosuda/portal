@@ -16,7 +16,7 @@ import (
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
 
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/portal/netutil"
 )
 
 // BuildClientTLSConfig builds a keyless TLS server config for tunnel-side TLS termination.
@@ -47,7 +47,6 @@ func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Con
 		Endpoint:   relayAddr,
 		ServerName: keylessServerName,
 		KeyID:      RelayKeyID,
-		EnableMTLS: false,
 		RootCAPEM:  rootCAPEM,
 	}, certPEM)
 	if err != nil {
@@ -186,7 +185,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
-		InsecureSkipVerify: types.IsLocalhost(host),
+		InsecureSkipVerify: netutil.IsLocalhost(host),
 	})
 	defer tlsConn.Close()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
