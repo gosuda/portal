@@ -9,17 +9,16 @@ services:
       - "${ADMIN_PORT:-4017}"
     environment:
       # Core configuration
-      PORTAL_URL: ${PORTAL_URL:-http://localhost:${ADMIN_PORT:-4017}}
-      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-http://localhost:${ADMIN_PORT:-4017}}
+      PORTAL_URL: ${PORTAL_URL:-https://localhost:${ADMIN_PORT:-4017}}
+      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-https://localhost:${ADMIN_PORT:-4017}}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
 
-      # TLS/SNI and keyless configurationa
+      # TLS/SNI and keyless configuration
       SNI_PORT: ${SNI_PORT:-443}
       KEYLESS_DIR: ${KEYLESS_DIR:-/etc/portal/keyless}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
     ports:
       - "${ADMIN_PORT:-4017}:${ADMIN_PORT:-4017}"
-      - "80:80"
       - "443:443"
     volumes:
       - ./data/keyless:/etc/portal/keyless

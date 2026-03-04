@@ -10,12 +10,36 @@ import (
 	"strings"
 )
 
-const defaultBootstrapURL = "http://localhost:4017"
+const defaultBootstrapURL = "https://localhost:4017"
 
 func normalizeRootHost(raw string) string {
 	normalized := strings.ToLower(strings.TrimSpace(raw))
 	normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "."), "*.")
 	return normalized
+}
+
+// IsLocalhost reports whether host resolves to localhost/loopback semantics.
+// It accepts bare hosts, host:port forms, and bracketed IPv6 literals.
+func IsLocalhost(host string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(host))
+	if normalized == "" {
+		return false
+	}
+
+	if parsedHost, _, err := net.SplitHostPort(normalized); err == nil {
+		normalized = parsedHost
+	}
+	normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "."), "*.")
+	normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "]"), "[")
+
+	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") {
+		return true
+	}
+
+	if ip := net.ParseIP(normalized); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // StripScheme removes http:// or https:// prefix from a string.
@@ -166,7 +190,7 @@ func ServicePublicURL(portalURL, serviceName string) string {
 		return ""
 	}
 
-	scheme, rootHost, _, ok := parsePortalAddress(portalURL, "http")
+	scheme, rootHost, _, ok := parsePortalAddress(portalURL, "https")
 	if !ok || rootHost == "" {
 		return ""
 	}
@@ -199,7 +223,7 @@ func DefaultBootstrapFrom(base string) string {
 	}
 
 	if !strings.Contains(base, "://") {
-		base = "http://" + base
+		base = "https://" + base
 	}
 
 	u, err := url.Parse(strings.TrimSuffix(base, "/"))
@@ -213,6 +237,7 @@ func DefaultBootstrapFrom(base string) string {
 		return defaultBootstrapURL
 	}
 
+	u.Scheme = "https"
 	u.Path = ""
 	u.RawQuery = ""
 	u.Fragment = ""
@@ -358,7 +383,7 @@ func NormalizeTargetAddr(raw string) (string, error) {
 }
 
 // NormalizeRelayAPIURL normalizes a relay API URL.
-// It accepts host:port input (defaults to http), validates the scheme,
+// It accepts host:port input (defaults to https), validates the scheme,
 // normalizes localhost hostnames, and removes path/query/fragment.
 func NormalizeRelayAPIURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
@@ -368,7 +393,7 @@ func NormalizeRelayAPIURL(raw string) (string, error) {
 
 	// Accept host:port input.
 	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
+		raw = "https://" + raw
 	}
 
 	u, err := url.Parse(raw)
@@ -389,9 +414,9 @@ func NormalizeRelayAPIURL(raw string) (string, error) {
 	}
 
 	switch u.Scheme {
-	case "http", "https":
+	case "https":
 	default:
-		return "", fmt.Errorf("unsupported relay URL scheme: %q (use http/https)", u.Scheme)
+		return "", fmt.Errorf("unsupported relay URL scheme: %q (use https)", u.Scheme)
 	}
 
 	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {

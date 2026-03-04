@@ -23,6 +23,8 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
+
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -66,8 +68,12 @@ type Manager struct {
 	stopOnce  sync.Once
 }
 
-func NewManager(cfg Config) *Manager {
-	return &Manager{
+func NewManager(ctx context.Context, cfg Config) (*Manager, string, error) {
+	if strings.TrimSpace(cfg.KeyDir) == "" {
+		return nil, "", nil
+	}
+
+	manager := &Manager{
 		cfg: Config{
 			BaseDomain:      cfg.BaseDomain,
 			KeyDir:          cfg.KeyDir,
@@ -75,6 +81,57 @@ func NewManager(cfg Config) *Manager {
 		},
 		stopCh: make(chan struct{}),
 	}
+
+	generated, err := EnsureLocalDevelopmentCertificate(manager.cfg.KeyDir, manager.cfg.BaseDomain)
+	if err != nil {
+		return nil, "", fmt.Errorf("ensure local development certificate: %w", err)
+	}
+	if generated {
+		log.Info().
+			Str("base_host", manager.cfg.BaseDomain).
+			Str("key_file", manager.SigningKeyFile()).
+			Msg("[signer] generated self-signed localhost development certificate")
+	}
+
+	keyFile, err := manager.PrepareSigningKey(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return manager, keyFile, nil
+}
+
+// PrepareSigningKey resolves the signer key path and runs ACME provisioning when required.
+// It encapsulates local-host detection and ACME enable/disable policy.
+func (m *Manager) PrepareSigningKey(ctx context.Context) (string, error) {
+	if m == nil {
+		return "", errors.New("acme manager is nil")
+	}
+
+	keyDir := strings.TrimSpace(m.cfg.KeyDir)
+	baseDomain := strings.TrimSpace(m.cfg.BaseDomain)
+	cloudflareToken := strings.TrimSpace(m.cfg.CloudflareToken)
+	isLocalBaseHost := types.IsLocalhost(baseDomain)
+
+	shouldEnsureWithACME := keyDir != "" && cloudflareToken != "" && baseDomain != "" && !isLocalBaseHost
+	if shouldEnsureWithACME {
+		keyFile, err := m.EnsureSigningKey(ctx)
+		if err != nil {
+			return "", fmt.Errorf("ensure keyless signing key: %w", err)
+		}
+		return keyFile, nil
+	}
+
+	log.Info().
+		Bool("has_key_dir", keyDir != "").
+		Bool("has_cloudflare_token", cloudflareToken != "").
+		Bool("has_base_domain", baseDomain != "").
+		Bool("is_local_base_host", isLocalBaseHost).
+		Msg("[signer] ACME issuance disabled (requires key directory, Cloudflare token, and base domain)")
+
+	if keyDir == "" {
+		return "", nil
+	}
+	return m.SigningKeyFile(), nil
 }
 
 func (m *Manager) keyDir() string {

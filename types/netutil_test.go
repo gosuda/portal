@@ -134,7 +134,7 @@ func TestServicePublicURL(t *testing.T) {
 			name:      "default scheme for host-only portal URL",
 			portalURL: "portal.example.com",
 			service:   "My-App",
-			want:      "http://my-app.portal.example.com",
+			want:      "https://my-app.portal.example.com",
 		},
 		{
 			name:      "invalid service returns empty",
@@ -276,5 +276,35 @@ func TestBuildSNINameFallbackNormalizesRootHost(t *testing.T) {
 	want := "api-gateway.portal.edge.example.com"
 	if got != want {
 		t.Fatalf("BuildSNIName fallback=%q, want %q", got, want)
+	}
+}
+
+func TestIsLocalhost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		want bool
+	}{
+		{name: "localhost", host: "localhost", want: true},
+		{name: "localhost with port", host: "localhost:4017", want: true},
+		{name: "subdomain localhost", host: "portal.localhost", want: true},
+		{name: "ipv4 loopback", host: "127.0.0.1", want: true},
+		{name: "ipv4 loopback with port", host: "127.0.0.1:4017", want: true},
+		{name: "ipv6 loopback", host: "::1", want: true},
+		{name: "ipv6 loopback with port", host: "[::1]:4017", want: true},
+		{name: "public host", host: "example.com", want: false},
+		{name: "public ip", host: "8.8.8.8", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := IsLocalhost(tt.host); got != tt.want {
+				t.Fatalf("IsLocalhostHost(%q)=%v, want %v", tt.host, got, tt.want)
+			}
+		})
 	}
 }

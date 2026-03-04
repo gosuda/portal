@@ -27,13 +27,13 @@ func TestNormalizeRelayAPIURL(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "localhost subdomain to localhost", in: "http://demo-app.localhost:4017", want: "http://localhost:4017"},
-		{name: "http base", in: "http://example.com", want: "http://example.com"},
+		{name: "localhost subdomain to localhost", in: "https://demo-app.localhost:4017", want: "https://localhost:4017"},
+		{name: "http base rejected", in: "http://example.com", wantErr: true},
 		{name: "https base", in: "https://example.com/", want: "https://example.com"},
-		{name: "bare host", in: "localhost:4017", want: "http://localhost:4017"},
+		{name: "bare host", in: "localhost:4017", want: "https://localhost:4017"},
 		{name: "invalid ws scheme", in: "ws://localhost:4017", wantErr: true},
 		{name: "invalid wss scheme", in: "wss://example.com", wantErr: true},
-		{name: "invalid relay path", in: "http://localhost:4017/relay", wantErr: true},
+		{name: "invalid relay path", in: "https://localhost:4017/relay", wantErr: true},
 		{name: "invalid scheme", in: "ftp://example.com", wantErr: true},
 		{name: "empty", in: "", wantErr: true},
 	}

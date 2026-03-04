@@ -23,7 +23,7 @@ import (
 const (
 	defaultAPIPort    = 4017
 	defaultSNIPort    = 443
-	defaultPortalURL  = "http://localhost:4017"
+	defaultPortalURL  = "https://localhost:4017"
 	defaultKeylessDir = "/etc/portal/keyless"
 )
 

@@ -26,7 +26,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (typeof window !== "undefined") {
       return window.location.origin;
     }
-    return "http://localhost:4017";
+    return "https://localhost:4017";
   }, []);
 
   const [host, setHost] = useState(defaultHost);

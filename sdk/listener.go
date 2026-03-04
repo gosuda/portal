@@ -120,6 +120,13 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 	if err != nil {
 		return nil, err
 	}
+	host := types.PortalRootHost(apiURL)
+	clientTransport := http.DefaultTransport.(*http.Transport).Clone()
+	clientTransport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         host,
+		InsecureSkipVerify: types.IsLocalhost(host),
+	}
 
 	if reverseWorkers <= 0 {
 		reverseWorkers = defaultReverseWorkers
@@ -133,7 +140,8 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 		relayAddr: apiURL,
 		lease:     lease,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: clientTransport,
 		},
 		tlsConfig:          tlsConfig,
 		closeFns:           closeFns,
@@ -388,8 +396,9 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 		return nil, errors.New("reverse connect URL missing TLS server name")
 	}
 	tlsConn := tls.Client(rawConn, &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ServerName: serverName,
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         serverName,
+		InsecureSkipVerify: types.IsLocalhost(serverName),
 	})
 	err = tlsConn.HandshakeContext(ctx)
 	if err != nil {

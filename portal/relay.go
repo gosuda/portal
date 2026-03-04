@@ -44,30 +44,15 @@ func NewRelayServer(
 		sniRouter:    sni.NewRouter(sniPort),
 	}
 
-	keyFile := ""
-	if keylessDir != "" {
-		server.acmeManager = acme.NewManager(acme.Config{
-			BaseDomain:      baseHost,
-			KeyDir:          keylessDir,
-			CloudflareToken: cloudflareToken,
-		})
-		keyFile = server.acmeManager.SigningKeyFile()
+	acmeManager, keyFile, err := acme.NewManager(ctx, acme.Config{
+		BaseDomain:      baseHost,
+		KeyDir:          keylessDir,
+		CloudflareToken: cloudflareToken,
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	shouldEnsureWithACME := keylessDir != "" && cloudflareToken != "" && baseHost != ""
-	if shouldEnsureWithACME {
-		var err error
-		keyFile, err = server.acmeManager.EnsureSigningKey(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("ensure keyless signing key: %w", err)
-		}
-	} else {
-		log.Info().
-			Bool("has_key_dir", keylessDir != "").
-			Bool("has_cloudflare_token", cloudflareToken != "").
-			Bool("has_base_domain", baseHost != "").
-			Msg("[signer] ACME issuance disabled (requires key directory, Cloudflare token, and base domain)")
-	}
+	server.acmeManager = acmeManager
 
 	signer, err := keyless.NewSigner(keyless.Config{
 		KeyFile: keyFile,

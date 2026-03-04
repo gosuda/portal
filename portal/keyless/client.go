@@ -15,6 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
+
+	"gosuda.org/portal/types"
 )
 
 // BuildClientTLSConfig builds a keyless TLS server config for tunnel-side TLS termination.
@@ -181,8 +183,9 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 	}
 
 	tlsConn := tls.Client(rawConn, &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ServerName: serverName,
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         serverName,
+		InsecureSkipVerify: types.IsLocalhost(host),
 	})
 	defer tlsConn.Close()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {

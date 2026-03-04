@@ -45,7 +45,7 @@ Usage:
         portal-tunnel [OPTIONS] [ARGUMENTS]
 
 Options:
-        --relay           Portal relay server API URLs (comma-separated, http/https) [default: http://localhost:4017] [env: RELAYS]
+        --relay           Portal relay server API URLs (comma-separated, https only) [default: https://localhost:4017] [env: RELAYS]
         --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
         --name            Service name  [env: APP_NAME]
         --tls             Enable keyless TLS mode [env: TLS]
