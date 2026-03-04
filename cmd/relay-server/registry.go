@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,15 +21,6 @@ type SDKRegistry struct {
 }
 
 const sdkLeaseTTL = 30 * time.Second
-
-func reverseTokenMatches(expected, provided string) bool {
-	expected = strings.TrimSpace(expected)
-	provided = strings.TrimSpace(provided)
-	if expected == "" || provided == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
-}
 
 func normalizeLeaseID(raw string) string {
 	return strings.TrimSpace(raw)
@@ -53,10 +43,6 @@ func lookupLeaseEntry(serv *portal.RelayServer, leaseID string) (*portal.LeaseEn
 
 func (r *SDKRegistry) extractClientIP(req *http.Request) string {
 	return manager.ExtractClientIP(req, r.trustProxyHeaders)
-}
-
-func (r *SDKRegistry) isSecureConnectRequest(req *http.Request) bool {
-	return isSecureRequestWithPolicy(req, r.trustProxyHeaders)
 }
 
 func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
@@ -127,41 +113,17 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	if !r.isSecureConnectRequest(req) {
-		writeAPIError(w, http.StatusUpgradeRequired, "tls_required", "tls reverse connect required")
-		return
-	}
-
-	leaseID, token := normalizeLeaseCredentials(
-		req.URL.Query().Get("lease_id"),
-		req.Header.Get(portal.ReverseConnectTokenHeader),
-	)
-	if leaseID == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
-		return
-	}
-	if token == "" {
-		writeAPIError(w, http.StatusUnauthorized, "missing_reverse_token", "reverse_token is required")
-		return
-	}
 	if isWebSocketUpgrade(req) {
 		writeAPIError(w, http.StatusBadRequest, "unsupported_transport", "websocket transport is not supported")
 		return
 	}
 
-	clientIP := r.extractClientIP(req)
-	if r.isClientIPBanned(clientIP) {
-		writeAPIError(w, http.StatusForbidden, "ip_banned", "ip is banned")
-		return
-	}
-
-	entry, ok := lookupLeaseEntry(serv, leaseID)
+	leaseID := req.URL.Query().Get("lease_id")
+	token := req.Header.Get(portal.ReverseConnectTokenHeader)
+	ctx, ok := r.admitControlPlane(w, req, serv, leaseID, token, admissionConfig{
+		requireExistingLease: true,
+	})
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "lease_not_found", "lease not found")
-		return
-	}
-	if !reverseTokenMatches(entry.Lease.ReverseToken, token) {
-		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized reverse connect")
 		return
 	}
 
@@ -188,7 +150,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		return
 	}
 
-	serv.GetReverseHub().HandleConnect(conn, leaseID, token, clientIP)
+	serv.GetReverseHub().HandleConnect(conn, ctx.leaseID, ctx.token, ctx.clientIP)
 }
 
 // handleRegister handles SDK lease registration requests.
@@ -202,14 +164,8 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		return
 	}
 
-	registerReq.LeaseID, registerReq.ReverseToken = normalizeLeaseCredentials(registerReq.LeaseID, registerReq.ReverseToken)
 	registerReq.Name = strings.TrimSpace(registerReq.Name)
-
-	if !r.validateLeaseCredentials(w, registerReq.LeaseID, registerReq.ReverseToken) {
-		return
-	}
-	name := registerReq.Name
-	if !types.IsValidLeaseName(name) {
+	if !types.IsValidLeaseName(registerReq.Name) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_name", "name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
 		return
 	}
@@ -217,46 +173,37 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		writeAPIError(w, http.StatusBadRequest, "tls_required", "tls must be enabled")
 		return
 	}
-	if r.isClientIPBanned(r.extractClientIP(req)) {
-		writeAPIError(w, http.StatusForbidden, "ip_banned", "ip is banned")
+	ctx, ok := r.admitControlPlane(w, req, serv, registerReq.LeaseID, registerReq.ReverseToken, admissionConfig{})
+	if !ok {
 		return
 	}
-
-	// Ownership semantics: re-registration of an existing lease ID requires the same reverse token.
-	if entry, ok := lookupLeaseEntry(serv, registerReq.LeaseID); ok {
-		if !reverseTokenMatches(entry.Lease.ReverseToken, registerReq.ReverseToken) {
-			writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized lease registration")
-			return
-		}
-	}
+	registerReq.LeaseID = ctx.leaseID
+	registerReq.ReverseToken = ctx.token
 
 	// Create lease
 	lease := &portal.Lease{
 		ID:           registerReq.LeaseID,
-		Name:         name,
+		Name:         registerReq.Name,
 		Metadata:     registerReq.Metadata,
 		Expires:      time.Now().Add(sdkLeaseTTL),
 		TLS:          true,
 		ReverseToken: registerReq.ReverseToken,
 	}
 
-	// Register with lease manager
 	if !serv.GetLeaseManager().UpdateLease(lease) {
 		writeAPIError(w, http.StatusConflict, "lease_rejected", "failed to register lease (name conflict or policy violation)")
 		return
 	}
 
-	// Clear dropped state in case this is a re-registration after disconnect
 	serv.GetReverseHub().ClearDropped(registerReq.LeaseID)
 
-	sniName := types.BuildSNIName(name, serv.BaseHost)
+	sniName := types.BuildSNIName(registerReq.Name, serv.BaseHost)
 	if sniName == "" {
 		serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
 		writeAPIError(w, http.StatusInternalServerError, "sni_name_invalid", "failed to build SNI route name")
 		return
 	}
-	if err := serv.GetSNIRouter().RegisterRoute(sniName, registerReq.LeaseID, name); err != nil {
-		// Keep lease and route state consistent on partial failure.
+	if err := serv.GetSNIRouter().RegisterRoute(sniName, registerReq.LeaseID, registerReq.Name); err != nil {
 		serv.GetLeaseManager().DeleteLease(registerReq.LeaseID)
 		writeAPIError(w, http.StatusInternalServerError, "sni_register_failed", fmt.Sprintf("failed to register SNI route: %v", err))
 		return
@@ -264,12 +211,11 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 
 	log.Info().
 		Str("lease_id", registerReq.LeaseID).
-		Str("name", name).
+		Str("name", registerReq.Name).
 		Bool("tls", true).
 		Msg("[Registry] Lease registered")
 
-	// Build public URL
-	publicURL := types.ServicePublicURL(flagPortalURL, name)
+	publicURL := types.ServicePublicURL(flagPortalURL, registerReq.Name)
 
 	writeAPIData(w, http.StatusOK, types.RegisterResponse{
 		LeaseID:   registerReq.LeaseID,
@@ -288,16 +234,20 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 	if !r.decodeRequestBody(w, req, &unregisterReq, "[Registry] Failed to decode unregistration request") {
 		return
 	}
-	unregisterReq.LeaseID = normalizeLeaseID(unregisterReq.LeaseID)
+	ctx, ok := r.admitControlPlane(w, req, serv, unregisterReq.LeaseID, unregisterReq.ReverseToken, admissionConfig{
+		requireExistingLease: true,
+	})
+	if !ok {
+		return
+	}
 
-	// Delete from lease manager
-	if serv.GetLeaseManager().DeleteLease(unregisterReq.LeaseID) {
+	if serv.GetLeaseManager().DeleteLease(ctx.leaseID) {
 		log.Info().
-			Str("lease_id", unregisterReq.LeaseID).
+			Str("lease_id", ctx.leaseID).
 			Msg("[Registry] Lease unregistered")
 	}
-	serv.GetSNIRouter().UnregisterRouteByLeaseID(unregisterReq.LeaseID)
-	serv.GetReverseHub().DropLease(unregisterReq.LeaseID)
+	serv.GetSNIRouter().UnregisterRouteByLeaseID(ctx.leaseID)
+	serv.GetReverseHub().DropLease(ctx.leaseID)
 
 	writeAPIOK(w, http.StatusOK)
 }
@@ -313,30 +263,20 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		return
 	}
 
-	renewReq.LeaseID, renewReq.ReverseToken = normalizeLeaseCredentials(renewReq.LeaseID, renewReq.ReverseToken)
-	if !r.validateLeaseCredentials(w, renewReq.LeaseID, renewReq.ReverseToken) {
-		return
-	}
-
-	// Get existing lease
-	entry, ok := lookupLeaseEntry(serv, renewReq.LeaseID)
+	ctx, ok := r.admitControlPlane(w, req, serv, renewReq.LeaseID, renewReq.ReverseToken, admissionConfig{
+		requireExistingLease: true,
+	})
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "lease_not_found", "lease not found")
-		return
-	}
-	if !reverseTokenMatches(entry.Lease.ReverseToken, renewReq.ReverseToken) {
-		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized lease renewal")
 		return
 	}
 
-	// Update expiration
+	entry := ctx.entry
 	entry.Lease.Expires = time.Now().Add(sdkLeaseTTL)
 	if !serv.GetLeaseManager().UpdateLease(entry.Lease) {
 		writeAPIError(w, http.StatusInternalServerError, "renew_failed", "failed to renew lease")
 		return
 	}
 
-	// Transport is TLS reverse-connect only; keep SNI route refreshed on renew.
 	sniName := types.BuildSNIName(entry.Lease.Name, serv.BaseHost)
 	if sniName == "" {
 		log.Warn().

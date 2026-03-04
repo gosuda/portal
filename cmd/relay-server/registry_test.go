@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,23 @@ import (
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/types"
 )
+
+func attachPeerLeaseCertificate(req *http.Request, leaseID string) {
+	leaseURI, _ := url.Parse(controlPlaneLeaseURIPfx + leaseID)
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{
+			{
+				NotBefore:   time.Now().Add(-1 * time.Minute),
+				NotAfter:    time.Now().Add(1 * time.Hour),
+				URIs:        []*url.URL{leaseURI},
+				ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+				Subject: pkix.Name{
+					CommonName: controlPlaneCertCNPrefix + leaseID,
+				},
+			},
+		},
+	}
+}
 
 func decodeAPIRawEnvelope(t *testing.T, rec *httptest.ResponseRecorder) types.APIRawEnvelope {
 	t.Helper()
@@ -59,6 +78,7 @@ func TestSDKRegistryHandleRegisterTrimsReverseToken(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, types.PathSDKRegister, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, payload.LeaseID)
 	rec := httptest.NewRecorder()
 	registry.handleRegister(rec, req, serv)
 
@@ -112,6 +132,7 @@ func TestSDKRegistryHandleRenewAcceptsTrimmedReverseToken(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, types.PathSDKRenew, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, payload.LeaseID)
 	rec := httptest.NewRecorder()
 	registry.handleRenew(rec, req, serv)
 
@@ -121,6 +142,196 @@ func TestSDKRegistryHandleRenewAcceptsTrimmedReverseToken(t *testing.T) {
 	}
 	if !envelope.OK {
 		t.Fatalf("renew response not successful: %+v", envelope)
+	}
+}
+
+func TestSDKRegistryHandleRenewRejectsBannedIP(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	ipManager := manager.NewIPManager()
+	ipManager.BanIP("203.0.113.22")
+	registry := &SDKRegistry{ipManager: ipManager}
+
+	lease := &portal.Lease{
+		ID:           "lease-renew-ban",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "renew-token",
+		Expires:      time.Now().Add(30 * time.Second),
+	}
+	if ok := serv.GetLeaseManager().UpdateLease(lease); !ok {
+		t.Fatal("failed to seed lease")
+	}
+
+	payload := types.RenewRequest{
+		LeaseID:      lease.ID,
+		ReverseToken: lease.ReverseToken,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal renew payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, types.PathSDKRenew, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, lease.ID)
+	req.RemoteAddr = "203.0.113.22:45000"
+	rec := httptest.NewRecorder()
+
+	registry.handleRenew(rec, req, serv)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("handleRenew status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.Error == nil || envelope.Error.Code != "ip_banned" {
+		t.Fatalf("unexpected renew ip_banned payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleRegisterRequiresClientCertificate(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	payload := types.RegisterRequest{
+		LeaseID:      "lease-register-cert-required",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "reverse-token",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal register payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, types.PathSDKRegister, bytes.NewReader(body))
+	req.TLS = &tls.ConnectionState{}
+	rec := httptest.NewRecorder()
+	registry.handleRegister(rec, req, serv)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("handleRegister status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected register rejection, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "client_cert_required" {
+		t.Fatalf("unexpected register rejection payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleUnregisterRequiresReverseToken(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	lease := &portal.Lease{
+		ID:           "lease-unregister-token-required",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "reverse-token",
+		Expires:      time.Now().Add(30 * time.Second),
+	}
+	if ok := serv.GetLeaseManager().UpdateLease(lease); !ok {
+		t.Fatal("failed to seed lease")
+	}
+
+	payload := types.UnregisterRequest{
+		LeaseID: lease.ID,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal unregister payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, types.PathSDKUnregister, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, lease.ID)
+	rec := httptest.NewRecorder()
+	registry.handleUnregister(rec, req, serv)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("handleUnregister status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.OK {
+		t.Fatalf("expected unregister rejection, got %+v", envelope)
+	}
+	if envelope.Error == nil || envelope.Error.Code != "missing_reverse_token" {
+		t.Fatalf("unexpected unregister rejection payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleUnregisterWithValidIdentity(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	lease := &portal.Lease{
+		ID:           "lease-unregister-success",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "reverse-token",
+		Expires:      time.Now().Add(30 * time.Second),
+	}
+	if ok := serv.GetLeaseManager().UpdateLease(lease); !ok {
+		t.Fatal("failed to seed lease")
+	}
+
+	payload := types.UnregisterRequest{
+		LeaseID:      lease.ID,
+		ReverseToken: lease.ReverseToken,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal unregister payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, types.PathSDKUnregister, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, lease.ID)
+	rec := httptest.NewRecorder()
+	registry.handleUnregister(rec, req, serv)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handleUnregister status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if _, ok := serv.GetLeaseManager().GetLeaseByID(lease.ID); ok {
+		t.Fatalf("lease %q should be removed after unregister", lease.ID)
+	}
+}
+
+func TestSDKRegistryHandleUnregisterRejectsTokenMismatch(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	lease := &portal.Lease{
+		ID:           "lease-unregister-token-mismatch",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "correct-token",
+		Expires:      time.Now().Add(30 * time.Second),
+	}
+	if ok := serv.GetLeaseManager().UpdateLease(lease); !ok {
+		t.Fatal("failed to seed lease")
+	}
+
+	payload := types.UnregisterRequest{
+		LeaseID:      lease.ID,
+		ReverseToken: "wrong-token",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal unregister payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, types.PathSDKUnregister, bytes.NewReader(body))
+	attachPeerLeaseCertificate(req, lease.ID)
+	rec := httptest.NewRecorder()
+
+	registry.handleUnregister(rec, req, serv)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("handleUnregister status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.Error == nil || envelope.Error.Code != "unauthorized" {
+		t.Fatalf("unexpected unregister mismatch payload: %+v", envelope.Error)
 	}
 }
 
@@ -134,7 +345,7 @@ func TestSDKRegistryHandleConnectRejectsBannedIP(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-connect-ban", http.NoBody)
-	req.TLS = &tls.ConnectionState{}
+	attachPeerLeaseCertificate(req, "lease-connect-ban")
 	req.RemoteAddr = "203.0.113.22:45000"
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
 	rec := httptest.NewRecorder()
@@ -153,9 +364,67 @@ func TestSDKRegistryHandleConnectRejectsBannedIP(t *testing.T) {
 	}
 }
 
+func TestSDKRegistryHandleConnectRejectsMissingLease(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=missing-lease", http.NoBody)
+	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
+	attachPeerLeaseCertificate(req, "missing-lease")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.Error == nil || envelope.Error.Code != "lease_not_found" {
+		t.Fatalf("unexpected lease_not_found payload: %+v", envelope.Error)
+	}
+}
+
+func TestSDKRegistryHandleConnectRejectsCertLeaseMismatch(t *testing.T) {
+	serv := newRegistryTestRelayServer(t)
+	registry := &SDKRegistry{}
+
+	lease := &portal.Lease{
+		ID:           "lease-cert-mismatch",
+		Name:         "tenant",
+		TLS:          true,
+		ReverseToken: "reverse-token",
+		Expires:      time.Now().Add(30 * time.Second),
+	}
+	if ok := serv.GetLeaseManager().UpdateLease(lease); !ok {
+		t.Fatal("failed to seed lease")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id="+lease.ID, http.NoBody)
+	req.Header.Set(portal.ReverseConnectTokenHeader, lease.ReverseToken)
+	attachPeerLeaseCertificate(req, "other-lease")
+	rec := httptest.NewRecorder()
+
+	registry.handleConnect(rec, req, serv)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	envelope := decodeAPIRawEnvelope(t, rec)
+	if envelope.Error == nil || envelope.Error.Code != "cert_lease_mismatch" {
+		t.Fatalf("unexpected cert_lease_mismatch payload: %+v", envelope.Error)
+	}
+}
+
 func TestSDKRegistryHandleConnectRequiresTLS(t *testing.T) {
 	serv := newRegistryTestRelayServer(t)
 	registry := &SDKRegistry{}
+	serv.GetLeaseManager().UpdateLease(&portal.Lease{
+		ID:           "lease-connect-tls",
+		Name:         "lease-connect-tls",
+		ReverseToken: "reverse-token",
+		Expires:      time.Now().Add(time.Hour),
+		TLS:          true,
+	})
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect+"?lease_id=lease-connect-tls", http.NoBody)
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
@@ -163,81 +432,15 @@ func TestSDKRegistryHandleConnectRequiresTLS(t *testing.T) {
 
 	registry.handleConnect(rec, req, serv)
 
-	if rec.Code != http.StatusUpgradeRequired {
-		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUpgradeRequired)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 	envelope := decodeAPIRawEnvelope(t, rec)
 	if envelope.OK {
-		t.Fatalf("expected tls_required response to fail, got %+v", envelope)
+		t.Fatalf("expected client_cert_required response to fail, got %+v", envelope)
 	}
-	if envelope.Error == nil || envelope.Error.Code != "tls_required" || envelope.Error.Message != "tls reverse connect required" {
-		t.Fatalf("unexpected tls_required payload: %+v", envelope.Error)
-	}
-}
-
-func TestSDKRegistryHandleConnectAcceptsTrustedProxyHTTPS(t *testing.T) {
-	serv := newRegistryTestRelayServer(t)
-	registry := &SDKRegistry{trustProxyHeaders: true}
-
-	_, trustedCIDR, err := net.ParseCIDR("10.0.0.0/8")
-	if err != nil {
-		t.Fatalf("parse trusted proxy cidr: %v", err)
-	}
-	manager.SetTrustedProxyCIDRs([]*net.IPNet{trustedCIDR})
-	t.Cleanup(func() {
-		manager.SetTrustedProxyCIDRs(nil)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
-	req.RemoteAddr = "10.1.2.3:443"
-	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
-	rec := httptest.NewRecorder()
-
-	registry.handleConnect(rec, req, serv)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusBadRequest)
-	}
-	envelope := decodeAPIRawEnvelope(t, rec)
-	if envelope.OK {
-		t.Fatalf("expected missing_lease_id response to fail, got %+v", envelope)
-	}
-	if envelope.Error == nil || envelope.Error.Code != "missing_lease_id" || envelope.Error.Message != "lease_id is required" {
-		t.Fatalf("unexpected missing_lease_id payload: %+v", envelope.Error)
-	}
-}
-
-func TestSDKRegistryHandleConnectRejectsUntrustedProxyHTTPS(t *testing.T) {
-	serv := newRegistryTestRelayServer(t)
-	registry := &SDKRegistry{trustProxyHeaders: true}
-
-	_, trustedCIDR, err := net.ParseCIDR("10.0.0.0/8")
-	if err != nil {
-		t.Fatalf("parse trusted proxy cidr: %v", err)
-	}
-	manager.SetTrustedProxyCIDRs([]*net.IPNet{trustedCIDR})
-	t.Cleanup(func() {
-		manager.SetTrustedProxyCIDRs(nil)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
-	req.RemoteAddr = "198.51.100.44:443"
-	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
-	rec := httptest.NewRecorder()
-
-	registry.handleConnect(rec, req, serv)
-
-	if rec.Code != http.StatusUpgradeRequired {
-		t.Fatalf("handleConnect status = %d, want %d", rec.Code, http.StatusUpgradeRequired)
-	}
-	envelope := decodeAPIRawEnvelope(t, rec)
-	if envelope.OK {
-		t.Fatalf("expected tls_required response to fail, got %+v", envelope)
-	}
-	if envelope.Error == nil || envelope.Error.Code != "tls_required" || envelope.Error.Message != "tls reverse connect required" {
-		t.Fatalf("unexpected tls_required payload: %+v", envelope.Error)
+	if envelope.Error == nil || envelope.Error.Code != "client_cert_required" {
+		t.Fatalf("unexpected client_cert_required payload: %+v", envelope.Error)
 	}
 }
 
@@ -246,7 +449,7 @@ func TestSDKRegistryHandleConnectMissingLeaseIDReturnsEnvelope(t *testing.T) {
 	registry := &SDKRegistry{}
 
 	req := httptest.NewRequest(http.MethodGet, types.PathSDKConnect, http.NoBody)
-	req.TLS = &tls.ConnectionState{}
+	attachPeerLeaseCertificate(req, "lease-missing")
 	req.Header.Set(portal.ReverseConnectTokenHeader, "reverse-token")
 	rec := httptest.NewRecorder()
 
