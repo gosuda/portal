@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { API_PATHS } from "@/lib/apiPaths";
+import { API_PATHS, adminLeasePath, encodeLeaseID } from "@/lib/apiPaths";
 
 describe("API_PATHS contract alignment", () => {
   it("keeps sdk endpoint paths aligned", () => {
@@ -12,6 +12,22 @@ describe("API_PATHS contract alignment", () => {
       domain: "/sdk/domain",
       connect: "/sdk/connect",
     });
+  });
+
+  it("encodes lease IDs as base64url path segments", () => {
+    const leaseId = "peer:legacy/123";
+    const expected = Buffer.from(leaseId)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const encoded = encodeLeaseID(leaseId);
+
+    expect(encoded).toBe(expected);
+    expect(encoded).not.toContain("=");
+    expect(adminLeasePath(encoded, "approve")).toBe(
+      `${API_PATHS.admin.leases}/${encodeURIComponent(encoded)}/approve`
+    );
   });
 
   it("keeps tunnel installer endpoint aligned", () => {

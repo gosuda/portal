@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
@@ -57,6 +57,20 @@ function isAdminServer(server: ListServer): server is AdminServer {
 
 function toAdminServer(server: ListServer): AdminServer | undefined {
   return isAdminServer(server) ? server : undefined;
+}
+
+function wrapAdminHandler<Args extends unknown[]>(
+  handler?: (...args: Args) => void | Promise<void>
+): ((...args: Args) => void) | undefined {
+  if (!handler) {
+    return undefined;
+  }
+
+  return (...args: Args) => {
+    void Promise.resolve(handler(...args)).catch((error) => {
+      console.error("Failed admin action", error);
+    });
+  };
 }
 
 export function ServerListView({
@@ -175,74 +189,29 @@ export function ServerListView({
     }
   };
 
-  const triggerBulkAction = async (handler?: (leaseIds: string[]) => void) => {
+  const runBulkAction = (handler?: (leaseIds: string[]) => void) => {
     if (!handler || selectedLeaseIds.size === 0) {
       return;
     }
 
-    try {
-      await Promise.resolve(handler(Array.from(selectedLeaseIds)));
-      handleClearSelection();
-    } catch (err) {
-      console.error("Failed bulk admin action", err);
-    }
+    void Promise.resolve(handler(Array.from(selectedLeaseIds)))
+      .then(() => {
+        handleClearSelection();
+      })
+      .catch((err) => {
+        console.error("Failed bulk admin action", err);
+      });
   };
 
-  const handleBulkApprove = () => triggerBulkAction(onBulkApprove);
-  const handleBulkDeny = () => triggerBulkAction(onBulkDeny);
-  const handleBulkBan = () => triggerBulkAction(onBulkBan);
+  const handleBulkApprove = () => runBulkAction(onBulkApprove);
+  const handleBulkDeny = () => runBulkAction(onBulkDeny);
+  const handleBulkBan = () => runBulkAction(onBulkBan);
 
-  const invokeAsyncHandler = useCallback(
-    (action: (() => void | Promise<void>) | undefined) => {
-      if (!action) {
-        return;
-      }
-      void Promise.resolve(action()).catch((error) => {
-        console.error("Failed admin action", error);
-      });
-    },
-    []
-  );
-
-  const handleCardBanStatusChange = useCallback(
-    (leaseId: string, isBan: boolean) =>
-      invokeAsyncHandler(
-        onBanStatusChange ? () => onBanStatusChange(leaseId, isBan) : undefined
-      ),
-    [invokeAsyncHandler, onBanStatusChange]
-  );
-
-  const handleCardBPSChange = useCallback(
-    (leaseId: string, bps: number) =>
-      invokeAsyncHandler(onBPSChange ? () => onBPSChange(leaseId, bps) : undefined),
-    [invokeAsyncHandler, onBPSChange]
-  );
-
-  const handleCardApproveStatusChange = useCallback(
-    (leaseId: string, approve: boolean) =>
-      invokeAsyncHandler(
-        onApproveStatusChange
-          ? () => onApproveStatusChange(leaseId, approve)
-          : undefined
-      ),
-    [invokeAsyncHandler, onApproveStatusChange]
-  );
-
-  const handleCardDenyStatusChange = useCallback(
-    (leaseId: string, deny: boolean) =>
-      invokeAsyncHandler(
-        onDenyStatusChange ? () => onDenyStatusChange(leaseId, deny) : undefined
-      ),
-    [invokeAsyncHandler, onDenyStatusChange]
-  );
-
-  const handleCardIPBanStatusChange = useCallback(
-    (ip: string, isBan: boolean) =>
-      invokeAsyncHandler(
-        onIPBanStatusChange ? () => onIPBanStatusChange(ip, isBan) : undefined
-      ),
-    [invokeAsyncHandler, onIPBanStatusChange]
-  );
+  const handleCardBanStatusChange = wrapAdminHandler(onBanStatusChange);
+  const handleCardBPSChange = wrapAdminHandler(onBPSChange);
+  const handleCardApproveStatusChange = wrapAdminHandler(onApproveStatusChange);
+  const handleCardDenyStatusChange = wrapAdminHandler(onDenyStatusChange);
+  const handleCardIPBanStatusChange = wrapAdminHandler(onIPBanStatusChange);
 
   const adminFilterControls = (
     <>

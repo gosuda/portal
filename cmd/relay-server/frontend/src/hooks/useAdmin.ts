@@ -68,13 +68,6 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function encodeLeaseIDForPath(raw: string): string {
-  if (!raw) {
-    throw new Error("Missing lease ID");
-  }
-  return encodeLeaseID(raw);
-}
-
 function toAdminServer(
   row: ServerData,
   index: number,
@@ -172,19 +165,16 @@ export function useAdmin() {
     );
   }, [serverData, bannedLeaseSet]);
 
-  const additionalFilter = useCallback(
-    (server: AdminServer) => {
-      switch (banFilter) {
-        case "banned":
-          return server.isBanned;
-        case "active":
-          return !server.isBanned;
-        default:
-          return true;
-      }
-    },
-    [banFilter]
-  );
+  const additionalFilter = (server: AdminServer) => {
+    switch (banFilter) {
+      case "banned":
+        return server.isBanned;
+      case "active":
+        return !server.isBanned;
+      default:
+        return true;
+    }
+  };
 
   const listState = useList({
     servers,
@@ -192,151 +182,122 @@ export function useAdmin() {
     additionalFilter,
   });
 
-  const runAdminAction = useCallback(
-    async (action: () => Promise<void>) => {
-      setError("");
-      try {
-        await action();
-        await fetchData();
-      } catch (err: unknown) {
-        const message = toAdminErrorMessage(err, "Action failed");
-        console.error(err);
-        setError(message);
-        throw err;
-      }
-    },
-    [fetchData]
-  );
+  const runAdminAction = async (action: () => Promise<void>) => {
+    setError("");
+    try {
+      await action();
+      await fetchData();
+    } catch (err: unknown) {
+      const message = toAdminErrorMessage(err, "Action failed");
+      console.error(err);
+      setError(message);
+      throw err;
+    }
+  };
 
-  const updateLeaseAction = useCallback(
-    async (peerId: string, action: LeaseAction, enabled: boolean) => {
-      const encodedLeaseID = encodeLeaseIDForPath(peerId);
-      const method = enabled ? apiClient.post : apiClient.delete;
-      await method<LeaseActionResult>(adminLeasePath(encodedLeaseID, action));
-    },
-    []
-  );
+  const updateLeaseAction = async (
+    peerId: string,
+    action: LeaseAction,
+    enabled: boolean
+  ) => {
+    if (!peerId) {
+      throw new Error("Missing lease ID");
+    }
+    const encodedLeaseID = encodeLeaseID(peerId);
+    const method = enabled ? apiClient.post : apiClient.delete;
+    await method<LeaseActionResult>(adminLeasePath(encodedLeaseID, action));
+  };
 
-  const handleBanFilterChange = useCallback((value: BanFilter) => {
+  const handleBanFilterChange = (value: BanFilter) => {
     setBanFilter(value);
-  }, []);
+  };
 
-  const handleBanStatus = useCallback(
-    (peerId: string, isBan: boolean) =>
-      runAdminAction(() => updateLeaseAction(peerId, "ban", isBan)),
-    [runAdminAction, updateLeaseAction]
-  );
+  const handleBanStatus = (peerId: string, isBan: boolean) =>
+    runAdminAction(() => updateLeaseAction(peerId, "ban", isBan));
 
-  const handleBPSChange = useCallback(
-    (peerId: string, bps: number) =>
-      runAdminAction(async () => {
-        const encodedLeaseID = encodeLeaseIDForPath(peerId);
-        const normalizedBPS = Math.trunc(bps);
-        if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-          await apiClient.delete<LeaseActionResult>(
-            adminLeasePath(encodedLeaseID, "bps")
-          );
-          return;
-        }
-        await apiClient.post<LeaseActionResult>(adminLeasePath(encodedLeaseID, "bps"), {
-          bps: normalizedBPS,
-        });
-      }),
-    [runAdminAction]
-  );
-
-  const handleApprovalModeChange = useCallback(
-    async (mode: ApprovalMode) => {
-      await runAdminAction(async () => {
-        const response = await apiClient.post<SettingsResponse>(
-          API_PATHS.admin.approvalMode,
-          { mode }
+  const handleBPSChange = (peerId: string, bps: number) =>
+    runAdminAction(async () => {
+      if (!peerId) {
+        throw new Error("Missing lease ID");
+      }
+      const encodedLeaseID = encodeLeaseID(peerId);
+      const normalizedBPS = Math.trunc(bps);
+      if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
+        await apiClient.delete<LeaseActionResult>(
+          adminLeasePath(encodedLeaseID, "bps")
         );
-        const nextMode = normalizeApprovalMode(response?.approval_mode ?? mode);
-        setApprovalMode(nextMode);
+        return;
+      }
+      await apiClient.post<LeaseActionResult>(adminLeasePath(encodedLeaseID, "bps"), {
+        bps: normalizedBPS,
       });
-    },
-    [runAdminAction]
-  );
+    });
 
-  const handleApproveStatus = useCallback(
-    (peerId: string, approve: boolean) =>
-      runAdminAction(() => updateLeaseAction(peerId, "approve", approve)),
-    [runAdminAction, updateLeaseAction]
-  );
+  const handleApprovalModeChange = async (mode: ApprovalMode) => {
+    await runAdminAction(async () => {
+      const response = await apiClient.post<SettingsResponse>(
+        API_PATHS.admin.approvalMode,
+        { mode }
+      );
+      const nextMode = normalizeApprovalMode(response?.approval_mode ?? mode);
+      setApprovalMode(nextMode);
+    });
+  };
 
-  const handleDenyStatus = useCallback(
-    (peerId: string, deny: boolean) =>
-      runAdminAction(() => updateLeaseAction(peerId, "deny", deny)),
-    [runAdminAction, updateLeaseAction]
-  );
+  const handleApproveStatus = (peerId: string, approve: boolean) =>
+    runAdminAction(() => updateLeaseAction(peerId, "approve", approve));
 
-  const handleIPBanStatus = useCallback(
-    (ip: string, isBan: boolean) =>
-      runAdminAction(async () => {
-        const normalizedIP = ip.trim();
-        if (!normalizedIP) {
-          throw new Error("Missing IP address");
-        }
-        if (isBan) {
-          await apiClient.post<LeaseActionResult>(adminIPBanPath(normalizedIP));
-          return;
-        }
-        await apiClient.delete<LeaseActionResult>(adminIPBanPath(normalizedIP));
-      }),
-    [runAdminAction]
-  );
+  const handleDenyStatus = (peerId: string, deny: boolean) =>
+    runAdminAction(() => updateLeaseAction(peerId, "deny", deny));
 
-  const runBulkLeaseAction = useCallback(
-    async (peerIds: string[], action: LeaseAction) => {
-      const normalizedPeerIDs = dedupeStrings(peerIds.filter((peerId) => peerId.length > 0));
-      if (normalizedPeerIDs.length === 0) {
-        throw new Error("No valid leases selected");
+  const handleIPBanStatus = (ip: string, isBan: boolean) =>
+    runAdminAction(async () => {
+      const normalizedIP = ip.trim();
+      if (!normalizedIP) {
+        throw new Error("Missing IP address");
       }
+      if (isBan) {
+        await apiClient.post<LeaseActionResult>(adminIPBanPath(normalizedIP));
+        return;
+      }
+      await apiClient.delete<LeaseActionResult>(adminIPBanPath(normalizedIP));
+    });
 
-      const results = await Promise.allSettled(
-        normalizedPeerIDs.map((peerId) =>
-          apiClient.post<LeaseActionResult>(
-            adminLeasePath(encodeLeaseIDForPath(peerId), action)
-          )
+  const runBulkLeaseAction = async (peerIds: string[], action: LeaseAction) => {
+    const normalizedPeerIDs = dedupeStrings(peerIds.filter((peerId) => peerId.length > 0));
+    if (normalizedPeerIDs.length === 0) {
+      throw new Error("No valid leases selected");
+    }
+
+    const results = await Promise.allSettled(
+      normalizedPeerIDs.map((peerId) =>
+        apiClient.post<LeaseActionResult>(
+          adminLeasePath(encodeLeaseID(peerId), action)
         )
-      );
+      )
+    );
 
-      const failed = results.find(
-        (
-          result
-        ): result is PromiseRejectedResult =>
-          result.status === "rejected"
-      );
-      if (failed) {
-        throw failed.reason instanceof Error
-          ? failed.reason
-          : new Error(String(failed.reason));
-      }
-    },
-    []
-  );
+    const failed = results.find(
+      (
+        result
+      ): result is PromiseRejectedResult =>
+        result.status === "rejected"
+    );
+    if (failed) {
+      throw failed.reason instanceof Error
+        ? failed.reason
+        : new Error(String(failed.reason));
+    }
+  };
 
-  const handleBulkAction = useCallback(
-    (peerIds: string[], action: LeaseAction) =>
-      runAdminAction(() => runBulkLeaseAction(peerIds, action)),
-    [runAdminAction, runBulkLeaseAction]
-  );
+  const handleBulkAction = (peerIds: string[], action: LeaseAction) =>
+    runAdminAction(() => runBulkLeaseAction(peerIds, action));
 
-  const handleBulkApprove = useCallback(
-    (peerIds: string[]) => handleBulkAction(peerIds, "approve"),
-    [handleBulkAction]
-  );
+  const handleBulkApprove = (peerIds: string[]) => handleBulkAction(peerIds, "approve");
 
-  const handleBulkDeny = useCallback(
-    (peerIds: string[]) => handleBulkAction(peerIds, "deny"),
-    [handleBulkAction]
-  );
+  const handleBulkDeny = (peerIds: string[]) => handleBulkAction(peerIds, "deny");
 
-  const handleBulkBan = useCallback(
-    (peerIds: string[]) => handleBulkAction(peerIds, "ban"),
-    [handleBulkAction]
-  );
+  const handleBulkBan = (peerIds: string[]) => handleBulkAction(peerIds, "ban");
 
   return {
     serverData,
