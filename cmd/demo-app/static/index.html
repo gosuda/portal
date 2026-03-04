@@ -17,6 +17,8 @@
         <div class="toolbar">
             <button id="httpPingBtn">HTTP Ping</button>
             <button id="testCookiesBtn">Test Cookies</button>
+            <button id="wsConnectBtn">WS Connect</button>
+            <button id="wsSendBtn" disabled>WS Send "hello"</button>
         </div>
 
         <div class="canvas-wrapper">
@@ -30,6 +32,10 @@
         const statusEl = document.getElementById('status');
         const logEl = document.getElementById('log');
         const httpPingBtn = document.getElementById('httpPingBtn');
+        const wsConnectBtn = document.getElementById('wsConnectBtn');
+        const wsSendBtn = document.getElementById('wsSendBtn');
+
+        let ws = null;
 
         function log(message) {
             const time = new Date().toISOString();
@@ -72,6 +78,53 @@
             }
         });
 
+        wsConnectBtn.addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const basePath = location.pathname.endsWith('/') ? location.pathname : (location.pathname + '/');
+            const url = protocol + '//' + window.location.host + basePath + 'ws';
+
+            statusEl.textContent = 'WS: Connecting...';
+            log(`WS connecting to ${url}`);
+
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                statusEl.textContent = 'WS: Connected';
+                log('WS connected');
+                wsSendBtn.disabled = false;
+                wsConnectBtn.textContent = 'WS Disconnect';
+            };
+
+            ws.onclose = () => {
+                statusEl.textContent = 'WS: Disconnected';
+                log('WS disconnected');
+                wsSendBtn.disabled = true;
+                wsConnectBtn.textContent = 'WS Connect';
+            };
+
+            ws.onerror = (err) => {
+                log(`WS error: ${err.message || err}`);
+            };
+
+            ws.onmessage = (event) => {
+                log(`WS recv: ${event.data}`);
+            };
+        });
+
+        wsSendBtn.addEventListener('click', () => {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('WS send skipped: not connected');
+                return;
+            }
+            const msg = 'hello';
+            ws.send(msg);
+            log(`WS send: ${msg}`);
+        });
     </script>
 </body>
 
