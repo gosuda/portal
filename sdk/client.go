@@ -91,6 +91,10 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if err != nil {
 		return nil, err
 	}
+	controlPlaneIdentity, err := issueControlPlaneIdentity(lease.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	listeners := make([]net.Listener, 0, len(relayAddrs))
 	closeActiveListeners := func() {
@@ -115,7 +119,7 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 		}
 
 		leaseCopy := *lease
-		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, 0, c.config.ReverseDialTimeout, listenerCloseFns...)
+		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, controlPlaneIdentity, 0, c.config.ReverseDialTimeout, listenerCloseFns...)
 		if listenerErr != nil {
 			runCloseFns(listenerCloseFns)
 			closeActiveListeners()
@@ -204,5 +208,3 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 func (c *Client) Close() error {
 	return nil
 }
-
-// Close closes the client.

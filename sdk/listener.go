@@ -39,6 +39,10 @@ var fatalReverseConnectRejectionCodes = map[string]struct{}{
 	"tls_required":          {},
 	"unauthorized":          {},
 	"unsupported_transport": {},
+	"client_cert_required":  {},
+	"client_cert_invalid":   {},
+	"cert_lease_missing":    {},
+	"cert_lease_mismatch":   {},
 }
 
 type reverseConnectRejectionError struct {
@@ -81,6 +85,7 @@ func (e *reverseConnectRejectionError) IsFatal() bool {
 // The relay connects to this listener after SNI routing resolves the lease.
 type Listener struct {
 	tlsConfig          *tls.Config
+	controlPlaneCert   tls.Certificate
 	lease              *portal.Lease
 	httpClient         *http.Client
 	stopCh             chan struct{}
@@ -99,7 +104,7 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener creates a relay-backed listener.
 // If tlsConfig is provided, reverse workers complete TLS handshakes before enqueueing connections.
-func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
+func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, controlPlaneCert tls.Certificate, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
 	if lease == nil {
 		return nil, errors.New("lease is required")
 	}
@@ -115,6 +120,9 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 	if tlsConfig == nil {
 		return nil, errors.New("tls config is required")
 	}
+	if len(controlPlaneCert.Certificate) == 0 {
+		return nil, errors.New("control plane client certificate is required")
+	}
 
 	apiURL, err := types.NormalizeRelayAPIURL(relayAddr)
 	if err != nil {
@@ -126,6 +134,7 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         host,
 		InsecureSkipVerify: types.IsLocalhost(host),
+		Certificates:       []tls.Certificate{controlPlaneCert},
 	}
 
 	if reverseWorkers <= 0 {
@@ -144,6 +153,7 @@ func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, r
 			Transport: clientTransport,
 		},
 		tlsConfig:          tlsConfig,
+		controlPlaneCert:   controlPlaneCert,
 		closeFns:           closeFns,
 		stopCh:             make(chan struct{}),
 		acceptCh:           make(chan net.Conn, 128),
@@ -399,6 +409,7 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
 		InsecureSkipVerify: types.IsLocalhost(serverName),
+		Certificates:       []tls.Certificate{l.controlPlaneCert},
 	})
 	err = tlsConn.HandshakeContext(ctx)
 	if err != nil {
@@ -656,7 +667,8 @@ func (l *Listener) registerWithRelay() error {
 
 func (l *Listener) unregisterFromRelay() error {
 	reqBody := types.UnregisterRequest{
-		LeaseID: l.lease.ID,
+		LeaseID:      l.lease.ID,
+		ReverseToken: l.lease.ReverseToken,
 	}
 	return l.postJSON(types.PathSDKUnregister, reqBody)
 }

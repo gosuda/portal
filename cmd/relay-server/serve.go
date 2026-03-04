@@ -129,6 +129,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	acmeManager := serv.GetACMEManager()
 	rootHost := types.PortalRootHost(flagPortalURL)
 	srv.TLSConfig = &tls.Config{
+		ClientAuth: tls.RequestClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))
 			if serverName != "" && !strings.EqualFold(serverName, rootHost) {

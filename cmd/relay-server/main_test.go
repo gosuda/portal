@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -102,6 +103,7 @@ func TestSDKRegisterRejectsBannedIP(t *testing.T) {
 
 	reqBody := strings.NewReader(`{"lease_id":"lease-ban","name":"test-lease","tls":true,"reverse_token":"token-1"}`)
 	req := httptest.NewRequest(http.MethodPost, types.PathSDKRegister, reqBody)
+	req.TLS = &tls.ConnectionState{}
 	req.RemoteAddr = "203.0.113.17:45678"
 	rr := httptest.NewRecorder()
 
@@ -159,8 +161,9 @@ func TestSDKUnregisterCleansRouteAndReversePoolImmediately(t *testing.T) {
 		t.Fatal("failed to seed reverse pool")
 	}
 
-	reqBody := strings.NewReader(`{"lease_id":"lease-cleanup"}`)
+	reqBody := strings.NewReader(`{"lease_id":"lease-cleanup","reverse_token":"token-cleanup"}`)
 	req := httptest.NewRequest(http.MethodPost, types.PathSDKUnregister, reqBody)
+	attachPeerLeaseCertificate(req, lease.ID)
 	rr := httptest.NewRecorder()
 	registry.handleUnregister(rr, req, serv)
 

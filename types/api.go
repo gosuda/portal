@@ -80,7 +80,8 @@ type RegisterResponse struct {
 
 // UnregisterRequest is the lease unregistration request.
 type UnregisterRequest struct {
-	LeaseID string `json:"lease_id"`
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
 }
 
 // RenewRequest is the lease renewal request.
