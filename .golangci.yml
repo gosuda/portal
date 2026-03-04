@@ -72,10 +72,6 @@ linters:
         - log.Print
         - time.Now
         - time.Sleep
-        - sync.Mutex.Lock
-        - sync.Mutex.Unlock
-        - sync.RWMutex.RLock
-        - sync.RWMutex.RUnlock
 
     govet:
       enable-all: true
