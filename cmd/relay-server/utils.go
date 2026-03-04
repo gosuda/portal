@@ -16,6 +16,11 @@ import (
 	"gosuda.org/portal/types"
 )
 
+const (
+	leaseConnectedWindow = 15 * time.Second
+	staleLeaseHideWindow = 3 * time.Minute
+)
+
 func isSecureRequest(r *http.Request) bool {
 	if r == nil {
 		return false
@@ -23,13 +28,16 @@ func isSecureRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
+	if !flagTrustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
+		return false
+	}
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on")
 }
 
-// getContentType returns the MIME type for a file extension
+// getContentType returns the MIME type for a file extension.
 func getContentType(ext string) string {
 	switch ext {
 	case ".html":
@@ -55,7 +63,7 @@ func getContentType(ext string) string {
 	}
 }
 
-// setCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers
+// setCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers.
 func setCORSHeaders(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
@@ -64,24 +72,24 @@ func setCORSHeaders(w http.ResponseWriter) {
 
 // leaseRow represents a lease entry for display in admin UI and frontend.
 type leaseRow struct {
-	Peer         string
-	Name         string
+	TTL          string
+	Metadata     string
 	Kind         string
-	Connected    bool
+	IP           string
 	DNS          string
 	LastSeen     string
 	LastSeenISO  string
 	FirstSeenISO string
-	TTL          string
+	Name         string
+	Peer         string
 	Link         string
-	StaleRed     bool
+	BPS          int64
 	Hide         bool
-	Metadata     string
-	BPS          int64  // bytes-per-second limit (0 = unlimited)
-	IsApproved   bool   // whether lease is approved (for manual mode)
-	IsDenied     bool   // whether lease is denied (for manual mode)
-	IP           string // client IP address (for IP-based ban)
-	IsIPBanned   bool   // whether the IP is banned
+	StaleRed     bool
+	IsApproved   bool
+	IsDenied     bool
+	Connected    bool
+	IsIPBanned   bool
 }
 
 // formatDuration formats a duration for TTL display.
@@ -119,9 +127,8 @@ func (leaseRow) formatLastSeen(d time.Duration) string {
 	return fmt.Sprintf("%ds", int(d/time.Second))
 }
 
-// isConnected returns true if the lease was seen recently.
-func (leaseRow) isConnected(since time.Duration) bool {
-	return since < 15*time.Second
+func isLeaseConnected(since time.Duration) bool {
+	return since < leaseConnectedWindow
 }
 
 // fromLeaseEntry populates the leaseRow from a LeaseEntry with common fields.
@@ -129,7 +136,7 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	lease := entry.Lease
 	identityID := lease.ID
 	since := max(time.Since(entry.LastSeen), 0)
-	connected := r.isConnected(since)
+	connected := isLeaseConnected(since)
 
 	name := lease.Name
 	if name == "" {
@@ -170,12 +177,23 @@ func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portal
 	r.LastSeenISO = entry.LastSeen.UTC().Format(time.RFC3339)
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
 	r.TTL = r.formatDuration(time.Until(entry.Expires))
-	linkLabel := strings.TrimSpace(lease.Name)
-	if linkLabel == "" {
-		linkLabel = identityID
+	linkLabel := identityID
+	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
+		linkLabel = normalized
+	} else if normalized, ok := types.NormalizeServiceName(identityID); ok {
+		linkLabel = normalized
 	}
-	r.Link = fmt.Sprintf("//%s.%s/", linkLabel, types.PortalHostPort(portalURL))
-	r.StaleRed = !connected && since >= 15*time.Second
+
+	publicHost := types.PortalRootHost(portalURL)
+	if publicHost == "" {
+		publicHost = types.PortalHostPort(portalURL)
+	}
+	if linkLabel != "" && publicHost != "" {
+		r.Link = fmt.Sprintf("//%s.%s/", linkLabel, publicHost)
+	} else {
+		r.Link = ""
+	}
+	r.StaleRed = !connected && since >= leaseConnectedWindow
 	r.Hide = entry.ParsedMetadata != nil && entry.ParsedMetadata.Hide
 	r.Metadata = metadataStr
 	r.BPS = bps
@@ -204,7 +222,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 	bannedList := serv.GetLeaseManager().GetBannedLeases()
 	bannedMap := make(map[string]struct{}, len(bannedList))
 	for _, b := range bannedList {
-		bannedMap[string(b)] = struct{}{}
+		bannedMap[b] = struct{}{}
 	}
 
 	for _, entry := range leaseEntries {
@@ -229,8 +247,8 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 				continue
 			}
 			since := max(now.Sub(entry.LastSeen), 0)
-			connected := (&leaseRow{}).isConnected(since)
-			if !connected && since >= 3*time.Minute {
+			connected := isLeaseConnected(since)
+			if !connected && since >= staleLeaseHideWindow {
 				continue
 			}
 		}
@@ -243,10 +261,41 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 	return rows
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func writeAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Error().Err(err).Msg("[HTTP] Failed to encode response")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
+		OK:   true,
+		Data: data,
+	}); err != nil {
+		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
+	}
+}
+
+func writeAPIOK(w http.ResponseWriter, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{OK: true}); err != nil {
+		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
+	}
+}
+
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	writeAPIErrorWithData(w, status, code, message, nil)
+}
+
+func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
+		OK:   false,
+		Data: data,
+		Error: &types.APIError{
+			Code:    code,
+			Message: message,
+		},
+	}); err != nil {
+		log.Error().Err(err).Msg("[HTTP] Failed to encode API error response")
 	}
 }
 

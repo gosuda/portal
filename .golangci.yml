@@ -5,36 +5,56 @@ run:
   go: "1.26"
 
 formatters:
-  enable:
-    - goimports
+  enable: [goimports]
   settings:
     goimports:
-      local-prefixes:
-        - github.com/gosuda
-        - gosuda.org
+      local-prefixes: [github.com/gosuda, gosuda.org]
 
 linters:
-  default: none
-
+  default: standard
   enable:
-    # CI blockers: correctness + security
     - govet
     - errcheck
     - staticcheck
     - unused
     - errorlint
     - copyloopvar
+    - nilerr
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - durationcheck
+    - makezero
     - noctx
+    - revive
+    - wastedassign
+    - misspell
+    - whitespace
+    - godot
+    - usestdlibvars
+    - testifylint
+    - usetesting
+    - containedctx
+    - prealloc
+    - intrange
+    - fatcontext
+    - perfsprint
+    - reassign
+    - mirror
 
   exclusions:
+    paths:
+      - ^cmd/relay-server/frontend/node_modules/
+      - ^cmd/relay-server/dist/
     rules:
-      - linters:
-          - errcheck
+      - linters: [errcheck]
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"
-        linters:
-          - errcheck
-          - noctx
+        linters: [bodyclose, errcheck, noctx, wrapcheck, funlen, dupl]
+      - text: "should have a package comment"
+        linters: [revive]
+      - text: "exported \\S+ \\S+ should have comment"
+        linters: [revive]
 
   settings:
     errcheck:
@@ -51,12 +71,6 @@ linters:
         - os.Unsetenv
         - encoding/json.Marshal
         - encoding/json.Unmarshal
-        - encoding/json.NewEncoder
-        - encoding/json.NewDecoder
-        - strings.Builder.WriteString
-        - strings.Builder.Write
-        - bytes.Buffer.Write
-        - bytes.Buffer.WriteString
         - io.Copy
         - log.Printf
         - log.Println
@@ -67,13 +81,15 @@ linters:
         - sync.Mutex.Unlock
         - sync.RWMutex.RLock
         - sync.RWMutex.RUnlock
-        - atomic.AddInt64
-        - atomic.StoreInt64
-        - atomic.LoadInt64
-        - rand.Read
 
     govet:
-      enable-all: false
+      enable-all: true
+
+    perfsprint:
+      strconcat: true
+
+    fatcontext:
+      check-struct-pointers: true
 
 issues:
   max-issues-per-linter: 0

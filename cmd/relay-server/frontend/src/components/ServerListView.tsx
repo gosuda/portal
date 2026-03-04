@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/Header";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
@@ -18,28 +18,23 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-// Admin-specific filter for ban status
 export type BanFilter = "all" | "banned" | "active";
+type ListServer = ClientServer | AdminServer;
 
 interface ServerListViewProps {
-  // Header customization
   title?: string;
-  // Search & Filter state
   searchQuery: string;
   status: StatusFilter;
   sortBy: SortOption;
   selectedTags: string[];
   availableTags: string[];
-  // Server data
   filteredServers: ClientServer[] | AdminServer[];
   favorites: number[];
-  // Handlers
   onSearchChange: (value: string) => void;
   onStatusChange: (value: StatusFilter) => void;
   onSortByChange: (value: SortOption) => void;
   onTagToggle: (tag: string) => void;
   onToggleFavorite: (serverId: number) => void;
-  // Admin mode (optional)
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
@@ -50,18 +45,18 @@ interface ServerListViewProps {
   onApproveStatusChange?: (leaseId: string, approve: boolean) => void;
   onDenyStatusChange?: (leaseId: string, deny: boolean) => void;
   onIPBanStatusChange?: (ip: string, isBan: boolean) => void;
-  // Bulk action handlers
   onBulkApprove?: (leaseIds: string[]) => void;
   onBulkDeny?: (leaseIds: string[]) => void;
   onBulkBan?: (leaseIds: string[]) => void;
-  // Logout handler (admin only)
   onLogout?: () => void;
 }
 
-function isAdminServer(
-  server: ClientServer | AdminServer
-): server is AdminServer {
+function isAdminServer(server: ListServer): server is AdminServer {
   return "peerId" in server;
+}
+
+function toAdminServer(server: ListServer): AdminServer | undefined {
+  return isAdminServer(server) ? server : undefined;
 }
 
 export function ServerListView({
@@ -78,7 +73,6 @@ export function ServerListView({
   onSortByChange,
   onTagToggle,
   onToggleFavorite,
-  // Admin props
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
@@ -89,19 +83,18 @@ export function ServerListView({
   onApproveStatusChange,
   onDenyStatusChange,
   onIPBanStatusChange,
-  // Bulk action handlers
   onBulkApprove,
   onBulkDeny,
   onBulkBan,
-  // Logout handler
   onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
     new Set()
   );
+  const serverItems = filteredServers as ListServer[];
+  const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
 
-  // Toggle selection for a single card
   const handleToggleSelect = (leaseId: string) => {
     setSelectedLeaseIds((prev) => {
       const next = new Set(prev);
@@ -114,22 +107,66 @@ export function ServerListView({
     });
   };
 
-  // Clear all selections
   const handleClearSelection = () => {
     setSelectedLeaseIds(new Set());
   };
 
-  // Get all selectable lease IDs from filtered servers
-  const allLeaseIds = (filteredServers as (ClientServer | AdminServer)[])
-    .filter(isAdminServer)
-    .map((server) => server.peerId);
+  const serverRows = useMemo(
+    () =>
+      serverItems.map((server) => ({
+        server,
+        adminServer: toAdminServer(server),
+      })),
+    [serverItems]
+  );
 
-  // Check if all items are selected
+  const allLeaseIds = useMemo(
+    () => [
+      ...new Set(
+        serverRows
+        .map(({ adminServer }) => adminServer?.peerId)
+          .filter(
+            (leaseId): leaseId is string =>
+              typeof leaseId === "string" && leaseId.trim().length > 0
+          )
+      ),
+    ],
+    [serverRows]
+  );
+
+  useEffect(() => {
+    const validLeaseIDs = new Set(allLeaseIds);
+    setSelectedLeaseIds((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+
+      const next = new Set<string>();
+      prev.forEach((leaseId) => {
+        if (validLeaseIDs.has(leaseId)) {
+          next.add(leaseId);
+        }
+      });
+
+      if (next.size === prev.size) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [allLeaseIds]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      return;
+    }
+    setSelectedLeaseIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [isAdmin]);
+
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
 
-  // Select all / Deselect all
   const handleSelectAll = () => {
     if (isAllSelected) {
       setSelectedLeaseIds(new Set());
@@ -138,32 +175,77 @@ export function ServerListView({
     }
   };
 
-  // Bulk action handlers
-  const handleBulkApprove = () => {
-    if (onBulkApprove && selectedLeaseIds.size > 0) {
-      onBulkApprove(Array.from(selectedLeaseIds));
+  const triggerBulkAction = async (handler?: (leaseIds: string[]) => void) => {
+    if (!handler || selectedLeaseIds.size === 0) {
+      return;
+    }
+
+    try {
+      await Promise.resolve(handler(Array.from(selectedLeaseIds)));
       handleClearSelection();
+    } catch (err) {
+      console.error("Failed bulk admin action", err);
     }
   };
 
-  const handleBulkDeny = () => {
-    if (onBulkDeny && selectedLeaseIds.size > 0) {
-      onBulkDeny(Array.from(selectedLeaseIds));
-      handleClearSelection();
-    }
-  };
+  const handleBulkApprove = () => triggerBulkAction(onBulkApprove);
+  const handleBulkDeny = () => triggerBulkAction(onBulkDeny);
+  const handleBulkBan = () => triggerBulkAction(onBulkBan);
 
-  const handleBulkBan = () => {
-    if (onBulkBan && selectedLeaseIds.size > 0) {
-      onBulkBan(Array.from(selectedLeaseIds));
-      handleClearSelection();
-    }
-  };
+  const invokeAsyncHandler = useCallback(
+    (action: (() => void | Promise<void>) | undefined) => {
+      if (!action) {
+        return;
+      }
+      void Promise.resolve(action()).catch((error) => {
+        console.error("Failed admin action", error);
+      });
+    },
+    []
+  );
 
-  // Admin filter content (Ban Status + Approval) - for desktop only
-  const AdminFilterContent = () => (
+  const handleCardBanStatusChange = useCallback(
+    (leaseId: string, isBan: boolean) =>
+      invokeAsyncHandler(
+        onBanStatusChange ? () => onBanStatusChange(leaseId, isBan) : undefined
+      ),
+    [invokeAsyncHandler, onBanStatusChange]
+  );
+
+  const handleCardBPSChange = useCallback(
+    (leaseId: string, bps: number) =>
+      invokeAsyncHandler(onBPSChange ? () => onBPSChange(leaseId, bps) : undefined),
+    [invokeAsyncHandler, onBPSChange]
+  );
+
+  const handleCardApproveStatusChange = useCallback(
+    (leaseId: string, approve: boolean) =>
+      invokeAsyncHandler(
+        onApproveStatusChange
+          ? () => onApproveStatusChange(leaseId, approve)
+          : undefined
+      ),
+    [invokeAsyncHandler, onApproveStatusChange]
+  );
+
+  const handleCardDenyStatusChange = useCallback(
+    (leaseId: string, deny: boolean) =>
+      invokeAsyncHandler(
+        onDenyStatusChange ? () => onDenyStatusChange(leaseId, deny) : undefined
+      ),
+    [invokeAsyncHandler, onDenyStatusChange]
+  );
+
+  const handleCardIPBanStatusChange = useCallback(
+    (ip: string, isBan: boolean) =>
+      invokeAsyncHandler(
+        onIPBanStatusChange ? () => onIPBanStatusChange(ip, isBan) : undefined
+      ),
+    [invokeAsyncHandler, onIPBanStatusChange]
+  );
+
+  const adminFilterControls = (
     <>
-      {/* Ban Status Filter Buttons */}
       {onBanFilterChange && (
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-text-muted">
@@ -175,8 +257,6 @@ export function ServerListView({
           />
         </div>
       )}
-
-      {/* Approval Mode Toggle */}
       {onApprovalModeChange && (
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-text-muted">Approval</span>
@@ -214,13 +294,11 @@ export function ServerListView({
                   />
                 </div>
               </div>
-              {/* Desktop filters - hidden on mobile */}
               {isAdmin && (
                 <div className="hidden sm:flex flex-wrap items-center gap-6 mt-4 px-4 sm:px-6">
-                  <AdminFilterContent />
+                  {adminFilterControls}
                 </div>
               )}
-              {/* Mobile-only Approval filter - always visible outside modal */}
               {isAdmin && onApprovalModeChange && (
                 <div className="sm:hidden flex items-center gap-3 mt-4 px-4">
                   <span className="text-sm font-medium text-text-muted">
@@ -235,70 +313,59 @@ export function ServerListView({
             </div>
             <main className="flex-1 z-0">
               <div className="grid grid-cols-1 min-[500px]:grid-cols-2 md:grid-cols-3 gap-6 p-4 min-[500px]:p-6">
-                {filteredServers.length > 0 ? (
-                  filteredServers.map((server) => (
-                    <ServerCard
-                      key={server.id}
-                      serverId={server.id}
-                      name={server.name}
-                      description={server.description}
-                      tags={server.tags}
-                      thumbnail={server.thumbnail}
-                      owner={server.owner}
-                      online={server.online}
-                      dns={server.dns}
-                      serverUrl={server.link}
-                      navigationPath={server.link || "#"}
-                      navigationState={{
-                        id: server.id,
-                        name: server.name,
-                        description: server.description,
-                        tags: server.tags,
-                        thumbnail: server.thumbnail,
-                        owner: server.owner,
-                        online: server.online,
-                        serverUrl: server.link,
-                      }}
-                      firstSeen={server.firstSeen}
-                      isFavorite={favorites.includes(server.id)}
-                      onToggleFavorite={onToggleFavorite}
-                      // Admin controls
-                      showAdminControls={isAdmin && isAdminServer(server)}
-                      leaseId={
-                        isAdminServer(server) ? server.peerId : undefined
-                      }
-                      isBanned={
-                        isAdminServer(server) ? server.isBanned : undefined
-                      }
-                      isApproved={
-                        isAdminServer(server) ? server.isApproved : undefined
-                      }
-                      isDenied={
-                        isAdminServer(server) ? server.isDenied : undefined
-                      }
-                      bps={isAdminServer(server) ? server.bps : undefined}
-                      ip={isAdminServer(server) ? server.ip : undefined}
-                      isIPBanned={
-                        isAdminServer(server) ? server.isIPBanned : undefined
-                      }
-                      onBanStatusChange={onBanStatusChange}
-                      onBPSChange={onBPSChange}
-                      onApproveStatusChange={onApproveStatusChange}
-                      onDenyStatusChange={onDenyStatusChange}
-                      onIPBanStatusChange={onIPBanStatusChange}
-                      // Selection for bulk actions
-                      isSelected={
-                        isAdminServer(server)
-                          ? selectedLeaseIds.has(server.peerId)
-                          : false
-                      }
-                      onToggleSelect={handleToggleSelect}
-                    />
-                  ))
+                {serverRows.length > 0 ? (
+                  serverRows.map(({ server, adminServer }) => {
+                    const isSelected = adminServer
+                      ? selectedLeaseIds.has(adminServer.peerId)
+                      : false;
+                    return (
+                      <ServerCard
+                        key={server.id}
+                        serverId={server.id}
+                        name={server.name}
+                        description={server.description}
+                        tags={server.tags}
+                        thumbnail={server.thumbnail}
+                        owner={server.owner}
+                        online={server.online}
+                        dns={server.dns}
+                        serverUrl={server.link}
+                        navigationPath={server.link || "#"}
+                        navigationState={{
+                          id: server.id,
+                          name: server.name,
+                          description: server.description,
+                          tags: server.tags,
+                          thumbnail: server.thumbnail,
+                          owner: server.owner,
+                          online: server.online,
+                          serverUrl: server.link,
+                        }}
+                        firstSeen={server.firstSeen}
+                        isFavorite={favoriteIds.has(server.id)}
+                        onToggleFavorite={onToggleFavorite}
+                        showAdminControls={isAdmin && !!adminServer}
+                        leaseId={adminServer?.peerId}
+                        isBanned={adminServer?.isBanned}
+                        isApproved={adminServer?.isApproved}
+                        isDenied={adminServer?.isDenied}
+                        bps={adminServer?.bps}
+                        ip={adminServer?.ip}
+                        isIPBanned={adminServer?.isIPBanned}
+                        onBanStatusChange={handleCardBanStatusChange}
+                        onBPSChange={handleCardBPSChange}
+                        onApproveStatusChange={handleCardApproveStatusChange}
+                        onDenyStatusChange={handleCardDenyStatusChange}
+                        onIPBanStatusChange={handleCardIPBanStatusChange}
+                        isSelected={isSelected}
+                        onToggleSelect={handleToggleSelect}
+                      />
+                    );
+                  })
                 ) : (
                   <div className="col-span-full text-center py-12">
                     <p className="text-text-muted text-lg">
-                      No servers found matching your criteria
+                      No servers match these filters
                     </p>
                   </div>
                 )}
@@ -308,14 +375,12 @@ export function ServerListView({
         </div>
       </div>
 
-      {/* Filter Modal for mobile - contains SearchBar filters (Status, Sort, Tag) */}
       <Dialog open={showFilterModal} onOpenChange={setShowFilterModal}>
         <DialogContent className="sm:hidden max-w-sm rounded-sm">
           <DialogHeader>
             <DialogTitle>Filters</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-4">
-            {/* Online/Offline Status Filter - Select style */}
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-text-muted">
                 Status
@@ -326,8 +391,6 @@ export function ServerListView({
                 className="w-full!"
               />
             </div>
-
-            {/* Admin Ban Status Filter - All/Active/Banned (button group style) */}
             {isAdmin && onBanFilterChange && (
               <div className="flex flex-col gap-2">
                 <span className="text-sm font-medium text-text-muted">
@@ -340,20 +403,14 @@ export function ServerListView({
                 />
               </div>
             )}
-
-            {/* Sort By */}
             <div className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-text-muted">
-                Sort By
-              </span>
+              <span className="text-sm font-medium text-text-muted">Sort</span>
               <SortbySelect
                 className="w-full!"
                 sortBy={sortBy}
                 onSortByChange={onSortByChange}
               />
             </div>
-
-            {/* Tag Filter */}
             <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-text-muted">Tags</span>
               <TagCombobox
@@ -367,7 +424,6 @@ export function ServerListView({
         </DialogContent>
       </Dialog>
 
-      {/* Floating Action Bar - shows when items are selected in admin mode */}
       {isAdmin && (
         <FloatingActionBar
           selectedCount={selectedLeaseIds.size}

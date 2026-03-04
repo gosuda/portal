@@ -69,6 +69,12 @@ curl -fsSL https://portal.example.com/tunnel | APP_HOST=localhost:3000 APP_NAME=
 $env:APP_HOST="localhost:3000"; $env:APP_NAME="myapp"; irm https://portal.example.com/tunnel | iex
 ```
 
+Installer integrity policy:
+
+- The installer downloads `BIN_URL` and `BIN_URL.sha256`.
+- SHA256 verification is mandatory and fail-closed.
+- Missing, malformed, or mismatched checksums abort startup with a remediation hint.
+
 ### Production (TLS)
 
 ```bash

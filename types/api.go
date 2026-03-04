@@ -1,4 +1,7 @@
+//revive:disable:var-naming
 package types
+
+import "encoding/json"
 
 // API path constants for Portal relay server.
 
@@ -38,21 +41,41 @@ const (
 
 // Client API types for /sdk/* endpoints.
 
+// APIError is the normalized API error payload.
+type APIError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// APIEnvelope is the canonical response wrapper for relay APIs.
+type APIEnvelope struct {
+	Data  any       `json:"data,omitempty"`
+	Error *APIError `json:"error,omitempty"`
+	OK    bool      `json:"ok"`
+}
+
+// APIRawEnvelope is the decoding-friendly envelope with raw data payload.
+type APIRawEnvelope struct {
+	Error *APIError       `json:"error,omitempty"`
+	Data  json.RawMessage `json:"data,omitempty"`
+	OK    bool            `json:"ok"`
+}
+
 // RegisterRequest is the lease registration request.
 type RegisterRequest struct {
 	LeaseID      string   `json:"lease_id"`
 	Name         string   `json:"name"`
+	ReverseToken string   `json:"reverse_token"`
 	Metadata     Metadata `json:"metadata"`
 	TLS          bool     `json:"tls"`
-	ReverseToken string   `json:"reverse_token"`
 }
 
 // RegisterResponse is the lease registration response.
 type RegisterResponse struct {
-	Success   bool   `json:"success"`
 	Message   string `json:"message,omitempty"`
 	LeaseID   string `json:"lease_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
+	Success   bool   `json:"success"`
 }
 
 // UnregisterRequest is the lease unregistration request.
@@ -68,15 +91,15 @@ type RenewRequest struct {
 
 // APIResponse is a generic Client API response.
 type APIResponse struct {
-	Success bool   `json:"success"`
 	Message string `json:"message,omitempty"`
+	Success bool   `json:"success"`
 }
 
 // DomainResponse is the Client domain discovery response.
 type DomainResponse struct {
-	Success    bool   `json:"success"`
 	Message    string `json:"message,omitempty"`
 	BaseDomain string `json:"base_domain,omitempty"`
+	Success    bool   `json:"success"`
 }
 
 // Admin API types for /admin/* endpoints.
@@ -88,10 +111,10 @@ type AdminLoginRequest struct {
 
 // AdminLoginResponse is the admin login response.
 type AdminLoginResponse struct {
-	Success          bool   `json:"success"`
 	Error            string `json:"error,omitempty"`
-	Locked           bool   `json:"locked,omitempty"`
 	RemainingSeconds int    `json:"remaining_seconds,omitempty"`
+	Success          bool   `json:"success"`
+	Locked           bool   `json:"locked,omitempty"`
 }
 
 // AdminAuthStatusResponse is the admin auth status response.
@@ -124,6 +147,6 @@ type AdminBPSRequest struct {
 
 // AdminStatsResponse is the admin stats response.
 type AdminStatsResponse struct {
-	LeasesCount int    `json:"leases_count"`
 	Uptime      string `json:"uptime"`
+	LeasesCount int    `json:"leases_count"`
 }

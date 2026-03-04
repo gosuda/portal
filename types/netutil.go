@@ -1,6 +1,8 @@
+//nolint:revive // Package name is intentionally aligned with the existing module-wide convention.
 package types
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -8,28 +10,12 @@ import (
 	"strings"
 )
 
-// ExtractBaseDomain extracts the base domain (e.g., "example.com") from a URL.
-// Returns empty string if the URL is invalid or has fewer than 2 domain parts.
-func ExtractBaseDomain(rawURL string) string {
-	trimmed := strings.TrimSpace(rawURL)
-	if trimmed == "" {
-		return ""
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + trimmed
-	}
+const defaultBootstrapURL = "http://localhost:4017"
 
-	u, err := url.Parse(trimmed)
-	if err != nil || u.Hostname() == "" {
-		return ""
-	}
-
-	host := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(u.Hostname())), "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+func normalizeRootHost(raw string) string {
+	normalized := strings.ToLower(strings.TrimSpace(raw))
+	normalized = strings.TrimPrefix(strings.TrimSuffix(normalized, "."), "*.")
+	return normalized
 }
 
 // StripScheme removes http:// or https:// prefix from a string.
@@ -91,84 +77,125 @@ func IsSubdomain(domain, host string) bool {
 	return strings.HasSuffix(h, "."+d)
 }
 
+func parsePortalAddress(raw, fallbackScheme string) (scheme, rootHost, hostPort string, ok bool) {
+	normalized := strings.TrimSpace(raw)
+	if normalized == "" {
+		return "", "", "", false
+	}
+
+	if fallbackScheme == "" {
+		fallbackScheme = "https"
+	}
+	fallbackScheme = strings.ToLower(strings.TrimSpace(fallbackScheme))
+
+	if !strings.Contains(normalized, "://") {
+		normalized = fallbackScheme + "://" + normalized
+	}
+
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Hostname() == "" {
+		return "", "", "", false
+	}
+
+	rootHost = normalizeRootHost(parsed.Hostname())
+	if rootHost == "" {
+		return "", "", "", false
+	}
+
+	scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme == "" {
+		scheme = fallbackScheme
+	}
+
+	if port := strings.TrimSpace(parsed.Port()); port != "" {
+		hostPort = net.JoinHostPort(rootHost, port)
+	} else {
+		hostPort = rootHost
+	}
+
+	return scheme, rootHost, strings.ToLower(strings.TrimSpace(hostPort)), true
+}
+
+// NormalizeServiceName canonicalizes and validates a service/lease name for DNS usage.
+// Valid names are a single DNS label: [a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?
+func NormalizeServiceName(name string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	normalized = strings.TrimPrefix(normalized, "*.")
+	normalized = strings.TrimSuffix(normalized, ".")
+
+	if normalized == "" || len(normalized) > 63 {
+		return "", false
+	}
+	if strings.Contains(normalized, ".") || normalized[0] == '-' || normalized[len(normalized)-1] == '-' {
+		return "", false
+	}
+	for _, ch := range normalized {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+		case ch >= '0' && ch <= '9':
+		case ch == '-':
+		default:
+			return "", false
+		}
+	}
+	return normalized, true
+}
+
+// IsValidServiceName reports whether a service name can be used as a DNS label.
+func IsValidServiceName(name string) bool {
+	_, ok := NormalizeServiceName(name)
+	return ok
+}
+
 // DefaultAppPattern builds a wildcard subdomain pattern from a base portal URL or host.
 func DefaultAppPattern(base string) string {
-	base = strings.TrimSpace(strings.TrimSuffix(base, "/"))
-	if base == "" {
+	if strings.TrimSpace(base) == "" {
 		return "*.localhost:4017"
 	}
-	host := StripWildcard(StripScheme(base))
-	if host == "" {
+	_, _, hostPort, ok := parsePortalAddress(base, "https")
+	if !ok || hostPort == "" {
 		return "*.localhost:4017"
 	}
-	if strings.HasPrefix(host, "*.") {
-		return host
-	}
-	return "*." + host
+	return "*." + hostPort
 }
 
 // ServicePublicURL returns a service URL derived from portalURL and service name.
 func ServicePublicURL(portalURL, serviceName string) string {
-	serviceName = strings.TrimSpace(serviceName)
-	if serviceName == "" {
+	normalizedName, ok := NormalizeServiceName(serviceName)
+	if !ok {
 		return ""
 	}
 
-	raw := strings.TrimSpace(portalURL)
-	if raw == "" {
+	scheme, rootHost, _, ok := parsePortalAddress(portalURL, "http")
+	if !ok || rootHost == "" {
 		return ""
 	}
-	if !strings.Contains(raw, "://") {
-		raw = "http://" + raw
-	}
-
-	u, err := url.Parse(raw)
-	if err != nil || strings.TrimSpace(u.Host) == "" {
-		return ""
-	}
-
-	host := strings.TrimSpace(StripWildcard(u.Host))
-	if host == "" {
-		return ""
-	}
-
-	scheme := strings.TrimSpace(u.Scheme)
-	if scheme == "" {
-		scheme = "http"
-	}
-
-	return fmt.Sprintf("%s://%s.%s", scheme, serviceName, host)
+	return fmt.Sprintf("%s://%s.%s", scheme, normalizedName, rootHost)
 }
 
 // PortalHostPort returns normalized host[:port] from a portal URL-like input.
 func PortalHostPort(portalURL string) string {
-	return strings.ToLower(strings.TrimSpace(
-		StripWildcard(StripScheme(portalURL)),
-	))
+	_, _, hostPort, ok := parsePortalAddress(portalURL, "https")
+	if !ok {
+		return ""
+	}
+	return hostPort
 }
 
 // PortalRootHost extracts the root hostname from a portal URL.
 func PortalRootHost(portalURL string) string {
-	raw := strings.TrimSpace(portalURL)
-	if raw == "" {
+	_, rootHost, _, ok := parsePortalAddress(portalURL, "https")
+	if !ok {
 		return ""
 	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Hostname() == "" {
-		return ""
-	}
-	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(parsed.Hostname())), "*.")
+	return rootHost
 }
 
 // DefaultBootstrapFrom derives a relay API bootstrap URL from a base portal URL or host.
 func DefaultBootstrapFrom(base string) string {
 	base = strings.TrimSpace(base)
 	if base == "" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 
 	if !strings.Contains(base, "://") {
@@ -177,13 +204,13 @@ func DefaultBootstrapFrom(base string) string {
 
 	u, err := url.Parse(strings.TrimSuffix(base, "/"))
 	if err != nil || u.Host == "" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 	if p := strings.TrimSpace(u.Path); p != "" && p != "/" {
-		return "http://localhost:4017"
+		return defaultBootstrapURL
 	}
 
 	u.Path = ""
@@ -213,21 +240,35 @@ func LeaseNameFromHost(host, appURL string) (string, bool) {
 	}
 
 	leaseName := strings.TrimSuffix(normalizedHost, suffix)
-	if leaseName == "" || strings.Contains(leaseName, ".") {
+	normalizedLeaseName, ok := NormalizeServiceName(leaseName)
+	if !ok {
 		return "", false
 	}
 
-	return leaseName, true
+	return normalizedLeaseName, true
 }
 
 // BuildSNIName constructs the SNI hostname for a lease.
 func BuildSNIName(leaseName, baseHost string) string {
-	leaseName = strings.ToLower(strings.TrimSpace(leaseName))
-	baseHost = strings.TrimSpace(baseHost)
-	if leaseName == "" || baseHost == "" {
+	normalizedLeaseName, ok := NormalizeServiceName(leaseName)
+	if !ok {
 		return ""
 	}
-	return leaseName + "." + baseHost
+
+	normalizedBaseHost := PortalRootHost(baseHost)
+	if normalizedBaseHost == "" {
+		normalizedBaseHost = normalizeRootHost(baseHost)
+	}
+	if normalizedBaseHost == "" {
+		return ""
+	}
+
+	return normalizedLeaseName + "." + normalizedBaseHost
+}
+
+// IsValidLeaseName reports whether a lease/service name is DNS-label-safe.
+func IsValidLeaseName(name string) bool {
+	return IsValidServiceName(name)
 }
 
 // ParseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
@@ -270,7 +311,7 @@ func LoopbackForwardAddr(listenAddr string) string {
 		return ""
 	}
 
-	port := ""
+	var port string
 	switch {
 	case strings.HasPrefix(raw, ":"):
 		port = strings.TrimPrefix(raw, ":")
@@ -298,7 +339,7 @@ func LoopbackForwardAddr(listenAddr string) string {
 func NormalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", fmt.Errorf("empty host")
+		return "", errors.New("empty host")
 	}
 
 	// Treat plain host[:port] as a dial target without URL parsing.
@@ -311,7 +352,7 @@ func NormalizeTargetAddr(raw string) (string, error) {
 		return "", fmt.Errorf("parse target URL: %w", err)
 	}
 	if strings.TrimSpace(u.Host) == "" {
-		return "", fmt.Errorf("missing host in URL")
+		return "", errors.New("missing host in URL")
 	}
 	return u.Host, nil
 }
@@ -322,7 +363,7 @@ func NormalizeTargetAddr(raw string) (string, error) {
 func NormalizeRelayAPIURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return "", fmt.Errorf("empty relay URL")
+		return "", errors.New("empty relay URL")
 	}
 
 	// Accept host:port input.
@@ -368,7 +409,7 @@ func NormalizeRelayAPIURL(raw string) (string, error) {
 // Returns an error if no valid URLs remain after normalization.
 func NormalizeRelayAPIURLs(bootstrapServers []string) ([]string, error) {
 	if len(bootstrapServers) == 0 {
-		return nil, fmt.Errorf("no available relay")
+		return nil, errors.New("no available relay")
 	}
 
 	seen := make(map[string]struct{}, len(bootstrapServers))
@@ -386,7 +427,7 @@ func NormalizeRelayAPIURLs(bootstrapServers []string) ([]string, error) {
 	}
 
 	if len(out) == 0 {
-		return nil, fmt.Errorf("no available relay")
+		return nil, errors.New("no available relay")
 	}
 	return out, nil
 }

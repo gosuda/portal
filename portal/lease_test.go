@@ -68,3 +68,25 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 		t.Fatal("expected active-1 to remain")
 	}
 }
+
+func TestLeaseManagerStopIsIdempotent(_ *testing.T) {
+	lm := NewLeaseManager(10 * time.Millisecond)
+
+	lm.Start()
+	lm.Stop()
+	lm.Stop()
+}
+
+func TestLeaseManagerGetBannedLeasesReturnsPlainLeaseIDs(t *testing.T) {
+	lm := NewLeaseManager(time.Second)
+	lm.BanLease("lease-a")
+	lm.BanLease("lease-b")
+
+	got := lm.GetBannedLeases()
+	slices.Sort(got)
+
+	want := []string{"lease-a", "lease-b"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("GetBannedLeases() = %v, want %v", got, want)
+	}
+}

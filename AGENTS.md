@@ -1,174 +1,96 @@
 # AGENTS.md
 
-Repo-specific guidance for automated agents working on Portal.
+## Purpose
 
-## Quick Commands
+This file is a high-signal rulebook for future agents.
+Include only constraints that are expensive to rediscover from quick code search.
 
-Build:
-- `make build` (all artifacts)
-- `make build-server` (relay server binary)
-- `make build-frontend` (React admin UI)
-- `make build-tunnel` (portal-tunnel binaries)
+Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs.
 
-Run:
-- `make run` (run `./bin/relay-server`)
-- `docker compose up` (full stack, relay at :4017, admin at `/admin`)
+## Non-Negotiable Architecture Invariants
 
-Lint/Format/Test:
-- `make fmt` (gofmt + goimports)
-- `make vet` (go vet)
-- `make lint` (golangci-lint)
-- `make test` (go test -v -race -coverprofile=coverage.out ./...)
-- `make vuln` (govulncheck)
-- `make tidy` (go mod tidy + go mod verify)
+1. **Raw TCP reverse-connect is the canonical transport.**
+   - Why: ADR-0001 and ADR-0002 accepted this to keep NAT-friendly behavior and reduce protocol complexity.
 
-Single test:
-- `go test -v -run TestName ./path/to/pkg`
+2. **Do not introduce websocket or legacy compatibility paths unless a new ADR supersedes ADR-0002.**
+   - Why: dual transport paths increase security and test surface and reintroduce drift.
 
-Frontend dev:
-- `cd cmd/relay-server/frontend && npm run dev`
-- `cd cmd/relay-server/frontend && npm run build`
-- `cd cmd/relay-server/frontend && npm run lint`
+3. **Derive routing hostnames from full portal root host in `PORTAL_URL` (supports non-apex), not apex extraction.**
+   - Why: prevents SNI/public URL mismatches in non-apex deployments (ADR-0001).
 
-## Architecture (Big Picture)
+4. **Keep explicit root-domain fallback behavior through SNI no-route handling to admin/API listener.**
+   - Why: preserves intended control-plane vs tenant routing split (ADR-0001).
 
-Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
+## Security and Anti-Abuse Invariants
 
-Core components:
-- Relay server: `cmd/relay-server` (HTTP API/admin + SNI router)
-- Relay core logic: `portal/` (lease manager, reverse connection hub, forwarding)
-- SNI router package: `portal/sni/`
-- SDK for Apps: `sdk/`
-- Tunnel client: `cmd/portal-tunnel/` (exposes local services)
-- Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
+1. **Admin-managed policy is authoritative for runtime security controls.**
+   - Why: ADR-0003 requires central policy ownership to avoid endpoint-local drift.
 
-## Connection Flow (High Level)
+2. **Do not rely on single-endpoint checks for abuse controls.**
+   - Why: ADR-0003 expects enforcement across critical ingress paths (registration and reverse admission class paths).
 
-1. App/Tunnel registers a Lease with relay via `/sdk/register` (name, metadata, TLS mode, reverse token).
-2. Tunnel maintains reverse WebSocket workers to relay via `/sdk/connect`.
-3. Client traffic enters relay:
-   - TLS traffic on SNI port is routed by SNI.
-   - Non-TLS traffic can use HTTP proxy mode.
-4. Relay acquires a reverse tunnel connection and forwards bytes end-to-end.
+3. **Reverse connection authorization must remain lease-token validated before bridge/forwarding.**
+   - Why: prevents unauthorized tunnel attachment (ADR-0003).
+4. **`/sdk/connect` must share the same policy source as `/sdk/register`.**
+   - Why: ensures registration and reverse admission apply identical IP-ban + token checks in one enforcement pipeline.
 
-## Key Terms
+5. **Operator setup is not changed by this hardening.**
+   - Why: anti-abuse changes are behavior-only and reuse existing flags/env/settings for policy management.
 
-- Portal / Relay: central mediator; never decrypts payloads.
-- App: service publisher using SDK or tunnel to register Leases.
-- Client: consumer connecting via relay.
-- Lease: advertising unit; one Lease maps to one public endpoint.
+## Operational Truths (CI-Aligned, Minimal)
 
-## Where to Look
+1. **Local lint workflow: run `make lint-auto` first, then `make lint`.**
+   - Why: `lint-auto` applies safe rewrites locally, while `lint` is the strict non-mutating gate that matches CI.
 
-- `cmd/relay-server/` (entrypoint, HTTP APIs, SNI callback wiring)
-- `portal/reverse_hub.go` (reverse WebSocket connection pool)
-- `portal/sni/` (SNI parser/router)
-- `sdk/` (App integration)
-- `cmd/portal-tunnel/` (tunnel client)
-- `docs/architecture.md` and `docs/glossary.md`
+2. **Use CI-equivalent verification when validating high-risk changes:**
+   - `make vet`
+   - `make lint`
+   - `make test`
+   - `make vuln`
+   - Why: these are the enforced checks in `.github/workflows/ci.yml`.
+   - Note: `make tidy` is a local maintenance/pre-release step and is not currently part of the CI workflow.
 
-## Domain Configuration
+3. **Assume Go toolchain baseline from `go.mod` (currently 1.26.x).**
+   - Why: CI resolves Go from `go.mod`; avoid stale version assumptions.
 
-Portal uses environment variables for domain and TLS configuration:
+4. **Use `Makefile` as build and verification authority; do not reference absent tooling (for example, no `justfile` in this repo).**
+   - Why: reduces operational drift and broken command guidance.
 
-### Core Environment Variables
+## Change Discipline
 
-| Variable | Description |
-|----------|-------------|
-| `PORTAL_URL` | Base URL (e.g., `https://portal.example.com`) |
-| `BOOTSTRAP_URIS` | Relay API URLs (defaults to `PORTAL_URL`) |
-| `SNI_PORT` | SNI router port (default `443`) |
-| `ADMIN_SECRET_KEY` | Admin auth key (auto-generated if unset) |
-| `KEYLESS_DIR` | Relay keyless materials directory (default `/etc/portal/keyless`) |
-| `CLOUDFLARE_TOKEN` | Cloudflare DNS token for ACME DNS-01 auto-issuance when key file is missing |
+1. If a code change violates any invariant above, update or add ADR and AGENTS in the same change set.
+   - Why: keeps architecture docs and implementation synchronized.
 
-### Tunnel Environment Variables
+2. Do not expand this file into repo summary, file tree guide, or generic handbook.
+   - Why: high-noise AGENTS degrades future agent effectiveness.
 
-| Variable | Description |
-|----------|-------------|
-| `RELAYS` | Relay API URLs for tunnel client (comma-separated) |
-| `TLS` | Enable TLS keyless mode (`1`/`true`) |
-| `TLS_BASE_DOMAIN` | Base domain used for keyless certificate hostname validation (keyless mode) |
+## Go Conventions
 
-### Domain Derivation
+**Format:** `gofmt -w . && goimports -w .` before every commit.
 
-- Service URL: `{name}.{base_domain}` (e.g., `myapp.example.com`)
-- Base domain extracted from `PORTAL_URL` via `extractBaseDomain()` in `cmd/relay-server/utils.go`
-- SNI routes registered in `portal/sni/router.go`
+**Imports:** stdlib → external → internal (blank-line separated). Local prefix: `github.com/gosuda`.
 
-### TLS
+**CGo:** always disabled — `CGO_ENABLED=0`. Pure Go only.
 
-1. **`TLS` disabled**: HTTP proxy mode for development.
-2. **`TLS` enabled**: Tunnel uses SDK keyless TLS mode.
-   - Keyless signer endpoint defaults to relay URL.
-   - Certificate chain/root trust are auto-discovered by SDK from signer endpoint when not explicitly provided.
-   - Auto-discovery requires an HTTPS signer endpoint.
-   - Relay signer key comes from `KEYLESS_DIR/privatekey.pem`; when missing and `CLOUDFLARE_TOKEN` is set, relay auto-issues via ACME DNS-01.
+**Module:** commit `go.mod`+`go.sum`, never `go.work` · pin toolchain in `go.mod` · `go mod tidy && go mod verify && govulncheck ./...` pre-release · `os.Root` (Go 1.24+) for directory-scoped I/O.
 
-See `docs/deployment.md` for full deployment documentation.
+**Concurrency:** `errgroup.Group` over `WaitGroup` · `errgroup.SetLimit` for bounded work · `context.WithTimeout` over `time.After` in loops (timer leak) · no bare `go func()` — creator owns lifecycle.
 
-## Repo Basics
+---
 
-- Module: `gosuda.org/portal`
-- Go version: 1.26.0 (from `go.mod`)
+## Verbalized Sampling
 
-## Gosuda Go Standards
+Before trivial or non-trivial changes, AI agents **must**:
 
-Formatting & style:
-- Run formatting before commits (see Quick Commands).
-- Import order: stdlib -> external -> internal (blank-line separated).
-- Naming: packages lowercase single-word; interfaces as behavior verbs; errors use `Err` prefix for sentinels and `Error` suffix for types.
-- Do not add meaningless string normalization or utility wrapper functions unless they provide clear, demonstrated value.
-- Do not keep backward compatibility when changing code unless explicitly requested by the user.
-- Context first parameter for public I/O: `func Do(ctx context.Context, ...)`.
-- CGo disabled: `CGO_ENABLED=0`.
+1. **Sample 3–5 intent hypotheses** — rank by likelihood, note one weakness each
+2. **Explore edge cases** — at least 3 standard, 5 for architectural changes
+3. **Assess coupling** — structural (imports), temporal (co-changing files), semantic (shared concepts)
+4. **Tidy first** — high coupling → extract/split/rename before changing; low → change directly
+5. **Surface decisions** — ask the human when trade-offs exist; do exactly what is asked, no more
 
-Static analysis & linters:
-- Use `go vet`, `golangci-lint`, `go test -race`, and `govulncheck` (see Quick Commands).
-- Linter tiers: correctness, quality, concurrency safety, and performance/modernization (configured in `.golangci.yml`).
+## Project-specific rules [**ENFORCED**]
 
-Error handling:
-- Wrap with `%w` and include call-site context.
-- Sentinel errors per package; use `errors.Is`/`errors.As`.
-- Use `errors.Join` for multi-error.
-- Never ignore errors unless explicitly excluded by errcheck.
-
-Iterators (Go 1.23+):
-- Signatures: `func(yield func() bool)`, `func(yield func(V) bool)`, `func(yield func(K, V) bool)`.
-- Always check yield return; prefer stdlib helpers like `slices.Collect` and `maps.Keys`.
-
-Context & concurrency:
-- Prefer `errgroup.Group` for parallel work, `SetLimit` for bounds.
-- No goroutines without clear exit; creator owns lifecycle.
-- Directional channels in signatures; only sender closes.
-- Avoid `time.After` in loops; use `context.WithTimeout` or `time.Ticker`.
-
-Testing:
-- Do not run tests on every execution. Run tests only when explicitly requested, before handoff, or when a change is high-risk.
-- Use race detector in normal test runs.
-- Use `t.Context()` in tests where applicable.
-- Benchmarks should use `for b.Loop() {}`.
-
-Security:
-- Use `govulncheck` and `go mod verify` during release workflows.
-- Avoid `math/rand` for security-sensitive operations.
-
-Performance:
-- Avoid `reflect` on hot paths; prefer generics or type switches.
-- Use `sync.Pool` for hot paths only.
-
-Module hygiene:
-- Always commit `go.mod` and `go.sum`; never commit `go.work`.
-- Pin toolchain version to match `go.mod`
-
-CI/CD:
-- CI runs a single `verify` job: vet + lint + test + vuln (`.github/workflows/ci.yml`).
-- CD builds/pushes Docker images on `main` and `v*` tags, and deploys on `main` pushes (`.github/workflows/cd.yml`).
-
-Verbalized sampling:
-- For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
-
-Refactoring discipline:
-- Do not stack repeated "minimal patches" that leave logic fragmented across files.
-- For domain/URL parsing and normalization, keep a single source of truth and make all callers use it.
-- If a flow is being refactored (e.g., SDK client/listener TLS domain handling), complete consolidation in the same change instead of leaving temporary split logic.
+- Do not keep backward compatibility unless explicitly requested.
+- Do not add meaningless wrapper functions unless they provide demonstrated value.
+- Do not stack minimal patches that fragment logic — complete consolidation in one change.
+- Do not run tests on every execution — only when requested, before handoff, or for high-risk changes.

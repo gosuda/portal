@@ -29,7 +29,7 @@ const (
 
 // Start begins the certificate renewal loop. It checks periodically if the
 // certificate needs renewal and renews it automatically.
-func (m *AcmeManager) Start(ctx context.Context) {
+func (m *Manager) Start(ctx context.Context) {
 	if m == nil || m.cfg.KeyDir == "" || !hasCloudflareToken(m.cfg.CloudflareToken) {
 		return
 	}
@@ -41,7 +41,7 @@ func (m *AcmeManager) Start(ctx context.Context) {
 }
 
 // Stop stops the renewal loop.
-func (m *AcmeManager) Stop() {
+func (m *Manager) Stop() {
 	if m == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func (m *AcmeManager) Stop() {
 	m.waitGroup.Wait()
 }
 
-func (m *AcmeManager) renewalLoop(ctx context.Context) {
+func (m *Manager) renewalLoop(ctx context.Context) {
 	defer m.waitGroup.Done()
 
 	ticker := time.NewTicker(RenewalCheckInterval)
@@ -77,7 +77,7 @@ func (m *AcmeManager) renewalLoop(ctx context.Context) {
 }
 
 // shouldRenew checks if the certificate needs renewal.
-func (m *AcmeManager) shouldRenew() bool {
+func (m *Manager) shouldRenew() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -147,7 +147,7 @@ func certNeedsRenewal(certFile string, domains []string) (bool, error) {
 }
 
 // renewCertificate renews the certificate via ACME.
-func (m *AcmeManager) renewCertificate(ctx context.Context) error {
+func (m *Manager) renewCertificate(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -196,7 +196,7 @@ func (m *AcmeManager) renewCertificate(ctx context.Context) error {
 	return nil
 }
 
-func (m *AcmeManager) doRenew(cfg provisionConfig) error {
+func (m *Manager) doRenew(cfg provisionConfig) error {
 	accountKey, err := loadOrCreateAccountKey(cfg.AccountKeyFile)
 	if err != nil {
 		return fmt.Errorf("load ACME account key: %w", err)
@@ -227,7 +227,8 @@ func (m *AcmeManager) doRenew(cfg provisionConfig) error {
 	if err != nil {
 		return fmt.Errorf("create Cloudflare DNS provider: %w", err)
 	}
-	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
+	err = client.Challenge.SetDNS01Provider(provider)
+	if err != nil {
 		return fmt.Errorf("set DNS-01 challenge provider: %w", err)
 	}
 
@@ -242,11 +243,13 @@ func (m *AcmeManager) doRenew(cfg provisionConfig) error {
 		return fmt.Errorf("read private key for renewal: %w", err)
 	}
 
-	renewed, err := client.Certificate.Renew(certificate.Resource{
+	renewed, err := client.Certificate.RenewWithOptions(certificate.Resource{
 		Domain:      cfg.Domains[0],
 		Certificate: certPEM,
 		PrivateKey:  keyPEM,
-	}, true, false, "")
+	}, &certificate.RenewOptions{
+		Bundle: true,
+	})
 	if err != nil {
 		return fmt.Errorf("ACME renew: %w", err)
 	}

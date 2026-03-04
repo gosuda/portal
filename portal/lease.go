@@ -12,12 +12,12 @@ import (
 
 // Lease represents a registered service.
 type Lease struct {
+	Expires      time.Time      `json:"expires"`
 	ID           string         `json:"id"`
 	Name         string         `json:"name"`
+	ReverseToken string         `json:"-"`
 	Metadata     types.Metadata `json:"metadata"`
-	Expires      time.Time      `json:"expires"`
 	TLS          bool           `json:"tls"`
-	ReverseToken string         `json:"-"` // shared secret for reverse connect authentication
 }
 
 // LeaseEntry represents a registered lease with expiration tracking.
@@ -30,17 +30,17 @@ type LeaseEntry struct {
 }
 
 type LeaseManager struct {
-	leases      map[string]*LeaseEntry // Key: lease ID
-	leasesLock  sync.RWMutex
-	stopCh      chan struct{}
-	ttlInterval time.Duration
-
-	// policy controls
+	leases         map[string]*LeaseEntry
+	stopCh         chan struct{}
 	bannedLeases   map[string]struct{}
 	namePattern    *regexp.Regexp
-	minTTL         time.Duration // 0 = no bound
-	maxTTL         time.Duration // 0 = no bound
 	onLeaseDeleted func(string)
+	ttlInterval    time.Duration
+	minTTL         time.Duration
+	maxTTL         time.Duration
+	leasesLock     sync.RWMutex
+	startOnce      sync.Once
+	stopOnce       sync.Once
 }
 
 func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
@@ -53,11 +53,15 @@ func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
 }
 
 func (lm *LeaseManager) Start() {
-	go lm.ttlWorker()
+	lm.startOnce.Do(func() {
+		go lm.ttlWorker()
+	})
 }
 
 func (lm *LeaseManager) Stop() {
-	close(lm.stopCh)
+	lm.stopOnce.Do(func() {
+		close(lm.stopCh)
+	})
 }
 
 func (lm *LeaseManager) ttlWorker() {
@@ -250,7 +254,7 @@ func (lm *LeaseManager) GetAllLeases() []*Lease {
 	return validLeases
 }
 
-// GetAllLeaseEntries returns all lease entries from the lease manager
+// GetAllLeaseEntries returns all lease entries from the lease manager.
 func (lm *LeaseManager) GetAllLeaseEntries() []*LeaseEntry {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
@@ -267,7 +271,7 @@ func (lm *LeaseManager) GetAllLeaseEntries() []*LeaseEntry {
 	return entries
 }
 
-// Lease policy configuration helpers
+// BanLease adds a lease ID to the denylist.
 func (lm *LeaseManager) BanLease(leaseID string) {
 	lm.leasesLock.Lock()
 	lm.bannedLeases[leaseID] = struct{}{}
@@ -280,12 +284,12 @@ func (lm *LeaseManager) UnbanLease(leaseID string) {
 	lm.leasesLock.Unlock()
 }
 
-func (lm *LeaseManager) GetBannedLeases() [][]byte {
+func (lm *LeaseManager) GetBannedLeases() []string {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
-	banned := make([][]byte, 0, len(lm.bannedLeases))
+	banned := make([]string, 0, len(lm.bannedLeases))
 	for id := range lm.bannedLeases {
-		banned = append(banned, []byte(id))
+		banned = append(banned, id)
 	}
 	return banned
 }
@@ -305,9 +309,9 @@ func (lm *LeaseManager) SetNamePattern(pattern string) error {
 	return nil
 }
 
-func (lm *LeaseManager) SetTTLBounds(min, max time.Duration) {
+func (lm *LeaseManager) SetTTLBounds(minTTL, maxTTL time.Duration) {
 	lm.leasesLock.Lock()
-	lm.minTTL = min
-	lm.maxTTL = max
+	lm.minTTL = minTTL
+	lm.maxTTL = maxTTL
 	lm.leasesLock.Unlock()
 }

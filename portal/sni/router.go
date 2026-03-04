@@ -15,9 +15,9 @@ import (
 )
 
 var (
-	// ErrNoRoute is returned when no route is found for the SNI
+	// ErrNoRoute is returned when no route is found for the SNI.
 	ErrNoRoute = errors.New("no route found for SNI")
-	// ErrRouterClosed is returned when the router is closed
+	// ErrRouterClosed is returned when the router is closed.
 	ErrRouterClosed = errors.New("router is closed")
 )
 
@@ -27,32 +27,28 @@ const (
 	maxTLSRecordSize = 16*1024 + 2048
 )
 
-// Route represents a registered route
+// Route represents a registered route.
 type Route struct {
 	SNI       string
 	LeaseID   string
 	LeaseName string
 }
 
-// Router handles SNI-based TCP routing
+// Router handles SNI-based TCP routing.
 type Router struct {
-	mu       sync.RWMutex
-	routes   map[string]*Route // SNI -> Route
-	leases   map[string]*Route // LeaseID -> Route
-	listener net.Listener
-	addr     string
-
-	// Callback for new connections
+	listener     net.Listener
+	routes       map[string]*Route
+	leases       map[string]*Route
 	onConnection func(conn net.Conn, route *Route)
-	// Callback for SNI connections that do not match any registered route.
-	onNoRoute func(conn net.Conn, sni string) bool
-
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	onNoRoute    func(conn net.Conn, sni string) bool
+	stopCh       chan struct{}
+	addr         string
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	stopOnce     sync.Once
 }
 
-// NewRouter creates a new SNI router
+// NewRouter creates a new SNI router.
 func NewRouter(addr string) *Router {
 	return &Router{
 		addr:   addr,
@@ -67,7 +63,7 @@ func (r *Router) GetAddr() string {
 	return r.addr
 }
 
-// SetConnectionCallback sets the callback for new connections
+// SetConnectionCallback sets the callback for new connections.
 func (r *Router) SetConnectionCallback(cb func(conn net.Conn, route *Route)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -82,7 +78,7 @@ func (r *Router) SetNoRouteHandler(cb func(conn net.Conn, sni string) bool) {
 	r.onNoRoute = cb
 }
 
-// RegisterRoute registers a new route for an SNI
+// RegisterRoute registers a new route for an SNI.
 func (r *Router) RegisterRoute(sni, leaseID, leaseName string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -95,7 +91,7 @@ func (r *Router) RegisterRoute(sni, leaseID, leaseName string) error {
 
 	sni = strings.ToLower(strings.TrimSpace(sni))
 	if sni == "" {
-		return fmt.Errorf("sni is required")
+		return errors.New("sni is required")
 	}
 
 	// Remove previous SNI entry when a lease is re-registered with a new name.
@@ -130,7 +126,7 @@ func (r *Router) RegisterRoute(sni, leaseID, leaseName string) error {
 	return nil
 }
 
-// UnregisterRoute removes a route for an SNI
+// UnregisterRoute removes a route for an SNI.
 func (r *Router) UnregisterRoute(sni string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -147,7 +143,7 @@ func (r *Router) UnregisterRoute(sni string) {
 	}
 }
 
-// UnregisterRouteByLeaseID removes a route by lease ID
+// UnregisterRouteByLeaseID removes a route by lease ID.
 func (r *Router) UnregisterRouteByLeaseID(leaseID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -162,7 +158,7 @@ func (r *Router) UnregisterRouteByLeaseID(leaseID string) {
 	}
 }
 
-// GetRoute returns the route for an SNI
+// GetRoute returns the route for an SNI.
 func (r *Router) GetRoute(sni string) (*Route, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -189,7 +185,7 @@ func (r *Router) GetRoute(sni string) (*Route, bool) {
 	return nil, false
 }
 
-// GetRouteByLeaseID returns the route for a lease ID
+// GetRouteByLeaseID returns the route for a lease ID.
 func (r *Router) GetRouteByLeaseID(leaseID string) (*Route, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -198,7 +194,7 @@ func (r *Router) GetRouteByLeaseID(leaseID string) (*Route, bool) {
 	return route, ok
 }
 
-// GetAllRoutes returns all registered routes
+// GetAllRoutes returns all registered routes.
 func (r *Router) GetAllRoutes() []*Route {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -232,16 +228,14 @@ func (r *Router) Start() error {
 	return nil
 }
 
-// Stop stops the SNI router
+// Stop stops the SNI router.
 func (r *Router) Stop() error {
 	r.stopOnce.Do(func() {
 		close(r.stopCh)
 
 		r.mu.Lock()
 		if r.listener != nil {
-			if err := r.listener.Close(); err != nil {
-				log.Debug().Err(err).Msg("[SNI] failed to close listener")
-			}
+			closeWithDebugLog(r.listener, "[SNI] failed to close listener")
 		}
 		r.mu.Unlock()
 	})
@@ -251,7 +245,7 @@ func (r *Router) Stop() error {
 	return nil
 }
 
-// Addr returns the router's listen address
+// Addr returns the router's listen address.
 func (r *Router) Addr() net.Addr {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -262,7 +256,7 @@ func (r *Router) Addr() net.Addr {
 	return nil
 }
 
-// acceptLoop accepts incoming connections
+// acceptLoop accepts incoming connections.
 func (r *Router) acceptLoop(listener net.Listener) {
 	defer r.wg.Done()
 
@@ -283,7 +277,7 @@ func (r *Router) acceptLoop(listener net.Listener) {
 	}
 }
 
-// handleConnection handles a single connection
+// handleConnection handles a single connection.
 func (r *Router) handleConnection(clientConn net.Conn) {
 	defer r.wg.Done()
 
@@ -299,9 +293,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 			Err(err).
 			Str("remote", clientConn.RemoteAddr().String()).
 			Msg("[SNI] Failed to extract SNI")
-		if closeErr := clientConn.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close client connection")
-		}
+		closeWithDebugLog(clientConn, "[SNI] failed to close client connection")
 		return
 	}
 
@@ -319,9 +311,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	// Find the route
 	route, ok := r.GetRoute(sni)
 	if !ok {
-		r.mu.RLock()
-		onNoRoute := r.onNoRoute
-		r.mu.RUnlock()
+		onNoRoute := r.getNoRouteHandler()
 		if onNoRoute != nil && onNoRoute(wrappedConn, sni) {
 			return
 		}
@@ -330,9 +320,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 			Str("sni", sni).
 			Str("remote", clientConn.RemoteAddr().String()).
 			Msg("[SNI] No route found")
-		if closeErr := clientConn.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close unrouted client connection")
-		}
+		closeWithDebugLog(clientConn, "[SNI] failed to close unrouted client connection")
 		return
 	}
 
@@ -343,9 +331,7 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 		Msg("[SNI] Route found")
 
 	// Call the connection callback if set
-	r.mu.RLock()
-	onConnection := r.onConnection
-	r.mu.RUnlock()
+	onConnection := r.getConnectionHandler()
 
 	if onConnection != nil {
 		onConnection(wrappedConn, route)
@@ -356,12 +342,31 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	log.Warn().
 		Str("sni", sni).
 		Msg("[SNI] No connection callback configured, closing connection")
-	if err := clientConn.Close(); err != nil {
-		log.Debug().Err(err).Msg("[SNI] failed to close client connection")
+	closeWithDebugLog(clientConn, "[SNI] failed to close client connection")
+}
+
+func closeWithDebugLog(closer io.Closer, msg string) {
+	if closer == nil {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		log.Debug().Err(err).Msg(msg)
 	}
 }
 
-// BridgeConnections bridges two connections
+func (r *Router) getNoRouteHandler() func(conn net.Conn, sni string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.onNoRoute
+}
+
+func (r *Router) getConnectionHandler() func(conn net.Conn, route *Route) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.onConnection
+}
+
+// BridgeConnections bridges two connections.
 func BridgeConnections(conn1, conn2 net.Conn) {
 	defer conn1.Close()
 	defer conn2.Close()
@@ -372,18 +377,14 @@ func BridgeConnections(conn1, conn2 net.Conn) {
 	go func() {
 		_, err := io.Copy(conn2, conn1)
 		errCh <- err
-		if closeErr := conn2.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close bridged connection 2")
-		}
+		closeWithDebugLog(conn2, "[SNI] failed to close bridged connection 2")
 	}()
 
 	// Conn2 -> Conn1
 	go func() {
 		_, err := io.Copy(conn1, conn2)
 		errCh <- err
-		if closeErr := conn1.Close(); closeErr != nil {
-			log.Debug().Err(closeErr).Msg("[SNI] failed to close bridged connection 1")
-		}
+		closeWithDebugLog(conn1, "[SNI] failed to close bridged connection 1")
 	}()
 
 	// Wait for either direction to close
@@ -407,7 +408,7 @@ func ExtractSNIFromConnection(conn net.Conn, bufSize int) (string, net.Conn, err
 	return sni, wrappedConn, nil
 }
 
-// peekedConn wraps a net.Conn to include peeked data
+// peekedConn wraps a net.Conn to include peeked data.
 type peekedConn struct {
 	net.Conn
 	reader io.Reader

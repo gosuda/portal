@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -20,10 +21,10 @@ import (
 // It returns the TLS config and a close callback for signer resources.
 func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Config, func(), error) {
 	if keylessServerName == "" {
-		return nil, nil, fmt.Errorf("keyless server name is required")
+		return nil, nil, errors.New("keyless server name is required")
 	}
 	if domain == "" {
-		return nil, nil, fmt.Errorf("tls domain is required")
+		return nil, nil, errors.New("tls domain is required")
 	}
 	certPEM, rootCAPEM, err := ResolveMaterials(
 		context.Background(),
@@ -36,8 +37,8 @@ func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Con
 		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
 
-	if err := VerifyCertificateHostname(certPEM, domain); err != nil {
-		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, err)
+	if verifyErr := VerifyCertificateHostname(certPEM, domain); verifyErr != nil {
+		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, verifyErr)
 	}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
@@ -91,7 +92,7 @@ func ResolveMaterials(
 		certPEM = chainFromEndpoint
 	}
 	if len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("keyless certificate chain is required")
+		return nil, nil, errors.New("keyless certificate chain is required")
 	}
 
 	if len(rootCAPEM) == 0 && len(chainFromEndpoint) > 0 {
@@ -116,7 +117,7 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 // ParseCertificateChainPEM parses PEM cert chain and returns DER chain + leaf.
 func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, error) {
 	if len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("certificate PEM is empty")
+		return nil, nil, errors.New("certificate PEM is empty")
 	}
 
 	var chain [][]byte
@@ -132,7 +133,7 @@ func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, erro
 		rest = next
 	}
 	if len(chain) == 0 {
-		return nil, nil, fmt.Errorf("no certificate blocks found")
+		return nil, nil, errors.New("no certificate blocks found")
 	}
 
 	leaf, err := x509.ParseCertificate(chain[0])
@@ -147,7 +148,7 @@ func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, erro
 func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverName string) ([]byte, error) {
 	raw := endpoint
 	if raw == "" {
-		return nil, fmt.Errorf("endpoint is required")
+		return nil, errors.New("endpoint is required")
 	}
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
@@ -158,12 +159,12 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 		return nil, fmt.Errorf("parse endpoint URL: %w", err)
 	}
 	if u.Scheme == "http" {
-		return nil, fmt.Errorf("http signer endpoint does not expose TLS certificate chain (use https endpoint)")
+		return nil, errors.New("http signer endpoint does not expose TLS certificate chain (use https endpoint)")
 	}
 
 	host := u.Hostname()
 	if host == "" {
-		return nil, fmt.Errorf("endpoint hostname is empty")
+		return nil, errors.New("endpoint hostname is empty")
 	}
 	port := u.Port()
 	if port == "" {
@@ -190,7 +191,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
 	if len(peerCerts) == 0 {
-		return nil, fmt.Errorf("no peer certificates from signer endpoint")
+		return nil, errors.New("no peer certificates from signer endpoint")
 	}
 
 	var chainPEM []byte

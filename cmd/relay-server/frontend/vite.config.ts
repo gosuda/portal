@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "path";
-import { renameSync } from "fs";
+import { existsSync, renameSync } from "fs";
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -18,9 +18,18 @@ export default defineConfig({
     {
       name: "rename-index",
       closeBundle() {
+        if (process.env.VITEST) {
+          return;
+        }
+
         const appDir = resolve(process.cwd(), "../dist/app");
         const indexPath = resolve(appDir, "index.html");
         const portalPath = resolve(appDir, "portal.html");
+
+        if (!existsSync(indexPath)) {
+          return;
+        }
+
         try {
           renameSync(indexPath, portalPath);
           console.log("✓ Renamed index.html to portal.html");
@@ -43,5 +52,11 @@ export default defineConfig({
         manualChunks: undefined,
       },
     },
+  },
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.ts",
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
   },
 });
