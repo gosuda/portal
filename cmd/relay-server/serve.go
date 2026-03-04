@@ -126,45 +126,21 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
-	rootHost := types.PortalRootHost(flagPortalURL)
 	acmeManager := serv.GetACMEManager()
-	if acmeManager != nil && rootHost != "" {
-		srv.TLSConfig = &tls.Config{
-			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				if hello == nil {
-					return nil, errors.New("missing TLS client hello")
-				}
-
-				serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))
-				if serverName != "" && !strings.EqualFold(serverName, rootHost) {
-					return nil, fmt.Errorf("acme certificate is only served for portal root host %q", rootHost)
-				}
-
-				certFile, keyFile := acmeManager.TLSFiles()
-				if certFile == "" || keyFile == "" {
-					return nil, errors.New("acme certificate files are not ready")
-				}
-
-				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-				if err != nil {
-					return nil, fmt.Errorf("load acme certificate: %w", err)
-				}
-				return &cert, nil
-			},
-		}
-	} else if acmeManager != nil && rootHost == "" {
-		log.Warn().Msg("[server] portal root host is empty; ACME TLS disabled for admin/API listener")
+	srv.TLSConfig = &tls.Config{
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			certFile, keyFile := acmeManager.TLSFiles()
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load acme certificate: %w", err)
+			}
+			return &cert, nil
+		},
 	}
 
 	go func() {
-		var err error
-		if srv.TLSConfig != nil {
-			log.Info().Str("addr", addr).Str("root_host", rootHost).Msg("[server] https api enabled via ACME")
-			err = srv.ListenAndServeTLS("", "")
-		} else {
-			log.Info().Str("addr", addr).Msgf("[server] http api enabled")
-			err = srv.ListenAndServe()
-		}
+		log.Info().Str("addr", addr).Msg("[server] https api enabled via ACME")
+		err := srv.ListenAndServeTLS("", "")
 		if err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("[server] http error")
 			cancel()
