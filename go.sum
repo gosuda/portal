@@ -10,10 +10,10 @@ github.com/go-jose/go-jose/v4 v4.1.3/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9
 github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/gosuda/keyless_tls v0.0.0 h1:hDFeF3JGo/xHO5NzsvhAdhYwW1YmWUC449fC1YOoGe4=
+github.com/gosuda/keyless_tls v0.0.0/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
 github.com/gosuda/keyless_tls v0.0.1-0.20260227054723-d699441f3834 h1:P+oEVDMGuhFxU3pBMvStOPbDLin8GO9pv7+iA/xaYMs=
 github.com/gosuda/keyless_tls v0.0.1-0.20260227054723-d699441f3834/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
-github.com/gosuda/keyless_tls v0.0.1-0.20260304053345-1d125c942539 h1:vxpQm9CezkSNtM3IXBA0sXwgbkGiziijnLHYVE7/wRM=
-github.com/gosuda/keyless_tls v0.0.1-0.20260304053345-1d125c942539/go.mod h1:BOhUZgiAAQzxKO3QcC4fCXgd/+lqxgIu1OyIYTqtta8=
 github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
 github.com/mattn/go-colorable v0.1.14 h1:9A9LHSqF/7dyVVX6g0U9cwm9pG3kP9gSzcuIPHPsaIE=
 github.com/mattn/go-colorable v0.1.14/go.mod h1:6LmQG8QLFO4G5z1gPvYEzlUgJ2wF+stgPZH1UqBm1s8=

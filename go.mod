@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/go-acme/lego/v4 v4.32.0
-	github.com/gosuda/keyless_tls v0.0.1-0.20260304053345-1d125c942539
+	github.com/gosuda/keyless_tls v0.0.0
 	github.com/rs/zerolog v1.34.0
 	golang.org/x/net v0.51.0
 )

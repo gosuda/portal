@@ -47,6 +47,7 @@ func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Con
 		Endpoint:   relayAddr,
 		ServerName: keylessServerName,
 		KeyID:      RelayKeyID,
+		EnableMTLS: false,
 		RootCAPEM:  rootCAPEM,
 	}, certPEM)
 	if err != nil {
