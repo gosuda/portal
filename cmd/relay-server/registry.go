@@ -11,6 +11,7 @@ import (
 
 	"gosuda.org/portal/cmd/relay-server/manager"
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/types"
 )
 
@@ -22,71 +23,6 @@ type SDKRegistry struct {
 }
 
 const sdkLeaseTTL = 30 * time.Second
-
-func normalizeLeaseID(raw string) string {
-	return strings.TrimSpace(raw)
-}
-
-func normalizeLeaseCredentials(leaseID, reverseToken string) (string, string) {
-	return normalizeLeaseID(leaseID), strings.TrimSpace(reverseToken)
-}
-
-func lookupLeaseEntry(serv *portal.RelayServer, leaseID string) (*portal.LeaseEntry, bool) {
-	if serv == nil {
-		return nil, false
-	}
-	entry, ok := serv.GetLeaseManager().GetLeaseByID(normalizeLeaseID(leaseID))
-	if !ok || entry == nil || entry.Lease == nil {
-		return nil, false
-	}
-	return entry, true
-}
-
-func (r *SDKRegistry) extractClientIP(req *http.Request) string {
-	return manager.ExtractClientIP(req, r.trustProxyHeaders)
-}
-
-func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
-	return manager.IsIPBannedByPolicy(r.ipManager, clientIP)
-}
-
-func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, method string) bool {
-	if req.Method == method {
-		return true
-	}
-
-	w.Header().Set("Allow", method)
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	return false
-}
-
-func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request, dst any, logMessage string) bool {
-	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
-		log.Error().Err(err).Msg(logMessage)
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
-		return false
-	}
-	return true
-}
-
-func (r *SDKRegistry) validateLeaseCredentials(w http.ResponseWriter, leaseID, reverseToken string) bool {
-	if leaseID == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
-		return false
-	}
-	if reverseToken == "" {
-		writeAPIError(w, http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
-		return false
-	}
-	return true
-}
-
-func isWebSocketUpgrade(req *http.Request) bool {
-	if req == nil {
-		return false
-	}
-	return hasForwardedToken(req.Header.Get("Upgrade"), "websocket")
-}
 
 // HandleSDKRequest routes /sdk/* requests.
 func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
@@ -121,9 +57,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 
 	leaseID := req.URL.Query().Get("lease_id")
 	token := req.Header.Get(portal.ReverseConnectTokenHeader)
-	ctx, ok := r.admitControlPlane(w, req, serv, leaseID, token, admissionConfig{
-		requireExistingLease: true,
-	})
+	leaseID, token, clientIP, _, ok := r.admitControlPlane(w, req, serv, leaseID, token, true)
 	if !ok {
 		return
 	}
@@ -151,7 +85,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, se
 		return
 	}
 
-	serv.GetReverseHub().HandleConnect(conn, ctx.leaseID, ctx.token, ctx.clientIP)
+	serv.GetReverseHub().HandleConnect(conn, leaseID, token, clientIP)
 }
 
 // handleRegister handles SDK lease registration requests.
@@ -174,12 +108,12 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, s
 		writeAPIError(w, http.StatusBadRequest, "tls_required", "tls must be enabled")
 		return
 	}
-	ctx, ok := r.admitControlPlane(w, req, serv, registerReq.LeaseID, registerReq.ReverseToken, admissionConfig{})
+	leaseID, token, _, _, ok := r.admitControlPlane(w, req, serv, registerReq.LeaseID, registerReq.ReverseToken, false)
 	if !ok {
 		return
 	}
-	registerReq.LeaseID = ctx.leaseID
-	registerReq.ReverseToken = ctx.token
+	registerReq.LeaseID = leaseID
+	registerReq.ReverseToken = token
 
 	// Create lease
 	lease := &portal.Lease{
@@ -235,20 +169,18 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 	if !r.decodeRequestBody(w, req, &unregisterReq, "[Registry] Failed to decode unregistration request") {
 		return
 	}
-	ctx, ok := r.admitControlPlane(w, req, serv, unregisterReq.LeaseID, unregisterReq.ReverseToken, admissionConfig{
-		requireExistingLease: true,
-	})
+	leaseID, _, _, _, ok := r.admitControlPlane(w, req, serv, unregisterReq.LeaseID, unregisterReq.ReverseToken, true)
 	if !ok {
 		return
 	}
 
-	if serv.GetLeaseManager().DeleteLease(ctx.leaseID) {
+	if serv.GetLeaseManager().DeleteLease(leaseID) {
 		log.Info().
-			Str("lease_id", ctx.leaseID).
+			Str("lease_id", leaseID).
 			Msg("[Registry] Lease unregistered")
 	}
-	serv.GetSNIRouter().UnregisterRouteByLeaseID(ctx.leaseID)
-	serv.GetReverseHub().DropLease(ctx.leaseID)
+	serv.GetSNIRouter().UnregisterRouteByLeaseID(leaseID)
+	serv.GetReverseHub().DropLease(leaseID)
 
 	writeAPIOK(w, http.StatusOK)
 }
@@ -264,14 +196,11 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv
 		return
 	}
 
-	ctx, ok := r.admitControlPlane(w, req, serv, renewReq.LeaseID, renewReq.ReverseToken, admissionConfig{
-		requireExistingLease: true,
-	})
+	_, _, _, entry, ok := r.admitControlPlane(w, req, serv, renewReq.LeaseID, renewReq.ReverseToken, true)
 	if !ok {
 		return
 	}
 
-	entry := ctx.entry
 	entry.Lease.Expires = time.Now().Add(sdkLeaseTTL)
 	if !serv.GetLeaseManager().UpdateLease(entry.Lease) {
 		writeAPIError(w, http.StatusInternalServerError, "renew_failed", "failed to renew lease")
@@ -306,4 +235,74 @@ func (r *SDKRegistry) handleDomain(w http.ResponseWriter, _ *http.Request, serv 
 		Success:    true,
 		BaseDomain: serv.BaseHost,
 	})
+}
+
+func (r *SDKRegistry) admitControlPlane(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer, rawLeaseID, rawToken string, requireExistingLease bool) (leaseID, token, clientIP string, entry *portal.LeaseEntry, ok bool) {
+	leaseID, token = normalizeLeaseCredentials(rawLeaseID, rawToken)
+	if !r.validateLeaseCredentials(w, leaseID, token) {
+		return "", "", "", nil, false
+	}
+
+	clientIP = r.extractClientIP(req)
+	if r.isClientIPBanned(clientIP) {
+		writeAPIError(w, http.StatusForbidden, "ip_banned", "ip is banned")
+		return "", "", "", nil, false
+	}
+
+	entry, exists := lookupLeaseEntry(serv, leaseID)
+	if requireExistingLease && !exists {
+		writeAPIError(w, http.StatusNotFound, "lease_not_found", "lease not found")
+		return "", "", "", nil, false
+	}
+
+	if code, message, ok := controlplane.ValidatePeerLeaseCertificate(req.TLS, leaseID); !ok {
+		writeAPIError(w, http.StatusUnauthorized, code, message)
+		return "", "", "", nil, false
+	}
+
+	if exists && !controlplane.MatchLeaseToken(entry.Lease.ReverseToken, token) {
+		writeAPIError(w, http.StatusUnauthorized, "unauthorized", "unauthorized reverse connect")
+		return "", "", "", nil, false
+	}
+
+	return leaseID, token, clientIP, entry, true
+}
+
+func (r *SDKRegistry) extractClientIP(req *http.Request) string {
+	return manager.ExtractClientIP(req, r.trustProxyHeaders)
+}
+
+func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
+	return manager.IsIPBannedByPolicy(r.ipManager, clientIP)
+}
+
+func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, method string) bool {
+	if req.Method == method {
+		return true
+	}
+
+	w.Header().Set("Allow", method)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request, dst any, logMessage string) bool {
+	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
+		log.Error().Err(err).Msg(logMessage)
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return false
+	}
+	return true
+}
+
+func (r *SDKRegistry) validateLeaseCredentials(w http.ResponseWriter, leaseID, reverseToken string) bool {
+	if leaseID == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_lease_id", "lease_id is required")
+		return false
+	}
+	if reverseToken == "" {
+		writeAPIError(w, http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
+		return false
+	}
+	return true
 }

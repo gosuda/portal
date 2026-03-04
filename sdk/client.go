@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/types"
 )
@@ -91,7 +92,7 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	if err != nil {
 		return nil, err
 	}
-	controlPlaneIdentity, err := issueControlPlaneIdentity(lease.ID)
+	controlPlaneIdentity, err := controlplane.IssueIdentity(lease.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -46,6 +46,32 @@ func hasForwardedToken(raw, target string) bool {
 	return false
 }
 
+func normalizeLeaseID(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
+func normalizeLeaseCredentials(leaseID, reverseToken string) (string, string) {
+	return normalizeLeaseID(leaseID), strings.TrimSpace(reverseToken)
+}
+
+func lookupLeaseEntry(serv *portal.RelayServer, leaseID string) (*portal.LeaseEntry, bool) {
+	if serv == nil {
+		return nil, false
+	}
+	entry, ok := serv.GetLeaseManager().GetLeaseByID(normalizeLeaseID(leaseID))
+	if !ok || entry == nil || entry.Lease == nil {
+		return nil, false
+	}
+	return entry, true
+}
+
+func isWebSocketUpgrade(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	return hasForwardedToken(req.Header.Get("Upgrade"), "websocket")
+}
+
 // getContentType returns the MIME type for a file extension.
 func getContentType(ext string) string {
 	switch ext {

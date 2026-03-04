@@ -25,8 +25,8 @@ type Admin struct {
 	authManager    *manager.AuthManager
 	frontend       *Frontend
 	portalURL      string
-	trustProxy     bool
 	settingsPath   string
+	trustProxy     bool
 	settingsMu     sync.Mutex
 }
 

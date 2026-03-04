@@ -2,7 +2,6 @@ package portal
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"net"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal/acme"
+	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/sni"
 )
@@ -110,13 +110,7 @@ func (g *RelayServer) authorizeReverseConnect(leaseID, token string) bool {
 		return false
 	}
 
-	expected := strings.TrimSpace(entry.Lease.ReverseToken)
-	provided := strings.TrimSpace(token)
-	if expected == "" || provided == "" {
-		return false
-	}
-
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+	return controlplane.MatchLeaseToken(entry.Lease.ReverseToken, token)
 }
 
 // GetLeaseManager returns the lease manager instance.
