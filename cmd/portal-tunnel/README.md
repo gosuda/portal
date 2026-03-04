@@ -17,26 +17,14 @@ You can run the tunnel using command-line flags or a configuration file.
   --thumbnail https://example.com/thumb.png
 ```
 
-### TLS Mode (End-to-End Encryption)
+### Transport Model
 
-Enable TLS for end-to-end encryption from client to your local service:
+Portal tunnel always runs in TLS reverse-connect mode:
 
-```bash
-./bin/portal-tunnel --host localhost:8080 \
-  --relay https://portal.example.com \
-  --name myapp \
-  --tls
-```
-
-TLS options:
-- TLS disabled (default): plain TCP/HTTP proxying without TLS termination
-- TLS enabled (`--tls`): keyless TLS mode with auto-discovered certificate chain and remote signing
-- TLS is terminated at the tunnel, then proxied to your local service via TCP
-- Access via `https://myapp.example.com` directly on port 443
-
-**Requirements:**
-- TLS enabled: no local cert/key required in default mode (SDK auto-discovers signer certificate chain)
-- Keyless auto-discovery expects an HTTPS signer endpoint.
+- Reverse admission requires HTTPS relay endpoints.
+- Tunnel-side TLS uses keyless signing with auto-discovered signer materials.
+- Traffic is proxied from tunnel to local `--host` over TCP.
+- Public access is `https://<service>.<portal-root-host>/`.
 
 ## Flags
 
@@ -48,7 +36,6 @@ Options:
         --relay           Portal relay server API URLs (comma-separated, https only) [default: https://localhost:4017] [env: RELAYS]
         --host            Target host to proxy to (host:port or URL)  [env: APP_HOST]
         --name            Service name  [env: APP_NAME]
-        --tls             Enable keyless TLS mode [env: TLS]
         --description     Service description metadata  [env: APP_DESCRIPTION]
         --tags            Service tags metadata (comma-separated)  [env: APP_TAGS]
         --thumbnail       Service thumbnail URL metadata  [env: APP_THUMBNAIL]
@@ -75,24 +62,12 @@ Installer integrity policy:
 - SHA256 verification is mandatory and fail-closed.
 - Missing, malformed, or mismatched checksums abort startup with a remediation hint.
 
-### Production (TLS)
+### Production
 
 ```bash
 export RELAYS=https://portal.example.com
 export APP_HOST=localhost:3000
 export APP_NAME=myapp
-export TLS=1
-
-./bin/portal-tunnel
-```
-
-### Production (Keyless TLS)
-
-```bash
-export RELAYS=https://portal.example.com
-export APP_HOST=localhost:3000
-export APP_NAME=myapp
-export TLS=1
 
 ./bin/portal-tunnel
 ```
@@ -123,6 +98,5 @@ Expected signer API contract (`/v1/sign`):
 ./bin/portal-tunnel \
   --host localhost:3000 \
   --name myapp \
-  --relay https://portal1.example.com,https://portal2.example.com \
-  --tls
+  --relay https://portal1.example.com,https://portal2.example.com
 ```

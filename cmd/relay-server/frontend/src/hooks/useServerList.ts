@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { useSSRData } from "@/hooks/useSSRData";
-import type { ServerData, Metadata } from "@/hooks/useSSRData";
+import type { ServerData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { generateRandomServers } from "@/lib/testUtils";
+import { parseLeaseMetadata } from "@/lib/metadata";
 
 const useDebug = false;
 
@@ -10,33 +11,13 @@ export type ClientServer = BaseServer;
 
 function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
   return ssrData.map((row, index) => {
-    let metadata: Metadata = {
-      description: "",
-      tags: [],
-      thumbnail: "",
-      owner: "",
-      hide: false,
-    };
-
-    try {
-      if (row.Metadata) {
-        metadata = JSON.parse(row.Metadata);
-      }
-    } catch (err) {
-      console.error("[App] Failed to parse metadata:", err, row.Metadata);
-    }
-
-    const normalizedTags = Array.isArray(metadata.tags)
-      ? metadata.tags
-          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
-          .filter(Boolean)
-      : [];
+    const metadata = parseLeaseMetadata(row.Metadata);
 
     return {
       id: index + 1,
       name: row.Name || row.DNS || "(unnamed)",
       description: metadata.description || "",
-      tags: normalizedTags,
+      tags: metadata.tags,
       thumbnail: metadata.thumbnail || "",
       owner: metadata.owner || "",
       online: row.Connected,

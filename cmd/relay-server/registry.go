@@ -56,19 +56,7 @@ func (r *SDKRegistry) extractClientIP(req *http.Request) string {
 }
 
 func (r *SDKRegistry) isSecureConnectRequest(req *http.Request) bool {
-	if req == nil {
-		return false
-	}
-	if req.TLS != nil {
-		return true
-	}
-	if !r.trustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(req.RemoteAddr) {
-		return false
-	}
-	if strings.EqualFold(strings.TrimSpace(req.Header.Get("X-Forwarded-Proto")), "https") {
-		return true
-	}
-	return strings.EqualFold(strings.TrimSpace(req.Header.Get("X-Forwarded-Ssl")), "on")
+	return isSecureRequestWithPolicy(req, r.trustProxyHeaders)
 }
 
 func (r *SDKRegistry) isClientIPBanned(clientIP string) bool {
@@ -110,7 +98,7 @@ func isWebSocketUpgrade(req *http.Request) bool {
 	if req == nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(req.Header.Get("Upgrade")), "websocket")
+	return hasForwardedToken(req.Header.Get("Upgrade"), "websocket")
 }
 
 // HandleSDKRequest routes /sdk/* requests.

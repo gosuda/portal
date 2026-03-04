@@ -14,7 +14,7 @@ Portal must support NAT-friendly inbound connectivity for tenant traffic while k
 - Keep SNI routing as the ingress split for tenant subdomains.
 - Keep root-domain fallback forwarding from SNI router to the admin/API listener.
 - Derive relay `BaseHost` and TLS domain construction from the full portal root host (for example `portal.example.com`), not apex extraction (`example.com`).
-- Serve admin/API TLS from ACME-managed certificate material when files are available.
+- Serve admin/API exclusively over TLS using ACME/local certificate material; no HTTP fallback path.
 
 ## Consequences
 
@@ -26,13 +26,13 @@ Portal must support NAT-friendly inbound connectivity for tenant traffic while k
 
 ### Trade-offs
 
-- TLS enablement still depends on ACME certificate files being present.
+- Startup availability depends on certificate material being present and loadable.
 - Non-apex portal host deployments require wildcard coverage on the full portal root host (for example `*.portal.example.com`).
 
 ### Risks and Mitigations
 
-- Risk: ACME certificate files unavailable at startup.
-  Mitigation: keep HTTP fallback when ACME/root-host prerequisites are not met and log explicit TLS enablement state.
+- Risk: certificate files unavailable or invalid at startup.
+  Mitigation: fail fast during startup and surface explicit operator diagnostics; do not downgrade to HTTP.
 - Risk: non-apex portal host deployments route to wrong TLS host if derivation drifts.
   Mitigation: enforce portal-root-host derivation consistently in relay and SDK.
 

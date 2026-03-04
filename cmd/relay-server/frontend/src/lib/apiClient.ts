@@ -40,11 +40,11 @@ function headersToObject(headers?: HeadersInit): Record<string, string> {
   return { ...headers };
 }
 
-function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
+function ensureJsonEnvelope<T>(raw: unknown, path: string, status: number): APIEnvelope<T> {
   if (!isRecord(raw)) {
     throw new APIClientError(
       `Unexpected API response for ${path}: envelope is not an object`,
-      0,
+      status,
       "invalid_envelope",
       raw
     );
@@ -54,7 +54,7 @@ function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
   if (typeof okValue !== "boolean") {
     throw new APIClientError(
       `Unexpected API response for ${path}: missing ok flag`,
-      0,
+      status,
       "invalid_envelope",
       raw
     );
@@ -64,7 +64,7 @@ function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
   if (errorValue !== undefined && !isRecord(errorValue)) {
     throw new APIClientError(
       `Unexpected API response for ${path}: invalid error payload`,
-      0,
+      status,
       "invalid_envelope",
       errorValue
     );
@@ -85,47 +85,14 @@ function ensureJsonEnvelope<T>(raw: unknown, path: string): APIEnvelope<T> {
   };
 }
 
-function coerceErrorPayload(value: unknown): APIErrorPayload | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const code = typeof value.code === "string" ? value.code.trim() : "";
-  const message = typeof value.message === "string" ? value.message.trim() : "";
-
-  if (!code && !message) {
-    return null;
-  }
-
-  return {
-    code: code || undefined,
-    message: message || undefined,
-  };
-}
-
-function extractErrorPayload(raw: unknown): APIErrorPayload | null {
-  if (!isRecord(raw)) {
-    return null;
-  }
-
-  const nested = coerceErrorPayload(raw.error);
-  if (nested) {
-    return nested;
-  }
-
-  return coerceErrorPayload(raw);
-}
-
 async function decodeEnvelope<T>(path: string, response: Response): Promise<APIEnvelope<T>> {
   const text = await response.text();
-  if (!text) {
-    if (response.ok) {
-      return { ok: true };
-    }
+  if (!text.trim()) {
     throw new APIClientError(
       `Empty API response from ${path}`,
       response.status,
-      "empty_response"
+      "invalid_envelope",
+      text
     );
   }
 
@@ -141,35 +108,7 @@ async function decodeEnvelope<T>(path: string, response: Response): Promise<APIE
     );
   }
 
-  if (isRecord(payload) && typeof payload.ok === "boolean") {
-    return ensureJsonEnvelope<T>(payload, path);
-  }
-
-  if (response.ok) {
-    return {
-      ok: true,
-      data: payload as T,
-    };
-  }
-
-  const fallbackError = extractErrorPayload(payload);
-  if (fallbackError) {
-    return {
-      ok: false,
-      data: payload as T,
-      error: {
-        code: fallbackError.code || "request_failed",
-        message: fallbackError.message || response.statusText || "Request failed",
-      },
-    };
-  }
-
-  throw new APIClientError(
-    `Unexpected API response for ${path}: missing ok envelope`,
-    response.status,
-    "invalid_envelope",
-    payload
-  );
+  return ensureJsonEnvelope<T>(payload, path, response.status);
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {

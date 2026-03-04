@@ -22,19 +22,32 @@ const (
 )
 
 func isSecureRequest(r *http.Request) bool {
+	return isSecureRequestWithPolicy(r, flagTrustProxyHeaders)
+}
+
+func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
 	if r == nil {
 		return false
 	}
 	if r.TLS != nil {
 		return true
 	}
-	if !flagTrustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
+	if !trustProxyHeaders || !manager.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https") {
+	if hasForwardedToken(r.Header.Get("X-Forwarded-Proto"), "https") {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Ssl")), "on")
+	return hasForwardedToken(r.Header.Get("X-Forwarded-Ssl"), "on")
+}
+
+func hasForwardedToken(raw, target string) bool {
+	for token := range strings.SplitSeq(raw, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), target) {
+			return true
+		}
+	}
+	return false
 }
 
 // getContentType returns the MIME type for a file extension.

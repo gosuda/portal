@@ -1,4 +1,4 @@
-import { ClientServer } from "@/pages/ServerList";
+import type { ClientServer } from "@/hooks/useServerList";
 
 // Generate random sample servers
 export const generateRandomServers = (

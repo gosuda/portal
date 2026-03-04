@@ -87,16 +87,13 @@ describe("useAdmin", () => {
       }
       if (path === API_PATHS.admin.bannedLeases) {
         return [
-          "  peer-a ",
+          "peer-a",
           "peer-a",
           "peer-b",
         ] as never;
       }
-      if (path === API_PATHS.admin.settings) {
-        return { approval_mode: "not-a-mode" } as never;
-      }
       if (path === API_PATHS.admin.approvalMode) {
-        return { approval_mode: "manual" } as never;
+        return { approval_mode: "not-a-mode" } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -123,9 +120,6 @@ describe("useAdmin", () => {
       }
       if (path === API_PATHS.admin.bannedLeases) {
         return [] as never;
-      }
-      if (path === API_PATHS.admin.settings) {
-        return { approval_mode: "manual" } as never;
       }
       if (path === API_PATHS.admin.approvalMode) {
         return { approval_mode: "manual" } as never;
@@ -175,13 +169,13 @@ describe("useAdmin", () => {
     });
   });
 
-  it("keeps plain lease IDs stable when building action targets", async () => {
+  it("encodes peer IDs for action routes", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
     const plainLeaseID = "deadbeefcafebabe";
 
     await act(async () => {
-      await result.current.handleApproveStatus(` ${plainLeaseID} `, true);
+      await result.current.handleApproveStatus(plainLeaseID, true);
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
@@ -190,7 +184,7 @@ describe("useAdmin", () => {
     );
   });
 
-  it("bulk deny posts normalized, deduped lease IDs", async () => {
+  it("bulk deny posts deduped lease IDs to action routes", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
     const normalizedPeerA = encodeLeaseID("peer-a");
@@ -198,7 +192,7 @@ describe("useAdmin", () => {
 
     await act(async () => {
       await result.current.handleBulkDeny([
-        " peer-a ",
+        "peer-a",
         "peer-a",
         "peer-b",
       ]);

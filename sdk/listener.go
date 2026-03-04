@@ -562,11 +562,6 @@ func parseReverseConnectRejection(body []byte) (string, string) {
 	}
 }
 
-func formatReverseConnectRejectionDetail(body []byte) string {
-	_, detail := parseReverseConnectRejection(body)
-	return detail
-}
-
 func (l *Listener) reverseSetupTimeout() time.Duration {
 	if l.reverseDialTimeout <= 0 {
 		return defaultReverseDialTimeout
@@ -702,30 +697,30 @@ func (l *Listener) postJSON(path string, body any) error {
 	}
 
 	var envelope types.APIRawEnvelope
-	if err := json.Unmarshal(data, &envelope); err == nil {
-		if envelope.OK {
-			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-				return nil
-			}
-			return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("POST %s failed: invalid API envelope: %w", path, err)
+	}
+	if envelope.OK {
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return nil
 		}
-
-		msg := ""
-		if envelope.Error != nil {
-			msg = strings.TrimSpace(envelope.Error.Message)
-		}
-		if msg == "" {
-			msg = strings.TrimSpace(string(data))
-		}
-		return fmt.Errorf("POST %s rejected: %s", path, msg)
+		return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 
-	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		// Non-envelope successful payloads are treated as successful.
-		return nil
+	msg := ""
+	if envelope.Error != nil {
+		msg = strings.TrimSpace(envelope.Error.Message)
 	}
-
-	return fmt.Errorf("POST %s failed: status=%d body=%s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+	if msg == "" {
+		msg = strings.TrimSpace(string(data))
+	}
+	if msg == "" {
+		msg = fmt.Sprintf("status=%d", resp.StatusCode)
+	}
+	if envelope.Error != nil && strings.TrimSpace(envelope.Error.Code) != "" {
+		return fmt.Errorf("POST %s rejected: %s (code=%s)", path, msg, strings.TrimSpace(envelope.Error.Code))
+	}
+	return fmt.Errorf("POST %s rejected: %s", path, msg)
 }
 
 func isLeaseNotFoundError(err error) bool {

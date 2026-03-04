@@ -312,32 +312,37 @@ func TestReadReverseConnectResponse_RespectsReadDeadline(t *testing.T) {
 	}
 }
 
-func TestFormatReverseConnectRejectionDetail(t *testing.T) {
+func TestParseReverseConnectRejection(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		body string
+		code string
 		want string
 	}{
 		{
 			name: "envelope with code and message",
 			body: `{"ok":false,"error":{"code":"ip_banned","message":"ip is banned"}}`,
+			code: "ip_banned",
 			want: "ip is banned (code=ip_banned)",
 		},
 		{
 			name: "envelope with message only",
 			body: `{"ok":false,"error":{"code":"","message":"missing lease_id"}}`,
+			code: "",
 			want: "missing lease_id",
 		},
 		{
 			name: "plain text body",
 			body: " unauthorized reverse connect ",
+			code: "",
 			want: "unauthorized reverse connect",
 		},
 		{
 			name: "empty body",
 			body: "  ",
+			code: "",
 			want: "",
 		},
 	}
@@ -345,8 +350,12 @@ func TestFormatReverseConnectRejectionDetail(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := formatReverseConnectRejectionDetail([]byte(tt.body)); got != tt.want {
-				t.Fatalf("formatReverseConnectRejectionDetail(%q)=%q, want %q", tt.body, got, tt.want)
+			code, detail := parseReverseConnectRejection([]byte(tt.body))
+			if code != tt.code {
+				t.Fatalf("parseReverseConnectRejection(%q) code=%q, want %q", tt.body, code, tt.code)
+			}
+			if detail != tt.want {
+				t.Fatalf("parseReverseConnectRejection(%q) detail=%q, want %q", tt.body, detail, tt.want)
 			}
 		})
 	}

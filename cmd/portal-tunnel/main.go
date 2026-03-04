@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -31,7 +30,6 @@ var (
 	flagThumbnail string
 	flagOwner     string
 	flagHide      bool
-	flagTLS       bool
 )
 
 func main() {
@@ -45,13 +43,6 @@ func main() {
 	flag.StringVar(&flagRelayURLs, "relay", defaultRelayURLs, "Portal relay server API URLs (comma-separated, https only) [env: RELAYS]")
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
-
-	tlsEnv := strings.TrimSpace(os.Getenv("TLS"))
-	defaultTLS := true
-	if tlsEnv != "" {
-		defaultTLS = strings.EqualFold(tlsEnv, "true") || tlsEnv == "1"
-	}
-	flag.BoolVar(&flagTLS, "tls", defaultTLS, "Enable TLS (keyless) [env: TLS]")
 
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
@@ -76,10 +67,8 @@ func runTunnel() error {
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
-	if !flagTLS {
-		return errors.New("reverse connect architecture requires TLS; set --tls=true")
-	}
-	if err := validateRelayURLsForReverseConnect(relayURLs); err != nil {
+	relayURLs, err := normalizeRelayURLsForReverseConnect(relayURLs)
+	if err != nil {
 		return err
 	}
 
@@ -87,14 +76,12 @@ func runTunnel() error {
 	log.Info().Msg("Starting Portal Tunnel...")
 	log.Info().Msgf("  Local:    %s", flagHost)
 	log.Info().Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Msgf("  TLS:      %t", flagTLS)
 
 	opts := []sdk.ClientOption{sdk.WithBootstrapServers(relayURLs)}
 	sdkClient, err := sdk.NewClient(opts...)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
 	}
-	defer sdkClient.Close()
 
 	listener, err := sdkClient.Listen(
 		flagName,
@@ -120,10 +107,6 @@ func runTunnel() error {
 	if leaseAware, ok := listener.(interface{ LeaseID() string }); ok {
 		log.Info().Msgf("- Lease ID: %s", leaseAware.LeaseID())
 	}
-	if flagTLS {
-		log.Info().Msg("- TLS:      Enabled")
-	}
-
 	log.Info().Str("service", flagName).Msg("")
 
 	connCount := 0
@@ -159,15 +142,10 @@ loop:
 		connWG.Add(1)
 		go func(relayConn net.Conn) {
 			defer connWG.Done()
-			tlsEnabled := flagTLS
-			proxyType := "TCP"
-			if tlsEnabled {
-				proxyType = "TLS→TCP"
-			}
 			if err := proxyConnection(ctx, flagHost, relayConn); err != nil {
-				log.Error().Str("proxy", proxyType).Err(err).Msg("Proxy error")
+				log.Error().Str("proxy", "TLS→TCP").Err(err).Msg("Proxy error")
 			}
-			log.Info().Str("proxy", proxyType).Msg("Connection closed")
+			log.Info().Str("proxy", "TLS→TCP").Msg("Connection closed")
 		}(relayConn)
 	}
 
@@ -187,17 +165,16 @@ loop:
 	return nil
 }
 
-func validateRelayURLsForReverseConnect(relayURLs []string) error {
+func normalizeRelayURLsForReverseConnect(relayURLs []string) ([]string, error) {
+	normalized := make([]string, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
-		parsedURL, err := url.Parse(relayURL)
+		normalizedURL, err := types.NormalizeRelayAPIURL(relayURL)
 		if err != nil {
-			return fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
+			return nil, fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
 		}
-		if !strings.EqualFold(parsedURL.Scheme, "https") {
-			return fmt.Errorf("reverse connect requires https relay URLs, got %q", relayURL)
-		}
+		normalized = append(normalized, normalizedURL)
 	}
-	return nil
+	return normalized, nil
 }
 
 var bufferPool = sync.Pool{

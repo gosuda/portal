@@ -21,14 +21,8 @@ import (
 
 // SDK-specific errors.
 var (
-	ErrNoAvailableRelay     = errors.New("no available relay")
-	ErrClientClosed         = errors.New("client is closed")
-	ErrListenerExists       = errors.New("listener already exists for this credential")
-	ErrRelayExists          = errors.New("relay already exists")
-	ErrRelayNotFound        = errors.New("relay not found")
-	ErrInvalidName          = errors.New("lease name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
-	ErrFailedToCreateClient = errors.New("failed to create relay client")
-	ErrInvalidMetadata      = errors.New("invalid metadata")
+	ErrNoAvailableRelay = errors.New("no available relay")
+	ErrInvalidName      = errors.New("lease name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
 )
 
 // ClientConfig configures the SDK client.
@@ -206,7 +200,9 @@ func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []fun
 	return tlsConfig, []func(){closeFn}, nil
 }
 
-// Close closes the client.
+// Close keeps SDK lifecycle parity with callers that defer cleanup.
 func (c *Client) Close() error {
 	return nil
 }
+
+// Close closes the client.

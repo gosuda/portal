@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ServerData, Metadata } from "@/hooks/useSSRData";
+import type { ServerData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
 import {
@@ -9,6 +9,7 @@ import {
   encodeLeaseID,
 } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
+import { parseLeaseMetadata } from "@/lib/metadata";
 
 export type ApprovalMode = "auto" | "manual";
 
@@ -67,64 +68,11 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function normalizeLeaseID(raw: string): string {
-  return raw.trim();
-}
-
 function encodeLeaseIDForPath(raw: string): string {
-  const leaseID = normalizeLeaseID(raw);
-  if (!leaseID) {
+  if (!raw) {
     throw new Error("Missing lease ID");
   }
-  return encodeLeaseID(leaseID);
-}
-
-function sanitizeMetadata(row: ServerData): Metadata {
-  const isRecord = (value: unknown): value is Record<string, unknown> => {
-    return (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value)
-    );
-  };
-
-  const fallback: Metadata = {
-    description: "",
-    tags: [],
-    thumbnail: "",
-    owner: "",
-    hide: false,
-  };
-
-  if (!row.Metadata) {
-    return fallback;
-  }
-
-  try {
-    const parsed = JSON.parse(row.Metadata);
-    if (!isRecord(parsed)) {
-      return fallback;
-    }
-
-    const rawTags = parsed.tags;
-    const tags = Array.isArray(rawTags)
-      ? rawTags
-          .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
-          .filter(Boolean)
-      : [];
-
-    return {
-      description:
-        typeof parsed.description === "string" ? parsed.description : "",
-      tags,
-      thumbnail:
-        typeof parsed.thumbnail === "string" ? parsed.thumbnail : "",
-      owner: typeof parsed.owner === "string" ? parsed.owner : "",
-      hide: typeof parsed.hide === "boolean" ? parsed.hide : false,
-    };
-  } catch {
-    return fallback;
-  }
+  return encodeLeaseID(raw);
 }
 
 function toAdminServer(
@@ -132,8 +80,7 @@ function toAdminServer(
   index: number,
   bannedLeases: Set<string>
 ): AdminServer {
-  const metadata = sanitizeMetadata(row);
-  const peerId = normalizeLeaseID(row.Peer);
+  const metadata = parseLeaseMetadata(row.Metadata);
 
   return {
     id: index + 1,
@@ -147,8 +94,8 @@ function toAdminServer(
     link: row.Link,
     lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
     firstSeen: row.FirstSeenISO || undefined,
-    peerId,
-    isBanned: bannedLeases.has(peerId),
+    peerId: row.Peer,
+    isBanned: bannedLeases.has(row.Peer),
     bps: row.BPS || 0,
     isApproved: row.IsApproved || false,
     isDenied: row.IsDenied || false,
@@ -190,26 +137,15 @@ export function useAdmin() {
     setLoading(true);
 
     try {
-      const settingsRequest = apiClient
-        .get<SettingsResponse>(API_PATHS.admin.settings)
-        .catch(async (err) => {
-          if (err instanceof APIClientError && err.status === 404) {
-            return apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode);
-          }
-          throw err;
-        });
-
       const [leasesData, bannedData, settings] = await Promise.all([
         apiClient.get<ServerData[]>(API_PATHS.admin.leases),
         apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
-        settingsRequest,
+        apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode),
       ]);
 
-      const normalizedBans = (Array.isArray(bannedData) ? bannedData : [])
-        .map((leaseID) =>
-          typeof leaseID === "string" ? normalizeLeaseID(leaseID) : ""
-        )
-        .filter(Boolean);
+      const normalizedBans = (Array.isArray(bannedData) ? bannedData : []).filter(
+        (leaseID): leaseID is string => typeof leaseID === "string"
+      );
 
       setServerData(Array.isArray(leasesData) ? leasesData : []);
       setBannedLeases(dedupeStrings(normalizedBans));
@@ -226,7 +162,7 @@ export function useAdmin() {
   }, [fetchData]);
 
   const bannedLeaseSet = useMemo(
-    () => new Set(bannedLeases.map((leaseID) => normalizeLeaseID(leaseID))),
+    () => new Set(bannedLeases),
     [bannedLeases]
   );
 
@@ -353,11 +289,7 @@ export function useAdmin() {
 
   const runBulkLeaseAction = useCallback(
     async (peerIds: string[], action: LeaseAction) => {
-      const normalizedPeerIDs = dedupeStrings(
-        peerIds
-          .map((peerId) => normalizeLeaseID(peerId))
-          .filter(Boolean)
-      );
+      const normalizedPeerIDs = dedupeStrings(peerIds.filter((peerId) => peerId.length > 0));
       if (normalizedPeerIDs.length === 0) {
         throw new Error("No valid leases selected");
       }

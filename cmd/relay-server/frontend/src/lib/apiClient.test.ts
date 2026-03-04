@@ -31,12 +31,14 @@ describe("apiClient", () => {
     expect(init.headers).toEqual({ Accept: "application/json" });
   });
 
-  it("accepts successful non-envelope JSON payloads", async () => {
+  it("rejects successful non-envelope JSON payloads", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ direct: true }));
 
-    const data = await apiClient.get<{ direct: boolean }>("/api/test");
-
-    expect(data).toEqual({ direct: true });
+    await expect(apiClient.get<{ direct: boolean }>("/api/test")).rejects.toMatchObject({
+      name: "APIClientError",
+      status: 200,
+      code: "invalid_envelope",
+    } satisfies Partial<APIClientError>);
   });
 
   it("throws APIClientError for server-side envelope failures", async () => {
@@ -55,7 +57,7 @@ describe("apiClient", () => {
     } satisfies Partial<APIClientError>);
   });
 
-  it("parses structured non-envelope errors for resilience", async () => {
+  it("rejects structured non-envelope errors as invalid envelopes", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
         { code: "lease_rejected", message: "failed to register lease" },
@@ -66,8 +68,7 @@ describe("apiClient", () => {
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({
       name: "APIClientError",
       status: 409,
-      code: "lease_rejected",
-      message: "failed to register lease",
+      code: "invalid_envelope",
     } satisfies Partial<APIClientError>);
   });
 
@@ -79,6 +80,16 @@ describe("apiClient", () => {
     await expect(apiClient.get("/api/test")).rejects.toMatchObject({
       name: "APIClientError",
       status: 400,
+      code: "invalid_envelope",
+    } satisfies Partial<APIClientError>);
+  });
+
+  it("treats empty responses as invalid envelopes", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
+
+    await expect(apiClient.get("/api/test")).rejects.toMatchObject({
+      name: "APIClientError",
+      status: 200,
       code: "invalid_envelope",
     } satisfies Partial<APIClientError>);
   });
