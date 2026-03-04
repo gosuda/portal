@@ -4,12 +4,10 @@ go 1.26.0
 
 require (
 	github.com/go-acme/lego/v4 v4.32.0
-	github.com/gosuda/keyless_tls v0.0.0
+	github.com/gosuda/keyless_tls v0.0.1-0.20260304212324-7733f8366abc
 	github.com/rs/zerolog v1.34.0
 	golang.org/x/net v0.51.0
 )
-
-replace github.com/gosuda/keyless_tls => ./keyless_tls
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
