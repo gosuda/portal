@@ -111,7 +111,6 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 ### Deployment Notes
 
 - `admin_settings.json` persists runtime state (ban lists, BPS limits, approval mode) in the process working directory. Mount CWD as a volume to preserve state across container restarts.
-- `keyless_tls/` is a local Go sub-module (`replace` directive in root `go.mod`), not a separately published package.
 
 ## Architecture
 
