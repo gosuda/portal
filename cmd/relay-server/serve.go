@@ -127,8 +127,13 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
+	rootHost := types.PortalRootHost(flagPortalURL)
 	srv.TLSConfig = &tls.Config{
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))
+			if serverName != "" && !strings.EqualFold(serverName, rootHost) {
+				return nil, fmt.Errorf("acme certificate is only served for portal root host %q", rootHost)
+			}
 			certFile, keyFile := acmeManager.TLSFiles()
 			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 			if err != nil {
