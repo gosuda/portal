@@ -43,7 +43,6 @@ func NewRelayServer(
 		sniRouter:    sni.NewRouter(sniPort),
 	}
 
-
 	// Auto-register DNS A records in Cloudflare (best-effort, non-fatal).
 	if err := acme.EnsureDNSRecords(ctx, baseHost, cloudflareToken); err != nil {
 		log.Warn().Err(err).Msg("[DNS] failed to auto-register DNS records; continuing without")

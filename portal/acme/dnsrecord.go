@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -27,8 +28,8 @@ const (
 // Cloudflare API response types.
 
 type cfError struct {
-	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Code    int    `json:"code"`
 }
 
 type cfZone struct {
@@ -46,21 +47,21 @@ type cfDNSRecord struct {
 }
 
 type cfZonesResult struct {
-	Success bool      `json:"success"`
 	Errors  []cfError `json:"errors"`
 	Result  []cfZone  `json:"result"`
+	Success bool      `json:"success"`
 }
 
 type cfRecordsResult struct {
-	Success bool          `json:"success"`
 	Errors  []cfError     `json:"errors"`
 	Result  []cfDNSRecord `json:"result"`
+	Success bool          `json:"success"`
 }
 
 type cfRecordResult struct {
-	Success bool        `json:"success"`
 	Errors  []cfError   `json:"errors"`
 	Result  cfDNSRecord `json:"result"`
+	Success bool        `json:"success"`
 }
 
 // EnsureDNSRecords creates or updates Cloudflare A records for the base domain
@@ -316,7 +317,7 @@ func cfMutate(ctx context.Context, method, token, rawURL string, body any, out a
 
 func cfErrs(errs []cfError) error {
 	if len(errs) == 0 {
-		return fmt.Errorf("cloudflare API request failed")
+		return errors.New("cloudflare API request failed")
 	}
 	msgs := make([]string, 0, len(errs))
 	for _, e := range errs {
