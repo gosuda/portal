@@ -241,4 +241,3 @@ func registryAPIError(statusCode int, code, message string) *types.APIError {
 		Message:    message,
 	}
 }
-
