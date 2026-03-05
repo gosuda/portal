@@ -9,12 +9,6 @@ import (
 	"gosuda.org/portal/types"
 )
 
-// Lease is an alias for types.Lease for backward compatibility within the portal package.
-type Lease = types.Lease
-
-// LeaseEntry is an alias for types.LeaseEntry for backward compatibility within the portal package.
-type LeaseEntry = types.LeaseEntry
-
 type LeaseManager struct {
 	leases         map[string]*types.LeaseEntry
 	stopCh         chan struct{}
@@ -31,7 +25,7 @@ type LeaseManager struct {
 
 func NewLeaseManager(ttlInterval time.Duration) *LeaseManager {
 	return &LeaseManager{
-		leases:       make(map[string]*LeaseEntry),
+		leases:       make(map[string]*types.LeaseEntry),
 		stopCh:       make(chan struct{}),
 		ttlInterval:  ttlInterval,
 		bannedLeases: make(map[string]struct{}),
@@ -86,7 +80,7 @@ func (lm *LeaseManager) cleanupExpiredLeases() {
 	}
 }
 
-func (lm *LeaseManager) UpdateLease(lease *Lease) bool {
+func (lm *LeaseManager) UpdateLease(lease *types.Lease) bool {
 	lm.leasesLock.Lock()
 	defer lm.leasesLock.Unlock()
 
@@ -137,7 +131,7 @@ func (lm *LeaseManager) UpdateLease(lease *Lease) bool {
 		firstSeen = time.Now()
 	}
 
-	lm.leases[identityID] = &LeaseEntry{
+	lm.leases[identityID] = &types.LeaseEntry{
 		Lease:     lease,
 		Expires:   lease.Expires,
 		LastSeen:  time.Now(),
@@ -168,7 +162,7 @@ func (lm *LeaseManager) SetOnLeaseDeleted(callback func(string)) {
 	lm.onLeaseDeleted = callback
 }
 
-func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
+func (lm *LeaseManager) GetLeaseByID(leaseID string) (*types.LeaseEntry, bool) {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
@@ -190,7 +184,7 @@ func (lm *LeaseManager) GetLeaseByID(leaseID string) (*LeaseEntry, bool) {
 	return lease, true
 }
 
-func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
+func (lm *LeaseManager) GetLeaseByName(name string) (*types.LeaseEntry, bool) {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
@@ -213,12 +207,12 @@ func (lm *LeaseManager) GetLeaseByName(name string) (*LeaseEntry, bool) {
 	return nil, false
 }
 
-func (lm *LeaseManager) GetAllLeases() []*Lease {
+func (lm *LeaseManager) GetAllLeases() []*types.Lease {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
 	now := time.Now()
-	var validLeases []*Lease
+	var validLeases []*types.Lease
 
 	for _, entry := range lm.leases {
 		if now.Before(entry.Expires) {
@@ -230,12 +224,12 @@ func (lm *LeaseManager) GetAllLeases() []*Lease {
 }
 
 // GetAllLeaseEntries returns all lease entries from the lease manager.
-func (lm *LeaseManager) GetAllLeaseEntries() []*LeaseEntry {
+func (lm *LeaseManager) GetAllLeaseEntries() []*types.LeaseEntry {
 	lm.leasesLock.RLock()
 	defer lm.leasesLock.RUnlock()
 
 	now := time.Now()
-	var entries []*LeaseEntry
+	var entries []*types.LeaseEntry
 
 	for _, entry := range lm.leases {
 		if now.Before(entry.Expires) {

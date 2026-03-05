@@ -17,9 +17,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/contracts"
 	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 var (
@@ -86,11 +86,11 @@ func runTunnel() error {
 
 	listener, err := sdkClient.Listen(
 		flagName,
-		contracts.WithDescription(flagDesc),
-		contracts.WithTags(netutil.ParseURLs(flagTags)),
-		contracts.WithOwner(flagOwner),
-		contracts.WithThumbnail(flagThumbnail),
-		contracts.WithHide(flagHide),
+		types.WithDescription(flagDesc),
+		types.WithTags(netutil.ParseURLs(flagTags)),
+		types.WithOwner(flagOwner),
+		types.WithThumbnail(flagThumbnail),
+		types.WithHide(flagHide),
 	)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to register service: %w", flagName, err)

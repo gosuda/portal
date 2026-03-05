@@ -13,10 +13,9 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/sni"
 	"gosuda.org/portal/types"
 )
-
-const testNonTLSStartMarker = byte(0x01)
 
 func TestNormalizeRelayAPIURL(t *testing.T) {
 	t.Parallel()
@@ -172,7 +171,7 @@ func TestOpenReverseConnection_RejectsNonHTTPSRelay(t *testing.T) {
 
 	l := &Listener{
 		relayAddr:          "http://localhost:4017",
-		lease:              &portal.Lease{ID: "lease-1", ReverseToken: "token-1"},
+		lease:              &types.Lease{ID: "lease-1", ReverseToken: "token-1"},
 		reverseDialTimeout: 2 * time.Second,
 		stopCh:             make(chan struct{}),
 	}
@@ -211,7 +210,7 @@ func TestOpenReverseConnection_StopUnblocksTLSHandshake(t *testing.T) {
 
 	l := &Listener{
 		relayAddr:          "https://" + ln.Addr().String(),
-		lease:              &portal.Lease{ID: "lease-1", ReverseToken: "token-1"},
+		lease:              &types.Lease{ID: "lease-1", ReverseToken: "token-1"},
 		reverseDialTimeout: 5 * time.Second,
 		stopCh:             make(chan struct{}),
 	}
@@ -256,7 +255,7 @@ func TestWriteReverseConnectRequest_RespectsWriteDeadline(t *testing.T) {
 	}
 
 	l := &Listener{
-		lease:              &portal.Lease{ReverseToken: "token-1"},
+		lease:              &types.Lease{ReverseToken: "token-1"},
 		reverseDialTimeout: 25 * time.Millisecond,
 		stopCh:             make(chan struct{}),
 	}
@@ -483,10 +482,10 @@ func TestWaitForReverseStart_HTTPMode(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.TLSStartMarker)
 	}()
 
-	_, err := peer.Write([]byte{portal.TLSStartMarker})
+	_, err := peer.Write([]byte{sni.TLSStartMarker})
 	if err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
@@ -514,10 +513,10 @@ func TestWaitForReverseStart_TLSMode(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.TLSStartMarker)
 	}()
 
-	_, err := peer.Write([]byte{portal.TLSStartMarker})
+	_, err := peer.Write([]byte{sni.TLSStartMarker})
 	if err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
@@ -542,14 +541,14 @@ func TestWaitForReverseStart_IgnoresKeepaliveMarker(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.TLSStartMarker)
 	}()
 
 	_, err := peer.Write([]byte{portal.ReverseKeepaliveMarker})
 	if err != nil {
 		t.Fatalf("write keepalive marker: %v", err)
 	}
-	_, err = peer.Write([]byte{portal.TLSStartMarker})
+	_, err = peer.Write([]byte{sni.TLSStartMarker})
 	if err != nil {
 		t.Fatalf("write start marker: %v", err)
 	}
@@ -577,10 +576,10 @@ func TestWaitForReverseStart_TLSRejectsHTTPMarker(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.TLSStartMarker)
 	}()
 
-	_, err := peer.Write([]byte{testNonTLSStartMarker})
+	_, err := peer.Write([]byte{sni.NonTLSStartMarker})
 	if err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
@@ -605,10 +604,10 @@ func TestWaitForReverseStart_HTTPRejectsTLSMarker(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, testNonTLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.NonTLSStartMarker)
 	}()
 
-	_, err := peer.Write([]byte{portal.TLSStartMarker})
+	_, err := peer.Write([]byte{sni.TLSStartMarker})
 	if err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
@@ -632,7 +631,7 @@ func TestWaitForReverseStart_StopCancelsWait(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- l.waitForReverseStart(local, portal.TLSStartMarker)
+		done <- l.waitForReverseStart(local, sni.TLSStartMarker)
 	}()
 
 	close(l.stopCh)

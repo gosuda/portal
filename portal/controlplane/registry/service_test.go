@@ -8,14 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/types"
 )
 
 type fakeBackend struct {
 	registerRouteErr   error
-	leases             map[string]*portal.LeaseEntry
+	leases             map[string]*types.LeaseEntry
 	baseHost           string
 	connectLeaseID     string
 	connectToken       string
@@ -29,7 +28,7 @@ func newFakeBackend(baseHost string) *fakeBackend {
 	return &fakeBackend{
 		baseHost:           baseHost,
 		updateLeaseAllowed: true,
-		leases:             make(map[string]*portal.LeaseEntry),
+		leases:             make(map[string]*types.LeaseEntry),
 	}
 }
 
@@ -37,11 +36,11 @@ func (f *fakeBackend) BaseHost() string {
 	return f.baseHost
 }
 
-func (f *fakeBackend) UpdateLease(lease *portal.Lease) bool {
+func (f *fakeBackend) UpdateLease(lease *types.Lease) bool {
 	if !f.updateLeaseAllowed {
 		return false
 	}
-	f.leases[lease.ID] = &portal.LeaseEntry{
+	f.leases[lease.ID] = &types.LeaseEntry{
 		Lease:   lease,
 		Expires: lease.Expires,
 	}
@@ -56,7 +55,7 @@ func (f *fakeBackend) DeleteLease(leaseID string) bool {
 	return true
 }
 
-func (f *fakeBackend) GetLeaseByID(leaseID string) (*portal.LeaseEntry, bool) {
+func (f *fakeBackend) GetLeaseByID(leaseID string) (*types.LeaseEntry, bool) {
 	entry, ok := f.leases[leaseID]
 	return entry, ok
 }
@@ -175,8 +174,8 @@ func TestAdmitSuccessWithMatchingToken(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -212,8 +211,8 @@ func TestAdmitRejectsInvalidTokenWithValidCertificate(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -242,8 +241,8 @@ func TestAdmit_ValidCert_Passes(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -272,8 +271,8 @@ func TestAdmit_InvalidCert_Rejected(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -303,8 +302,8 @@ func TestAdmit_NoCert_TokenValid_Passes(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -315,7 +314,7 @@ func TestAdmit_NoCert_TokenValid_Passes(t *testing.T) {
 		t.Fatalf("NewService returned error: %v", err)
 	}
 
-	// Nil TLS state — CertBind skipped, token validation still applies.
+	// Nil TLS state ??CertBind skipped, token validation still applies.
 	result, apiErr := svc.Admit(AdmissionInput{
 		RawLeaseID:         "lease-1",
 		RawReverseToken:    "token-1",
@@ -334,8 +333,8 @@ func TestAdmit_NoCert_TokenInvalid_Rejected(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	backend.leases["lease-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:           "lease-1",
 			ReverseToken: "token-1",
 		},
@@ -346,7 +345,7 @@ func TestAdmit_NoCert_TokenInvalid_Rejected(t *testing.T) {
 		t.Fatalf("NewService returned error: %v", err)
 	}
 
-	// Nil TLS state — CertBind skipped, but token does not match.
+	// Nil TLS state ??CertBind skipped, but token does not match.
 	_, apiErr := svc.Admit(AdmissionInput{
 		RawLeaseID:         "lease-1",
 		RawReverseToken:    "wrong-token",
@@ -433,8 +432,8 @@ func TestRenewExtendsLease(t *testing.T) {
 
 	now := time.Date(2026, time.March, 4, 1, 0, 0, 0, time.UTC)
 	backend := newFakeBackend("example.com")
-	entry := &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	entry := &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:      "lease-1",
 			Name:    "demo",
 			Expires: now,
@@ -464,8 +463,8 @@ func TestRenewResetsFutureExpiryFromNow(t *testing.T) {
 	now := time.Date(2026, time.March, 4, 1, 0, 0, 0, time.UTC)
 	originalExpiry := now.Add(5 * time.Minute)
 	backend := newFakeBackend("example.com")
-	entry := &portal.LeaseEntry{
-		Lease: &portal.Lease{
+	entry := &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:      "lease-1",
 			Name:    "demo",
 			Expires: originalExpiry,
@@ -498,7 +497,7 @@ func TestUnregisterDropsLeaseAndRoutes(t *testing.T) {
 	t.Parallel()
 
 	backend := newFakeBackend("example.com")
-	backend.leases["lease-1"] = &portal.LeaseEntry{Lease: &portal.Lease{ID: "lease-1"}}
+	backend.leases["lease-1"] = &types.LeaseEntry{Lease: &types.Lease{ID: "lease-1"}}
 	svc, err := NewService(backend, Options{})
 	if err != nil {
 		t.Fatalf("NewService returned error: %v", err)

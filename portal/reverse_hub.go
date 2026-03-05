@@ -9,16 +9,14 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"gosuda.org/portal/portal/sni"
 )
 
 const (
 	// ReverseKeepaliveMarker keeps idle reverse connections alive
 	// before they are activated for a real client request.
 	ReverseKeepaliveMarker = byte(0x00)
-
-	// TLSStartMarker is sent by the relay to activate a reverse connection
-	// for TLS reverse-connect mode.
-	TLSStartMarker = byte(0x02)
 
 	// QueueSize is the maximum number of pending reverse connections per lease.
 	QueueSize = 64
@@ -267,7 +265,7 @@ func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*Reve
 			}
 			// Stop idle keepalive and signal tunnel worker to release this connection.
 			conn.Activate()
-			err := conn.WriteControlByte(TLSStartMarker, controlWriteTimeout)
+			err := conn.WriteControlByte(sni.TLSStartMarker, controlWriteTimeout)
 			if err == nil {
 				return conn, nil
 			}

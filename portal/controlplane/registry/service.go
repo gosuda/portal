@@ -10,7 +10,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/types"
 )
@@ -21,9 +20,9 @@ const DefaultLeaseTTL = 30 * time.Second
 // Backend provides the relay operations needed by the control-plane registry.
 type Backend interface {
 	BaseHost() string
-	UpdateLease(lease *portal.Lease) bool
+	UpdateLease(lease *types.Lease) bool
 	DeleteLease(leaseID string) bool
-	GetLeaseByID(leaseID string) (*portal.LeaseEntry, bool)
+	GetLeaseByID(leaseID string) (*types.LeaseEntry, bool)
 	ClearDropped(leaseID string)
 	DropLease(leaseID string)
 	RegisterRoute(sniName, leaseID, name string) error
@@ -37,9 +36,6 @@ type Options struct {
 	LeaseTTL time.Duration
 }
 
-// APIError is an alias for types.APIError to avoid breaking existing consumers.
-type APIError = types.APIError
-
 // AdmissionInput describes runtime context for control-plane admission checks.
 type AdmissionInput struct {
 	ConnectionTLSState *tls.ConnectionState
@@ -52,7 +48,7 @@ type AdmissionInput struct {
 
 // AdmissionResult returns normalized, validated admission context.
 type AdmissionResult struct {
-	Entry        *portal.LeaseEntry
+	Entry        *types.LeaseEntry
 	LeaseID      string
 	ReverseToken string
 	ClientIP     string
@@ -96,7 +92,7 @@ func NewService(backend Backend, opts Options) (*Service, error) {
 }
 
 // Admit validates and normalizes control-plane credentials before SDK operations.
-func (s *Service) Admit(input AdmissionInput) (AdmissionResult, *APIError) {
+func (s *Service) Admit(input AdmissionInput) (AdmissionResult, *types.APIError) {
 	leaseID, reverseToken := normalizeLeaseCredentials(input.RawLeaseID, input.RawReverseToken)
 	if err := validateLeaseCredentials(leaseID, reverseToken); err != nil {
 		return AdmissionResult{}, err
@@ -130,7 +126,7 @@ func (s *Service) Admit(input AdmissionInput) (AdmissionResult, *APIError) {
 }
 
 // Register creates a new lease and associated SNI route.
-func (s *Service) Register(input RegisterInput) (types.RegisterResponse, *APIError) {
+func (s *Service) Register(input RegisterInput) (types.RegisterResponse, *types.APIError) {
 	name := strings.TrimSpace(input.Name)
 	if !types.IsValidLeaseName(name) {
 		return types.RegisterResponse{}, apiError(httpStatusBadRequest, "invalid_name", "name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
@@ -144,7 +140,7 @@ func (s *Service) Register(input RegisterInput) (types.RegisterResponse, *APIErr
 		metadata = *input.Metadata
 	}
 
-	lease := &portal.Lease{
+	lease := &types.Lease{
 		ID:           input.LeaseID,
 		Name:         name,
 		Metadata:     metadata,
@@ -198,7 +194,7 @@ func (s *Service) Unregister(leaseID string) {
 }
 
 // Renew extends lease expiry and opportunistically refreshes SNI routing.
-func (s *Service) Renew(entry *portal.LeaseEntry) *APIError {
+func (s *Service) Renew(entry *types.LeaseEntry) *types.APIError {
 	if entry == nil || entry.Lease == nil {
 		return apiError(httpStatusNotFound, "lease_not_found", "lease not found")
 	}
@@ -228,7 +224,7 @@ func (s *Service) Renew(entry *portal.LeaseEntry) *APIError {
 }
 
 // Domain returns the configured relay base domain.
-func (s *Service) Domain() (types.DomainResponse, *APIError) {
+func (s *Service) Domain() (types.DomainResponse, *types.APIError) {
 	baseHost := strings.TrimSpace(s.backend.BaseHost())
 	if baseHost == "" {
 		return types.DomainResponse{}, apiError(httpStatusServiceUnavailable, "base_domain_missing", "base domain not configured")
@@ -248,7 +244,7 @@ func normalizeLeaseCredentials(rawLeaseID, rawReverseToken string) (leaseID, rev
 	return strings.TrimSpace(rawLeaseID), strings.TrimSpace(rawReverseToken)
 }
 
-func validateLeaseCredentials(leaseID, reverseToken string) *APIError {
+func validateLeaseCredentials(leaseID, reverseToken string) *types.APIError {
 	if leaseID == "" {
 		return apiError(httpStatusBadRequest, "missing_lease_id", "lease_id is required")
 	}
@@ -258,8 +254,8 @@ func validateLeaseCredentials(leaseID, reverseToken string) *APIError {
 	return nil
 }
 
-func apiError(statusCode int, code, message string) *APIError {
-	return &APIError{
+func apiError(statusCode int, code, message string) *types.APIError {
+	return &types.APIError{
 		StatusCode: statusCode,
 		Code:       code,
 		Message:    message,

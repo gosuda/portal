@@ -22,7 +22,6 @@ import (
 
 	"github.com/gosuda/keyless_tls/keyless/lifecycle"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/types"
@@ -166,7 +165,7 @@ func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Liste
 	return listener, nil
 }
 
-func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal.Lease, error) {
+func (c *Client) newLease(name string, options ...types.MetadataOption) (*types.Lease, error) {
 	var metadata types.Metadata
 	for _, option := range options {
 		option(&metadata)
@@ -182,7 +181,7 @@ func (c *Client) newLease(name string, options ...types.MetadataOption) (*portal
 		return nil, fmt.Errorf("generate reverse token: %w", err)
 	}
 
-	lease := &portal.Lease{
+	lease := &types.Lease{
 		ID:           hex.EncodeToString(idBytes),
 		Name:         name,
 		TLS:          true,

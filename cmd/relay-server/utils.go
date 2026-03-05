@@ -11,10 +11,10 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/contracts"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -149,7 +149,7 @@ func isLeaseConnected(since time.Duration) bool {
 }
 
 // fromLeaseEntry populates the leaseRow from a LeaseEntry with common fields.
-func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portalURL string) {
+func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalURL string) {
 	lease := entry.Lease
 	identityID := lease.ID
 	since := max(time.Since(entry.LastSeen), 0)
@@ -281,7 +281,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 func writeAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
 		OK:   true,
 		Data: data,
 	}); err != nil {
@@ -292,7 +292,7 @@ func writeAPIData(w http.ResponseWriter, status int, data any) {
 func writeAPIOK(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{OK: true}); err != nil {
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{OK: true}); err != nil {
 		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
 	}
 }
@@ -304,10 +304,10 @@ func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(contracts.APIEnvelope{
+	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
 		OK:   false,
 		Data: data,
-		Error: &contracts.APIError{
+		Error: &types.APIError{
 			Code:    code,
 			Message: message,
 		},

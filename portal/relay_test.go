@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gosuda.org/portal/types"
 )
 
 func TestRelayServerReverseHubAuthorizerTrimsToken(t *testing.T) {
@@ -14,7 +16,7 @@ func TestRelayServerReverseHubAuthorizerTrimsToken(t *testing.T) {
 		t.Fatalf("create relay server: %v", err)
 	}
 
-	lease := &Lease{
+	lease := &types.Lease{
 		ID:           "lease-authorizer-trim",
 		Name:         "tenant",
 		TLS:          true,

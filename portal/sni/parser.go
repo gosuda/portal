@@ -10,6 +10,13 @@ import (
 	"io"
 )
 
+const (
+	// TLSStartMarker activates a reverse TCP connection for TLS passthrough.
+	TLSStartMarker = byte(0x02)
+	// NonTLSStartMarker is reserved for non-TLS protocol marker tests.
+	NonTLSStartMarker = byte(0x01)
+)
+
 var (
 	// ErrInvalidTLSRecord is returned when the TLS record is malformed.
 	ErrInvalidTLSRecord = errors.New("invalid TLS record")
