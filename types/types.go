@@ -23,7 +23,6 @@ type Lease struct {
 // LeaseEntry represents a registered lease with expiration tracking.
 type LeaseEntry struct {
 	Lease     *Lease
-	Expires   time.Time
 	LastSeen  time.Time
 	FirstSeen time.Time
 }

@@ -192,7 +192,7 @@ func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalU
 	r.LastSeen = formatLastSeen(since)
 	r.LastSeenISO = entry.LastSeen.UTC().Format(time.RFC3339)
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
-	r.TTL = formatDuration(time.Until(entry.Expires))
+	r.TTL = formatDuration(time.Until(entry.Lease.Expires))
 	linkLabel := identityID
 	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
 		linkLabel = normalized
@@ -244,7 +244,7 @@ func convertLeaseEntriesToRows(serv *portal.RelayServer, admin *Admin, forAdmin 
 	}
 
 	for _, entry := range leaseEntries {
-		if now.After(entry.Expires) {
+		if now.After(entry.Lease.Expires) {
 			continue
 		}
 

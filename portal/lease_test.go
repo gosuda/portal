@@ -47,7 +47,6 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 			Name:    "expired",
 			Expires: time.Now().Add(-1 * time.Second),
 		},
-		Expires: time.Now().Add(-1 * time.Second),
 	}
 	lm.leases["active-1"] = &types.LeaseEntry{
 		Lease: &types.Lease{
@@ -55,7 +54,6 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 			Name:    "active",
 			Expires: time.Now().Add(30 * time.Second),
 		},
-		Expires: time.Now().Add(30 * time.Second),
 	}
 
 	lm.cleanupExpiredLeases()

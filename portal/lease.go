@@ -1,8 +1,6 @@
 package portal
 
 import (
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +11,8 @@ type LeaseManager struct {
 	leases         map[string]*types.LeaseEntry
 	stopCh         chan struct{}
 	bannedLeases   map[string]struct{}
-	namePattern    *regexp.Regexp
 	onLeaseDeleted func(string)
 	ttlInterval    time.Duration
-	minTTL         time.Duration
-	maxTTL         time.Duration
 	leasesLock     sync.RWMutex
 	startOnce      sync.Once
 	stopOnce       sync.Once
@@ -64,7 +59,7 @@ func (lm *LeaseManager) cleanupExpiredLeases() {
 	now := time.Now()
 	expired := make([]string, 0)
 	for id, lease := range lm.leases {
-		if now.After(lease.Expires) {
+		if now.After(lease.Lease.Expires) {
 			delete(lm.leases, id)
 			expired = append(expired, id)
 		}
@@ -95,18 +90,6 @@ func (lm *LeaseManager) UpdateLease(lease *types.Lease) bool {
 	if _, banned := lm.bannedLeases[identityID]; banned {
 		return false
 	}
-	if lm.namePattern != nil && lease.Name != "" && !lm.namePattern.MatchString(lease.Name) {
-		return false
-	}
-	if lm.minTTL > 0 || lm.maxTTL > 0 {
-		ttl := time.Until(lease.Expires)
-		if lm.minTTL > 0 && ttl < lm.minTTL {
-			return false
-		}
-		if lm.maxTTL > 0 && ttl > lm.maxTTL {
-			return false
-		}
-	}
 
 	// Check for name conflicts (only if name is not empty)
 	if lease.Name != "" && lease.Name != "(unnamed)" {
@@ -133,7 +116,6 @@ func (lm *LeaseManager) UpdateLease(lease *types.Lease) bool {
 
 	lm.leases[identityID] = &types.LeaseEntry{
 		Lease:     lease,
-		Expires:   lease.Expires,
 		LastSeen:  time.Now(),
 		FirstSeen: firstSeen,
 	}
@@ -177,50 +159,11 @@ func (lm *LeaseManager) GetLeaseByID(leaseID string) (*types.LeaseEntry, bool) {
 	}
 
 	// Check if lease is expired
-	if time.Now().After(lease.Expires) {
+	if time.Now().After(lease.Lease.Expires) {
 		return nil, false
 	}
 
 	return lease, true
-}
-
-func (lm *LeaseManager) GetLeaseByName(name string) (*types.LeaseEntry, bool) {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	if name == "" {
-		return nil, false
-	}
-
-	now := time.Now()
-	for _, lease := range lm.leases {
-		if strings.EqualFold(lease.Lease.Name, name) {
-			if _, banned := lm.bannedLeases[lease.Lease.ID]; banned {
-				continue
-			}
-			if now.After(lease.Expires) {
-				continue
-			}
-			return lease, true
-		}
-	}
-	return nil, false
-}
-
-func (lm *LeaseManager) GetAllLeases() []*types.Lease {
-	lm.leasesLock.RLock()
-	defer lm.leasesLock.RUnlock()
-
-	now := time.Now()
-	var validLeases []*types.Lease
-
-	for _, entry := range lm.leases {
-		if now.Before(entry.Expires) {
-			validLeases = append(validLeases, entry.Lease)
-		}
-	}
-
-	return validLeases
 }
 
 // GetAllLeaseEntries returns all lease entries from the lease manager.
@@ -232,7 +175,7 @@ func (lm *LeaseManager) GetAllLeaseEntries() []*types.LeaseEntry {
 	var entries []*types.LeaseEntry
 
 	for _, entry := range lm.leases {
-		if now.Before(entry.Expires) {
+		if now.Before(entry.Lease.Expires) {
 			entries = append(entries, entry)
 		}
 	}
@@ -261,26 +204,4 @@ func (lm *LeaseManager) GetBannedLeases() []string {
 		banned = append(banned, id)
 	}
 	return banned
-}
-
-func (lm *LeaseManager) SetNamePattern(pattern string) error {
-	lm.leasesLock.Lock()
-	defer lm.leasesLock.Unlock()
-	if pattern == "" {
-		lm.namePattern = nil
-		return nil
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return err
-	}
-	lm.namePattern = re
-	return nil
-}
-
-func (lm *LeaseManager) SetTTLBounds(minTTL, maxTTL time.Duration) {
-	lm.leasesLock.Lock()
-	lm.minTTL = minTTL
-	lm.maxTTL = maxTTL
-	lm.leasesLock.Unlock()
 }
