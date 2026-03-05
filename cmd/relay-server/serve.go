@@ -121,15 +121,24 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		appMux.ServeHTTP(w, r)
 	})
 
+	// Add security headers middleware
+	secureHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		handler.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           handler,
+		Handler:           secureHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
 	rootHost := types.PortalRootHost(cfg.PortalURL)
 	srv.TLSConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
 		ClientAuth: tls.RequestClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))

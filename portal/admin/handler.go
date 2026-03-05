@@ -214,6 +214,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req types.AdminLoginRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 		return
@@ -262,6 +263,7 @@ func (h *Handler) handleApprovalModeRequest(w http.ResponseWriter, r *http.Reque
 		})
 	case http.MethodPost:
 		var req types.AdminApprovalModeRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 			return
@@ -447,6 +449,7 @@ func (h *Handler) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, 
 	switch r.Method {
 	case http.MethodPost:
 		var req types.AdminBPSRequest
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			h.writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
 			return
