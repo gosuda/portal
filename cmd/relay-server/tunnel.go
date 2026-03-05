@@ -79,7 +79,6 @@ set -- "$BIN_PATH" --relay "$RELAYS" --host "${APP_HOST:-localhost:3000}"
 if [ "${APP_HIDE:-}" = "1" ] || [ "${APP_HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
-set -- "$@" --tls
 
 echo "Starting portal-tunnel..." >&2
 exec "$@"
@@ -152,7 +151,6 @@ if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
 if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }
 if ($env:APP_OWNER) { $ArgsList += "--owner", $env:APP_OWNER }
 if ($env:APP_HIDE -eq "1" -or $env:APP_HIDE -eq "true") { $ArgsList += "--hide" }
-$ArgsList += "--tls"
 
 Write-Host "Starting portal-tunnel..."
 try {
