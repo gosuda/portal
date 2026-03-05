@@ -15,8 +15,8 @@ type Admin struct {
 	handler *portaladmin.Handler
 }
 
-func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *policy.Authenticator, portalURL string, trustProxy bool) *Admin {
-	service := portaladmin.NewService(defaultLeaseBPS, authManager)
+func NewAdmin(frontend *Frontend, authManager *policy.Authenticator, portalURL string, trustProxy bool) *Admin {
+	service := portaladmin.NewService(authManager)
 	normalizedPortalURL := strings.TrimSpace(portalURL)
 	admin := &Admin{
 		service: service,

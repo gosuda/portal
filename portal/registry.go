@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -50,20 +51,20 @@ func (g *RelayServer) AdmitControlPlane(input RegistryAdmissionInput) (RegistryA
 	}
 
 	if input.IsClientIPBanned {
-		return RegistryAdmissionResult{}, registryAPIError(httpStatusForbidden, "ip_banned", "ip is banned")
+		return RegistryAdmissionResult{}, registryAPIError(http.StatusForbidden, "ip_banned", "ip is banned")
 	}
 
 	if g == nil || g.leaseManager == nil {
-		return RegistryAdmissionResult{}, registryAPIError(httpStatusInternalServerError, "registry_unavailable", "registry service unavailable")
+		return RegistryAdmissionResult{}, registryAPIError(http.StatusInternalServerError, "registry_unavailable", "registry service unavailable")
 	}
 
 	entry, exists := g.leaseManager.GetLeaseByID(leaseID)
 	if input.RequireExisting && !exists {
-		return RegistryAdmissionResult{}, registryAPIError(httpStatusNotFound, "lease_not_found", "lease not found")
+		return RegistryAdmissionResult{}, registryAPIError(http.StatusNotFound, "lease_not_found", "lease not found")
 	}
 
 	if exists && !matchLeaseToken(entry.Lease.ReverseToken, reverseToken) {
-		return RegistryAdmissionResult{}, registryAPIError(httpStatusUnauthorized, "unauthorized", "unauthorized reverse connect")
+		return RegistryAdmissionResult{}, registryAPIError(http.StatusUnauthorized, "unauthorized", "unauthorized reverse connect")
 	}
 
 	return RegistryAdmissionResult{
@@ -77,15 +78,15 @@ func (g *RelayServer) AdmitControlPlane(input RegistryAdmissionInput) (RegistryA
 // RegisterLease creates a new lease and associated SNI route.
 func (g *RelayServer) RegisterLease(input RegistryRegisterInput) (types.RegisterResponse, *types.APIError) {
 	if g == nil || g.leaseManager == nil || g.reverseHub == nil || g.sniRouter == nil {
-		return types.RegisterResponse{}, registryAPIError(httpStatusInternalServerError, "registry_unavailable", "registry service unavailable")
+		return types.RegisterResponse{}, registryAPIError(http.StatusInternalServerError, "registry_unavailable", "registry service unavailable")
 	}
 
 	name := strings.TrimSpace(input.Name)
 	if !types.IsValidServiceName(name) {
-		return types.RegisterResponse{}, registryAPIError(httpStatusBadRequest, "invalid_name", "name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
+		return types.RegisterResponse{}, registryAPIError(http.StatusBadRequest, "invalid_name", "name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
 	}
 	if !input.TLS {
-		return types.RegisterResponse{}, registryAPIError(httpStatusBadRequest, "tls_required", "tls must be enabled")
+		return types.RegisterResponse{}, registryAPIError(http.StatusBadRequest, "tls_required", "tls must be enabled")
 	}
 
 	metadata := types.Metadata{}
@@ -103,18 +104,18 @@ func (g *RelayServer) RegisterLease(input RegistryRegisterInput) (types.Register
 	}
 
 	if !g.leaseManager.UpdateLease(lease) {
-		return types.RegisterResponse{}, registryAPIError(httpStatusConflict, "lease_rejected", "failed to register lease (name conflict or policy violation)")
+		return types.RegisterResponse{}, registryAPIError(http.StatusConflict, "lease_rejected", "failed to register lease (name conflict or policy violation)")
 	}
 	g.reverseHub.ClearDropped(input.LeaseID)
 
 	sniName := types.BuildSNIName(name, g.BaseHost)
 	if sniName == "" {
 		g.leaseManager.DeleteLease(input.LeaseID)
-		return types.RegisterResponse{}, registryAPIError(httpStatusInternalServerError, "sni_name_invalid", "failed to build SNI route name")
+		return types.RegisterResponse{}, registryAPIError(http.StatusInternalServerError, "sni_name_invalid", "failed to build SNI route name")
 	}
 	if err := g.sniRouter.RegisterRoute(sniName, input.LeaseID, name); err != nil {
 		g.leaseManager.DeleteLease(input.LeaseID)
-		return types.RegisterResponse{}, registryAPIError(httpStatusInternalServerError, "sni_register_failed", fmt.Sprintf("failed to register SNI route: %v", err))
+		return types.RegisterResponse{}, registryAPIError(http.StatusInternalServerError, "sni_register_failed", fmt.Sprintf("failed to register SNI route: %v", err))
 	}
 
 	log.Info().
@@ -153,15 +154,15 @@ func (g *RelayServer) UnregisterLease(leaseID string) {
 // RenewLease extends lease expiry and opportunistically refreshes SNI routing.
 func (g *RelayServer) RenewLease(entry *types.LeaseEntry) *types.APIError {
 	if entry == nil || entry.Lease == nil {
-		return registryAPIError(httpStatusNotFound, "lease_not_found", "lease not found")
+		return registryAPIError(http.StatusNotFound, "lease_not_found", "lease not found")
 	}
 	if g == nil || g.leaseManager == nil || g.sniRouter == nil {
-		return registryAPIError(httpStatusInternalServerError, "registry_unavailable", "registry service unavailable")
+		return registryAPIError(http.StatusInternalServerError, "registry_unavailable", "registry service unavailable")
 	}
 
 	entry.Lease.Expires = time.Now().Add(DefaultLeaseTTL)
 	if !g.leaseManager.UpdateLease(entry.Lease) {
-		return registryAPIError(httpStatusInternalServerError, "renew_failed", "failed to renew lease")
+		return registryAPIError(http.StatusInternalServerError, "renew_failed", "failed to renew lease")
 	}
 
 	sniName := types.BuildSNIName(entry.Lease.Name, g.BaseHost)
@@ -186,11 +187,11 @@ func (g *RelayServer) RenewLease(entry *types.LeaseEntry) *types.APIError {
 // RegistryDomain returns the configured relay base domain.
 func (g *RelayServer) RegistryDomain() (types.DomainResponse, *types.APIError) {
 	if g == nil {
-		return types.DomainResponse{}, registryAPIError(httpStatusServiceUnavailable, "base_domain_missing", "base domain not configured")
+		return types.DomainResponse{}, registryAPIError(http.StatusServiceUnavailable, "base_domain_missing", "base domain not configured")
 	}
 	baseHost := strings.TrimSpace(g.BaseHost)
 	if baseHost == "" {
-		return types.DomainResponse{}, registryAPIError(httpStatusServiceUnavailable, "base_domain_missing", "base domain not configured")
+		return types.DomainResponse{}, registryAPIError(http.StatusServiceUnavailable, "base_domain_missing", "base domain not configured")
 	}
 	return types.DomainResponse{
 		Success:    true,
@@ -225,10 +226,10 @@ func normalizeRegistryCredentials(rawLeaseID, rawReverseToken string) (leaseID, 
 
 func validateRegistryCredentials(leaseID, reverseToken string) *types.APIError {
 	if leaseID == "" {
-		return registryAPIError(httpStatusBadRequest, "missing_lease_id", "lease_id is required")
+		return registryAPIError(http.StatusBadRequest, "missing_lease_id", "lease_id is required")
 	}
 	if reverseToken == "" {
-		return registryAPIError(httpStatusBadRequest, "missing_reverse_token", "reverse_token is required")
+		return registryAPIError(http.StatusBadRequest, "missing_reverse_token", "reverse_token is required")
 	}
 	return nil
 }
@@ -241,12 +242,3 @@ func registryAPIError(statusCode int, code, message string) *types.APIError {
 	}
 }
 
-const (
-	httpStatusBadRequest          = 400
-	httpStatusUnauthorized        = 401
-	httpStatusForbidden           = 403
-	httpStatusNotFound            = 404
-	httpStatusConflict            = 409
-	httpStatusInternalServerError = 500
-	httpStatusServiceUnavailable  = 503
-)

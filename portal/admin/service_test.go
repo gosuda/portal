@@ -11,7 +11,7 @@ import (
 )
 
 func TestServiceSaveLoadSettingsRoundTrip(t *testing.T) {
-	service := NewService(0, policy.NewAuthenticator("test-secret"))
+	service := NewService(policy.NewAuthenticator("test-secret"))
 	settingsPath := filepath.Join(t.TempDir(), "admin_settings.json")
 	service.SetSettingsPath(settingsPath)
 
@@ -28,7 +28,7 @@ func TestServiceSaveLoadSettingsRoundTrip(t *testing.T) {
 	service.SaveSettings(sourceServer)
 
 	targetServer := mustNewTestRelayServer(t)
-	loaded := NewService(0, policy.NewAuthenticator("test-secret"))
+	loaded := NewService(policy.NewAuthenticator("test-secret"))
 	loaded.SetSettingsPath(settingsPath)
 	loaded.LoadSettings(targetServer)
 

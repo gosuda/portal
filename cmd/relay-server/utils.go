@@ -109,7 +109,7 @@ type leaseRow struct {
 }
 
 // formatDuration formats a duration for TTL display.
-func (leaseRow) formatDuration(d time.Duration) string {
+func formatDuration(d time.Duration) string {
 	if d <= 0 {
 		return ""
 	}
@@ -123,7 +123,7 @@ func (leaseRow) formatDuration(d time.Duration) string {
 }
 
 // formatLastSeen formats a duration since last seen.
-func (leaseRow) formatLastSeen(d time.Duration) string {
+func formatLastSeen(d time.Duration) string {
 	if d >= time.Hour {
 		h := int(d / time.Hour)
 		m := int((d % time.Hour) / time.Minute)
@@ -189,10 +189,10 @@ func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalU
 	r.Kind = kind
 	r.Connected = connected
 	r.DNS = dnsLabel
-	r.LastSeen = r.formatLastSeen(since)
+	r.LastSeen = formatLastSeen(since)
 	r.LastSeenISO = entry.LastSeen.UTC().Format(time.RFC3339)
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
-	r.TTL = r.formatDuration(time.Until(entry.Expires))
+	r.TTL = formatDuration(time.Until(entry.Expires))
 	linkLabel := identityID
 	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
 		linkLabel = normalized

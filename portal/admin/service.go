@@ -35,11 +35,8 @@ type settings struct {
 	BannedIPs      []string         `json:"banned_ips,omitempty"`
 }
 
-func NewService(defaultLeaseBPS int64, authManager *policy.Authenticator) *Service {
+func NewService(authManager *policy.Authenticator) *Service {
 	bpsManager := policy.NewRateLimiter()
-	if defaultLeaseBPS > 0 {
-		bpsManager.SetDefaultBPS(defaultLeaseBPS)
-	}
 
 	return &Service{
 		settingsPath:   "admin_settings.json",

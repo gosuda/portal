@@ -13,7 +13,7 @@ import (
 )
 
 func TestHandleAdminRequestLoginSuccessSetsSessionCookie(t *testing.T) {
-	service := NewService(0, policy.NewAuthenticator("test-secret"))
+	service := NewService(policy.NewAuthenticator("test-secret"))
 	handler := newTestHandler(t, service, true, nil)
 
 	req := httptest.NewRequest(http.MethodPost, types.PathAdminPrefix+"/login", strings.NewReader(`{"key":"test-secret"}`))
@@ -53,7 +53,7 @@ func TestHandleAdminRequestLoginSuccessSetsSessionCookie(t *testing.T) {
 }
 
 func TestHandleAdminRequestProtectedRouteUnauthorized(t *testing.T) {
-	service := NewService(0, policy.NewAuthenticator("test-secret"))
+	service := NewService(policy.NewAuthenticator("test-secret"))
 	handler := newTestHandler(t, service, false, func(_ *portal.RelayServer) any {
 		t.Fatalf("list leases should not be called for unauthorized request")
 		return nil
@@ -74,7 +74,7 @@ func TestHandleAdminRequestProtectedRouteUnauthorized(t *testing.T) {
 }
 
 func TestHandleAdminRequestApprovalModeInvalidMode(t *testing.T) {
-	service := NewService(0, policy.NewAuthenticator("test-secret"))
+	service := NewService(policy.NewAuthenticator("test-secret"))
 	handler := newTestHandler(t, service, false, nil)
 	token := service.GetAuthManager().CreateSession()
 
@@ -94,7 +94,7 @@ func TestHandleAdminRequestApprovalModeInvalidMode(t *testing.T) {
 }
 
 func TestHandleAdminRequestLeaseActionInvalidLeaseID(t *testing.T) {
-	service := NewService(0, policy.NewAuthenticator("test-secret"))
+	service := NewService(policy.NewAuthenticator("test-secret"))
 	handler := newTestHandler(t, service, false, nil)
 	token := service.GetAuthManager().CreateSession()
 

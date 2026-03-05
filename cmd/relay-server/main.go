@@ -35,7 +35,6 @@ type relayServerConfig struct {
 	CloudflareToken   string
 	Bootstraps        []string
 	AdminPort         int
-	LeaseBPS          int
 	SNIPort           int
 	TrustProxyHeaders bool
 }
@@ -65,7 +64,6 @@ func main() {
 
 	flag.IntVar(&cfg.AdminPort, "adminport", defaultAPIPort, "Admin/HTTP server port")
 	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
-	flag.IntVar(&cfg.LeaseBPS, "lease-bps", 0, "bytes-per-second limit per lease (0=unlimited)")
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers (env: TRUST_PROXY_HEADERS)")
 	flag.StringVar(&cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "trusted proxy CIDR allowlist for forwarded headers, comma-separated (env: TRUSTED_PROXY_CIDRS)")
@@ -107,7 +105,7 @@ func runServer(cfg relayServerConfig) error {
 
 	frontend := NewFrontend(cfg.PortalURL)
 	authManager := policy.NewAuthenticator(cfg.AdminSecretKey)
-	admin := NewAdmin(int64(cfg.LeaseBPS), frontend, authManager, cfg.PortalURL, cfg.TrustProxyHeaders)
+	admin := NewAdmin(frontend, authManager, cfg.PortalURL, cfg.TrustProxyHeaders)
 	frontend.SetAdmin(admin)
 
 	// Load persisted admin settings (ban list, BPS limits, IP bans)

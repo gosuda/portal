@@ -15,7 +15,6 @@ import (
 type RateLimiter struct {
 	bpsLimits  map[string]int64
 	bpsBuckets map[string]*Bucket
-	defaultBPS int64
 	mu         sync.Mutex
 }
 
@@ -24,7 +23,6 @@ func NewRateLimiter() *RateLimiter {
 	return &RateLimiter{
 		bpsLimits:  make(map[string]int64),
 		bpsBuckets: make(map[string]*Bucket),
-		defaultBPS: 0,
 	}
 }
 
@@ -59,23 +57,6 @@ func (m *RateLimiter) GetAllBPSLimits() map[string]int64 {
 	result := make(map[string]int64, len(m.bpsLimits))
 	maps.Copy(result, m.bpsLimits)
 	return result
-}
-
-// SetDefaultBPS sets the default BPS limit for new leases.
-func (m *RateLimiter) SetDefaultBPS(bps int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if bps < 0 {
-		bps = 0
-	}
-	m.defaultBPS = bps
-}
-
-// GetDefaultBPS returns the default BPS limit.
-func (m *RateLimiter) GetDefaultBPS() int64 {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.defaultBPS
 }
 
 // GetBucket returns a rate limit bucket for a lease, creating one if needed.
@@ -119,10 +100,8 @@ func (m *RateLimiter) Copy(dst io.Writer, src io.Reader, leaseID string) (int64,
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
 // In the new TLS passthrough architecture, this uses net.Conn.
 func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *RateLimiter) {
-	bpsLimit := bpsManager.GetBPSLimit(leaseID)
 	log.Info().
 		Str("lease_id", leaseID).
-		Int64("bps_limit", bpsLimit).
 		Msg("[Relay] Starting relay connection")
 
 	defer func() {
@@ -134,23 +113,44 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Client -> Lease
-	go func() {
-		defer wg.Done()
-		_, _ = bpsManager.Copy(leaseConn, clientConn, leaseID)
-		if err := leaseConn.Close(); err != nil {
-			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close lease connection")
-		}
-	}()
+	if bpsManager == nil {
+		// No BPS manager - direct copy without rate limiting
+		go func() {
+			defer wg.Done()
+			_, _ = io.Copy(leaseConn, clientConn)
+			_ = leaseConn.Close()
+		}()
 
-	// Lease -> Client
-	go func() {
-		defer wg.Done()
-		_, _ = bpsManager.Copy(clientConn, leaseConn, leaseID)
-		if err := clientConn.Close(); err != nil {
-			log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close client connection")
-		}
-	}()
+		go func() {
+			defer wg.Done()
+			_, _ = io.Copy(clientConn, leaseConn)
+			_ = clientConn.Close()
+		}()
+	} else {
+		bpsLimit := bpsManager.GetBPSLimit(leaseID)
+		log.Info().
+			Str("lease_id", leaseID).
+			Int64("bps_limit", bpsLimit).
+			Msg("[Relay] Starting relay connection with rate limit")
+
+		// Client -> Lease
+		go func() {
+			defer wg.Done()
+			_, _ = bpsManager.Copy(leaseConn, clientConn, leaseID)
+			if err := leaseConn.Close(); err != nil {
+				log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close lease connection")
+			}
+		}()
+
+		// Lease -> Client
+		go func() {
+			defer wg.Done()
+			_, _ = bpsManager.Copy(clientConn, leaseConn, leaseID)
+			if err := clientConn.Close(); err != nil {
+				log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close client connection")
+			}
+		}()
+	}
 
 	wg.Wait()
 }
