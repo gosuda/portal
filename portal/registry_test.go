@@ -9,12 +9,14 @@ import (
 )
 
 func newTestRegistryRelay(baseHost string) *RelayServer {
-	return &RelayServer{
+	s := &RelayServer{
 		BaseHost:     baseHost,
 		leaseManager: NewLeaseManager(DefaultLeaseTTL),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(":0"),
 	}
+	s.bindLeaseLifecycleHooks()
+	return s
 }
 
 func newTestLease(id, name, token string) *types.Lease {

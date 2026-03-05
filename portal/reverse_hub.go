@@ -120,6 +120,12 @@ func NewReverseHub() *ReverseHub {
 }
 
 func (h *ReverseHub) getOrCreatePool(leaseID string) chan *ReverseConn {
+	select {
+	case <-h.stopCh:
+		return nil
+	default:
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -208,6 +214,16 @@ func (h *ReverseHub) Offer(leaseID string, conn *ReverseConn) bool {
 	for range QueueSize + 1 {
 		select {
 		case pool <- conn:
+			// Re-check: DropLease may have run between getOrCreatePool and send.
+			h.mu.RLock()
+			_, dropped := h.dropped[leaseID]
+			h.mu.RUnlock()
+			if dropped {
+				// Pool was drained by DropLease; conn may still be in channel.
+				// Close it defensively — DropLease drain will also close if it gets it.
+				conn.Close()
+				return false
+			}
 			return true
 		default:
 		}

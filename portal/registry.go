@@ -139,10 +139,15 @@ func (g *RelayServer) UnregisterLease(leaseID string) {
 	}
 
 	if g.leaseManager != nil && g.leaseManager.DeleteLease(leaseID) {
+		// DeleteLease callback (handleLeaseDeleted) already called
+		// DropLease + UnregisterRouteByLeaseID, so we're done.
 		log.Info().
 			Str("lease_id", leaseID).
 			Msg("[Registry] Lease unregistered")
+		return
 	}
+
+	// Lease was already removed (e.g. TTL expiry) — defensive cleanup.
 	if g.sniRouter != nil {
 		g.sniRouter.UnregisterRouteByLeaseID(leaseID)
 	}

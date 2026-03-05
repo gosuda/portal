@@ -1,6 +1,7 @@
 package sdk
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -187,10 +188,14 @@ func TestBuildReverseConnectRequest(t *testing.T) {
 func TestOpenReverseConnection_RejectsNonHTTPSRelay(t *testing.T) {
 	t.Parallel()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
 		relayAddr:          "http://localhost:4017",
 		lease:              &types.Lease{ID: "lease-1", ReverseToken: "token-1"},
 		reverseDialTimeout: 2 * time.Second,
+		baseCtx:            baseCtx,
+		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 	}
 
@@ -226,10 +231,14 @@ func TestOpenReverseConnection_StopUnblocksTLSHandshake(t *testing.T) {
 		_, _ = conn.Read(buf)
 	}()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
 		relayAddr:          "https://" + ln.Addr().String(),
 		lease:              &types.Lease{ID: "lease-1", ReverseToken: "token-1"},
 		reverseDialTimeout: 5 * time.Second,
+		baseCtx:            baseCtx,
+		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 	}
 
@@ -272,9 +281,13 @@ func TestWriteReverseConnectRequest_RespectsWriteDeadline(t *testing.T) {
 		t.Fatalf("parse request URL: %v", err)
 	}
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
 		lease:              &types.Lease{ReverseToken: "token-1"},
 		reverseDialTimeout: 25 * time.Millisecond,
+		baseCtx:            baseCtx,
+		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 	}
 
@@ -304,8 +317,12 @@ func TestReadReverseConnectResponse_RespectsReadDeadline(t *testing.T) {
 	defer local.Close()
 	defer peer.Close()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
 		reverseDialTimeout: 25 * time.Millisecond,
+		baseCtx:            baseCtx,
+		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 	}
 
@@ -385,8 +402,12 @@ func TestReadReverseConnectResponseParsesEnvelopeError(t *testing.T) {
 	defer local.Close()
 	defer peer.Close()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
 		reverseDialTimeout: 500 * time.Millisecond,
+		baseCtx:            baseCtx,
+		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 	}
 
@@ -493,7 +514,9 @@ func TestReverseConnectRejectionErrorIsFatal(t *testing.T) {
 func TestWaitForReverseStart_HTTPMode(t *testing.T) {
 	t.Parallel()
 
-	l := &Listener{stopCh: make(chan struct{})}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	l := &Listener{baseCtx: baseCtx, baseCancel: baseCancel, stopCh: make(chan struct{})}
 	local, peer := net.Pipe()
 	defer local.Close()
 	defer peer.Close()
@@ -521,7 +544,11 @@ func TestWaitForReverseStart_HTTPMode(t *testing.T) {
 func TestWaitForReverseStart_TLSMode(t *testing.T) {
 	t.Parallel()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
+		baseCtx:   baseCtx,
+		baseCancel: baseCancel,
 		stopCh:    make(chan struct{}),
 		tlsConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 	}
@@ -552,7 +579,9 @@ func TestWaitForReverseStart_TLSMode(t *testing.T) {
 func TestWaitForReverseStart_IgnoresKeepaliveMarker(t *testing.T) {
 	t.Parallel()
 
-	l := &Listener{stopCh: make(chan struct{})}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	l := &Listener{baseCtx: baseCtx, baseCancel: baseCancel, stopCh: make(chan struct{})}
 	local, peer := net.Pipe()
 	defer local.Close()
 	defer peer.Close()
@@ -584,7 +613,11 @@ func TestWaitForReverseStart_IgnoresKeepaliveMarker(t *testing.T) {
 func TestWaitForReverseStart_TLSRejectsHTTPMarker(t *testing.T) {
 	t.Parallel()
 
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
 	l := &Listener{
+		baseCtx:   baseCtx,
+		baseCancel: baseCancel,
 		stopCh:    make(chan struct{}),
 		tlsConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 	}
@@ -615,7 +648,9 @@ func TestWaitForReverseStart_TLSRejectsHTTPMarker(t *testing.T) {
 func TestWaitForReverseStart_HTTPRejectsTLSMarker(t *testing.T) {
 	t.Parallel()
 
-	l := &Listener{stopCh: make(chan struct{})}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	l := &Listener{baseCtx: baseCtx, baseCancel: baseCancel, stopCh: make(chan struct{})}
 	local, peer := net.Pipe()
 	defer local.Close()
 	defer peer.Close()
@@ -643,7 +678,9 @@ func TestWaitForReverseStart_HTTPRejectsTLSMarker(t *testing.T) {
 func TestWaitForReverseStart_StopCancelsWait(t *testing.T) {
 	t.Parallel()
 
-	l := &Listener{stopCh: make(chan struct{})}
+	baseCtx, baseCancel := context.WithCancel(context.Background())
+	defer baseCancel()
+	l := &Listener{baseCtx: baseCtx, baseCancel: baseCancel, stopCh: make(chan struct{})}
 	local, peer := net.Pipe()
 	defer local.Close()
 

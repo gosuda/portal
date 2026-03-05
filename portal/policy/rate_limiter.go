@@ -97,6 +97,12 @@ func (m *RateLimiter) Copy(dst io.Writer, src io.Reader, leaseID string) (int64,
 	return Copy(dst, src, bucket)
 }
 
+// CopyInterruptible copies data with rate limiting, interruptible via done channel.
+func (m *RateLimiter) CopyInterruptible(dst io.Writer, src io.Reader, leaseID string, done <-chan struct{}) (int64, error) {
+	bucket := m.GetBucket(leaseID)
+	return CopyInterruptible(dst, src, bucket, done)
+}
+
 // EstablishRelayWithBPS sets up bidirectional relay with BPS limiting.
 // In the new TLS passthrough architecture, this uses net.Conn.
 func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsManager *RateLimiter) {
@@ -113,17 +119,24 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	// done is closed when either copy direction finishes, unblocking
+	// any rate-limit sleep in the other direction.
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	closeDone := func() { doneOnce.Do(func() { close(done) }) }
+
 	if bpsManager == nil {
-		// No BPS manager - direct copy without rate limiting
 		go func() {
 			defer wg.Done()
 			_, _ = io.Copy(leaseConn, clientConn)
+			closeDone()
 			_ = leaseConn.Close()
 		}()
 
 		go func() {
 			defer wg.Done()
 			_, _ = io.Copy(clientConn, leaseConn)
+			closeDone()
 			_ = clientConn.Close()
 		}()
 	} else {
@@ -136,7 +149,8 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 		// Client -> Lease
 		go func() {
 			defer wg.Done()
-			_, _ = bpsManager.Copy(leaseConn, clientConn, leaseID)
+			_, _ = bpsManager.CopyInterruptible(leaseConn, clientConn, leaseID, done)
+			closeDone()
 			if err := leaseConn.Close(); err != nil {
 				log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close lease connection")
 			}
@@ -145,7 +159,8 @@ func EstablishRelayWithBPS(clientConn, leaseConn net.Conn, leaseID string, bpsMa
 		// Lease -> Client
 		go func() {
 			defer wg.Done()
-			_, _ = bpsManager.Copy(clientConn, leaseConn, leaseID)
+			_, _ = bpsManager.CopyInterruptible(clientConn, leaseConn, leaseID, done)
+			closeDone()
 			if err := clientConn.Close(); err != nil {
 				log.Debug().Err(err).Str("lease_id", leaseID).Msg("[Relay] failed to close client connection")
 			}
@@ -238,6 +253,62 @@ func (b *Bucket) Take(n int64) {
 				Dur("wait_time", waitTime).
 				Msg("[RateLimit] Throttling - waiting for bandwidth")
 			time.Sleep(waitTime)
+		}
+	}
+}
+
+// TakeInterruptible requests n bytes from the bucket, like Take, but the wait
+// can be interrupted via the done channel. Returns false if interrupted.
+func (b *Bucket) TakeInterruptible(n int64, done <-chan struct{}) bool {
+	if b == nil || n <= 0 {
+		return true
+	}
+
+	needed := float64(n)
+
+	for {
+		b.mu.Lock()
+
+		now := time.Now()
+		elapsed := now.Sub(b.lastRefill).Seconds()
+		b.tokens += elapsed * float64(b.rateBps)
+		if b.tokens > b.maxTokens {
+			b.tokens = b.maxTokens
+		}
+		b.lastRefill = now
+
+		if b.tokens >= needed {
+			b.tokens -= needed
+			b.mu.Unlock()
+			atomic.AddInt64(&b.totalBytes, n)
+			return true
+		}
+
+		deficit := needed - b.tokens
+		waitTime := time.Duration(deficit / float64(b.rateBps) * float64(time.Second))
+
+		if b.tokens > 0 {
+			needed -= b.tokens
+			b.tokens = 0
+		}
+
+		b.mu.Unlock()
+
+		if waitTime > 0 {
+			atomic.AddInt64(&b.throttleHits, 1)
+			atomic.AddInt64(&b.totalWaited, int64(waitTime))
+			log.Debug().
+				Int64("bytes_requested", n).
+				Int64("rate_bps", b.rateBps).
+				Dur("wait_time", waitTime).
+				Msg("[RateLimit] Throttling - waiting for bandwidth")
+			timer := time.NewTimer(waitTime)
+			select {
+			case <-done:
+				timer.Stop()
+				return false
+			case <-timer.C:
+			}
 		}
 	}
 }
@@ -356,6 +427,50 @@ func Copy(dst io.Writer, src io.Reader, b *Bucket) (int64, error) {
 			// Take rate limit BEFORE writing - this delays the write if needed
 			// Multiple connections sharing this bucket will wait fairly
 			b.Take(int64(nr))
+			nw, ew := dst.Write(buf[:nr])
+			if nw > 0 {
+				total += int64(nw)
+			}
+			if ew != nil {
+				logCopyStats(b, total, startTime)
+				return total, ew
+			}
+			if nr != nw {
+				logCopyStats(b, total, startTime)
+				return total, io.ErrShortWrite
+			}
+		}
+		if er != nil {
+			if er == io.EOF {
+				break
+			}
+			logCopyStats(b, total, startTime)
+			return total, er
+		}
+	}
+	logCopyStats(b, total, startTime)
+	return total, nil
+}
+
+// CopyInterruptible copies from src to dst with rate limiting, interruptible via done channel.
+// When done is closed, the current rate-limit wait is interrupted and the copy returns.
+func CopyInterruptible(dst io.Writer, src io.Reader, b *Bucket, done <-chan struct{}) (int64, error) {
+	if b == nil {
+		return io.Copy(dst, src)
+	}
+	buf := *bufPool.Get().(*[]byte)
+	defer bufPool.Put(&buf)
+
+	var total int64
+	startTime := time.Now()
+
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			if !b.TakeInterruptible(int64(nr), done) {
+				logCopyStats(b, total, startTime)
+				return total, nil
+			}
 			nw, ew := dst.Write(buf[:nr])
 			if nw > 0 {
 				total += int64(nw)
