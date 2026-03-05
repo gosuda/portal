@@ -43,10 +43,10 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 1. **Relay holds the TLS private key for admin/API (root domain) only.** SDK calls `/v1/sign` on the relay via `RemoteSigner` for admin/API TLS termination. For SNI-passthrough routes, the relay peeks the ClientHello for SNI then bridges the raw encrypted connection — the backend/tunnel endpoint terminates TLS and holds those keys, not the relay.
    - Why: admin/API key material stays on the relay; tenant TLS passthrough avoids key distribution to the relay entirely.
 
-2. **mTLS is implicit (optional) for `/sdk/*` control-plane paths.** When a client cert is presented, the relay validates it (CertBind stage). When absent, CertBind is skipped and token auth alone is used.
-   - `KEYLESS_DIR` env var presence triggers SDK lifecycle identity issuance and client cert presentation. When unset, the SDK operates in token-only mode.
-   - Keyless TLS (`RemoteSigner` for `/v1/sign`) is independent of mTLS — always used for admin/API TLS termination regardless of client cert presence.
-   - Why: ADR-0003 admission order is IP ban → Lease → [CertBind if cert present] → Token. Invalid certs are still rejected; absent certs skip CertBind.
+2. **/sdk/* control-plane auth is token.** Admission order is IP ban -> Lease -> Token.
+   - Admin/API TLS listener does not request client certificates.
+   - Keyless TLS (RemoteSigner for /v1/sign) remains independent and is still used for admin/API TLS termination.
+   - Why: removes browser client-cert prompt side effects while keeping centralized token/IP policy enforcement.
 
 3. **All relay URLs must be `https://`.** `NormalizeRelayAPIURL` rejects non-HTTPS. SDK and tunnel hard-fail on `http://`.
    - Why: enforces transport security without opt-out.

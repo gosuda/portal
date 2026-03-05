@@ -139,7 +139,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	rootHost := types.PortalRootHost(cfg.PortalURL)
 	srv.TLSConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		ClientAuth: tls.RequestClientCert,
+		ClientAuth: tls.NoClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 			serverName := strings.TrimSpace(strings.ToLower(hello.ServerName))
 			if serverName != "" && !strings.EqualFold(serverName, rootHost) {

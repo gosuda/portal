@@ -50,12 +50,11 @@ Portal normalizes `PORTAL_URL` to its host for routing, so public service hosts 
 Requests to the exact `PORTAL_URL` host (for example, `portal.example.com`) are not wildcard-matched; the router uses no-route fallback and forwards them to the admin/API listener.
 Relay/tunnel traffic for reverse admission stays raw TCP on `/sdk/connect`.
 
-### 2.4 Control-Plane Identity Requirements (Mandatory Upgrade)
+### 2.4 Control-Plane Admission (Token-Only)
 
-- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` require lease-bound client mTLS identity.
-- Control-plane admission order is fixed: `IP -> Lease -> CertBind -> Token`.
-- Clients without valid lease-bound mTLS identity are rejected; there is no token-only runtime fallback.
-- Identity material must be stored under `KEYLESS_DIR` with owner-only file permissions and encrypted-at-rest policy enabled in your environment.
+- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` use token-based admission.
+- Control-plane admission order is fixed: `IP -> Lease -> Token`.
+- Clients without valid lease token are rejected.
 
 ### 2.3 Create Cloudflare API Token
 

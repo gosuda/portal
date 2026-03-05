@@ -15,8 +15,8 @@ Portal accepts unauthenticated internet traffic on relay/admin edges while manag
 - Enforce lease-token validation before bridging reverse connections.
 - Keep root-domain and tenant-subdomain traffic split through SNI routing rules to prevent accidental cross-path handling.
 - Standardize SDK endpoint handling: `/sdk/register` (and related SDK APIs) and `/sdk/connect` validation failures return JSON envelopes (`{ ok, error }`) with explicit error codes prior to connection hijack, and `/sdk/connect` remains subject to `ReverseHub` authorization before pooling.
-- Require lease-bound client mTLS identity on `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` with deterministic admission order `IP -> Lease -> CertBind -> Token`.
-- Enforce hard-break behavior for control-plane identity: non-mTLS clients fail admission deterministically and there is no token-only fallback mode.
+- Use token-only admission on `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` with deterministic order `IP -> Lease -> Token`.
+- Do not request or validate client certificates for `/sdk/*` runtime admission; authorization is enforced by lease token and policy checks.
 - Enforce installer binary integrity with mandatory SHA256 sidecar verification (`${BIN_URL}.sha256`) and fail-closed behavior on verification errors.
 
 Operator setup remains unchanged: no new relay flags/env vars are introduced for anti-abuse behavior.

@@ -25,7 +25,7 @@ This connection keeps existing data-plane TLS behavior.
 ## Conn #2 (Control Plane)
 
 Relay-to-tunnel control path used by `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister`.
-This connection requires lease-bound client mTLS identity with admission order `IP -> Lease -> CertBind -> Token`.
+This connection uses token-based admission with order `IP -> Lease -> Token`.
 
 ## Tunnel
 
@@ -49,7 +49,7 @@ The human-readable identifier used for subdomain routing (for example, `myapp` -
 ## Reverse Token
 
 A per-lease secret used to authenticate reverse connections (`/sdk/connect`) from backend to relay.
-Token validation is a required admission stage, but only after lease-bound mTLS cert binding passes.
+Token validation is a required admission stage after lease and policy checks.
 
 ## ReverseHub
 

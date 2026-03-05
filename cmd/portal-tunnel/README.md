@@ -26,12 +26,12 @@ Portal tunnel always runs in TLS reverse-connect mode:
 - Traffic is proxied from tunnel to local `--host` over TCP.
 - Public access is `https://<service>.<portal-root-host>/`.
 
-### Lifecycle Identity
+### Control-Plane Admission
 
-The tunnel automatically acquires a per-lease mTLS identity via the relay's control plane. Identity materials are managed by `keyless_tls/keyless/lifecycle` and stored encrypted on disk under `KEYLESS_DIR/lifecycle-identities/`.
+Portal tunnel authenticates control-plane operations with lease token headers.
 
-- `KEYLESS_DIR` defaults to `/etc/portal/keyless`. The tunnel must have read/write access to this directory.
-- If the relay's issuer certificate or key is unavailable, the tunnel fails at startup.
+- No client certificate setup is required for `/sdk/*` requests.
+- The relay enforces token and policy checks before accepting reverse connections.
 
 ## Flags
 

@@ -38,10 +38,6 @@ var fatalReverseConnectRejectionCodes = map[string]struct{}{
 	"tls_required":          {},
 	"unauthorized":          {},
 	"unsupported_transport": {},
-	"client_cert_required":  {},
-	"client_cert_invalid":   {},
-	"cert_lease_missing":    {},
-	"cert_lease_mismatch":   {},
 }
 
 type reverseConnectRejectionError struct {
@@ -84,7 +80,6 @@ func (e *reverseConnectRejectionError) IsFatal() bool {
 // The relay connects to this listener after SNI routing resolves the lease.
 type Listener struct {
 	tlsConfig          *tls.Config
-	controlPlaneCert   tls.Certificate
 	lease              *types.Lease
 	httpClient         *http.Client
 	stopCh             chan struct{}
@@ -103,7 +98,7 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener creates a relay-backed listener.
 // If tlsConfig is provided, reverse workers complete TLS handshakes before enqueueing connections.
-func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, controlPlaneCert tls.Certificate, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
+func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
 	if lease == nil {
 		return nil, errors.New("lease is required")
 	}
@@ -130,9 +125,6 @@ func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, co
 		ServerName:         host,
 		InsecureSkipVerify: types.IsLocalhost(host),
 	}
-	if len(controlPlaneCert.Certificate) > 0 {
-		transportTLSConfig.Certificates = []tls.Certificate{controlPlaneCert}
-	}
 	clientTransport.TLSClientConfig = transportTLSConfig
 
 	if reverseWorkers <= 0 {
@@ -151,7 +143,6 @@ func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, co
 			Transport: clientTransport,
 		},
 		tlsConfig:          tlsConfig,
-		controlPlaneCert:   controlPlaneCert,
 		closeFns:           closeFns,
 		stopCh:             make(chan struct{}),
 		acceptCh:           make(chan net.Conn, 128),
@@ -407,9 +398,6 @@ func (l *Listener) openReverseConnection() (net.Conn, error) {
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
 		InsecureSkipVerify: types.IsLocalhost(serverName),
-	}
-	if len(l.controlPlaneCert.Certificate) > 0 {
-		reverseTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
 	}
 	tlsConn := tls.Client(rawConn, reverseTLSConfig)
 	err = tlsConn.HandshakeContext(ctx)

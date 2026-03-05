@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +15,7 @@ import (
 	"gosuda.org/portal/types"
 )
 
-func TestNewListener_ZeroCert_Succeeds(t *testing.T) {
+func TestNewListener_Succeeds(t *testing.T) {
 	t.Parallel()
 
 	relayAddr := "https://localhost:4017"
@@ -26,98 +25,14 @@ func TestNewListener_ZeroCert_Succeeds(t *testing.T) {
 		ReverseToken: "test-token",
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	zeroCert := tls.Certificate{}
-
-	listener, err := NewListener(relayAddr, lease, tlsConfig, zeroCert, 0, 0)
+	listener, err := NewListener(relayAddr, lease, tlsConfig, 0, 0)
 	if err != nil {
-		t.Fatalf("NewListener with zero cert failed: %v", err)
+		t.Fatalf("NewListener failed: %v", err)
 	}
 	if listener == nil {
 		t.Fatal("NewListener returned nil listener")
 	}
 	defer listener.Close()
-
-	// Use reflection to access unexported controlPlaneCert field
-	lValue := reflect.ValueOf(listener).Elem()
-	certField := lValue.FieldByName("controlPlaneCert")
-	if !certField.IsValid() {
-		t.Fatal("could not access controlPlaneCert field")
-	}
-	// Access the Certificate slice field directly (it's exported from tls.Certificate)
-	certSlice := certField.FieldByName("Certificate")
-	if !certSlice.IsValid() {
-		t.Fatal("could not access Certificate field")
-	}
-	if certSlice.Len() != 0 {
-		t.Fatalf("controlPlaneCert.Certificate has len %d, want 0", certSlice.Len())
-	}
-}
-
-func TestOpenReverseConnection_NoCert_NoClientCertPresented(t *testing.T) {
-	t.Parallel()
-
-	// Test the exact condition we care about: when controlPlaneCert is zero-value,
-	// the TLS config does NOT include the cert. This is what prevents client cert presentation.
-
-	tests := []struct {
-		cert        tls.Certificate
-		name        string
-		wantCertSet bool
-	}{
-		{
-			name:        "zero cert → no client cert in TLS config",
-			cert:        tls.Certificate{},
-			wantCertSet: false,
-		},
-		{
-			name:        "non-zero cert → client cert in TLS config",
-			cert:        tls.Certificate{Certificate: [][]byte{{0x01, 0x02, 0x03}}},
-			wantCertSet: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			l := &Listener{
-				controlPlaneCert: tt.cert,
-			}
-
-			// Duplicate the exact logic from listener.go (both HTTP transport and reverse connection)
-			// First check the HTTP transport logic (lines 134-136)
-			transportTLSConfig := &tls.Config{}
-			if len(l.controlPlaneCert.Certificate) > 0 {
-				transportTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
-			}
-
-			if tt.wantCertSet {
-				if len(transportTLSConfig.Certificates) != 1 {
-					t.Fatalf("transportTLSConfig.Certificates has len %d, want 1", len(transportTLSConfig.Certificates))
-				}
-			} else {
-				if len(transportTLSConfig.Certificates) != 0 {
-					t.Fatalf("transportTLSConfig.Certificates has len %d, want 0", len(transportTLSConfig.Certificates))
-				}
-			}
-
-			// Then check the reverse connection logic (lines 412-414)
-			reverseTLSConfig := &tls.Config{}
-			if len(l.controlPlaneCert.Certificate) > 0 {
-				reverseTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
-			}
-
-			if tt.wantCertSet {
-				if len(reverseTLSConfig.Certificates) != 1 {
-					t.Fatalf("reverseTLSConfig.Certificates has len %d, want 1", len(reverseTLSConfig.Certificates))
-				}
-			} else {
-				if len(reverseTLSConfig.Certificates) != 0 {
-					t.Fatalf("reverseTLSConfig.Certificates has len %d, want 0", len(reverseTLSConfig.Certificates))
-				}
-			}
-		})
-	}
 }
 
 func TestNormalizeRelayAPIURL(t *testing.T) {

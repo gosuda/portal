@@ -139,8 +139,8 @@ Admin lease ID contract:
 The relay enforces a consistent anti-abuse gate for both control APIs and reverse admission:
 
 - `/sdk/register`, `/sdk/unregister`, `/sdk/renew`, and `/sdk/domain` return JSON envelopes (`{ ok, data, error }`).
-- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` require lease-bound client mTLS identity.
-- Control-plane admission order is deterministic: `IP -> Lease -> CertBind -> Token`.
+- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` use token-based admission.
+- Control-plane admission order is deterministic: `IP -> Lease -> Token`.
 - `/sdk/connect` is additionally re-validated inside `ReverseHub` before pooling so token and IP authorization are applied at both admission layers.
 
 ### Run with Relay Server
@@ -170,12 +170,12 @@ npm run serve
 ### Connection Responsibilities
 
 - Conn #1 (`browser -> app`) is the data plane and keeps existing tenant-facing TLS behavior.
-- Conn #2 (`relay -> tunnel`) is the control plane and enforces lease-bound mTLS identity.
+- Conn #2 (`relay -> tunnel`) is the control plane and enforces lease token admission.
 
 ### Breaking-Change Expectation
 
-- Non-mTLS control-plane clients are expected to fail admission after cutover.
-- There is no token-only fallback mode.
+- Clients with invalid lease tokens are expected to fail admission.
+- Client certificates are not required for `/sdk/*` admission.
 
 ### Radix Select Values
 

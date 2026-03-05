@@ -2,20 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
-	"net"
 	"net/http"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
-	controlplaneregistry "gosuda.org/portal/portal/controlplane/registry"
 	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/types"
 )
-
-var errRegistryBackendUnavailable = errors.New("registry backend unavailable")
 
 // SDKRegistry handles HTTP API for client lease registration.
 type SDKRegistry struct {
@@ -26,8 +21,7 @@ type SDKRegistry struct {
 
 // HandleSDKRequest routes /sdk/* requests.
 func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
-	registryService, err := r.newService(serv)
-	if err != nil {
+	if serv == nil {
 		writeAPIError(w, http.StatusInternalServerError, "registry_unavailable", "registry service unavailable")
 		return
 	}
@@ -35,21 +29,21 @@ func (r *SDKRegistry) HandleSDKRequest(w http.ResponseWriter, req *http.Request,
 	path := strings.TrimSuffix(req.URL.Path, "/")
 	switch path {
 	case types.PathSDKRegister:
-		r.handleRegister(w, req, registryService)
+		r.handleRegister(w, req, serv)
 	case types.PathSDKUnregister:
-		r.handleUnregister(w, req, registryService)
+		r.handleUnregister(w, req, serv)
 	case types.PathSDKRenew:
-		r.handleRenew(w, req, registryService)
+		r.handleRenew(w, req, serv)
 	case types.PathSDKDomain:
-		r.handleDomain(w, registryService)
+		r.handleDomain(w, serv)
 	case types.PathSDKConnect:
-		r.handleConnect(w, req, registryService)
+		r.handleConnect(w, req, serv)
 	default:
 		http.NotFound(w, req)
 	}
 }
 
-func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, registryService *controlplaneregistry.Service) {
+func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if req.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -63,7 +57,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, re
 	admission, ok := r.admitControlPlane(
 		w,
 		req,
-		registryService,
+		serv,
 		req.URL.Query().Get("lease_id"),
 		req.Header.Get(types.ReverseConnectTokenHeader),
 		true,
@@ -95,11 +89,11 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, re
 		return
 	}
 
-	registryService.HandleConnect(conn, admission)
+	serv.HandleRegistryConnect(conn, admission)
 }
 
 // handleRegister handles SDK lease registration requests.
-func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, registryService *controlplaneregistry.Service) {
+func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if !r.requireMethod(w, req, http.MethodPost) {
 		return
 	}
@@ -112,7 +106,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, r
 	admission, ok := r.admitControlPlane(
 		w,
 		req,
-		registryService,
+		serv,
 		registerReq.LeaseID,
 		registerReq.ReverseToken,
 		false,
@@ -121,7 +115,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, r
 		return
 	}
 
-	registerResp, apiErr := registryService.Register(controlplaneregistry.RegisterInput{
+	registerResp, apiErr := serv.RegisterLease(portal.RegistryRegisterInput{
 		LeaseID:      admission.LeaseID,
 		ReverseToken: admission.ReverseToken,
 		Name:         registerReq.Name,
@@ -137,7 +131,7 @@ func (r *SDKRegistry) handleRegister(w http.ResponseWriter, req *http.Request, r
 }
 
 // handleUnregister handles SDK lease unregistration requests.
-func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request, registryService *controlplaneregistry.Service) {
+func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if !r.requireMethod(w, req, http.MethodPost) {
 		return
 	}
@@ -150,7 +144,7 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 	admission, ok := r.admitControlPlane(
 		w,
 		req,
-		registryService,
+		serv,
 		unregisterReq.LeaseID,
 		unregisterReq.ReverseToken,
 		true,
@@ -159,12 +153,12 @@ func (r *SDKRegistry) handleUnregister(w http.ResponseWriter, req *http.Request,
 		return
 	}
 
-	registryService.Unregister(admission.LeaseID)
+	serv.UnregisterLease(admission.LeaseID)
 	writeAPIOK(w, http.StatusOK)
 }
 
 // handleRenew handles SDK lease renewal requests (keepalive).
-func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, registryService *controlplaneregistry.Service) {
+func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, serv *portal.RelayServer) {
 	if !r.requireMethod(w, req, http.MethodPost) {
 		return
 	}
@@ -177,7 +171,7 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, regi
 	admission, ok := r.admitControlPlane(
 		w,
 		req,
-		registryService,
+		serv,
 		renewReq.LeaseID,
 		renewReq.ReverseToken,
 		true,
@@ -186,15 +180,15 @@ func (r *SDKRegistry) handleRenew(w http.ResponseWriter, req *http.Request, regi
 		return
 	}
 
-	if !writeRegistryError(w, registryService.Renew(admission.Entry)) {
+	if !writeRegistryError(w, serv.RenewLease(admission.Entry)) {
 		return
 	}
 	writeAPIOK(w, http.StatusOK)
 }
 
 // handleDomain returns the relay's base domain for TLS certificate construction.
-func (r *SDKRegistry) handleDomain(w http.ResponseWriter, registryService *controlplaneregistry.Service) {
-	domainResp, apiErr := registryService.Domain()
+func (r *SDKRegistry) handleDomain(w http.ResponseWriter, serv *portal.RelayServer) {
+	domainResp, apiErr := serv.RegistryDomain()
 	if !writeRegistryError(w, apiErr) {
 		return
 	}
@@ -204,35 +198,22 @@ func (r *SDKRegistry) handleDomain(w http.ResponseWriter, registryService *contr
 func (r *SDKRegistry) admitControlPlane(
 	w http.ResponseWriter,
 	req *http.Request,
-	registryService *controlplaneregistry.Service,
+	serv *portal.RelayServer,
 	rawLeaseID, rawToken string,
 	requireExistingLease bool,
-) (controlplaneregistry.AdmissionResult, bool) {
+) (portal.RegistryAdmissionResult, bool) {
 	clientIP := policy.ExtractClientIP(req, r.trustProxyHeaders)
-	admission, apiErr := registryService.Admit(controlplaneregistry.AdmissionInput{
-		RawLeaseID:         rawLeaseID,
-		RawReverseToken:    rawToken,
-		ClientIP:           clientIP,
-		IsClientIPBanned:   policy.IsIPBannedByPolicy(r.ipManager, clientIP),
-		RequireExisting:    requireExistingLease,
-		ConnectionTLSState: req.TLS,
+	admission, apiErr := serv.AdmitControlPlane(portal.RegistryAdmissionInput{
+		RawLeaseID:       rawLeaseID,
+		RawReverseToken:  rawToken,
+		ClientIP:         clientIP,
+		IsClientIPBanned: policy.IsIPBannedByPolicy(r.ipManager, clientIP),
+		RequireExisting:  requireExistingLease,
 	})
 	if !writeRegistryError(w, apiErr) {
-		return controlplaneregistry.AdmissionResult{}, false
+		return portal.RegistryAdmissionResult{}, false
 	}
 	return admission, true
-}
-
-func (r *SDKRegistry) newService(serv *portal.RelayServer) (*controlplaneregistry.Service, error) {
-	if serv == nil {
-		return nil, errRegistryBackendUnavailable
-	}
-	return controlplaneregistry.NewService(
-		newRelayRegistryBackend(serv),
-		controlplaneregistry.Options{
-			LeaseTTL: controlplaneregistry.DefaultLeaseTTL,
-		},
-	)
 }
 
 func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, method string) bool {
@@ -260,80 +241,4 @@ func writeRegistryError(w http.ResponseWriter, apiErr *types.APIError) bool {
 	}
 	writeAPIError(w, apiErr.StatusCode, apiErr.Code, apiErr.Message)
 	return false
-}
-
-type relayRegistryBackend struct {
-	serv *portal.RelayServer
-}
-
-func newRelayRegistryBackend(serv *portal.RelayServer) *relayRegistryBackend {
-	return &relayRegistryBackend{serv: serv}
-}
-
-func (b *relayRegistryBackend) BaseHost() string {
-	if b.serv == nil {
-		return ""
-	}
-	return b.serv.BaseHost
-}
-
-func (b *relayRegistryBackend) UpdateLease(lease *types.Lease) bool {
-	if b.serv == nil || b.serv.GetLeaseManager() == nil {
-		return false
-	}
-	return b.serv.GetLeaseManager().UpdateLease(lease)
-}
-
-func (b *relayRegistryBackend) DeleteLease(leaseID string) bool {
-	if b.serv == nil || b.serv.GetLeaseManager() == nil {
-		return false
-	}
-	return b.serv.GetLeaseManager().DeleteLease(leaseID)
-}
-
-func (b *relayRegistryBackend) GetLeaseByID(leaseID string) (*types.LeaseEntry, bool) {
-	if b.serv == nil || b.serv.GetLeaseManager() == nil {
-		return nil, false
-	}
-	return b.serv.GetLeaseManager().GetLeaseByID(leaseID)
-}
-
-func (b *relayRegistryBackend) ClearDropped(leaseID string) {
-	if b.serv == nil || b.serv.GetReverseHub() == nil {
-		return
-	}
-	b.serv.GetReverseHub().ClearDropped(leaseID)
-}
-
-func (b *relayRegistryBackend) DropLease(leaseID string) {
-	if b.serv == nil || b.serv.GetReverseHub() == nil {
-		return
-	}
-	b.serv.GetReverseHub().DropLease(leaseID)
-}
-
-func (b *relayRegistryBackend) RegisterRoute(sniName, leaseID, name string) error {
-	if b.serv == nil || b.serv.GetSNIRouter() == nil {
-		return errRegistryBackendUnavailable
-	}
-	return b.serv.GetSNIRouter().RegisterRoute(sniName, leaseID, name)
-}
-
-func (b *relayRegistryBackend) UnregisterRouteByLeaseID(leaseID string) {
-	if b.serv == nil || b.serv.GetSNIRouter() == nil {
-		return
-	}
-	b.serv.GetSNIRouter().UnregisterRouteByLeaseID(leaseID)
-}
-
-func (b *relayRegistryBackend) HandleConnect(conn net.Conn, leaseID, token, clientIP string) {
-	if b.serv == nil || b.serv.GetReverseHub() == nil {
-		if conn != nil {
-			if err := conn.Close(); err != nil {
-				log.Debug().Err(err).Msg("[Registry] failed to close reverse connection after backend lookup failure")
-			}
-		}
-		return
-	}
-	b.serv.GetReverseHub().HandleConnect(conn, leaseID, token, clientIP)
 }

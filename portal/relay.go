@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal/acme"
-	"gosuda.org/portal/portal/controlplane"
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/portal/sni"
 )
@@ -39,7 +38,7 @@ func NewRelayServer(
 	server := &RelayServer{
 		BaseHost:     baseHost,
 		address:      address,
-		leaseManager: NewLeaseManager(30 * time.Second),
+		leaseManager: NewLeaseManager(DefaultLeaseTTL),
 		reverseHub:   NewReverseHub(),
 		sniRouter:    sni.NewRouter(sniPort),
 	}
@@ -108,7 +107,7 @@ func (g *RelayServer) authorizeReverseConnect(leaseID, token string) bool {
 		return false
 	}
 
-	return controlplane.MatchLeaseToken(entry.Lease.ReverseToken, token)
+	return matchLeaseToken(entry.Lease.ReverseToken, token)
 }
 
 // GetLeaseManager returns the lease manager instance.
