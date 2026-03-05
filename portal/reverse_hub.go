@@ -10,14 +10,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/sni"
+	"gosuda.org/portal/types"
 )
 
 const (
-	// ReverseKeepaliveMarker keeps idle reverse connections alive
-	// before they are activated for a real client request.
-	ReverseKeepaliveMarker = byte(0x00)
-
 	// QueueSize is the maximum number of pending reverse connections per lease.
 	QueueSize = 64
 
@@ -36,9 +32,6 @@ const (
 	// ReverseIdleKeepaliveInterval sends an idle keepalive byte to reduce
 	// reverse connection disconnections from intermediate idle timeouts.
 	ReverseIdleKeepaliveInterval = 25 * time.Second
-
-	// ReverseConnectTokenHeader carries reverse auth token on /sdk/connect requests.
-	ReverseConnectTokenHeader = "X-Portal-Reverse-Token"
 )
 
 // ReverseConn wraps a net.Conn with lifecycle management for the connection pool.
@@ -265,7 +258,7 @@ func (h *ReverseHub) AcquireForTLS(leaseID string, timeout time.Duration) (*Reve
 			}
 			// Stop idle keepalive and signal tunnel worker to release this connection.
 			conn.Activate()
-			err := conn.WriteControlByte(sni.TLSStartMarker, controlWriteTimeout)
+			err := conn.WriteControlByte(types.TLSStartMarker, controlWriteTimeout)
 			if err == nil {
 				return conn, nil
 			}
@@ -395,7 +388,7 @@ func (h *ReverseHub) keepAliveWhileIdle(conn *ReverseConn, leaseID string) {
 		case <-conn.active:
 			return
 		case <-ticker.C:
-			if err := conn.WriteControlByte(ReverseKeepaliveMarker, controlWriteTimeout); err != nil {
+			if err := conn.WriteControlByte(types.ReverseKeepaliveMarker, controlWriteTimeout); err != nil {
 				log.Debug().
 					Err(err).
 					Str("lease_id", leaseID).

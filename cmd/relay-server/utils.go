@@ -12,7 +12,6 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/types"
 )
@@ -195,15 +194,15 @@ func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalU
 	r.FirstSeenISO = entry.FirstSeen.UTC().Format(time.RFC3339)
 	r.TTL = r.formatDuration(time.Until(entry.Expires))
 	linkLabel := identityID
-	if normalized, ok := netutil.NormalizeServiceName(lease.Name); ok {
+	if normalized, ok := types.NormalizeServiceName(lease.Name); ok {
 		linkLabel = normalized
-	} else if normalized, ok := netutil.NormalizeServiceName(identityID); ok {
+	} else if normalized, ok := types.NormalizeServiceName(identityID); ok {
 		linkLabel = normalized
 	}
 
-	publicHost := netutil.PortalRootHost(portalURL)
+	publicHost := types.PortalRootHost(portalURL)
 	if publicHost == "" {
-		publicHost = netutil.PortalHostPort(portalURL)
+		publicHost = types.PortalHostPort(portalURL)
 	}
 	if linkLabel != "" && publicHost != "" {
 		r.Link = fmt.Sprintf("//%s.%s/", linkLabel, publicHost)

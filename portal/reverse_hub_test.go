@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gosuda.org/portal/portal/sni"
+	"gosuda.org/portal/types"
 )
 
 func TestReverseHubAuthorization(t *testing.T) {
@@ -115,7 +115,7 @@ func TestHandleConnectTrimsLeaseIDAndToken(t *testing.T) {
 	case err := <-readErr:
 		t.Fatalf("failed to read marker: %v", err)
 	case marker := <-markerRead:
-		if marker != sni.TLSStartMarker {
+		if marker != types.TLSStartMarker {
 			t.Fatalf("unexpected marker: %d", marker)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -170,7 +170,7 @@ func TestAcquireForTLSSendsStartMarker(t *testing.T) {
 	case err := <-readErr:
 		t.Fatalf("failed to read marker: %v", err)
 	case b := <-markerRead:
-		if b != sni.TLSStartMarker {
+		if b != types.TLSStartMarker {
 			t.Fatalf("unexpected marker: %d", b)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -228,7 +228,7 @@ func TestAcquireForTLSPollLoopSendsStartMarker(t *testing.T) {
 	case err := <-readErr:
 		t.Fatalf("failed to read marker: %v", err)
 	case b := <-markerRead:
-		if b != sni.TLSStartMarker {
+		if b != types.TLSStartMarker {
 			t.Fatalf("unexpected marker: %d", b)
 		}
 	case <-time.After(500 * time.Millisecond):
@@ -295,7 +295,7 @@ func TestHandleConnectOffersAuthorizedConn(t *testing.T) {
 	case err := <-readErr:
 		t.Fatalf("failed to read start marker: %v", err)
 	case b := <-markerRead:
-		if b != sni.TLSStartMarker {
+		if b != types.TLSStartMarker {
 			t.Fatalf("unexpected marker: %d", b)
 		}
 	case <-time.After(500 * time.Millisecond):

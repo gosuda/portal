@@ -17,7 +17,6 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/types"
 )
@@ -99,10 +98,10 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 	})
 
 	// Create the main handler
-	appDomain := netutil.DefaultAppPattern(cfg.PortalURL)
+	appDomain := types.DefaultAppPattern(cfg.PortalURL)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handle subdomain requests
-		if netutil.IsSubdomain(appDomain, r.Host) {
+		if types.IsSubdomain(appDomain, r.Host) {
 			log.Debug().
 				Str("host", r.Host).
 				Str("url", r.URL.String()).
@@ -129,7 +128,7 @@ func serveAPI(addr string, serv *portal.RelayServer, admin *Admin, frontend *Fro
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	acmeManager := serv.GetACMEManager()
-	rootHost := netutil.PortalRootHost(cfg.PortalURL)
+	rootHost := types.PortalRootHost(cfg.PortalURL)
 	srv.TLSConfig = &tls.Config{
 		ClientAuth: tls.RequestClientCert,
 		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {

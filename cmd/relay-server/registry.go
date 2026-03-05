@@ -65,7 +65,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, re
 		req,
 		registryService,
 		req.URL.Query().Get("lease_id"),
-		req.Header.Get(portal.ReverseConnectTokenHeader),
+		req.Header.Get(types.ReverseConnectTokenHeader),
 		true,
 	)
 	if !ok {

@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal/netutil"
 	"gosuda.org/portal/sdk"
 	"gosuda.org/portal/types"
 )
@@ -64,7 +63,7 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	relayURLs := netutil.ParseURLs(flagRelayURLs)
+	relayURLs := types.ParseURLs(flagRelayURLs)
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
@@ -87,7 +86,7 @@ func runTunnel() error {
 	listener, err := sdkClient.Listen(
 		flagName,
 		types.WithDescription(flagDesc),
-		types.WithTags(netutil.ParseURLs(flagTags)),
+		types.WithTags(types.ParseURLs(flagTags)),
 		types.WithOwner(flagOwner),
 		types.WithThumbnail(flagThumbnail),
 		types.WithHide(flagHide),
@@ -169,7 +168,7 @@ loop:
 func normalizeRelayURLsForReverseConnect(relayURLs []string) ([]string, error) {
 	normalized := make([]string, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
-		normalizedURL, err := netutil.NormalizeRelayAPIURL(relayURL)
+		normalizedURL, err := types.NormalizeRelayAPIURL(relayURL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid relay URL %q: %w", relayURL, err)
 		}
@@ -188,7 +187,7 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	targetAddr, err := netutil.NormalizeTargetAddr(localAddr)
+	targetAddr, err := types.NormalizeTargetAddr(localAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
 	}

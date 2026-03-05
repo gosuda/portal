@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	ksigner "github.com/gosuda/keyless_tls/relay/signer"
@@ -33,17 +32,8 @@ type Signer struct {
 	keyID   string
 }
 
-type Config struct {
-	KeyFile string
-}
-
-func NewSigner(cfg Config) (*Signer, error) {
-	keyFile := strings.TrimSpace(cfg.KeyFile)
-	if keyFile == "" {
-		return nil, nil
-	}
-
-	keyPEM, err := os.ReadFile(keyFile)
+func NewSigner(KeyFile string) (*Signer, error) {
+	keyPEM, err := os.ReadFile(KeyFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil

@@ -128,7 +128,7 @@ func (s *Service) Admit(input AdmissionInput) (AdmissionResult, *types.APIError)
 // Register creates a new lease and associated SNI route.
 func (s *Service) Register(input RegisterInput) (types.RegisterResponse, *types.APIError) {
 	name := strings.TrimSpace(input.Name)
-	if !types.IsValidLeaseName(name) {
+	if !types.IsValidServiceName(name) {
 		return types.RegisterResponse{}, apiError(httpStatusBadRequest, "invalid_name", "name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
 	}
 	if !input.TLS {
