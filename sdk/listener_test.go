@@ -16,8 +16,6 @@ import (
 	"gosuda.org/portal/types"
 )
 
-const testNonTLSStartMarker = byte(0x01)
-
 func TestNewListener_ZeroCert_Succeeds(t *testing.T) {
 	t.Parallel()
 
@@ -88,9 +86,7 @@ func TestOpenReverseConnection_NoCert_NoClientCertPresented(t *testing.T) {
 
 			// Duplicate the exact logic from listener.go (both HTTP transport and reverse connection)
 			// First check the HTTP transport logic (lines 134-136)
-			transportTLSConfig := &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			}
+			transportTLSConfig := &tls.Config{}
 			if len(l.controlPlaneCert.Certificate) > 0 {
 				transportTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
 			}
@@ -106,9 +102,7 @@ func TestOpenReverseConnection_NoCert_NoClientCertPresented(t *testing.T) {
 			}
 
 			// Then check the reverse connection logic (lines 412-414)
-			reverseTLSConfig := &tls.Config{
-				MinVersion: tls.VersionTLS12,
-			}
+			reverseTLSConfig := &tls.Config{}
 			if len(l.controlPlaneCert.Certificate) > 0 {
 				reverseTLSConfig.Certificates = []tls.Certificate{l.controlPlaneCert}
 			}
