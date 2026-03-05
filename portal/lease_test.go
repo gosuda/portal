@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"gosuda.org/portal/types"
 )
 
 func TestLeaseManagerDeleteLeaseInvokesCallback(t *testing.T) {
@@ -14,7 +16,7 @@ func TestLeaseManagerDeleteLeaseInvokesCallback(t *testing.T) {
 		deleted = append(deleted, id)
 	})
 
-	lease := &Lease{
+	lease := &types.Lease{
 		ID:      "lease-1",
 		Name:    "app-1",
 		Expires: time.Now().Add(30 * time.Second),
@@ -39,16 +41,16 @@ func TestLeaseManagerCleanupExpiredLeasesInvokesCallback(t *testing.T) {
 		deleted = append(deleted, id)
 	})
 
-	lm.leases["expired-1"] = &LeaseEntry{
-		Lease: &Lease{
+	lm.leases["expired-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:      "expired-1",
 			Name:    "expired",
 			Expires: time.Now().Add(-1 * time.Second),
 		},
 		Expires: time.Now().Add(-1 * time.Second),
 	}
-	lm.leases["active-1"] = &LeaseEntry{
-		Lease: &Lease{
+	lm.leases["active-1"] = &types.LeaseEntry{
+		Lease: &types.Lease{
 			ID:      "active-1",
 			Name:    "active",
 			Expires: time.Now().Add(30 * time.Second),

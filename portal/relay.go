@@ -54,9 +54,7 @@ func NewRelayServer(
 	}
 	server.acmeManager = acmeManager
 
-	signer, err := keyless.NewSigner(keyless.Config{
-		KeyFile: keyFile,
-	})
+	signer, err := keyless.NewSigner(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("configure keyless signer: %w", err)
 	}

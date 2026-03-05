@@ -203,14 +203,14 @@ func TestNonApexPortalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestIsValidLeaseNameUsesServiceValidation(t *testing.T) {
+func TestIsValidServiceName(t *testing.T) {
 	t.Parallel()
 
-	if !IsValidLeaseName("my-app") {
-		t.Fatalf("expected valid lease name")
+	if !IsValidServiceName("my-app") {
+		t.Fatalf("expected valid service name")
 	}
-	if IsValidLeaseName("my_app") {
-		t.Fatalf("expected underscore to be invalid for DNS-safe lease names")
+	if IsValidServiceName("my_app") {
+		t.Fatalf("expected underscore to be invalid for DNS-safe service names")
 	}
 }
 

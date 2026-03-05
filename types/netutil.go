@@ -290,11 +290,6 @@ func BuildSNIName(leaseName, baseHost string) string {
 	return normalizedLeaseName + "." + normalizedBaseHost
 }
 
-// IsValidLeaseName reports whether a lease/service name is DNS-label-safe.
-func IsValidLeaseName(name string) bool {
-	return IsValidServiceName(name)
-}
-
 // ParseURLs splits a comma-separated string into a list of trimmed, non-empty URLs.
 func ParseURLs(raw string) []string {
 	raw = strings.TrimSpace(raw)

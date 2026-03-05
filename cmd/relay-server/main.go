@@ -76,7 +76,7 @@ func main() {
 	flag.Parse()
 
 	cfg.Bootstraps = types.ParseURLs(bootstrapsCSV)
-	parsedTrustedProxyCIDRs, err := parseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+	parsedTrustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		log.Fatal().Err(err).Msg("parse trusted proxy CIDRs")
 	}
@@ -225,8 +225,4 @@ func trimmedEnv(name string) string {
 func parseBoolEnv(name string) bool {
 	raw := trimmedEnv(name)
 	return strings.EqualFold(raw, "true") || raw == "1"
-}
-
-func parseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
-	return policy.ParseTrustedProxyCIDRs(raw)
 }

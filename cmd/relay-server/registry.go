@@ -65,7 +65,7 @@ func (r *SDKRegistry) handleConnect(w http.ResponseWriter, req *http.Request, re
 		req,
 		registryService,
 		req.URL.Query().Get("lease_id"),
-		req.Header.Get(portal.ReverseConnectTokenHeader),
+		req.Header.Get(types.ReverseConnectTokenHeader),
 		true,
 	)
 	if !ok {
@@ -254,7 +254,7 @@ func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request
 	return true
 }
 
-func writeRegistryError(w http.ResponseWriter, apiErr *controlplaneregistry.APIError) bool {
+func writeRegistryError(w http.ResponseWriter, apiErr *types.APIError) bool {
 	if apiErr == nil {
 		return true
 	}
@@ -277,7 +277,7 @@ func (b *relayRegistryBackend) BaseHost() string {
 	return b.serv.BaseHost
 }
 
-func (b *relayRegistryBackend) UpdateLease(lease *portal.Lease) bool {
+func (b *relayRegistryBackend) UpdateLease(lease *types.Lease) bool {
 	if b.serv == nil || b.serv.GetLeaseManager() == nil {
 		return false
 	}
@@ -291,7 +291,7 @@ func (b *relayRegistryBackend) DeleteLease(leaseID string) bool {
 	return b.serv.GetLeaseManager().DeleteLease(leaseID)
 }
 
-func (b *relayRegistryBackend) GetLeaseByID(leaseID string) (*portal.LeaseEntry, bool) {
+func (b *relayRegistryBackend) GetLeaseByID(leaseID string) (*types.LeaseEntry, bool) {
 	if b.serv == nil || b.serv.GetLeaseManager() == nil {
 		return nil, false
 	}

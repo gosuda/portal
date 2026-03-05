@@ -10,6 +10,14 @@ import (
 	"io"
 )
 
+const (
+	// TLS wire constants for ClientHello/SNI parsing.
+	tlsRecordContentTypeHandshake = byte(0x16)
+	tlsHandshakeTypeClientHello   = byte(0x01)
+	tlsExtensionTypeServerName    = uint16(0x0000)
+	tlsServerNameTypeHostName     = byte(0x00)
+)
+
 var (
 	// ErrInvalidTLSRecord is returned when the TLS record is malformed.
 	ErrInvalidTLSRecord = errors.New("invalid TLS record")
@@ -32,8 +40,8 @@ func ExtractSNI(r io.Reader) (string, error) {
 		return "", fmt.Errorf("reading TLS header: %w", err)
 	}
 
-	// Check ContentType (0x16 = Handshake)
-	if header[0] != 0x16 {
+	// Check ContentType (handshake)
+	if header[0] != tlsRecordContentTypeHandshake {
 		return "", ErrNotClientHello
 	}
 
@@ -66,8 +74,8 @@ func parseHandshake(data []byte) (string, error) {
 		return "", ErrInvalidTLSRecord
 	}
 
-	// Check if it's a ClientHello (0x01)
-	if handshakeType != 0x01 {
+	// Check if it's a ClientHello.
+	if handshakeType != tlsHandshakeTypeClientHello {
 		return "", ErrNotClientHello
 	}
 
@@ -161,8 +169,8 @@ func parseExtensions(data []byte) (string, error) {
 			return "", ErrInvalidTLSRecord
 		}
 
-		// Extension Type 0x0000 = server_name (SNI)
-		if extType == 0x0000 {
+		// Extension Type server_name (SNI)
+		if extType == tlsExtensionTypeServerName {
 			return parseSNIExtension(data[offset : offset+extLen])
 		}
 
@@ -204,8 +212,8 @@ func parseSNIExtension(data []byte) (string, error) {
 			return "", ErrInvalidTLSRecord
 		}
 
-		// Name Type 0x00 = host_name
-		if nameType == 0x00 {
+		// Name Type host_name
+		if nameType == tlsServerNameTypeHostName {
 			if nameLen == 0 {
 				return "", ErrNoSNI
 			}
@@ -278,7 +286,7 @@ func PeekSNI(r io.Reader, bufSize int) (string, io.Reader, error) {
 	if _, err := io.ReadFull(r, header); err != nil {
 		return "", nil, fmt.Errorf("peeking TLS header: %w", err)
 	}
-	if header[0] != 0x16 {
+	if header[0] != tlsRecordContentTypeHandshake {
 		reader := io.MultiReader(bytes.NewReader(header), r)
 		return "", reader, ErrNotClientHello
 	}

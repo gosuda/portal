@@ -18,7 +18,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/types"
 )
 
@@ -86,7 +85,7 @@ func (e *reverseConnectRejectionError) IsFatal() bool {
 type Listener struct {
 	tlsConfig          *tls.Config
 	controlPlaneCert   tls.Certificate
-	lease              *portal.Lease
+	lease              *types.Lease
 	httpClient         *http.Client
 	stopCh             chan struct{}
 	acceptCh           chan net.Conn
@@ -104,7 +103,7 @@ var _ net.Listener = (*Listener)(nil)
 
 // NewListener creates a relay-backed listener.
 // If tlsConfig is provided, reverse workers complete TLS handshakes before enqueueing connections.
-func NewListener(relayAddr string, lease *portal.Lease, tlsConfig *tls.Config, controlPlaneCert tls.Certificate, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
+func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, controlPlaneCert tls.Certificate, reverseWorkers int, reverseDialTimeout time.Duration, closeFns ...func()) (*Listener, error) {
 	if lease == nil {
 		return nil, errors.New("lease is required")
 	}
@@ -314,7 +313,7 @@ func (l *Listener) reverseAcceptWorker(workerID int) {
 			continue
 		}
 
-		err = l.waitForReverseStart(conn, portal.TLSStartMarker)
+		err = l.waitForReverseStart(conn, types.TLSStartMarker)
 		if err != nil {
 			if closeErr := conn.Close(); closeErr != nil {
 				log.Debug().Err(closeErr).Msg("[SDK] failed to close reverse connection")
@@ -490,7 +489,7 @@ func buildReverseConnectRequest(u *url.URL, reverseToken string) (*http.Request,
 		return nil, fmt.Errorf("build reverse connect request: %w", err)
 	}
 	req.Host = u.Host
-	req.Header.Set(portal.ReverseConnectTokenHeader, token)
+	req.Header.Set(types.ReverseConnectTokenHeader, token)
 	req.Header.Set("Connection", "keep-alive")
 	return req, nil
 }
@@ -627,7 +626,7 @@ func (l *Listener) waitForReverseStart(conn net.Conn, expectedMarker byte) error
 		_, err := io.ReadFull(conn, marker[:])
 		if err == nil {
 			_ = conn.SetReadDeadline(time.Time{})
-			if marker[0] == portal.ReverseKeepaliveMarker {
+			if marker[0] == types.ReverseKeepaliveMarker {
 				continue
 			}
 			if marker[0] == expectedMarker {

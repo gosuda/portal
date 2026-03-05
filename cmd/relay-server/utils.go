@@ -148,7 +148,7 @@ func isLeaseConnected(since time.Duration) bool {
 }
 
 // fromLeaseEntry populates the leaseRow from a LeaseEntry with common fields.
-func (r *leaseRow) fromLeaseEntry(entry *portal.LeaseEntry, admin *Admin, portalURL string) {
+func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalURL string) {
 	lease := entry.Lease
 	identityID := lease.ID
 	since := max(time.Since(entry.LastSeen), 0)
