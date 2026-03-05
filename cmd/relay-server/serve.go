@@ -219,6 +219,7 @@ func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.S
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	defer r.Body.Close()
 
 	var req keyless.SignRequest
@@ -238,7 +239,11 @@ func handleKeylessSign(w http.ResponseWriter, r *http.Request, signer *keyless.S
 		case errors.Is(err, keyless.ErrPermissionDenied):
 			status = http.StatusForbidden
 		}
-		writeSignError(w, status, err.Error())
+		msg := err.Error()
+		if status == http.StatusInternalServerError {
+			msg = "internal signing error"
+		}
+		writeSignError(w, status, msg)
 		return
 	}
 

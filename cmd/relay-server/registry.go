@@ -222,11 +222,12 @@ func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, me
 	}
 
 	w.Header().Set("Allow", method)
-	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	return false
 }
 
 func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request, dst any, logMessage string) bool {
+	req.Body = http.MaxBytesReader(w, req.Body, 1<<16)
 	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
 		log.Error().Err(err).Msg(logMessage)
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")

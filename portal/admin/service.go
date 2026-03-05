@@ -135,7 +135,7 @@ func (s *Service) SaveSettings(serv *portal.RelayServer) {
 		}
 	}
 
-	if err := os.WriteFile(s.settingsPath, data, 0644); err != nil {
+	if err := os.WriteFile(s.settingsPath, data, 0600); err != nil {
 		log.Error().Err(err).Msg("[Admin] Failed to save admin settings")
 		return
 	}
@@ -180,7 +180,9 @@ func (s *Service) LoadSettings(serv *portal.RelayServer) {
 	}
 
 	if payload.ApprovalMode != "" {
-		s.approveManager.SetApprovalMode(payload.ApprovalMode)
+		if err := s.approveManager.SetApprovalMode(payload.ApprovalMode); err != nil {
+			log.Warn().Err(err).Str("mode", string(payload.ApprovalMode)).Msg("[Admin] Ignoring invalid approval mode from settings")
+		}
 	}
 
 	for _, leaseID := range payload.ApprovedLeases {

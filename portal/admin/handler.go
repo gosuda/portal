@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -273,7 +274,7 @@ func (h *Handler) handleApprovalModeRequest(w http.ResponseWriter, r *http.Reque
 			h.writeAPIError(w, http.StatusBadRequest, "invalid_mode", "invalid mode (must be 'auto' or 'manual')")
 			return
 		}
-		approveManager.SetApprovalMode(mode)
+		_ = approveManager.SetApprovalMode(mode) // mode already validated above
 		h.service.SaveSettings(serv)
 		log.Info().Str("mode", string(mode)).Msg("[Admin] Approval mode changed")
 		h.writeAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{
@@ -495,6 +496,10 @@ func (h *Handler) handleIPBanRequest(w http.ResponseWriter, r *http.Request, ser
 
 	ip := parts[1]
 	if ip == "" {
+		h.writeAPIError(w, http.StatusBadRequest, "invalid_ip", "invalid IP address")
+		return
+	}
+	if net.ParseIP(ip) == nil {
 		h.writeAPIError(w, http.StatusBadRequest, "invalid_ip", "invalid IP address")
 		return
 	}

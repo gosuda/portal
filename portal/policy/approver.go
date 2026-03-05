@@ -1,6 +1,9 @@
 package policy
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // Mode represents the approval mode for new connections.
 type Mode string
@@ -32,10 +35,14 @@ func (m *Approver) GetApprovalMode() Mode {
 	return m.approvalMode
 }
 
-func (m *Approver) SetApprovalMode(mode Mode) {
+func (m *Approver) SetApprovalMode(mode Mode) error {
+	if mode != ModeAuto && mode != ModeManual {
+		return fmt.Errorf("invalid approval mode: %q", mode)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.approvalMode = mode
+	return nil
 }
 
 func (m *Approver) IsLeaseApproved(leaseID string) bool {

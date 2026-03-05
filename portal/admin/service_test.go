@@ -18,7 +18,9 @@ func TestServiceSaveLoadSettingsRoundTrip(t *testing.T) {
 	sourceServer := mustNewTestRelayServer(t)
 	sourceServer.GetLeaseManager().BanLease("lease-ban")
 	service.GetBPSManager().SetBPSLimit("lease-bps", 4096)
-	service.GetApproveManager().SetApprovalMode(policy.ModeManual)
+	if err := service.GetApproveManager().SetApprovalMode(policy.ModeManual); err != nil {
+		t.Fatalf("SetApprovalMode: %v", err)
+	}
 	service.GetApproveManager().ApproveLease("lease-approved")
 	service.GetApproveManager().DenyLease("lease-denied")
 	service.GetIPManager().BanIP("203.0.113.10")
