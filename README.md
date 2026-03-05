@@ -26,11 +26,9 @@ and routes incoming traffic while preserving end-to-end TLS.
 
 - **NAT-friendly connectivity**: Works behind NAT or firewalls without opening inbound ports
 - **Automatic subdomain routing**: Gives each app its own subdomain (`your-app.<base-domain>`)
-- **Non-apex `PORTAL_URL` friendly**: Route hosts are derived from the full portal host (e.g., `https://portal.example.com:8443` -> `portal.example.com`), so services become `<name>.portal.example.com`
 - **End-to-end encryption**: Supports TLS passthrough with relay keyless certificates
-- **Self-hosted by design**: You can run your own Portal relay
-- **Fast setup**: Expose a local app with a short command flow
-- **Central anti-abuse enforcement**: `/sdk/register` and `/sdk/connect` use the same admin-managed policy controls (IP bans, lease authorization) before accepting a tunnel
+- **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
+- **One-Command Setup**: Expose any local app with a single command
 
 ## Components
 
@@ -69,9 +67,13 @@ For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
 ## Contributing
 
-1. Fork the repository.
-2. Create a feature branch and make your changes.
-3. Open a Pull Request.
+We welcome contributions from the community!
+
+1. Fork the repository
+2. Create a feature branch (git checkout -b feature/amazing-feature)
+3. Commit your changes (git commit -m 'Add amazing feature')
+4. Push to the branch (git push origin feature/amazing-feature)
+5. Open a Pull Request
 
 ## License
 
