@@ -47,7 +47,6 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 3. **All relay URLs must be `https://`.** `NormalizeRelayAPIURL` rejects non-HTTPS. SDK and tunnel hard-fail on `http://`.
    - Why: enforces transport security without opt-out.
-
 4. **`keyless_tls/` is published to `github.com/gosuda/keyless_tls`** and vendored as a directory for co-development. Root `go.mod` pins a specific pseudo-version or tag — no `replace` directive.
    - Why: enables external consumers while keeping co-development convenient. Pin version after pushing upstream changes.
 

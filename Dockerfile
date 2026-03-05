@@ -7,7 +7,7 @@ WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
   make && rm -rf /var/lib/apt/lists/*
 
-COPY frontend ./
+COPY frontend ./frontend
 COPY Makefile ./
 
 RUN --mount=type=cache,target=/root/.npm \
