@@ -113,7 +113,7 @@ func TestHandleAdminRequestLeaseActionInvalidLeaseID(t *testing.T) {
 	}
 }
 
-func newTestHandler(t *testing.T, service *Service, secure bool, listLeases ListLeasesFunc) *Handler {
+func newTestHandler(t *testing.T, service *Service, secure bool, listLeases func(*portal.RelayServer) any) *Handler {
 	t.Helper()
 
 	if listLeases == nil {

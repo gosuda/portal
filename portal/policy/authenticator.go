@@ -39,8 +39,6 @@ type loginAttempt struct {
 
 // NewAuthenticator creates a new Authenticator with the given secret key.
 func NewAuthenticator(secretKey string) *Authenticator {
-	// Create Authenticator for admin authentication
-	// Auto-generate secret key if not provided
 	if secretKey == "" {
 		randomBytes := make([]byte, 16)
 		if _, err := rand.Read(randomBytes); err != nil {

@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -13,42 +14,34 @@ import (
 	"gosuda.org/portal/types"
 )
 
-type ServeAppStaticFunc func(http.ResponseWriter, *http.Request, string, *portal.RelayServer)
-type ListLeasesFunc func(*portal.RelayServer) any
-type StatsFunc func(*portal.RelayServer) map[string]any
-type DecodeLeaseIDFunc func(string) (string, bool)
-type SecureRequestFunc func(*http.Request, bool) bool
-type WriteAPIDataFunc func(http.ResponseWriter, int, any)
-type WriteAPIOKFunc func(http.ResponseWriter, int)
-type WriteAPIErrorFunc func(http.ResponseWriter, int, string, string)
-type WriteAPIErrorWithDataFunc func(http.ResponseWriter, int, string, string, any)
+var errInvalidLeaseID = errors.New("invalid lease ID")
 
 type HandlerConfig struct {
 	Service               *Service
-	ServeAppStatic        ServeAppStaticFunc
-	ListLeases            ListLeasesFunc
-	Stats                 StatsFunc
-	DecodeLeaseID         DecodeLeaseIDFunc
-	IsSecureRequest       SecureRequestFunc
-	WriteAPIData          WriteAPIDataFunc
-	WriteAPIOK            WriteAPIOKFunc
-	WriteAPIError         WriteAPIErrorFunc
-	WriteAPIErrorWithData WriteAPIErrorWithDataFunc
+	ServeAppStatic        func(http.ResponseWriter, *http.Request, string, *portal.RelayServer)
+	ListLeases            func(*portal.RelayServer) any
+	Stats                 func(*portal.RelayServer) map[string]any
+	DecodeLeaseID         func(string) (string, bool)
+	IsSecureRequest       func(*http.Request, bool) bool
+	WriteAPIData          func(http.ResponseWriter, int, any)
+	WriteAPIOK            func(http.ResponseWriter, int)
+	WriteAPIError         func(http.ResponseWriter, int, string, string)
+	WriteAPIErrorWithData func(http.ResponseWriter, int, string, string, any)
 	TrustProxy            bool
 }
 
 // Handler routes /admin/* HTTP requests and delegates policy mutations to Service.
 type Handler struct {
 	service               *Service
-	serveAppStatic        ServeAppStaticFunc
-	listLeases            ListLeasesFunc
-	stats                 StatsFunc
-	decodeLeaseID         DecodeLeaseIDFunc
-	isSecureRequest       SecureRequestFunc
-	writeAPIData          WriteAPIDataFunc
-	writeAPIOK            WriteAPIOKFunc
-	writeAPIError         WriteAPIErrorFunc
-	writeAPIErrorWithData WriteAPIErrorWithDataFunc
+	serveAppStatic        func(http.ResponseWriter, *http.Request, string, *portal.RelayServer)
+	listLeases            func(*portal.RelayServer) any
+	stats                 func(*portal.RelayServer) map[string]any
+	decodeLeaseID         func(string) (string, bool)
+	isSecureRequest       func(*http.Request, bool) bool
+	writeAPIData          func(http.ResponseWriter, int, any)
+	writeAPIOK            func(http.ResponseWriter, int)
+	writeAPIError         func(http.ResponseWriter, int, string, string)
+	writeAPIErrorWithData func(http.ResponseWriter, int, string, string, any)
 	trustProxy            bool
 }
 
@@ -83,7 +76,6 @@ func NewHandler(cfg HandlerConfig) *Handler {
 			}
 			return map[string]any{
 				"leases_count": count,
-				"uptime":       "TODO",
 			}
 		}
 	}
@@ -318,43 +310,36 @@ func (h *Handler) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type leaseActionRouteStatus uint8
-
-const (
-	leaseActionRouteNotFound leaseActionRouteStatus = iota
-	leaseActionRouteInvalidLeaseID
-	leaseActionRouteOK
-)
-
-func (h *Handler) parseLeaseActionRoute(route string) (leaseID, action string, status leaseActionRouteStatus) {
+func (h *Handler) parseLeaseActionRoute(route string) (leaseID, action string, err error) {
 	parts := strings.Split(route, "/")
 	if len(parts) != 3 || parts[0] != "leases" {
-		return "", "", leaseActionRouteNotFound
+		return "", "", errors.New("route not found")
 	}
 
 	action = parts[2]
 	switch action {
 	case "ban", "bps", "approve", "deny":
 	default:
-		return "", "", leaseActionRouteNotFound
+		return "", "", errors.New("route not found")
 	}
 
-	leaseID, ok := h.decodeLeaseID(parts[1])
+	var ok bool
+	leaseID, ok = h.decodeLeaseID(parts[1])
 	if !ok {
-		return "", action, leaseActionRouteInvalidLeaseID
+		return "", action, errInvalidLeaseID
 	}
 
-	return leaseID, action, leaseActionRouteOK
+	return leaseID, action, nil
 }
 
 func (h *Handler) handleLeaseActionRouteRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, route string) bool {
-	leaseID, action, status := h.parseLeaseActionRoute(route)
-	switch status {
-	case leaseActionRouteNotFound:
+	leaseID, action, err := h.parseLeaseActionRoute(route)
+	if err != nil {
+		if errors.Is(err, errInvalidLeaseID) {
+			h.writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
+			return true
+		}
 		return false
-	case leaseActionRouteInvalidLeaseID:
-		h.writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
-		return true
 	}
 
 	switch action {
@@ -373,7 +358,17 @@ func (h *Handler) handleLeaseActionRouteRequest(w http.ResponseWriter, r *http.R
 	return true
 }
 
-func (h *Handler) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+// handleLeaseToggleRequest is a generic helper for lease toggle actions (ban, approve, deny).
+func (h *Handler) handleLeaseToggleRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	serv *portal.RelayServer,
+	leaseID string,
+	onPost func(),
+	onDelete func(),
+	logMsgPost string,
+	logMsgDelete string,
+) {
 	if strings.TrimSpace(leaseID) == "" {
 		h.writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
 		return
@@ -381,16 +376,31 @@ func (h *Handler) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, 
 
 	switch r.Method {
 	case http.MethodPost:
-		serv.GetLeaseManager().BanLease(leaseID)
+		onPost()
 		h.service.SaveSettings(serv)
+		if logMsgPost != "" {
+			log.Info().Str("lease_id", leaseID).Msg(logMsgPost)
+		}
 		h.writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
-		serv.GetLeaseManager().UnbanLease(leaseID)
+		onDelete()
 		h.service.SaveSettings(serv)
+		if logMsgDelete != "" {
+			log.Info().Str("lease_id", leaseID).Msg(logMsgDelete)
+		}
 		h.writeAPIOK(w, http.StatusOK)
 	default:
 		h.writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	}
+}
+
+func (h *Handler) handleLeaseBanRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
+	h.handleLeaseToggleRequest(
+		w, r, serv, leaseID,
+		func() { serv.GetLeaseManager().BanLease(leaseID) },
+		func() { serv.GetLeaseManager().UnbanLease(leaseID) },
+		"", "",
+	)
 }
 
 func (h *Handler) handleGetSettings(w http.ResponseWriter) {
@@ -403,50 +413,28 @@ func (h *Handler) handleGetSettings(w http.ResponseWriter) {
 }
 
 func (h *Handler) handleLeaseApproveRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
-	if strings.TrimSpace(leaseID) == "" {
-		h.writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
-		return
-	}
-
 	approveManager := h.service.GetApproveManager()
-	switch r.Method {
-	case http.MethodPost:
-		approveManager.ApproveLease(leaseID)
-		approveManager.UndenyLease(leaseID) // Remove from denied if exists.
-		h.service.SaveSettings(serv)
-		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approved")
-		h.writeAPIOK(w, http.StatusOK)
-	case http.MethodDelete:
-		approveManager.RevokeLease(leaseID)
-		h.service.SaveSettings(serv)
-		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease approval revoked")
-		h.writeAPIOK(w, http.StatusOK)
-	default:
-		h.writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-	}
+	h.handleLeaseToggleRequest(
+		w, r, serv, leaseID,
+		func() {
+			approveManager.ApproveLease(leaseID)
+			approveManager.UndenyLease(leaseID) // Remove from denied if exists.
+		},
+		func() { approveManager.RevokeLease(leaseID) },
+		"[Admin] Lease approved",
+		"[Admin] Lease approval revoked",
+	)
 }
 
 func (h *Handler) handleLeaseDenyRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
-	if strings.TrimSpace(leaseID) == "" {
-		h.writeAPIError(w, http.StatusBadRequest, "invalid_lease_id", "invalid lease ID")
-		return
-	}
-
 	approveManager := h.service.GetApproveManager()
-	switch r.Method {
-	case http.MethodPost:
-		approveManager.DenyLease(leaseID)
-		h.service.SaveSettings(serv)
-		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denied")
-		h.writeAPIOK(w, http.StatusOK)
-	case http.MethodDelete:
-		approveManager.UndenyLease(leaseID)
-		h.service.SaveSettings(serv)
-		log.Info().Str("lease_id", leaseID).Msg("[Admin] Lease denial removed")
-		h.writeAPIOK(w, http.StatusOK)
-	default:
-		h.writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-	}
+	h.handleLeaseToggleRequest(
+		w, r, serv, leaseID,
+		func() { approveManager.DenyLease(leaseID) },
+		func() { approveManager.UndenyLease(leaseID) },
+		"[Admin] Lease denied",
+		"[Admin] Lease denial removed",
+	)
 }
 
 func (h *Handler) handleLeaseBPSRequest(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer, leaseID string) {
