@@ -243,6 +243,10 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 		if err != nil {
 			log.Debug().Err(err).Msg("local->relay copy ended")
 		}
+		// TLS does not support half-close; full close unblocks the relay→local goroutine.
+		if closeErr := relayConn.Close(); closeErr != nil {
+			log.Debug().Err(closeErr).Msg("failed to close relay conn after local->relay copy")
+		}
 		errCh <- err
 	}()
 

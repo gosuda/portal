@@ -215,6 +215,9 @@ func (g *RelayServer) Stop() {
 		if g.leaseManager != nil {
 			g.leaseManager.Stop()
 		}
+		if g.reverseHub != nil {
+			g.reverseHub.Shutdown()
+		}
 		if g.sniRouter != nil {
 			if err := g.sniRouter.Stop(); err != nil {
 				log.Warn().Err(err).Msg("[RelayServer] Failed to stop SNI router")

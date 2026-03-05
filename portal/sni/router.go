@@ -39,6 +39,7 @@ type Router struct {
 	listener     net.Listener
 	routes       map[string]*Route
 	leases       map[string]*Route
+	conns        map[net.Conn]struct{}
 	onConnection func(conn net.Conn, route *Route)
 	onNoRoute    func(conn net.Conn, sni string) bool
 	stopCh       chan struct{}
@@ -54,6 +55,7 @@ func NewRouter(addr string) *Router {
 		addr:   addr,
 		routes: make(map[string]*Route),
 		leases: make(map[string]*Route),
+		conns:  make(map[net.Conn]struct{}),
 		stopCh: make(chan struct{}),
 	}
 }
@@ -237,6 +239,9 @@ func (r *Router) Stop() error {
 		if r.listener != nil {
 			closeWithDebugLog(r.listener, "[SNI] failed to close listener")
 		}
+		for conn := range r.conns {
+			closeWithDebugLog(conn, "[SNI] failed to close tracked connection")
+		}
 		r.mu.Unlock()
 	})
 
@@ -334,7 +339,15 @@ func (r *Router) handleConnection(clientConn net.Conn) {
 	onConnection := r.getConnectionHandler()
 
 	if onConnection != nil {
+		r.mu.Lock()
+		r.conns[wrappedConn] = struct{}{}
+		r.mu.Unlock()
+
 		onConnection(wrappedConn, route)
+
+		r.mu.Lock()
+		delete(r.conns, wrappedConn)
+		r.mu.Unlock()
 		return
 	}
 

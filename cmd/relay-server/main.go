@@ -176,12 +176,15 @@ func runServer(cfg relayServerConfig) error {
 	if err := serv.Start(); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
 	}
-	defer serv.Stop()
 
 	apiServ := serveAPI(fmt.Sprintf(":%d", cfg.AdminPort), serv, admin, frontend, cfg, stop)
 
 	<-ctx.Done()
 	log.Info().Msg("[server] shutting down...")
+
+	// Stop relay first: drain idle reverse conns + close active SNI conns
+	// so that all HTTP handlers blocked on HandleConnect.Wait() can return.
+	serv.Stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

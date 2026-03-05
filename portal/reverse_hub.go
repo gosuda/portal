@@ -105,7 +105,9 @@ type ReverseHub struct {
 	authorizer   func(leaseID, token string) bool
 	ipBanChecker func(ip string) bool
 	onAccepted   func(leaseID, ip string)
+	stopCh       chan struct{}
 	mu           sync.RWMutex
+	stopOnce     sync.Once
 }
 
 // NewReverseHub creates a new reverse connection hub.
@@ -113,6 +115,7 @@ func NewReverseHub() *ReverseHub {
 	return &ReverseHub{
 		pools:   make(map[string]chan *ReverseConn),
 		dropped: make(map[string]struct{}),
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -377,12 +380,45 @@ func (h *ReverseHub) closeConn(conn net.Conn, debugCloseMessage string) {
 	}
 }
 
+// Shutdown closes the stop channel and drains all pools, causing idle
+// HandleConnect goroutines to unblock and return.
+func (h *ReverseHub) Shutdown() {
+	h.stopOnce.Do(func() {
+		close(h.stopCh)
+
+		h.mu.Lock()
+		pools := h.pools
+		h.pools = make(map[string]chan *ReverseConn)
+		h.mu.Unlock()
+
+		for _, pool := range pools {
+			drainPool(pool)
+		}
+	})
+}
+
+func drainPool(pool chan *ReverseConn) {
+	for {
+		select {
+		case conn := <-pool:
+			if conn != nil {
+				conn.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (h *ReverseHub) keepAliveWhileIdle(conn *ReverseConn, leaseID string) {
 	ticker := time.NewTicker(ReverseIdleKeepaliveInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
+		case <-h.stopCh:
+			conn.Close()
+			return
 		case <-conn.done:
 			return
 		case <-conn.active:
