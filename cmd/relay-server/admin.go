@@ -13,21 +13,13 @@ import (
 type Admin struct {
 	service *portaladmin.Service
 	handler *portaladmin.Handler
-
-	// Kept for existing call sites in cmd package (for example lease row conversion).
-	approveManager *policy.Approver
-	bpsManager     *policy.RateLimiter
-	ipManager      *policy.IPFilter
 }
 
 func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *policy.Authenticator, portalURL string, trustProxy bool) *Admin {
 	service := portaladmin.NewService(defaultLeaseBPS, authManager)
 	normalizedPortalURL := strings.TrimSpace(portalURL)
 	admin := &Admin{
-		service:        service,
-		approveManager: service.GetApproveManager(),
-		bpsManager:     service.GetBPSManager(),
-		ipManager:      service.GetIPManager(),
+		service: service,
 	}
 
 	serveStatic := func(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer) {
@@ -58,26 +50,26 @@ func NewAdmin(defaultLeaseBPS int64, frontend *Frontend, authManager *policy.Aut
 
 // GetApproveManager exposes the approval manager.
 func (a *Admin) GetApproveManager() *policy.Approver {
-	if a == nil {
+	if a == nil || a.service == nil {
 		return nil
 	}
-	return a.approveManager
+	return a.service.GetApproveManager()
 }
 
 // GetBPSManager exposes the BPS manager.
 func (a *Admin) GetBPSManager() *policy.RateLimiter {
-	if a == nil {
+	if a == nil || a.service == nil {
 		return nil
 	}
-	return a.bpsManager
+	return a.service.GetBPSManager()
 }
 
 // GetIPManager exposes the IP manager.
 func (a *Admin) GetIPManager() *policy.IPFilter {
-	if a == nil {
+	if a == nil || a.service == nil {
 		return nil
 	}
-	return a.ipManager
+	return a.service.GetIPManager()
 }
 
 func (a *Admin) SetSettingsPath(path string) {

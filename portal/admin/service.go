@@ -50,48 +50,40 @@ func NewService(defaultLeaseBPS int64, authManager *policy.Authenticator) *Servi
 	}
 }
 
-func (s *Service) isUnavailable() bool {
-	return s == nil
-}
-
-func (s *Service) isUnavailableForServer(serv *portal.RelayServer) bool {
-	return s == nil || serv == nil
-}
-
 func (s *Service) authUnavailable() bool {
 	return s == nil || s.authManager == nil || !s.authManager.HasSecretKey()
 }
 
 func (s *Service) GetApproveManager() *policy.Approver {
-	if s.isUnavailable() {
+	if s == nil {
 		return nil
 	}
 	return s.approveManager
 }
 
 func (s *Service) GetBPSManager() *policy.RateLimiter {
-	if s.isUnavailable() {
+	if s == nil {
 		return nil
 	}
 	return s.bpsManager
 }
 
 func (s *Service) GetIPManager() *policy.IPFilter {
-	if s.isUnavailable() {
+	if s == nil {
 		return nil
 	}
 	return s.ipManager
 }
 
 func (s *Service) GetAuthManager() *policy.Authenticator {
-	if s.isUnavailable() {
+	if s == nil {
 		return nil
 	}
 	return s.authManager
 }
 
 func (s *Service) SetSettingsPath(path string) {
-	if s.isUnavailable() {
+	if s == nil {
 		return
 	}
 	s.settingsMu.Lock()
@@ -100,7 +92,7 @@ func (s *Service) SetSettingsPath(path string) {
 }
 
 func (s *Service) SaveSettings(serv *portal.RelayServer) {
-	if s.isUnavailableForServer(serv) {
+	if s == nil || serv == nil {
 		return
 	}
 
@@ -152,7 +144,7 @@ func (s *Service) SaveSettings(serv *portal.RelayServer) {
 }
 
 func (s *Service) LoadSettings(serv *portal.RelayServer) {
-	if s.isUnavailableForServer(serv) {
+	if s == nil || serv == nil {
 		return
 	}
 

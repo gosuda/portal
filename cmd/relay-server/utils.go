@@ -215,13 +215,15 @@ func (r *leaseRow) fromLeaseEntry(entry *types.LeaseEntry, admin *Admin, portalU
 	r.BPS = bps
 
 	if admin != nil {
-		r.IsApproved = admin.approveManager.GetApprovalMode() == policy.ModeAuto || admin.approveManager.IsLeaseApproved(identityID)
-		r.IsDenied = admin.approveManager.IsLeaseDenied(identityID)
+		if approveMgr := admin.GetApproveManager(); approveMgr != nil {
+			r.IsApproved = approveMgr.GetApprovalMode() == policy.ModeAuto || approveMgr.IsLeaseApproved(identityID)
+			r.IsDenied = approveMgr.IsLeaseDenied(identityID)
+		}
 
-		if admin.ipManager != nil {
-			r.IP = admin.ipManager.GetLeaseIP(identityID)
+		if ipMgr := admin.GetIPManager(); ipMgr != nil {
+			r.IP = ipMgr.GetLeaseIP(identityID)
 			if r.IP != "" {
-				r.IsIPBanned = admin.ipManager.IsIPBanned(r.IP)
+				r.IsIPBanned = ipMgr.IsIPBanned(r.IP)
 			}
 		}
 	}
