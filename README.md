@@ -10,17 +10,13 @@
 
 ## Why Portal?
 
-Publishing a local service usually requires:
+Publishing a local service to the internet is often complicated.
+It usually requires opening inbound ports, configuring NAT or firewalls, managing DNS, and terminating TLS.
 
-- Opening inbound ports
-- Configuring NAT or firewall rules
-- Managing DNS records
-- Terminating TLS at a gateway
+Portal removes this complexity by inverting the connection model.
+Applications establish outbound connections to a relay, which exposes the service to the public internet and routes incoming traffic back to the application while preserving end-to-end TLS.
 
-Portal removes most of this setup by inverting the connection model.
-Applications establish outbound connections to a relay.
-The relay runs on a public base domain, assigns each service a subdomain,
-and routes incoming traffic while preserving end-to-end TLS.
+Unlike other tunneling services, Portal is self-hosted and permissionless. You can run your own relay on your domain or connect to any relay.
 
 ## Features
 
