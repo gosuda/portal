@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/keyless"
 )
 
 type ClientConfig struct {
@@ -130,23 +131,10 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		return nil, err
 	}
 
-	var (
-		tlsConf   *tls.Config
-		tlsCloser io.Closer
-		err       error
-	)
-	if len(req.TLS.CertPEM) > 0 || len(req.TLS.KeyPEM) > 0 || req.TLS.Keyless != nil {
-		tlsConf, tlsCloser, err = buildTenantTLSConfig(req.TLS)
-		if err != nil {
-			_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
-			return nil, err
-		}
-	} else {
-		tlsConf, err = buildAutoTenantTLSConfig(registerResp.Hostnames)
-		if err != nil {
-			_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
-			return nil, err
-		}
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(c.baseURL.String(), registerResp.Hostnames)
+	if err != nil {
+		_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
+		return nil, err
 	}
 
 	listenerCtx, cancel := context.WithCancel(ctx)

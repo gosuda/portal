@@ -21,6 +21,7 @@ import (
 
 type ServerConfig struct {
 	APIHandlerWrapper     func(http.Handler) http.Handler
+	KeylessSignerHandler  http.Handler
 	PortalURL             string
 	APIListenAddr         string
 	SNIListenAddr         string
@@ -240,13 +241,16 @@ func (s *Server) ListLeases() []LeaseSnapshot {
 
 func (s *Server) apiHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleRoot)
+	if s.cfg.KeylessSignerHandler != nil {
+		mux.Handle("/v1/sign", s.cfg.KeylessSignerHandler)
+	}
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/sdk/domain", s.handleDomain)
 	mux.HandleFunc("/sdk/register", s.handleRegister)
 	mux.HandleFunc("/sdk/renew", s.handleRenew)
 	mux.HandleFunc("/sdk/unregister", s.handleUnregister)
 	mux.HandleFunc("/sdk/connect", s.handleConnect)
+	mux.HandleFunc("/", s.handleRoot)
 	return mux
 }
 

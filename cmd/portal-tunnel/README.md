@@ -30,5 +30,5 @@ Portal-tunnel connects a local service to a Portal relay with the legacy CLI sha
 ## Notes
 
 - The current runtime accepts multiple relay URLs but uses the first one.
-- If tenant TLS material is not provided internally, the SDK generates a self-signed certificate for the registered hostnames.
+- Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.

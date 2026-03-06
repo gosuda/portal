@@ -14,6 +14,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/acme"
+	"gosuda.org/portal/portal/keyless"
 )
 
 func runServer(cfg relayServerConfig) error {
@@ -42,6 +43,10 @@ func runServer(cfg relayServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("ensure relay certificate: %w", err)
 	}
+	signer, err := keyless.NewSigner(keyFile)
+	if err != nil {
+		return fmt.Errorf("create keyless signer: %w", err)
+	}
 
 	frontend := NewFrontend(cfg.PortalURL)
 	admin := NewAdmin(cfg.AdminSecretKey, cfg.TrustProxyHeaders, frontend)
@@ -52,11 +57,17 @@ func runServer(cfg relayServerConfig) error {
 		SNIListenAddr:    sniListenAddr,
 		RootHost:         rootHost,
 		RootFallbackAddr: loopbackAddr(apiListenAddr),
+		KeylessSignerHandler: func() http.Handler {
+			if signer == nil {
+				return nil
+			}
+			return signer.Handler()
+		}(),
 		APITLS: portal.TLSMaterialConfig{
 			CertPEM: mustRead(certFile),
 			KeyPEM:  mustRead(keyFile),
 		},
-		APIHandlerWrapper: serveAPI(frontend, admin, cfg),
+		APIHandlerWrapper: serveAPI(frontend, admin, signer, cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -81,11 +92,13 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http.Handler) http.Handler {
+func serveAPI(frontend *Frontend, admin *Admin, signer *keyless.Signer, cfg relayServerConfig) func(http.Handler) http.Handler {
 	return func(base http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case isRelayControlPlanePath(r.URL.Path):
+				base.ServeHTTP(w, r)
+			case r.URL.Path == "/v1/sign":
 				base.ServeHTTP(w, r)
 			case r.URL.Path == "/healthz":
 				base.ServeHTTP(w, r)

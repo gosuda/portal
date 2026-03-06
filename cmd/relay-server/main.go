@@ -31,7 +31,6 @@ type relayServerConfig struct {
 }
 
 func main() {
-	zerolog.TimeFieldFormat = time.RFC3339
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "relay-server").Logger()
 

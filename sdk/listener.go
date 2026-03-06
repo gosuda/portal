@@ -18,7 +18,6 @@ type LeaseMetadata = portal.LeaseMetadata
 type ListenRequest struct {
 	Name         string
 	ReverseToken string
-	TLS          portal.TLSMaterialConfig
 	Hostnames    []string
 	Metadata     LeaseMetadata
 	ReadyTarget  int

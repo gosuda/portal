@@ -40,8 +40,8 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 
 ## TLS and Identity Invariants
 
-1. **Relay holds the TLS private key for admin/API (root domain) only.** SDK calls `/v1/sign` on the relay via `RemoteSigner` for admin/API TLS termination. For SNI-passthrough routes, the relay peeks the ClientHello for SNI then bridges the raw encrypted connection — the backend/tunnel endpoint terminates TLS and holds those keys, not the relay.
-   - Why: admin/API key material stays on the relay; tenant TLS passthrough avoids key distribution to the relay entirely.
+1. **Relay terminates admin/API TLS directly and also exposes `/v1/sign` as the keyless signer for tenant passthrough TLS.** The relay still does not terminate tenant traffic; it peeks ClientHello for SNI and bridges raw encrypted bytes, while the backend/tunnel endpoint performs the handshake using a `RemoteSigner`.
+   - Why: preserves SNI passthrough data flow while centralizing certificate signing behind the relay keyless endpoint.
 
 2. **/sdk/* control-plane auth is token.** Admission order is IP ban -> Lease -> Token.
    - Admin/API TLS listener does not request client certificates.
