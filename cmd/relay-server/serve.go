@@ -63,7 +63,7 @@ func runServer(cfg relayServerConfig) error {
 			}
 			return signer.Handler()
 		}(),
-		APITLS: portal.TLSMaterialConfig{
+		APITLS: keyless.TLSMaterialConfig{
 			CertPEM: mustRead(certFile),
 			KeyPEM:  mustRead(keyFile),
 		},

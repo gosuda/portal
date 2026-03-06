@@ -43,7 +43,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "demo-app").Logger()
 
-	flag.StringVar(&flagServerURL, "server-url", "https://gosunuts.xyz", "relay API URL (https only)")
+	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https only)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")

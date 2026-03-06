@@ -1,4 +1,4 @@
-package portal
+package keyless
 
 import (
 	"crypto/tls"
@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	keylesslib "github.com/gosuda/keyless_tls/keyless"
+	keylesstls "github.com/gosuda/keyless_tls/keyless"
 )
 
 type TLSMaterialConfig struct {
@@ -25,14 +25,14 @@ type RemoteSignerConfig struct {
 	RootCAPEM     []byte
 }
 
-func attachAPITLS(server *http.Server, cfg TLSMaterialConfig) (io.Closer, error) {
+func AttachToHTTPServer(server *http.Server, cfg TLSMaterialConfig) (io.Closer, error) {
 	if server == nil {
 		return nil, errors.New("http server is required")
 	}
 	if cfg.Keyless != nil {
-		remoteSigner, err := keylesslib.AttachToHTTPServer(server, keylesslib.HTTPServerAttachConfig{
+		remoteSigner, err := keylesstls.AttachToHTTPServer(server, keylesstls.HTTPServerAttachConfig{
 			CertPEM: cfg.CertPEM,
-			RemoteSigner: keylesslib.RemoteSignerConfig{
+			RemoteSigner: keylesstls.RemoteSignerConfig{
 				Endpoint:      cfg.Keyless.Endpoint,
 				ServerName:    cfg.Keyless.ServerName,
 				KeyID:         cfg.Keyless.KeyID,

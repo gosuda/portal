@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
+
+	"gosuda.org/portal/portal/keyless"
 )
 
 type ServerConfig struct {
@@ -27,7 +29,7 @@ type ServerConfig struct {
 	SNIListenAddr         string
 	RootHost              string
 	RootFallbackAddr      string
-	APITLS                TLSMaterialConfig
+	APITLS                keyless.TLSMaterialConfig
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
@@ -129,7 +131,7 @@ func (s *Server) Start(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
-	apiCloser, err := attachAPITLS(apiServer, s.cfg.APITLS)
+	apiCloser, err := keyless.AttachToHTTPServer(apiServer, s.cfg.APITLS)
 	if err != nil {
 		_ = apiListener.Close()
 		_ = sniListener.Close()

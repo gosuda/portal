@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	keylesslib "github.com/gosuda/keyless_tls/keyless"
+	keylesstls "github.com/gosuda/keyless_tls/keyless"
 )
 
 func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioCloser, error) {
@@ -40,7 +40,7 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 		}
 	}
 
-	remoteSigner, err := keylesslib.NewRemoteSigner(keylesslib.RemoteSignerConfig{
+	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
 		Endpoint:   relayURL,
 		ServerName: serverName,
 		KeyID:      RelayKeyID,
@@ -50,7 +50,7 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 		return nil, nil, fmt.Errorf("create keyless remote signer: %w", err)
 	}
 
-	tlsConfig, err := keylesslib.NewServerTLSConfig(keylesslib.ServerTLSConfig{
+	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
 		CertPEM:    certPEM,
 		Signer:     remoteSigner,
 		NextProtos: []string{"http/1.1"},

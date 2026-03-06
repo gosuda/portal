@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"gosuda.org/portal/portal"
-	portalkeyless "gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/portal/keyless"
 )
 
 func selfSignedCertPEM(hosts ...string) (certPEM, keyPEM []byte, err error) {
@@ -87,7 +87,7 @@ func TestListenerEndToEndTLSHTTP(t *testing.T) {
 		RootHost:             "portal.test",
 		RootFallbackAddr:     "127.0.0.1:1",
 		KeylessSignerHandler: newTestSignerHandler(t, apiKeyPEM),
-		APITLS: portal.TLSMaterialConfig{
+		APITLS: keyless.TLSMaterialConfig{
 			CertPEM: apiCertPEM,
 			KeyPEM:  apiKeyPEM,
 		},
@@ -207,7 +207,7 @@ func TestListenerEndToEndTLSHTTP_AutoKeyless(t *testing.T) {
 		RootHost:             "portal.test",
 		RootFallbackAddr:     "127.0.0.1:1",
 		KeylessSignerHandler: newTestSignerHandler(t, apiKeyPEM),
-		APITLS: portal.TLSMaterialConfig{
+		APITLS: keyless.TLSMaterialConfig{
 			CertPEM: apiCertPEM,
 			KeyPEM:  apiKeyPEM,
 		},
@@ -325,7 +325,7 @@ func newTestSignerHandler(t *testing.T, keyPEM []byte) http.Handler {
 	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
 		t.Fatalf("WriteFile(key) error = %v", err)
 	}
-	signer, err := portalkeyless.NewSigner(keyFile)
+	signer, err := keyless.NewSigner(keyFile)
 	if err != nil {
 		t.Fatalf("NewSigner() error = %v", err)
 	}
