@@ -1,12 +1,15 @@
 # ADR 0003: Security and Anti-Abuse Hardening
 
-- Status: `Accepted`
+- Status: `Deprecated`
 - Date: `2026-03-03`
 - Owners: `Portal maintainers`
 
 ## Context
 
 Portal accepts unauthenticated internet traffic on relay/admin edges while managing long-lived reverse tunnel sessions. Abuse controls and security boundaries must be first-class or operational risk rises quickly.
+
+This ADR captured a broader policy/bans/admin-settings model than the current runtime now implements.
+Keep it as historical context only. Current descriptive docs and `AGENTS.md` are the source for the simplified runtime behavior until a replacement ADR is written.
 
 ## Decision
 

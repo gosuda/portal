@@ -4,79 +4,88 @@ Key terms used in Portal.
 
 ## Portal / Relay
 
-The central server that handles lease registration, routing, and reverse-connection brokering.
-In TLS passthrough mode, it routes transport and does not terminate app payload TLS.
-All backend-to-relay ingress uses a long-lived raw TCP reverse-connect channel (`/sdk/connect`).
+The central server that handles lease registration, SNI routing, reverse-session brokering, admin/API TLS, and keyless signing.
+It does not terminate tenant TLS.
 
 ## App (Service Publisher)
 
-A backend service connected to Portal through Tunnel or Native SDK.
-An app publishes one or more leases and serves traffic from local services.
+A backend service connected to Portal through `portal-tunnel` or the native Go SDK.
+An app publishes one or more leases and serves traffic from a local process.
 
 ## Client (Service Consumer)
 
-A browser or external caller that accesses a published service through relay-managed domains.
+A browser or external caller that accesses a published service through relay-managed hostnames.
 
-## Conn #1 (Data Plane)
+## Control-Plane Request
 
-Tenant-facing traffic path between browser/client and app/tunnel endpoint.
-This connection keeps existing data-plane TLS behavior.
+An ordinary HTTPS request to the relay admin/API listener, such as:
 
-## Conn #2 (Control Plane)
+- `/sdk/register`
+- `/sdk/renew`
+- `/sdk/unregister`
+- `/sdk/domain`
 
-Relay-to-tunnel control path used by `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister`.
-This connection uses token-based admission with order `IP -> Lease -> Token`.
+These use the JSON API envelope contract.
 
-## Tunnel
+## Reverse Session
 
-The CLI publisher path (`cmd/portal-tunnel`).
-It forwards relay traffic to an existing local host/port without app code changes.
-
-## Native SDK
-
-The Go integration path (`sdk/`).
-It provides relay-backed listener APIs and lease metadata control for direct integration.
+A long-lived raw TCP connection opened through `GET /sdk/connect?lease_id=...`.
+The relay hijacks it, keeps it idle in a lease broker, and later claims it for one tenant TLS passthrough connection.
 
 ## Lease
 
 Portal's routing and advertisement unit.
-Each lease maps to one public endpoint and includes identity, name, metadata, TLS flag, and reverse token.
+Each lease has an ID, display name, hostnames, metadata, expiry, reverse token, and a broker of ready reverse sessions.
 
 ## Lease Name
 
-The human-readable identifier used for subdomain routing (for example, `myapp` -> `myapp.example.com`).
+The human-readable identifier used to derive a hostname (for example, `myapp` -> `myapp.example.com`) when no explicit hostname is supplied.
+
+## Lease Broker
+
+The relay-side owner of reverse session state for one lease.
+It manages the ready queue, claim/wakeup behavior, drop/stop lifecycle, and idle keepalive policy.
 
 ## Reverse Token
 
-A per-lease secret used to authenticate reverse connections (`/sdk/connect`) from backend to relay.
-Token validation is a required admission stage after lease and policy checks.
+A per-lease secret supplied at registration time and later required by:
 
-## ReverseHub
+- `/sdk/connect`
+- `/sdk/renew`
+- `/sdk/unregister`
 
-Relay-side pool of authenticated reverse connections keyed by lease ID.
-It supplies raw TCP reverse connections for TLS SNI forwarding.
+It authorizes reverse-session and lease-lifecycle operations.
 
-## SNI Router
+## Route Table
 
-The TCP router on relay SNI port (default `443`) that selects lease routes by TLS SNI.
-Exact matches on the portal root host (derived from `PORTAL_URL` host) are intentionally routed via no-route fallback to the admin/API listener.
+The relay hostname map that resolves exact and single-label wildcard matches to a lease ID.
+
+## SNI Routing
+
+The relay reads ClientHello to extract the requested hostname, chooses a lease route, and then bridges the original encrypted TLS stream without terminating it.
 
 ## Keyless TLS
 
-A mode where the backend performs TLS while using the relay signer endpoint (`/v1/sign`) for remote signing.
-This avoids distributing private keys to every backend host.
+A mode where the SDK/tunnel terminates tenant TLS locally while delegating private-key signing to the relay `/v1/sign` endpoint.
+This keeps the relay out of the tenant data plane while avoiding direct private-key distribution to every backend host.
 
 ## ACME DNS-01
 
-Certificate issuance/renewal method used with a Cloudflare DNS API token when keyless materials are missing.
+The relay certificate issuance and renewal path for non-localhost deployments.
+It uses a Cloudflare DNS API token to provision the root and wildcard certificate coverage used by the relay.
 
-## Base Domain
+## Base Domain / Root Host
 
-The host extracted from `PORTAL_URL` (scheme, port, and path removed) and used to build service subdomains.
-For non-apex values such as `https://portal.example.com:8443/admin`, the base host is `portal.example.com`.
-The same host is used for exact-match SNI fallback, which routes root-host requests to the admin/API listener.
+The host extracted from `PORTAL_URL` after removing scheme, port, path, query, and fragment.
+For `https://portal.example.com:8443/admin`, the root host is `portal.example.com`.
 
 ## Admin/API Server
 
-The relay HTTP server (default `:4017`) serving admin UI and control endpoints such as `/sdk/*`, `/admin`, and `/healthz`.
-It also receives root-domain fallback traffic from SNI when no more specific lease route is found.
+The relay HTTPS listener (default `:4017`) serving:
+
+- `/sdk/*`
+- `/admin`
+- `/admin/leases`
+- `/healthz`
+- `/v1/sign`
+- frontend root/app routes through root-host fallback

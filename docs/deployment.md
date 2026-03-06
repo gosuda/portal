@@ -25,7 +25,7 @@ You need:
 
 Cloudflare Dashboard -> `DNS` -> `Records`:
 
-- Record 1 (apex)
+- Record 1 (root host)
   - Type: `A`
   - Name: `@`
   - Content: `<server-ip>`
@@ -41,20 +41,13 @@ Expected records:
 - `example.com -> <server-ip>`
 - `*.example.com -> <server-ip>`
 
-If you deploy on a non-apex host (for example, `PORTAL_URL=https://portal.example.com:8443`), create host-scoped records:
+If you deploy on a non-apex host (for example, `PORTAL_URL=https://portal.example.com:8443`), create host-scoped records instead:
 
 - `portal.example.com -> <server-ip>`
 - `*.portal.example.com -> <server-ip>`
 
-Portal normalizes `PORTAL_URL` to its host for routing, so public service hosts become `<lease>.portal.example.com`.
-Requests to the exact `PORTAL_URL` host (for example, `portal.example.com`) are not wildcard-matched; the router uses no-route fallback and forwards them to the admin/API listener.
-Relay/tunnel traffic for reverse admission stays raw TCP on `/sdk/connect`.
-
-### 2.4 Control-Plane Admission (Token-Only)
-
-- `/sdk/register`, `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` use token-based admission.
-- Control-plane admission order is fixed: `IP -> Lease -> Token`.
-- Clients without valid lease token are rejected.
+Portal derives public lease hostnames from the normalized `PORTAL_URL` host.
+Requests to the exact root host are not served by the wildcard route; they fall back to the admin/API listener.
 
 ### 2.3 Create Cloudflare API Token
 
@@ -71,9 +64,31 @@ Scope:
 
 Save this token for `CLOUDFLARE_TOKEN`.
 
-## 3. Run Relay Server
+## 3. Relay Runtime Behavior
 
-### 3.1 Create `.env` at repository root
+### 3.1 Control Plane and Reverse Sessions
+
+- `/sdk/register` creates a lease and stores the caller-provided reverse token.
+- `/sdk/connect` requires:
+  - `lease_id` query parameter
+  - `X-Portal-Token` header
+  - HTTP/1.1
+- `/sdk/renew` and `/sdk/unregister` require `lease_id` + `reverse_token`.
+- `/sdk/connect` is hijacked into a long-lived reverse TCP session after validation.
+
+### 3.2 Certificates and DNS Maintenance
+
+- Relay certificates live in `KEYLESS_DIR`:
+  - `fullchain.pem`
+  - `privatekey.pem`
+- On non-localhost deployments, ACME DNS-01 uses the Cloudflare token to:
+  - ensure root and wildcard A records point to the current public IP
+  - provision the relay certificate
+  - keep DNS and certificate state refreshed over time
+
+## 4. Run Relay Server
+
+### 4.1 Create `.env` at repository root
 
 ```bash
 PORTAL_URL=https://example.com
@@ -84,18 +99,18 @@ KEYLESS_DIR=/etc/portal/keyless
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
 
-For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`). Keep any path segments only for dashboard use, not for routing.
+For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).
 `PORTAL_URL` path/query segments are ignored for route derivation; only the host component is used.
 
-### 3.2 Start Relay
+### 4.2 Start Relay
 
 ```bash
 docker compose up
 ```
 
-## 4. Troubleshooting
+## 5. Troubleshooting
 
-### 4.1 Ports blocked
+### 5.1 Ports blocked
 
 Required inbound ports:
 
