@@ -12,6 +12,8 @@ import (
 	"gosuda.org/portal/types"
 )
 
+const sdkRequestBodyLimitBytes = 4 << 20 // 4 MiB
+
 // SDKRegistry handles HTTP API for client lease registration.
 type SDKRegistry struct {
 	ipManager         *policy.IPFilter
@@ -227,7 +229,7 @@ func (r *SDKRegistry) requireMethod(w http.ResponseWriter, req *http.Request, me
 }
 
 func (r *SDKRegistry) decodeRequestBody(w http.ResponseWriter, req *http.Request, dst any, logMessage string) bool {
-	req.Body = http.MaxBytesReader(w, req.Body, 1<<16)
+	req.Body = http.MaxBytesReader(w, req.Body, sdkRequestBodyLimitBytes)
 	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
 		log.Error().Err(err).Msg(logMessage)
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")

@@ -82,8 +82,6 @@ type Listener struct {
 	tlsConfig          *tls.Config
 	lease              *types.Lease
 	httpClient         *http.Client
-	baseCtx            context.Context
-	baseCancel         context.CancelFunc
 	stopCh             chan struct{}
 	acceptCh           chan net.Conn
 	relayAddr          string
@@ -137,7 +135,6 @@ func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, re
 	}
 	lease.TLS = true
 
-	baseCtx, baseCancel := context.WithCancel(context.Background())
 	return &Listener{
 		relayAddr: apiURL,
 		lease:     lease,
@@ -147,8 +144,6 @@ func NewListener(relayAddr string, lease *types.Lease, tlsConfig *tls.Config, re
 		},
 		tlsConfig:          tlsConfig,
 		closeFns:           closeFns,
-		baseCtx:            baseCtx,
-		baseCancel:         baseCancel,
 		stopCh:             make(chan struct{}),
 		acceptCh:           make(chan net.Conn, 128),
 		reverseWorkers:     reverseWorkers,
@@ -212,7 +207,6 @@ func (l *Listener) Accept() (net.Conn, error) {
 func (l *Listener) Close() error {
 	var retErr error
 	l.closeOnce.Do(func() {
-		l.baseCancel()
 		close(l.stopCh)
 
 		l.mu.Lock()
@@ -579,7 +573,15 @@ func (l *Listener) newStopAwareContext(timeout time.Duration) (context.Context, 
 	if timeout <= 0 {
 		timeout = defaultReverseDialTimeout
 	}
-	return context.WithTimeout(l.baseCtx, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		select {
+		case <-l.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 func (l *Listener) closeConnOnStop(conn net.Conn) func() {
