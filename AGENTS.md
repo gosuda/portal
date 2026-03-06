@@ -1,128 +1,113 @@
 # AGENTS.md
 
-Repo-specific guidance for automated agents working on Portal.
+## Purpose
 
-## Quick Commands
+This file is a high-signal rulebook for future agents.
+Include only constraints that are expensive to rediscover from quick code search.
 
-Build:
-- `make build` (all artifacts)
-- `make build-server` (relay server binary)
-- `make build-frontend` (React admin UI)
-- `make build-wasm` (webclient WASM)
-- `make build-tunnel` (portal-tunnel binaries)
-- `make build-protoc` (protobufs)
+Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs.
+Descriptive docs under `docs/` should match current code paths.
 
-Run:
-- `make run` (run `./bin/relay-server`)
-- `docker compose up` (full stack, relay at :4017, admin at `/admin`)
+## Non-Negotiable Architecture Invariants
 
-Lint/Format/Test:
-- `make fmt` (gofmt + goimports)
-- `make vet` (go vet)
-- `make lint` (golangci-lint)
-- `make test` (go test -v -race ./...)
-- `make vuln` (govulncheck)
-- `make tidy` (go mod tidy + go mod verify)
+1. **Raw TCP reverse-connect is the canonical transport.**
+   - Why: keeps backend connectivity NAT-friendly and avoids parallel transport stacks.
 
-Single test:
-- `go test -v -run TestName ./path/to/pkg`
+2. **Do not introduce websocket or legacy compatibility paths unless a new ADR supersedes ADR-0002.**
+   - Why: dual transport paths increase security and test surface and reintroduce drift.
 
-Frontend dev:
-- `cd cmd/relay-server/frontend && npm run dev`
-- `cd cmd/relay-server/frontend && npm run build`
-- `cd cmd/relay-server/frontend && npm run lint`
+3. **Derive routing hostnames from the full portal root host in `PORTAL_URL` (supports non-apex), not apex extraction.**
+   - Why: prevents SNI/public URL mismatches in non-apex deployments.
 
-## Architecture (Big Picture)
+4. **Keep explicit root-domain fallback behavior through SNI no-route handling to the admin/API listener.**
+   - Why: preserves the intended split between root-host control-plane traffic and tenant subdomain traffic.
 
-Portal is a relay network that connects Apps (service publishers) and Clients (service consumers) through a central relay server without decrypting payloads.
+5. **All leases require `TLS=true`.** The register endpoint rejects `TLS=false`.
+   - Why: all tenant routes are expected to stay on the TLS passthrough path.
 
-Core components:
-- Relay server: `cmd/relay-server` (HTTP + WS relay, admin UI serving)
-- Relay core logic: `portal/` (lease manager, connection handlers, forwarding)
-- Crypto + protocols: `portal/core/` and `portal/core/proto/` (RDSEC/RDVERB)
-- SDK for Apps: `sdk/`
-- Tunnel client: `cmd/portal-tunnel/` (exposes local services)
-- Webclient: `cmd/webclient/` (WASM + service worker served by relay)
-- Admin frontend: `cmd/relay-server/frontend/` (built into `cmd/relay-server/dist/app`)
+## TLS and Identity Invariants
 
-## Connection Flow (High Level)
+1. **Relay terminates admin/API TLS on the root host and also exposes `/v1/sign` for tenant-side keyless signing.**
+   - Relay still does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes.
+   - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 
-1. App registers a Lease with the relay (identity, ALPN, metadata).
-2. Client requests connection by Lease ID or name.
-3. Relay forwards the request to the App and brokers the connection.
-4. RDSEC handshake establishes end-to-end encryption (X25519 + ChaCha20-Poly1305).
-5. Yamux multiplexes multiple streams over one relay connection.
+2. **`/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus reverse token.**
+   - `/sdk/register` requires the caller to provide a reverse token for later use, but registration itself is not separately authenticated by that token.
 
-## Key Terms
+3. **All relay URLs must be `https://`.**
+   - Why: SDK and tunnel are expected to hard-fail on insecure relay URLs.
 
-- Portal / Relay: central mediator; never decrypts payloads.
-- App: service publisher using SDK or tunnel to register Leases.
-- Client: consumer (often browser + WASM) connecting via relay.
-- Lease: advertising unit; one Lease maps to one public endpoint.
+4. **HTTP/2 is intentionally disabled on the admin/API TLS listener.**
+   - Why: `/sdk/connect` depends on HTTP/1.1 hijacking semantics.
 
-## Where to Look
+## Reverse Session Protocol
 
-- `cmd/relay-server/` (entrypoint and HTTP/WS relay)
-- `portal/` (core relay logic)
-- `portal/core/proto/` (protocol definitions)
-- `sdk/` (App integration)
-- `cmd/portal-tunnel/` (tunnel client)
-- `cmd/webclient/` (WASM client)
-- `docs/architecture.md` and `docs/glossary.md`
+1. **SNI wildcard matching is one-level only.**
+   - `*.parent.example.com` matches `foo.parent.example.com`, not arbitrary depth.
 
-## Repo Basics
+2. **Protocol markers on reverse TCP connections are still meaningful protocol state.**
+   - `0x00` = idle keepalive
+   - `0x02` = TLS passthrough activation
+   - Why: SDK waits on these bytes before switching an idle reverse session into a claimed tenant TLS session.
 
-- Module: `gosuda.org/portal`
-- Go version: 1.25.3 (from `go.mod`)
+3. **`/sdk/connect` must remain HTTP/1.1 only.**
+   - Why: hijacking and long-lived reverse sessions depend on HTTP/1.1 connection ownership.
 
-## Gosuda Go Standards
+## API Response Contract
 
-Formatting & style:
-- Run formatting before commits (see Quick Commands).
-- Import order: stdlib -> external -> internal (blank-line separated).
-- Naming: packages lowercase single-word; interfaces as behavior verbs; errors use `Err` prefix for sentinels and `Error` suffix for types.
-- Context first parameter for public I/O: `func Do(ctx context.Context, ...)`.
-- CGo disabled: `CGO_ENABLED=0`.
+1. **All JSON control-plane responses use the `APIEnvelope` wrapper:** `{ ok: bool, data?: any, error?: { code, message } }` (defined in `types/api.go`).
+   - Write responses through `writeAPIData()`, `writeAPIOK()`, or `writeAPIError()`.
+   - Admin HTML pages, tunnel script/binary responses, and other non-JSON endpoints are exceptions.
 
-Static analysis & linters:
-- Use `go vet`, `golangci-lint`, `go test -race`, and `govulncheck` (see Quick Commands).
-- Linter tiers: correctness, quality, concurrency safety, and performance/modernization (configured in `.golangci.yml`).
+## Shared Types Package
 
-Error handling:
-- Wrap with `%w` and include call-site context.
-- Sentinel errors per package; use `errors.Is`/`errors.As`.
-- Use `errors.Join` for multi-error.
-- Never ignore errors unless explicitly excluded by errcheck.
+1. **`types/` is reserved for shared wire/public types and cross-package constants only.**
+   - Allowed: request/response DTOs, shared metadata structs, protocol markers, shared headers, shared public path constants.
+   - Not allowed: relay runtime state, broker/session state, server config, SDK lifecycle state, generic helpers.
 
-Iterators (Go 1.23+):
-- Signatures: `func(yield func() bool)`, `func(yield func(V) bool)`, `func(yield func(K, V) bool)`.
-- Always check yield return; prefer stdlib helpers like `slices.Collect` and `maps.Keys`.
+2. **Shared control-plane and public route constants that cross package boundaries belong in `types/paths.go`.**
+   - Examples: `/sdk/*`, `/v1/sign`, `/healthz`, `/admin`, `/admin/leases`, `/tunnel`.
 
-Context & concurrency:
-- Prefer `errgroup.Group` for parallel work, `SetLimit` for bounds.
-- No goroutines without clear exit; creator owns lifecycle.
-- Directional channels in signatures; only sender closes.
-- Avoid `time.After` in loops; use `context.WithTimeout` or `time.Ticker`.
+3. **Relay-local frontend asset paths stay local to `cmd/relay-server`.**
+   - Why: filenames like `favicon.svg` or `portal.jpg` are frontend serving details, not cross-package API contract.
 
-Testing:
-- Use race detector in normal test runs.
-- Use `t.Context()` in tests where applicable.
-- Benchmarks should use `for b.Loop() {}`.
+4. **Do not import `portal` from `cmd/*` or `sdk` just to reach shared DTOs or constants.**
+   - Why: `portal` is relay runtime code; shared public shapes belong in `types/`.
 
-Security:
-- Use `govulncheck` and `go mod verify` during release workflows.
-- Avoid `math/rand` for security-sensitive operations.
+## Operational Truths (CI-Aligned, Minimal)
 
-Performance:
-- Avoid `reflect` on hot paths; prefer generics or type switches.
-- Use `sync.Pool` for hot paths only.
+1. **CI verification commands:** `make vet`, `make lint`, `make test`, `make vuln`.
+   - `make tidy` is a local maintenance step, not part of CI.
 
-Module hygiene:
-- Always commit `go.mod` and `go.sum`; never commit `go.work`.
-- Pin toolchain version to match `go.mod` (currently 1.25.3).
+2. **`make build-server` does not build the frontend first.**
+   - Why: `cmd/relay-server/dist/*` is embed input; build the frontend explicitly before packaging the relay binary.
 
-CI/CD:
-- CI runs test -> lint -> security -> build (`.github/workflows/ci.yml`).
+3. **ACME management keeps both root and wildcard DNS A records in sync for non-localhost deployments.**
+   - Certificates and keys live under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.
+   - Localhost uses the development certificate path instead of Cloudflare-managed ACME.
 
-Verbalized sampling:
-- For non-trivial changes: sample multiple intents, explore edge cases, assess coupling, tidy first, and surface tradeoffs.
+## Change Discipline
+
+1. If a code change violates any invariant above, update or add ADR and AGENTS in the same change set.
+   - Why: keeps architecture docs and implementation synchronized.
+
+2. Do not expand this file into repo summary, file tree guide, or generic handbook.
+   - Why: high-noise AGENTS degrades future agent effectiveness.
+
+## Go Conventions
+
+**Imports:** stdlib -> external -> internal (blank-line separated), local prefix `gosuda.org/portal/v2`.  
+**Concurrency:** `errgroup.Group` over `WaitGroup`; `errgroup.SetLimit` for bounded work; `context.WithTimeout` over `time.After` in loops; no bare `go func()` without owned lifecycle.  
+**I/O:** prefer directory-scoped operations when touching filesystem trees.
+
+---
+
+## Agent Behavior
+
+**Verbalized sampling:** Before changes, sample 3-5 intent hypotheses (rank by likelihood, note one weakness each), assess coupling (structural/temporal/semantic), and tidy-first when coupling is high. Ask the human when trade-offs exist.
+
+**Project rules:**
+- No backward compatibility unless explicitly requested.
+- No wrapper functions without demonstrated value.
+- Consolidate changes in one pass; do not stack minimal patches.
+- Run tests only when requested, before handoff, or for high-risk changes.

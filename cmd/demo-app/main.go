@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -14,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/websocket"
 
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
+	"gosuda.org/portal/v2/sdk"
+	"gosuda.org/portal/v2/types"
 )
 
 //go:embed static
@@ -38,165 +41,154 @@ var (
 )
 
 func main() {
-	flag.StringVar(&flagServerURL, "server-url", "ws://localhost:4017/relay", "relay websocket URL")
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "demo-app").Logger()
+
+	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https only)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
-	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,moning", "comma-separated lease tags")
+	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
-
 	flag.Parse()
 
 	if err := runDemo(); err != nil {
-		log.Fatal().Err(err).Msg("execute demo command")
-	}
-}
-
-// handleWS is a minimal WebSocket echo handler to verify bidirectional connectivity.
-func handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := utils.UpgradeWebSocket(w, r, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("upgrade websocket")
-		return
-	}
-	defer conn.Close()
-
-	for {
-		messageType, data, err := conn.ReadMessage()
-		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Error().Err(err).Msg("read websocket message")
-			}
-			break
-		}
-
-		if err := conn.WriteMessage(messageType, data); err != nil {
-			log.Error().Err(err).Msg("write websocket message")
-			break
-		}
+		logger.Error().Err(err).Msg("demo command failed")
+		os.Exit(1)
 	}
 }
 
 func runDemo() error {
-	// 1) Create credential for this demo app
-	cred := sdk.NewCredential()
+	logger := log.With().Str("component", "demo-app").Logger()
 
-	// 2) Create SDK client and connect to relay(s)
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = []string{flagServerURL}
-	})
+	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURL: flagServerURL})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
-	defer client.Close()
+	defer sdkClient.Close()
 
-	// 3) Register lease
-	// Create base64 data URI from embedded thumbnail
 	thumbnailDataURI := "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
 
-	listener, err := client.Listen(
-		cred,
-		flagName,
-		[]string{"http/1.1"},
-		sdk.WithDescription(flagDesc),
-		sdk.WithTags(strings.Split(flagTags, ",")),
-		sdk.WithOwner(flagOwner),
-		sdk.WithThumbnail(thumbnailDataURI),
-		sdk.WithHide(flagHide),
-	)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	listener, err := sdkClient.Listen(ctx, sdk.ListenRequest{
+		Name: flagName,
+		Metadata: types.LeaseMetadata{
+			Description: flagDesc,
+			Tags:        splitCSV(flagTags),
+			Owner:       flagOwner,
+			Thumbnail:   thumbnailDataURI,
+			Hide:        flagHide,
+		},
+	})
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
 
-	// 4) Setup HTTP handler
+	logger.Info().
+		Str("lease_id", listener.LeaseID()).
+		Strs("public_urls", listener.PublicURLs()).
+		Int("local_port", flagPort).
+		Msg("demo app registered with relay")
+
 	mux := http.NewServeMux()
 
-	// Serve static files from embedded filesystem
 	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return fmt.Errorf("create static fs: %w", err)
 	}
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	// Simple HTTP ping endpoint for connectivity checks
-	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
 			"message": "pong",
 			"time":    time.Now().UTC().Format(time.RFC3339),
 		}
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			log.Error().Err(err).Msg("write ping response")
-		}
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
-	// WebSocket echo endpoint for bidirectional test
-	mux.HandleFunc("/ws", handleWS)
+	mux.Handle("/ws", websocket.Handler(func(conn *websocket.Conn) {
+		defer conn.Close()
+		for {
+			var msg string
+			if err := websocket.Message.Receive(conn, &msg); err != nil {
+				break
+			}
+			if err := websocket.Message.Send(conn, "echo: "+msg); err != nil {
+				break
+			}
+		}
+	}))
 
-	// Test endpoint for multiple Set-Cookie headers
-	// Note: HttpOnly cookies cannot be set via Service Worker (browser security limitation)
-	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{
-			Name:   "session_id",
-			Value:  "abc123",
-			Path:   "/",
-			MaxAge: 3600,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:   "auth_token",
-			Value:  "secret456",
-			Path:   "/",
-			MaxAge: 3600,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:   "csrf_token",
-			Value:  "xyz789",
-			Path:   "/",
-			MaxAge: 3600,
-		})
-		http.SetCookie(w, &http.Cookie{
-			Name:   "user_pref",
-			Value:  "dark_mode",
-			Path:   "/",
-			MaxAge: 86400,
-		})
+	mux.HandleFunc("/api/test-cookies", func(w http.ResponseWriter, _ *http.Request) {
+		for _, cookie := range []*http.Cookie{
+			{Name: "session_id", Value: "abc123", Path: "/", MaxAge: 3600},
+			{Name: "auth_token", Value: "secret456", Path: "/", MaxAge: 3600},
+			{Name: "csrf_token", Value: "xyz789", Path: "/", MaxAge: 3600},
+			{Name: "user_pref", Value: "dark_mode", Path: "/", MaxAge: 86400},
+		} {
+			http.SetCookie(w, cookie)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"message": "4 cookies set: session_id, auth_token, csrf_token, user_pref",
 		})
 	})
 
-	// 5) Serve HTTP over relay listener
-	log.Info().Msgf("[demo] serving HTTP over relay; lease=%s id=%s", flagName, cred.ID())
-
-	// Also serve on local port for direct testing
+	localAddr := fmt.Sprintf(":%d", flagPort)
 	go func() {
-		localAddr := fmt.Sprintf(":%d", flagPort)
-		log.Info().Msgf("[demo] also serving on local port %s for direct testing", localAddr)
-		if err := http.ListenAndServe(localAddr, mux); err != nil {
-			log.Error().Err(err).Msg("local http serve error")
+		localSrv := &http.Server{
+			Addr:              localAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		logger.Info().Str("addr", localAddr).Msg("demo app listening locally")
+		if err := localSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error().Err(err).Str("addr", localAddr).Msg("demo local server stopped")
 		}
 	}()
 
-	srvErr := make(chan error, 1)
-	go func() {
-		srvErr <- http.Serve(listener, mux)
-	}()
+	relaySrv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- relaySrv.Serve(listener)
+	}()
+
 	select {
 	case <-sig:
-		log.Info().Msg("[demo] shutting down...")
-	case err := <-srvErr:
-		if err != nil {
-			log.Error().Err(err).Msg("[demo] http serve error")
+		logger.Info().Msg("demo app shutting down")
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
 		}
 	}
 
-	log.Info().Msg("[demo] shutdown complete")
+	logger.Info().Msg("demo app shutdown complete")
 	return nil
+}
+
+func splitCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

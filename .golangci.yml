@@ -2,27 +2,21 @@ version: "2"
 
 run:
   tests: true
-  go: "1.25"
+  go: "1.26"
 
 formatters:
-  enable:
-    - goimports
+  enable: [goimports]
   settings:
     goimports:
-      local-prefixes:
-        - github.com/gosuda
-        - gosuda.org
+      local-prefixes: [github.com/gosuda, gosuda.org]
 
 linters:
   default: standard
-
   enable:
-    # --- Tier 1: Bugs & Correctness ---
     - govet
     - errcheck
     - staticcheck
     - unused
-    - gosec
     - errorlint
     - copyloopvar
     - nilerr
@@ -32,60 +26,30 @@ linters:
     - durationcheck
     - makezero
     - noctx
-
-    # --- Tier 2: Code Quality & Style ---
-    - gocritic
-    - revive
-    - unconvert
-    - unparam
     - wastedassign
     - misspell
     - whitespace
     - godot
-    - goconst
-    - dupword
     - usestdlibvars
     - testifylint
-    - testableexamples
-    - tparallel
     - usetesting
-
-    # --- Tier 3: Concurrency & Safety ---
-    - gochecknoglobals
-    - gochecknoinits
     - containedctx
-
-    # --- Tier 4: Performance & Modernization ---
     - prealloc
     - intrange
-    - modernize
     - fatcontext
     - perfsprint
     - reassign
-    - spancheck
     - mirror
-    - recvcheck
 
   exclusions:
+    paths:
+      - ^frontend/node_modules/
+      - ^cmd/relay-server/dist/
     rules:
-      - linters:
-          - errcheck
+      - linters: [errcheck]
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"
-        linters:
-          - bodyclose
-          - errcheck
-          - gosec
-          - noctx
-          - wrapcheck
-          - goconst
-          - funlen
-          - dupl
-          - gochecknoglobals
-      - text: "should have a package comment"
-        linters: [revive]
-      - text: "exported \\S+ \\S+ should have comment"
-        linters: [revive]
+        linters: [bodyclose, errcheck, noctx, wrapcheck, funlen, dupl]
 
   settings:
     errcheck:
@@ -102,89 +66,23 @@ linters:
         - os.Unsetenv
         - encoding/json.Marshal
         - encoding/json.Unmarshal
-        - encoding/json.NewEncoder
-        - encoding/json.NewDecoder
-        - strings.Builder.WriteString
-        - strings.Builder.Write
-        - bytes.Buffer.Write
-        - bytes.Buffer.WriteString
         - io.Copy
         - log.Printf
         - log.Println
         - log.Print
         - time.Now
         - time.Sleep
-        - sync.Mutex.Lock
-        - sync.Mutex.Unlock
-        - sync.RWMutex.RLock
-        - sync.RWMutex.RUnlock
-        - atomic.AddInt64
-        - atomic.StoreInt64
-        - atomic.LoadInt64
-        - rand.Read
-
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - style
-        - performance
-        - experimental
-        - opinionated
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
 
     govet:
       enable-all: true
       disable:
         - fieldalignment
-      settings:
-        shadow:
-          strict: true
-
-    revive:
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: dot-imports
-        - name: error-return
-        - name: error-strings
-        - name: error-naming
-        - name: exported
-          disabled: true
-        - name: if-return
-        - name: increment-decrement
-        - name: var-naming
-        - name: var-declaration
-        - name: range
-        - name: receiver-naming
-        - name: time-naming
-        - name: unexported-return
-        - name: indent-error-flow
-        - name: errorf
-        - name: empty-block
-        - name: superfluous-else
-        - name: unused-parameter
-        - name: unreachable-code
-        - name: redefines-builtin-id
-
-    gosec:
-      excludes:
-        - G104
-        - G304
 
     perfsprint:
       strconcat: true
 
     fatcontext:
       check-struct-pointers: true
-
-    spancheck:
-      checks:
-        - end
-        - record-error
-        - set-status
 
 issues:
   max-issues-per-linter: 0

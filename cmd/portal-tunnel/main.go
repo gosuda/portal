@@ -2,225 +2,137 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"gopkg.eu.org/broccoli"
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
+
+	"gosuda.org/portal/v2/sdk"
+	"gosuda.org/portal/v2/types"
 )
 
-// bufferPool provides reusable 64KB buffers for io.CopyBuffer to eliminate
-// per-copy allocations and reduce GC pressure under high concurrency.
-// Using *[]byte to avoid interface boxing allocation in sync.Pool.
-var bufferPool = sync.Pool{
-	New: func() any {
-		b := make([]byte, 64*1024)
-		return &b
-	},
-}
-
-type Config struct {
-	_ struct{} `version:"0.0.1" command:"portal-tunnel" about:"Expose local services through Portal relay"`
-
-	RelayURLs string `flag:"relay" env:"RELAYS" default:"ws://localhost:4017/relay" about:"Portal relay server URLs (comma-separated)"`
-	Host      string `flag:"host" env:"APP_HOST" about:"Target host to proxy to (host:port or URL)"`
-	Name      string `flag:"name" env:"APP_NAME" about:"Service name"`
-
-	// Metadata
-	Protocols   string `flag:"protocols" env:"APP_PROTOCOLS" default:"http/1.1,h2" about:"ALPN protocols (comma-separated)"`
-	Description string `flag:"description" env:"APP_DESCRIPTION" about:"Service description metadata"`
-	Tags        string `flag:"tags" env:"APP_TAGS" about:"Service tags metadata (comma-separated)"`
-	Thumbnail   string `flag:"thumbnail" env:"APP_THUMBNAIL" about:"Service thumbnail URL metadata"`
-	Owner       string `flag:"owner" env:"APP_OWNER" about:"Service owner metadata"`
-	Hide        bool   `flag:"hide" env:"APP_HIDE" about:"Hide service from discovery (metadata)"`
-}
+var (
+	flagRelayURLs string
+	flagHost      string
+	flagName      string
+	flagDesc      string
+	flagTags      string
+	flagThumbnail string
+	flagOwner     string
+	flagHide      bool
+)
 
 func main() {
-	var cfg Config
-	app, err := broccoli.NewApp(&cfg)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create app")
-		os.Exit(1)
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "portal-tunnel").Logger()
+
+	defaultRelayURLs := os.Getenv("RELAYS")
+	if defaultRelayURLs == "" {
+		defaultRelayURLs = "https://localhost:4017"
 	}
 
-	if _, _, err = app.Bind(&cfg, os.Args[1:]); err != nil {
-		if err == broccoli.ErrHelp {
-			fmt.Println(app.Help())
-			os.Exit(0)
-		}
+	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Portal relay server API URLs (comma-separated, https only) [env: RELAYS]")
+	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
+	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
+	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
+	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
+	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")
+	flag.StringVar(&flagOwner, "owner", os.Getenv("APP_OWNER"), "Service owner metadata [env: APP_OWNER]")
+	flag.BoolVar(&flagHide, "hide", os.Getenv("APP_HIDE") == "true", "Hide service from discovery (metadata) [env: APP_HIDE]")
+	flag.Parse()
 
-		fmt.Println(app.Help())
-		log.Error().Err(err).Msg("Failed to bind CLI arguments")
+	if err := runTunnel(); err != nil {
+		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
-
-	if cfg.Host == "" || cfg.Name == "" {
-		fmt.Println(app.Help())
-		os.Exit(1)
-	}
-
-	relayURLs := utils.ParseURLs(cfg.RelayURLs)
-	if len(relayURLs) == 0 {
-		log.Error().Msg("--relay must include at least one non-empty URL")
-		os.Exit(1)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	go func() {
-		<-sigCh
-		log.Info().Msg("Shutting down tunnel...")
-		cancel()
-	}()
-
-	if err := runServiceTunnel(ctx, relayURLs, cfg, "flags"); err != nil {
-		log.Error().Err(err).Msg("Exited with error")
-		os.Exit(1)
-	}
-
-	log.Info().Msg("Tunnel stopped")
 }
 
-func runServiceTunnel(ctx context.Context, relayURLs []string, cfg Config, origin string) error {
+func runTunnel() error {
+	logger := log.With().Str("component", "portal-tunnel").Logger()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	relayURLs, err := normalizeRelayURLs(flagRelayURLs)
+	if err != nil {
+		return err
+	}
 	if len(relayURLs) == 0 {
-		return fmt.Errorf("no relay URLs provided")
-	}
-	protocols := strings.Split(cfg.Protocols, ",")
-	if len(protocols) == 0 {
-		protocols = []string{"http/1.1", "h2"}
+		return errors.New("no relay URLs provided")
 	}
 
-	cred := sdk.NewCredential()
-	leaseID := cred.ID()
-	if cfg.Name == "" {
-		cfg.Name = fmt.Sprintf("tunnel-%s", leaseID[:8])
-		log.Info().Str("service", cfg.Name).Msg("No service name provided; generated automatically")
-	}
-	log.Info().Str("service", cfg.Name).Msgf("Local service is reachable at %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("Starting Portal Tunnel (%s)...", origin)
-	log.Info().Str("service", cfg.Name).Msgf("  Local:    %s", cfg.Host)
-	log.Info().Str("service", cfg.Name).Msgf("  Relays:   %s", strings.Join(relayURLs, ", "))
-	log.Info().Str("service", cfg.Name).Msgf("  Lease ID: %s", leaseID)
+	logger.Info().
+		Str("local", flagHost).
+		Int("relay_count", len(relayURLs)).
+		Strs("relays", relayURLs).
+		Msg("starting portal tunnel")
 
-	client, err := sdk.NewClient(func(c *sdk.ClientConfig) {
-		c.BootstrapServers = relayURLs
-	})
+	listenReq := sdk.ListenRequest{
+		Name: flagName,
+		Metadata: types.LeaseMetadata{
+			Description: flagDesc,
+			Tags:        splitCSV(flagTags),
+			Owner:       flagOwner,
+			Thumbnail:   flagThumbnail,
+			Hide:        flagHide,
+		},
+	}
+
+	runtimes, err := startRelayRuntimes(ctx, relayURLs, listenReq)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to connect to relay: %w", cfg.Name, err)
+		return fmt.Errorf("service %s: failed to start relays: %w", flagName, err)
 	}
-	defer client.Close()
 
-	listener, err := client.Listen(cred, cfg.Name, protocols,
-		sdk.WithDescription(cfg.Description),
-		sdk.WithTags(strings.Split(cfg.Tags, ",")),
-		sdk.WithOwner(cfg.Owner),
-		sdk.WithThumbnail(cfg.Thumbnail),
-		sdk.WithHide(cfg.Hide),
-	)
-	if err != nil {
-		return fmt.Errorf("service %s: failed to register service: %w", cfg.Name, err)
-	}
-	defer listener.Close()
-
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
-
-	log.Info().Str("service", cfg.Name).Msg("")
-	log.Info().Str("service", cfg.Name).Msg("Access via:")
-	log.Info().Str("service", cfg.Name).Msgf("- Name:     /peer/%s", cfg.Name)
-	log.Info().Str("service", cfg.Name).Msgf("- Lease ID: /peer/%s", leaseID)
-	log.Info().Str("service", cfg.Name).Msgf("- Example:  %s/peer/%s", relayURLs[0], cfg.Name)
-
-	log.Info().Str("service", cfg.Name).Msg("")
-
-	connCount := 0
 	var connWG sync.WaitGroup
-	defer connWG.Wait()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-		}
+	var connCount atomic.Int64
+	relayDone := make(chan relayLoopResult, len(runtimes))
 
-		relayConn, err := listener.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Failed to accept connection")
-				continue
-			}
-		}
-
-		connCount++
-		log.Info().Str("service", cfg.Name).Msgf("→ [#%d] New connection from %s", connCount, relayConn.RemoteAddr())
-
-		connWG.Add(1)
-		go func(relayConn net.Conn) {
-			defer connWG.Done()
-			if err := proxyConnection(ctx, cfg.Host, relayConn); err != nil {
-				log.Error().Str("service", cfg.Name).Err(err).Msg("Proxy error")
-			}
-			log.Info().Str("service", cfg.Name).Msg("Connection closed")
-		}(relayConn)
+	for _, runtime := range runtimes {
+		logger.Info().
+			Str("relay", runtime.relayURL).
+			Str("lease_id", runtime.listener.LeaseID()).
+			Strs("public_urls", runtime.listener.PublicURLs()).
+			Msg("relay tunnel ready")
+		go runtime.run(ctx, flagHost, &connWG, &connCount, relayDone)
 	}
-}
 
-func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
-	defer relayConn.Close()
-
-	dialer := new(net.Dialer)
-	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to local service %s: %w", localAddr, err)
+	waitErr := waitForRelayLoops(ctx, relayDone, len(runtimes))
+	if waitErr != nil {
+		stop()
 	}
-	defer localConn.Close()
+	closeErr := closeRelayRuntimes(runtimes)
+	if waitErr != nil {
+		logger.Error().Err(waitErr).Msg("relay supervisor exited with error")
+	}
+	if closeErr != nil {
+		logger.Error().Err(closeErr).Msg("relay shutdown failed")
+	}
 
-	errCh := make(chan error, 2)
-	stopCh := make(chan struct{})
+	if ctx.Err() != nil {
+		logger.Info().Msg("tunnel shutting down")
+	}
+
+	done := make(chan struct{})
 	go func() {
-		select {
-		case <-ctx.Done():
-			relayConn.Close()
-			localConn.Close()
-		case <-stopCh:
-		}
+		connWG.Wait()
+		close(done)
 	}()
 
-	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(localConn, relayConn, buf)
-		errCh <- err
-	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		logger.Warn().Msg("tunnel shutdown timeout; connections still active")
+	}
 
-	go func() {
-		buf := *bufferPool.Get().(*[]byte)
-		defer bufferPool.Put(&buf)
-		_, err := io.CopyBuffer(relayConn, localConn, buf)
-		errCh <- err
-	}()
-
-	err = <-errCh
-	close(stopCh)
-	relayConn.Close()
-	<-errCh
-
-	return err
+	logger.Info().Msg("tunnel shutdown complete")
+	return errors.Join(waitErr, closeErr)
 }

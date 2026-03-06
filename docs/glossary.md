@@ -1,37 +1,91 @@
-Portal is unlike traditional server–client architectures, both the App and the Client act as clients within the Portal network, which can easily cause terminology confusion. In addition, names such as "Portal" (relay server) and legacy RD-related function names often overlap. This glossary clarifies those terms.
+# Glossary
 
-### Portal (Relay Server)
+Key terms used in Portal.
 
-The Portal is the relay hub provided by this project.
-It acts as a central mediator, while other components either advertise themselves to the Portal or discover their counterparts through it.
+## Portal / Relay
 
-* Participates in the RDSEC handshake using its own Ed25519 credential.
-* Manages multiplexed streams with yamux and handles lease registration/deletion/query, connection forwarding, and traffic control (BPS, concurrent streams).
-* Does not decrypt payloads and only provides routing. App and Client maintain end-to-end encryption (SecureConnection) even when traversing the Portal.
+The central server that handles lease registration, SNI routing, reverse-session brokering, admin/API TLS, and keyless signing.
+It does not terminate tenant TLS.
 
-### App (Service Publisher)
+## App (Service Publisher)
 
-An App is a service-providing entity that publishes services to the Portal.
-In practice, server-side code that uses the Portal SDK to communicate with the Portal is considered an App.
+A backend service connected to Portal through `portal-tunnel` or the native Go SDK.
+An app publishes one or more leases and serves traffic from a local process.
 
-* Holds at least one credential, connects to the Portal with it, and registers a Lease that represents the App.
-* Maintains a yamux session with the Portal and proxies incoming connection requests to a local service (TCP/HTTP, etc.).
-* Updates metadata, ALPN, and other advertising attributes via the Portal Frontend or API to improve discoverability.
+## Client (Service Consumer)
 
-### Client (Service Consumer)
+A browser or external caller that accesses a published service through relay-managed hostnames.
 
-A Client is the end-user entity that attempts to access services published by an App through the Portal.
+## Control-Plane Request
 
-* Currently, this is primarily the browser (Portal WebClient + Service Worker).
-* A Client requests a connection to the Portal by specifying a Lease ID or name. The Portal matches this request to the App owning that Lease, then performs an RDSEC handshake to establish a SecureConnection and exchange data.
-* A Client must also possess a credential, which grants connection-request permission and enables mutual authentication with the App (E2EE).
+An ordinary HTTPS request to the relay admin/API listener, such as:
 
-### Lease (Advertising Slot)
+- `/sdk/register`
+- `/sdk/renew`
+- `/sdk/unregister`
+- `/sdk/domain`
 
-A Lease is the advertisement unit an App publishes to the Portal.
+These use the JSON API envelope contract.
 
-* Consists of an identity (App credential), expiration time, display name, allowed ALPN list, and optional metadata (JSON).
-* Managed by the Portal’s LeaseManager, which handles registration, renewal, expiration, deletion, and enforces name conflict rules, banned IDs, and TTL/BPS policies.
-* A Client requests a connection from the Portal using a Lease ID (= credential ID) or name, and the Portal uses this information to locate the corresponding App’s RelayClient.
+## Reverse Session
 
-A Lease is the fundamental routing unit: **one Lease equals one public endpoint.**
+A long-lived raw TCP connection opened through `GET /sdk/connect?lease_id=...`.
+The relay hijacks it, keeps it idle in a lease broker, and later claims it for one tenant TLS passthrough connection.
+
+## Lease
+
+Portal's routing and advertisement unit.
+Each lease has an ID, display name, hostnames, metadata, expiry, reverse token, and a broker of ready reverse sessions.
+
+## Lease Name
+
+The human-readable identifier used to derive a hostname (for example, `myapp` -> `myapp.example.com`) when no explicit hostname is supplied.
+
+## Lease Broker
+
+The relay-side owner of reverse session state for one lease.
+It manages the ready queue, claim/wakeup behavior, drop/stop lifecycle, and idle keepalive policy.
+
+## Reverse Token
+
+A per-lease secret supplied at registration time and later required by:
+
+- `/sdk/connect`
+- `/sdk/renew`
+- `/sdk/unregister`
+
+It authorizes reverse-session and lease-lifecycle operations.
+
+## Route Table
+
+The relay hostname map that resolves exact and single-label wildcard matches to a lease ID.
+
+## SNI Routing
+
+The relay reads ClientHello to extract the requested hostname, chooses a lease route, and then bridges the original encrypted TLS stream without terminating it.
+
+## Keyless TLS
+
+A mode where the SDK/tunnel terminates tenant TLS locally while delegating private-key signing to the relay `/v1/sign` endpoint.
+This keeps the relay out of the tenant data plane while avoiding direct private-key distribution to every backend host.
+
+## ACME DNS-01
+
+The relay certificate issuance and renewal path for non-localhost deployments.
+It uses a Cloudflare DNS API token to provision the root and wildcard certificate coverage used by the relay.
+
+## Base Domain / Root Host
+
+The host extracted from `PORTAL_URL` after removing scheme, port, path, query, and fragment.
+For `https://portal.example.com:8443/admin`, the root host is `portal.example.com`.
+
+## Admin/API Server
+
+The relay HTTPS listener (default `:4017`) serving:
+
+- `/sdk/*`
+- `/admin`
+- `/admin/leases`
+- `/healthz`
+- `/v1/sign`
+- frontend root/app routes through root-host fallback

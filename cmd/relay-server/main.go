@@ -1,146 +1,108 @@
 package main
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/cmd/relay-server/manager"
-	"gosuda.org/portal/portal"
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/utils"
 )
 
-var (
-	flagPortalURL      string
-	flagPortalAppURL   string
-	flagBootstraps     []string
-	flagALPN           string
-	flagPort           int
-	flagMaxLease       int
-	flagLeaseBPS       int
-	flagNoIndex        bool
-	flagAdminSecretKey string
+const (
+	defaultAPIPort    = 4017
+	defaultSNIPort    = 443
+	defaultPortalURL  = "https://localhost:4017"
+	defaultKeylessDir = ".portal-certs"
 )
+
+type relayServerConfig struct {
+	PortalURL         string
+	Bootstraps        []string
+	APIPort           int
+	SNIPort           int
+	AdminSecretKey    string
+	TrustProxyHeaders bool
+	TrustedProxyCIDRs string
+	KeylessDir        string
+	CloudflareToken   string
+}
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "relay-server").Logger()
 
-	defaultPortalURL := strings.TrimSuffix(os.Getenv("PORTAL_URL"), "/")
-	if defaultPortalURL == "" {
-		// Prefer explicit scheme for localhost so downstream URL building is unambiguous
-		defaultPortalURL = "http://localhost:4017"
+	cfg := relayServerConfig{}
+
+	portalURL := strings.TrimSuffix(trimmedEnv("PORTAL_URL"), "/")
+	if portalURL == "" {
+		portalURL = defaultPortalURL
 	}
-	defaultAppURL := os.Getenv("PORTAL_APP_URL")
-	if defaultAppURL == "" {
-		defaultAppURL = utils.DefaultAppPattern(defaultPortalURL)
+	bootstrapsCSV := trimmedEnv("BOOTSTRAP_URIS")
+	if bootstrapsCSV == "" {
+		bootstrapsCSV = portalURL
 	}
-	defaultBootstraps := os.Getenv("BOOTSTRAP_URIS")
-	if defaultBootstraps == "" {
-		defaultBootstraps = utils.DefaultBootstrapFrom(defaultPortalURL)
+	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
+	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
+	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
+	trustProxyHeaders := parseBoolEnv("TRUST_PROXY_HEADERS")
+	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
+	keylessDir := trimmedEnv("KEYLESS_DIR")
+	if keylessDir == "" {
+		keylessDir = defaultKeylessDir
 	}
+	cloudflareToken := trimmedEnv("CLOUDFLARE_TOKEN")
 
-	var flagBootstrapsCSV string
-	flag.StringVar(&flagPortalURL, "portal-url", defaultPortalURL, "base URL for portal frontend (env: PORTAL_URL)")
-	flag.StringVar(&flagPortalAppURL, "portal-app-url", defaultAppURL, "subdomain wildcard URL (env: PORTAL_APP_URL)")
-	flag.StringVar(&flagBootstrapsCSV, "bootstraps", defaultBootstraps, "bootstrap addresses (comma-separated)")
-	flag.StringVar(&flagALPN, "alpn", "http/1.1", "ALPN identifier for this service")
-	flag.IntVar(&flagPort, "port", 4017, "app UI and HTTP proxy port")
-	flag.IntVar(&flagMaxLease, "max-lease", 0, "maximum active relayed connections per lease (0 = unlimited)")
-	flag.IntVar(&flagLeaseBPS, "lease-bps", 0, "default bytes-per-second limit per lease (0 = unlimited)")
+	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
+	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
+	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
+	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
 
-	defaultNoIndex := os.Getenv("NOINDEX") == "true"
-	flag.BoolVar(&flagNoIndex, "noindex", defaultNoIndex, "disallow all crawlers via robots.txt (env: NOINDEX)")
+	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
+	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies (env: TRUST_PROXY_HEADERS)")
+	flag.StringVar(&cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled (env: TRUSTED_PROXY_CIDRS)")
 
-	defaultAdminSecretKey := os.Getenv("ADMIN_SECRET_KEY")
-	flag.StringVar(&flagAdminSecretKey, "admin-secret-key", defaultAdminSecretKey, "secret key for admin authentication (env: ADMIN_SECRET_KEY)")
+	flag.StringVar(&cfg.KeylessDir, "keyless-dir", keylessDir, "directory path for relay keyless materials (env: KEYLESS_DIR)")
+	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
 	flag.Parse()
 
-	flagBootstraps = utils.ParseURLs(flagBootstrapsCSV)
-	if err := runServer(); err != nil {
-		log.Fatal().Err(err).Msg("execute root command")
+	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	if len(cfg.Bootstraps) == 0 {
+		cfg.Bootstraps = []string{cfg.PortalURL}
+	}
+	if cfg.PortalURL == "" {
+		cfg.PortalURL = cfg.Bootstraps[0]
+	}
+
+	logger.Info().
+		Str("portal_url", cfg.PortalURL).
+		Strs("bootstraps", cfg.Bootstraps).
+		Msg("configured relay server")
+
+	if err := runServer(cfg); err != nil {
+		logger.Fatal().Err(err).Msg("execute root command")
 	}
 }
 
-func runServer() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+func trimmedEnv(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
+}
 
-	log.Info().
-		Str("portal_base_url", flagPortalURL).
-		Str("app_url", flagPortalAppURL).
-		Str("bootstrap_uris", strings.Join(flagBootstraps, ",")).
-		Msg("[server] frontend configuration")
+func parseBoolEnv(name string) bool {
+	raw := trimmedEnv(name)
+	return strings.EqualFold(raw, "true") || raw == "1"
+}
 
-	cred := sdk.NewCredential()
-
-	serv := portal.NewRelayServer(cred, flagBootstraps)
-	if flagMaxLease > 0 {
-		serv.SetMaxRelayedPerLease(flagMaxLease)
+func parsePortNumber(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
 	}
-
-	// Create AuthManager for admin authentication
-	// Auto-generate secret key if not provided
-	if flagAdminSecretKey == "" {
-		randomBytes := make([]byte, 16)
-		if _, err := rand.Read(randomBytes); err != nil {
-			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
-		}
-		flagAdminSecretKey = hex.EncodeToString(randomBytes)
-		log.Warn().Str("key", flagAdminSecretKey).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
-	} else {
-		log.Info().Str("key", flagAdminSecretKey).Msg("[server] admin authentication enabled")
+	var port int
+	if _, err := fmt.Sscanf(raw, "%d", &port); err != nil || port < 1 || port > 65535 {
+		return fallback
 	}
-	authManager := manager.NewAuthManager(flagAdminSecretKey)
-
-	// Create Frontend first, then Admin, then attach Admin back to Frontend.
-	frontend := NewFrontend()
-	admin := NewAdmin(int64(flagLeaseBPS), frontend, authManager)
-	frontend.SetAdmin(admin)
-
-	// Load persisted admin settings (ban list, BPS limits, IP bans)
-	admin.LoadSettings(serv)
-
-	// Register relay callback for BPS handling and IP tracking
-	serv.SetEstablishRelayCallback(func(clientStream, leaseStream *yamux.Stream, leaseID string) {
-		// Associate pending IP with this lease
-		ipManager := admin.GetIPManager()
-		if ipManager != nil {
-			if ip := ipManager.PopPendingIP(); ip != "" {
-				ipManager.RegisterLeaseIP(leaseID, ip)
-			}
-		}
-		bpsManager := admin.GetBPSManager()
-		manager.EstablishRelayWithBPS(clientStream, leaseStream, leaseID, bpsManager)
-	})
-
-	serv.Start()
-	defer serv.Stop()
-
-	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)
-
-	<-ctx.Done()
-	log.Info().Msg("[server] shutting down...")
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if httpSrv != nil {
-		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-			log.Error().Err(err).Msg("[server] http server shutdown error")
-		}
-	}
-
-	log.Info().Msg("[server] shutdown complete")
-	return nil
+	return port
 }

@@ -1,13 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
-
-	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/utils"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
@@ -34,8 +32,16 @@ case "$ARCH" in
 esac
 
 BASE_URL="${BASE_URL:-%s}"
-RELAY_URL="${RELAY_URL:-$BASE_URL}"
+RELAYS="${RELAYS:-$BASE_URL}"
 BIN_URL="${BIN_URL:-$BASE_URL/tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH}"
+CHECKSUM_URL="${BIN_URL}.sha256"
+CURL_INSECURE_FLAG=""
+
+case "$BASE_URL" in
+  https://localhost|https://localhost:*|https://127.0.0.1|https://127.0.0.1:*|https://[::1]|https://[::1]:*|https://*.localhost|https://*.localhost:*)
+    CURL_INSECURE_FLAG="-k"
+    ;;
+esac
 
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/portal-tunnel.XXXXXX" 2>/dev/null || mktemp -d -t portal-tunnel)"
@@ -44,16 +50,38 @@ cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT INT TERM
 
 echo "Downloading portal-tunnel ($TUNNEL_OS/$TUNNEL_ARCH)..." >&2
-curl -fsSL "$BIN_URL" -o "$BIN_PATH"
+curl $CURL_INSECURE_FLAG -fsSL "$BIN_URL" -o "$BIN_PATH"
+
+echo "Verifying SHA256 checksum..." >&2
+CHECKSUM_PAYLOAD="$(curl $CURL_INSECURE_FLAG -fsSL "$CHECKSUM_URL")" || {
+  echo "Failed to download checksum from $CHECKSUM_URL. Aborting (fail-closed)." >&2
+  echo "Hint: verify relay artifact publishing or CDN cache freshness." >&2
+  exit 1
+}
+
+EXPECTED_SHA="$(printf '%%s\n' "$CHECKSUM_PAYLOAD" | awk '{print $1}' | tr 'A-Z' 'a-z')"
+if ! printf '%%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{64}$'; then
+  echo "Invalid checksum payload from $CHECKSUM_URL. Aborting (fail-closed)." >&2
+  echo "Hint: expected SHA256 sidecar format '<sha256>  <filename>'." >&2
+  exit 1
+fi
+
+ACTUAL_SHA="$(sha256sum "$BIN_PATH" | awk '{print $1}')"
+if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+  echo "Checksum mismatch for portal-tunnel binary. Aborting (fail-closed)." >&2
+  echo "Hint: relay artifact and checksum may be out of sync or cached stale." >&2
+  exit 1
+fi
+
 chmod +x "$BIN_PATH"
 
-set -- "$BIN_PATH" --relay "$RELAY_URL" --host "${HOST:-localhost:3000}"
-[ -n "${NAME:-}" ] && set -- "$@" --name "$NAME"
-[ -n "${DESCRIPTION:-}" ] && set -- "$@" --description "$DESCRIPTION"
-[ -n "${TAGS:-}" ] && set -- "$@" --tags "$TAGS"
-[ -n "${THUMBNAIL:-}" ] && set -- "$@" --thumbnail "$THUMBNAIL"
-[ -n "${OWNER:-}" ] && set -- "$@" --owner "$OWNER"
-if [ "${HIDE:-}" = "1" ] || [ "${HIDE:-}" = "true" ]; then
+set -- "$BIN_PATH" --relays "$RELAYS" --host "${APP_HOST:-localhost:3000}"
+[ -n "${APP_NAME:-}" ] && set -- "$@" --name "$APP_NAME"
+[ -n "${APP_DESCRIPTION:-}" ] && set -- "$@" --description "$APP_DESCRIPTION"
+[ -n "${APP_TAGS:-}" ] && set -- "$@" --tags "$APP_TAGS"
+[ -n "${APP_THUMBNAIL:-}" ] && set -- "$@" --thumbnail "$APP_THUMBNAIL"
+[ -n "${APP_OWNER:-}" ] && set -- "$@" --owner "$APP_OWNER"
+if [ "${APP_HIDE:-}" = "1" ] || [ "${APP_HIDE:-}" = "true" ]; then
   set -- "$@" --hide
 fi
 
@@ -64,7 +92,9 @@ exec "$@"
 const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
-$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $BaseUrl }
+$RelayUrls = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
+$OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 $Arch = $env:PROCESSOR_ARCHITECTURE
 if ($Arch -eq "AMD64") {
@@ -77,6 +107,7 @@ if ($Arch -eq "AMD64") {
 }
 
 $BinUrl = if ($env:BIN_URL) { $env:BIN_URL } else { "$BaseUrl/tunnel/bin/windows-$TunnelArch" }
+$ChecksumUrl = "$BinUrl.sha256"
 
 $WorkDir = Join-Path $env:TEMP ("portal-tunnel-" + [Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
@@ -91,102 +122,126 @@ try {
     exit 1
 }
 
-$ArgsList = @("--relay", $RelayUrl)
+try {
+    Write-Host "Verifying SHA256 checksum..."
+    $ChecksumPayload = (Invoke-WebRequest -Uri $ChecksumUrl).Content
+} catch {
+    Write-Error "Failed to download checksum from $ChecksumUrl. Aborting (fail-closed)."
+    Write-Error "Hint: verify relay artifact publishing or CDN cache freshness."
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ChecksumMatch = [regex]::Match($ChecksumPayload, '([A-Fa-f0-9]{64})')
+if (-not $ChecksumMatch.Success) {
+    Write-Error "Invalid checksum payload from $ChecksumUrl. Aborting (fail-closed)."
+    Write-Error "Hint: expected SHA256 sidecar format '<sha256>  <filename>'."
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ExpectedHash = $ChecksumMatch.Groups[1].Value.ToLowerInvariant()
+$ActualHash = (Get-FileHash -Algorithm SHA256 -Path $BinPath).Hash.ToLowerInvariant()
+if ($ActualHash -ne $ExpectedHash) {
+    Write-Error "Checksum mismatch for portal-tunnel binary. Aborting (fail-closed)."
+    Write-Error "Hint: relay artifact and checksum may be out of sync or cached stale."
+    Remove-Item -Recurse -Force $WorkDir
+    exit 1
+}
+
+$ArgsList = @("--relays", $RelayUrls)
 
 if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
 if ($env:NAME) { $ArgsList += "--name", $env:NAME }
-if ($env:DESCRIPTION) { $ArgsList += "--description", $env:DESCRIPTION }
-if ($env:TAGS) { $ArgsList += "--tags", $env:TAGS }
-if ($env:THUMBNAIL) { $ArgsList += "--thumbnail", $env:THUMBNAIL }
-if ($env:OWNER) { $ArgsList += "--owner", $env:OWNER }
-if ($env:HIDE -eq "1" -or $env:HIDE -eq "true") { $ArgsList += "--hide" }
+if ($env:APP_DESCRIPTION) { $ArgsList += "--description", $env:APP_DESCRIPTION }
+if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
+if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }
+if ($env:APP_OWNER) { $ArgsList += "--owner", $env:APP_OWNER }
+if ($env:APP_HIDE -eq "1" -or $env:APP_HIDE -eq "true") { $ArgsList += "--hide" }
 
 Write-Host "Starting portal-tunnel..."
 try {
     & $BinPath $ArgsList
 } finally {
+    [System.Net.ServicePointManager]::SecurityProtocol = $OriginalSecurityProtocol
     if (Test-Path $WorkDir) {
         Remove-Item -Recurse -Force $WorkDir
     }
 }
 `
 
-func serveTunnelScript(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
+func serveTunnelScript(w http.ResponseWriter, r *http.Request, portalURL string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	targetOS := r.URL.Query().Get("os")
-	isWindows := false
-	if targetOS != "" {
-		isWindows = strings.EqualFold(targetOS, "windows")
-	} else {
-		// Fallback: check User-Agent
-		ua := strings.ToLower(r.UserAgent())
-		isWindows = strings.Contains(ua, "windows")
-	}
-
-	var script string
-	var contentType string
-	var filename string
-
+	isWindows := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("os")), "windows")
+	script := fmt.Sprintf(tunnelScriptTemplate, portalURL)
+	contentType := "text/x-shellscript"
+	filename := "tunnel.sh"
 	if isWindows {
-		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, flagPortalURL)
-		contentType = "text/plain" // or application/x-powershell
+		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, portalURL)
+		contentType = "text/plain; charset=utf-8"
 		filename = "tunnel.ps1"
-	} else {
-		script = fmt.Sprintf(tunnelScriptTemplate, flagPortalURL)
-		contentType = "text/x-shellscript"
-		filename = "tunnel.sh"
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
-	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		w.Write([]byte(script))
+		_, _ = w.Write([]byte(script))
 	}
 }
 
 func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
-	utils.SetCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	slug := strings.TrimPrefix(r.URL.Path, "/tunnel/bin/")
-	slug = strings.Trim(slug, "/")
-	path, ok := map[string]string{
-		"linux-amd64":   "dist/tunnel/portal-tunnel-linux-amd64",
-		"linux-arm64":   "dist/tunnel/portal-tunnel-linux-arm64",
-		"darwin-amd64":  "dist/tunnel/portal-tunnel-darwin-amd64",
-		"darwin-arm64":  "dist/tunnel/portal-tunnel-darwin-arm64",
-		"windows-amd64": "dist/tunnel/portal-tunnel-windows-amd64.exe",
-		"windows-arm64": "dist/tunnel/portal-tunnel-windows-arm64.exe",
-	}[slug]
+	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/tunnel/bin/"), "/")
+	checksumRequest := strings.HasSuffix(slug, ".sha256")
+	if checksumRequest {
+		slug = strings.TrimSuffix(slug, ".sha256")
+	}
+
+	data, filename, ok := tunnelBinaryBySlug(slug)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
+	sum := sha256.Sum256(data)
+	checksumHex := hex.EncodeToString(sum[:])
 
-	data, err := distFS.ReadFile(path)
-	if err != nil {
-		log.Error().Err(err).Str("path", path).Msg("failed to read embedded tunnel binary")
-		http.NotFound(w, r)
+	if checksumRequest {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if r.Method == http.MethodGet {
+			_, _ = fmt.Fprintf(w, "%s  %s\n", checksumHex, filename)
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"portal-tunnel-%s\"", slug))
-	w.Header().Set("Cache-Control", "public, max-age=600")
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("X-Checksum-Sha256", checksumHex)
 	if r.Method == http.MethodGet {
-		w.Write(data)
+		_, _ = w.Write(data)
 	}
+}
+
+func tunnelBinaryBySlug(slug string) ([]byte, string, bool) {
+	filename := tunnelBinaryName(slug)
+	if data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename); err == nil {
+		return data, filename, true
+	}
+	return nil, "", false
+}
+
+func tunnelBinaryName(slug string) string {
+	if strings.HasPrefix(slug, "windows-") {
+		return "portal-tunnel-" + slug + ".exe"
+	}
+	return "portal-tunnel-" + slug
 }
