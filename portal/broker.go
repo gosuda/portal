@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/v2/types"
 )
 
 var (

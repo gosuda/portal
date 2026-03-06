@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
-	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/admin"
+	"gosuda.org/portal/v2/portal"
+	"gosuda.org/portal/v2/portal/admin"
 )
 
 type readDirFileFS interface {

@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/v2/sdk"
+	"gosuda.org/portal/v2/types"
 )
 
 var (

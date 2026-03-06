@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"gosuda.org/portal/portal"
+	"gosuda.org/portal/v2/portal"
 )
 
 const staleLeaseHideWindow = 3 * time.Minute

@@ -20,8 +20,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/websocket"
 
-	"gosuda.org/portal/sdk"
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/v2/sdk"
+	"gosuda.org/portal/v2/types"
 )
 
 //go:embed static

@@ -11,12 +11,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal"
-	"gosuda.org/portal/portal/acme"
-	portaladmin "gosuda.org/portal/portal/admin"
-	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/policy"
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/v2/portal"
+	"gosuda.org/portal/v2/portal/acme"
+	"gosuda.org/portal/v2/portal/admin"
+	"gosuda.org/portal/v2/portal/keyless"
+	"gosuda.org/portal/v2/portal/policy"
+	"gosuda.org/portal/v2/types"
 )
 
 func runServer(cfg relayServerConfig) error {
@@ -56,7 +56,7 @@ func runServer(cfg relayServerConfig) error {
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
-	adminHandler := portaladmin.NewHandler(cfg.PortalURL, cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
+	adminHandler := admin.NewHandler(cfg.PortalURL, cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
 		frontend.ServeAppStatic(w, r, appPath)
 	})
 	if loadErr := adminHandler.LoadSettings(); loadErr != nil {
@@ -106,7 +106,7 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func serveAPI(frontend *Frontend, adminHandler *portaladmin.Handler, cfg relayServerConfig) func(http.Handler) http.Handler {
+func serveAPI(frontend *Frontend, adminHandler *admin.Handler, cfg relayServerConfig) func(http.Handler) http.Handler {
 	return func(base http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {

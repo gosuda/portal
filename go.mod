@@ -1,4 +1,4 @@
-module gosuda.org/portal
+module gosuda.org/portal/v2
 
 go 1.26.0
 

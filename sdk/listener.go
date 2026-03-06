@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"gosuda.org/portal/types"
+	"gosuda.org/portal/v2/types"
 )
 
 type ListenRequest struct {
