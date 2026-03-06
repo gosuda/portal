@@ -60,12 +60,24 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	cfg.DialTimeout = durationOrDefault(cfg.DialTimeout, 5*time.Second)
-	cfg.RequestTimeout = durationOrDefault(cfg.RequestTimeout, 15*time.Second)
-	cfg.HandshakeTimeout = durationOrDefault(cfg.HandshakeTimeout, 15*time.Second)
-	cfg.LeaseTTL = durationOrDefault(cfg.LeaseTTL, 2*time.Minute)
-	cfg.RenewBefore = durationOrDefault(cfg.RenewBefore, 30*time.Second)
-	cfg.ReadyTarget = intOrDefault(cfg.ReadyTarget, 1)
+	if cfg.DialTimeout <= 0 {
+		cfg.DialTimeout = 5 * time.Second
+	}
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = 15 * time.Second
+	}
+	if cfg.HandshakeTimeout <= 0 {
+		cfg.HandshakeTimeout = 15 * time.Second
+	}
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = 2 * time.Minute
+	}
+	if cfg.RenewBefore <= 0 {
+		cfg.RenewBefore = 30 * time.Second
+	}
+	if cfg.ReadyTarget <= 0 {
+		cfg.ReadyTarget = 1
+	}
 
 	baseTLS := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -114,8 +126,14 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		reverseToken = randomToken()
 	}
 
-	readyTarget := intOrDefault(req.ReadyTarget, c.readyTarget)
-	leaseTTL := durationOrDefault(req.LeaseTTL, c.leaseTTL)
+	readyTarget := req.ReadyTarget
+	if readyTarget <= 0 {
+		readyTarget = c.readyTarget
+	}
+	leaseTTL := req.LeaseTTL
+	if leaseTTL <= 0 {
+		leaseTTL = c.leaseTTL
+	}
 
 	registerReq := portal.RegisterRequest{
 		Name:         req.Name,
@@ -285,27 +303,6 @@ func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
 		return nil, errors.New("failed to parse relay root ca")
 	}
 	return pool, nil
-}
-
-func durationOrDefault(v, fallback time.Duration) time.Duration {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
-func intOrDefault(v, fallback int) int {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func randomToken() string {

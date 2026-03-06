@@ -139,7 +139,7 @@ func normalizeTags(tags []string) []string {
 	return out
 }
 
-func hostPortOrLoopback(addr string) string {
+func HostPortOrLoopback(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr

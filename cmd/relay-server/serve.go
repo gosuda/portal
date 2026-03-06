@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -56,7 +55,7 @@ func runServer(cfg relayServerConfig) error {
 		APIListenAddr:    apiListenAddr,
 		SNIListenAddr:    sniListenAddr,
 		RootHost:         rootHost,
-		RootFallbackAddr: loopbackAddr(apiListenAddr),
+		RootFallbackAddr: portal.HostPortOrLoopback(apiListenAddr),
 		KeylessSignerHandler: func() http.Handler {
 			if signer == nil {
 				return nil
@@ -67,7 +66,7 @@ func runServer(cfg relayServerConfig) error {
 			CertPEM: mustRead(certFile),
 			KeyPEM:  mustRead(keyFile),
 		},
-		APIHandlerWrapper: serveAPI(frontend, admin, signer, cfg),
+		APIHandlerWrapper: serveAPI(frontend, admin, cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -83,7 +82,7 @@ func runServer(cfg relayServerConfig) error {
 	defer acmeManager.Stop()
 
 	logger.Info().
-		Str("api_addr", loopbackAddr(server.APIAddr())).
+		Str("api_addr", portal.HostPortOrLoopback(server.APIAddr())).
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1").
@@ -92,7 +91,7 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func serveAPI(frontend *Frontend, admin *Admin, signer *keyless.Signer, cfg relayServerConfig) func(http.Handler) http.Handler {
+func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http.Handler) http.Handler {
 	return func(base http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -104,19 +103,19 @@ func serveAPI(frontend *Frontend, admin *Admin, signer *keyless.Signer, cfg rela
 				base.ServeHTTP(w, r)
 			case isFrontendRootAssetPath(r.URL.Path):
 				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
-			case hasPathPrefix(r.URL.Path, "/assets/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/assets/"):
 				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
 			case r.URL.Path == "/" || r.URL.Path == "/app" || r.URL.Path == "/app/":
 				frontend.ServeAppStatic(w, r, "")
-			case hasPathPrefix(r.URL.Path, "/app/"):
-				frontend.ServeAppStatic(w, r, trimPathPrefix(r.URL.Path, "/app/"))
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/app/"):
+				frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/app/"))
 			case r.URL.Path == "/admin" || r.URL.Path == "/admin/":
 				admin.HandleAdminRequest(w, r)
-			case hasPathPrefix(r.URL.Path, "/admin/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/admin/"):
 				admin.HandleAdminRequest(w, r)
 			case r.URL.Path == "/tunnel":
 				serveTunnelScript(w, r, cfg.PortalURL)
-			case hasPathPrefix(r.URL.Path, "/tunnel/bin/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/tunnel/bin/"):
 				serveTunnelBinary(w, r)
 			default:
 				base.ServeHTTP(w, r)
@@ -138,17 +137,6 @@ func isFrontendRootAssetPath(requestPath string) bool {
 	default:
 		return false
 	}
-}
-
-func loopbackAddr(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
 }
 
 func mustRead(path string) []byte {

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -39,7 +41,9 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request) {
 	case "/admin":
 		a.handleAdminIndex(w)
 	case "/admin/leases":
-		writeJSON(w, http.StatusOK, convertLeaseEntriesToRows(a.server, true, a.frontend.portalURL))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(convertLeaseEntriesToRows(a.server, true, a.frontend.portalURL))
 	default:
 		http.NotFound(w, r)
 	}
@@ -55,18 +59,22 @@ func (a *Admin) authorize(r *http.Request) bool {
 	if a.secret == "" {
 		return true
 	}
-	if subtleValueMatch(strings.TrimSpace(r.URL.Query().Get("key")), a.secret) {
+	queryKey := strings.TrimSpace(r.URL.Query().Get("key"))
+	if queryKey != "" && subtle.ConstantTimeCompare([]byte(queryKey), []byte(a.secret)) == 1 {
 		return true
 	}
 	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	if strings.HasPrefix(strings.ToLower(auth), "bearer ") && subtleValueMatch(strings.TrimSpace(auth[7:]), a.secret) {
-		return true
+	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		bearerToken := strings.TrimSpace(auth[7:])
+		if bearerToken != "" && subtle.ConstantTimeCompare([]byte(bearerToken), []byte(a.secret)) == 1 {
+			return true
+		}
 	}
 	if strings.HasPrefix(strings.ToLower(auth), "basic ") {
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(auth[6:]))
 		if err == nil {
 			parts := strings.SplitN(string(raw), ":", 2)
-			if len(parts) == 2 && subtleValueMatch(parts[1], a.secret) {
+			if len(parts) == 2 && parts[1] != "" && subtle.ConstantTimeCompare([]byte(parts[1]), []byte(a.secret)) == 1 {
 				return true
 			}
 		}

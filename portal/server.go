@@ -590,7 +590,7 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 
 func (s *Server) bridgeToFallback(conn net.Conn) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	upstream, err := dialer.DialContext(s.context(), "tcp", hostPortOrLoopback(s.cfg.RootFallbackAddr))
+	upstream, err := dialer.DialContext(s.context(), "tcp", HostPortOrLoopback(s.cfg.RootFallbackAddr))
 	if err != nil {
 		_ = conn.Close()
 		return
@@ -644,7 +644,7 @@ func (s *Server) watchContext() error {
 func (s *Server) connectURL() string {
 	base := strings.TrimRight(s.cfg.PortalURL, "/")
 	if base == "" && s.apiListener != nil {
-		return "https://" + hostPortOrLoopback(s.apiListener.Addr().String()) + "/sdk/connect"
+		return "https://" + HostPortOrLoopback(s.apiListener.Addr().String()) + "/sdk/connect"
 	}
 	return base + "/sdk/connect"
 }

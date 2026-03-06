@@ -1,33 +1,9 @@
 package main
 
 import (
-	"crypto/subtle"
-	"encoding/json"
 	"mime"
-	"net/http"
 	"strings"
 )
-
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
-}
-
-func hasPathPrefix(path, prefix string) bool {
-	return strings.HasPrefix(strings.TrimSpace(path), prefix)
-}
-
-func trimPathPrefix(path, prefix string) string {
-	return strings.TrimPrefix(strings.TrimSpace(path), prefix)
-}
-
-func subtleValueMatch(left, right string) bool {
-	if left == "" || right == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
-}
 
 func getContentType(ext string) string {
 	ext = strings.TrimSpace(ext)
