@@ -60,11 +60,6 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	baseURL.RawQuery = ""
 	baseURL.Fragment = ""
 
-	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
-	if err != nil {
-		return nil, err
-	}
-
 	if cfg.DialTimeout <= 0 {
 		cfg.DialTimeout = 5 * time.Second
 	}
@@ -82,6 +77,22 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 	if cfg.ReadyTarget <= 0 {
 		cfg.ReadyTarget = 1
+	}
+
+	if len(cfg.RootCAPEM) == 0 && !cfg.InsecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout+cfg.HandshakeTimeout)
+		defer cancel()
+
+		_, rootCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
+		if bootstrapErr != nil {
+			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", bootstrapErr)
+		}
+		cfg.RootCAPEM = rootCAPEM
+	}
+
+	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
+	if err != nil {
+		return nil, err
 	}
 
 	baseTLS := &tls.Config{
@@ -327,6 +338,18 @@ func ensurePort(host string) string {
 		return host
 	}
 	return net.JoinHostPort(host, "443")
+}
+
+func isLocalRelayHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.HasSuffix(host, ".localhost")
 }
 
 type bufferedConn struct {

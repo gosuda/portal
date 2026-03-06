@@ -35,6 +35,13 @@ BASE_URL="${BASE_URL:-%s}"
 RELAYS="${RELAYS:-$BASE_URL}"
 BIN_URL="${BIN_URL:-$BASE_URL/tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH}"
 CHECKSUM_URL="${BIN_URL}.sha256"
+CURL_INSECURE_FLAG=""
+
+case "$BASE_URL" in
+  https://localhost|https://localhost:*|https://127.0.0.1|https://127.0.0.1:*|https://[::1]|https://[::1]:*|https://*.localhost|https://*.localhost:*)
+    CURL_INSECURE_FLAG="-k"
+    ;;
+esac
 
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/portal-tunnel.XXXXXX" 2>/dev/null || mktemp -d -t portal-tunnel)"
@@ -43,10 +50,10 @@ cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT INT TERM
 
 echo "Downloading portal-tunnel ($TUNNEL_OS/$TUNNEL_ARCH)..." >&2
-curl -fsSL "$BIN_URL" -o "$BIN_PATH"
+curl $CURL_INSECURE_FLAG -fsSL "$BIN_URL" -o "$BIN_PATH"
 
 echo "Verifying SHA256 checksum..." >&2
-CHECKSUM_PAYLOAD="$(curl -fsSL "$CHECKSUM_URL")" || {
+CHECKSUM_PAYLOAD="$(curl $CURL_INSECURE_FLAG -fsSL "$CHECKSUM_URL")" || {
   echo "Failed to download checksum from $CHECKSUM_URL. Aborting (fail-closed)." >&2
   echo "Hint: verify relay artifact publishing or CDN cache freshness." >&2
   exit 1
@@ -86,6 +93,8 @@ const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
 $Relays = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
+$OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
 $Arch = $env:PROCESSOR_ARCHITECTURE
 if ($Arch -eq "AMD64") {
@@ -154,6 +163,7 @@ Write-Host "Starting portal-tunnel..."
 try {
     & $BinPath $ArgsList
 } finally {
+    [System.Net.ServicePointManager]::SecurityProtocol = $OriginalSecurityProtocol
     if (Test-Path $WorkDir) {
         Remove-Item -Recurse -Force $WorkDir
     }
