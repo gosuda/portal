@@ -75,7 +75,7 @@ fi
 
 chmod +x "$BIN_PATH"
 
-set -- "$BIN_PATH" --relay "$RELAYS" --host "${APP_HOST:-localhost:3000}"
+set -- "$BIN_PATH" --relays "$RELAYS" --host "${APP_HOST:-localhost:3000}"
 [ -n "${APP_NAME:-}" ] && set -- "$@" --name "$APP_NAME"
 [ -n "${APP_DESCRIPTION:-}" ] && set -- "$@" --description "$APP_DESCRIPTION"
 [ -n "${APP_TAGS:-}" ] && set -- "$@" --tags "$APP_TAGS"
@@ -92,7 +92,7 @@ exec "$@"
 const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
-$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $BaseUrl }
+$RelayUrls = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -149,7 +149,7 @@ if ($ActualHash -ne $ExpectedHash) {
     exit 1
 }
 
-$ArgsList = @("--relay", $RelayUrl)
+$ArgsList = @("--relays", $RelayUrls)
 
 if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
 if ($env:NAME) { $ArgsList += "--name", $env:NAME }
