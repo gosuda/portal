@@ -1,17 +1,19 @@
 package main
 
 import (
-	"encoding/base64"
+	"crypto/subtle"
 	"encoding/json"
+	"html"
+	"mime"
 	"net/http"
 	"strings"
-
-	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/portal/keyless"
-	"gosuda.org/portal/portal/policy"
-	"gosuda.org/portal/types"
 )
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(data)
+}
 
 func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
 	if r == nil {
@@ -20,115 +22,56 @@ func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
 	if r.TLS != nil {
 		return true
 	}
-	if !trustProxyHeaders || !policy.IsTrustedProxyRemoteAddr(r.RemoteAddr) {
+	if !trustProxyHeaders {
 		return false
 	}
-	if hasForwardedToken(r.Header.Get("X-Forwarded-Proto"), "https") {
-		return true
-	}
-	return hasForwardedToken(r.Header.Get("X-Forwarded-Ssl"), "on")
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
-func hasForwardedToken(raw, target string) bool {
-	for token := range strings.SplitSeq(raw, ",") {
-		if strings.EqualFold(strings.TrimSpace(token), target) {
-			return true
-		}
-	}
-	return false
+func hasPathPrefix(path, prefix string) bool {
+	return strings.HasPrefix(strings.TrimSpace(path), prefix)
 }
 
-func isWebSocketUpgrade(req *http.Request) bool {
-	if req == nil {
+func trimPathPrefix(path, prefix string) string {
+	return strings.TrimPrefix(strings.TrimSpace(path), prefix)
+}
+
+func subtleValueMatch(left, right string) bool {
+	if left == "" || right == "" {
 		return false
 	}
-	return hasForwardedToken(req.Header.Get("Upgrade"), "websocket")
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
 }
 
-// getContentType returns the MIME type for a file extension.
+func escapeHTML(value string) string {
+	return html.EscapeString(value)
+}
+
 func getContentType(ext string) string {
-	switch ext {
-	case ".html":
-		return "text/html; charset=utf-8"
-	case ".js":
-		return "application/javascript"
-	case ".json":
-		return "application/json"
-	case ".wasm":
-		return "application/wasm"
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return ""
+	}
+	if contentType := mime.TypeByExtension(ext); contentType != "" {
+		return contentType
+	}
+
+	switch strings.ToLower(ext) {
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
 	case ".css":
-		return "text/css"
-	case ".mp4":
-		return "video/mp4"
+		return "text/css; charset=utf-8"
 	case ".svg":
 		return "image/svg+xml"
-	case ".png":
-		return "image/png"
 	case ".ico":
 		return "image/x-icon"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".json", ".webmanifest":
+		return "application/json; charset=utf-8"
 	default:
 		return ""
 	}
-}
-
-// setCORSHeaders sets permissive CORS headers for GET/OPTIONS and common headers.
-func setCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, Accept-Encoding")
-}
-
-func writeAPIData(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
-		OK:   true,
-		Data: data,
-	}); err != nil {
-		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
-	}
-}
-
-func writeAPIOK(w http.ResponseWriter, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{OK: true}); err != nil {
-		log.Error().Err(err).Msg("[HTTP] Failed to encode API success response")
-	}
-}
-
-func writeAPIError(w http.ResponseWriter, status int, code, message string) {
-	writeAPIErrorWithData(w, status, code, message, nil)
-}
-
-func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(types.APIEnvelope{
-		OK:   false,
-		Data: data,
-		Error: &types.APIError{
-			Code:    code,
-			Message: message,
-		},
-	}); err != nil {
-		log.Error().Err(err).Msg("[HTTP] Failed to encode API error response")
-	}
-}
-
-func writeSignError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(keyless.ErrorResponse{Error: message})
-}
-
-func decodeLeaseID(encoded string) (string, bool) {
-	idBytes, err := base64.URLEncoding.DecodeString(encoded)
-	if err != nil {
-		idBytes, err = base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return "", false
-		}
-	}
-	return string(idBytes), true
 }

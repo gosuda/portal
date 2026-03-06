@@ -5,9 +5,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
-
-	"github.com/rs/zerolog/log"
 )
 
 const tunnelScriptTemplate = `#!/usr/bin/env sh
@@ -163,108 +163,87 @@ try {
 `
 
 func serveTunnelScript(w http.ResponseWriter, r *http.Request, portalURL string) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	targetOS := r.URL.Query().Get("os")
-	var isWindows bool
-	if targetOS != "" {
-		isWindows = strings.EqualFold(targetOS, "windows")
-	} else {
-		// Fallback: check User-Agent
-		ua := strings.ToLower(r.UserAgent())
-		isWindows = strings.Contains(ua, "windows")
-	}
-
-	var script string
-	var contentType string
-	var filename string
-
+	isWindows := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("os")), "windows")
+	script := fmt.Sprintf(tunnelScriptTemplate, portalURL)
+	contentType := "text/x-shellscript"
+	filename := "tunnel.sh"
 	if isWindows {
 		script = fmt.Sprintf(tunnelPowerShellScriptTemplate, portalURL)
-		contentType = "text/plain" // or application/x-powershell
+		contentType = "text/plain; charset=utf-8"
 		filename = "tunnel.ps1"
-	} else {
-		script = fmt.Sprintf(tunnelScriptTemplate, portalURL)
-		contentType = "text/x-shellscript"
-		filename = "tunnel.sh"
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filename))
-	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		if _, err := w.Write([]byte(script)); err != nil {
-			log.Debug().Err(err).Msg("failed to write tunnel script")
-		}
+		_, _ = w.Write([]byte(script))
 	}
 }
 
 func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
-	setCORSHeaders(w)
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	slug := strings.TrimPrefix(r.URL.Path, "/tunnel/bin/")
-	slug = strings.Trim(slug, "/")
+	slug := strings.Trim(strings.TrimPrefix(r.URL.Path, "/tunnel/bin/"), "/")
 	checksumRequest := strings.HasSuffix(slug, ".sha256")
 	if checksumRequest {
 		slug = strings.TrimSuffix(slug, ".sha256")
 	}
 
-	path, ok := tunnelBinaryAssetBySlug[slug]
-	if !ok || strings.TrimSpace(path) == "" {
+	path, ok := tunnelBinaryPathBySlug(slug)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	data, err := distFS.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Error().Err(err).Str("path", path).Msg("failed to read embedded tunnel binary")
 		http.NotFound(w, r)
 		return
 	}
-
 	sum := sha256.Sum256(data)
 	checksumHex := hex.EncodeToString(sum[:])
 
 	if checksumRequest {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=600")
-		w.WriteHeader(http.StatusOK)
 		if r.Method == http.MethodGet {
-			if _, err := fmt.Fprintf(w, "%s  portal-tunnel-%s\n", checksumHex, slug); err != nil {
-				log.Debug().Err(err).Str("slug", slug).Msg("failed to write tunnel checksum")
-			}
+			_, _ = fmt.Fprintf(w, "%s  portal-tunnel-%s\n", checksumHex, slug)
 		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"portal-tunnel-%s\"", slug))
-	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.Header().Set("X-Checksum-Sha256", checksumHex)
-	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
-		if _, err := w.Write(data); err != nil {
-			log.Debug().Err(err).Str("slug", slug).Msg("failed to write tunnel binary")
-		}
+		_, _ = w.Write(data)
 	}
 }
 
-var tunnelBinaryAssetBySlug = map[string]string{
-	"linux-amd64":   "dist/tunnel/portal-tunnel-linux-amd64",
-	"linux-arm64":   "dist/tunnel/portal-tunnel-linux-arm64",
-	"darwin-amd64":  "dist/tunnel/portal-tunnel-darwin-amd64",
-	"darwin-arm64":  "dist/tunnel/portal-tunnel-darwin-arm64",
-	"windows-amd64": "dist/tunnel/portal-tunnel-windows-amd64.exe",
-	"windows-arm64": "dist/tunnel/portal-tunnel-windows-arm64.exe",
+func tunnelBinaryPathBySlug(slug string) (string, bool) {
+	candidates := []string{
+		filepath.Join("dist", "tunnel", tunnelBinaryName(slug)),
+		filepath.Join("bin", tunnelBinaryName(slug)),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func tunnelBinaryName(slug string) string {
+	if strings.HasPrefix(slug, "windows-") {
+		return "portal-tunnel-" + slug + ".exe"
+	}
+	return "portal-tunnel-" + slug
 }

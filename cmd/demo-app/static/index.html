@@ -1,131 +1,57 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
-    <title>Portal Demo Connectivity</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal Demo App</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
-
 <body>
-    <div class="container">
-        <h1>Portal Demo Connectivity</h1>
+  <main class="shell">
+    <header>
+      <p class="eyebrow">Portal Demo</p>
+      <h1>Relay-backed demo application</h1>
+      <p>Use this page to verify static assets, cookies, fetches, and websocket echo.</p>
+    </header>
 
-        <div class="toolbar">
-            <button id="httpPingBtn">HTTP Ping</button>
-            <button id="testCookiesBtn">Test Cookies</button>
-            <button id="wsConnectBtn">WS Connect</button>
-            <button id="wsSendBtn" disabled>WS Send "hello"</button>
-        </div>
+    <section class="card">
+      <h2>HTTP</h2>
+      <button id="ping">Fetch /api/ping</button>
+      <button id="cookies">Set cookies</button>
+      <pre id="output">Ready.</pre>
+    </section>
 
-        <div class="canvas-wrapper">
-            <pre id="log" class="log"></pre>
-        </div>
+    <section class="card">
+      <h2>WebSocket</h2>
+      <input id="ws-input" value="hello portal">
+      <button id="ws-send">Send</button>
+      <pre id="ws-output">Disconnected.</pre>
+    </section>
+  </main>
 
-        <div id="status" class="status">Idle</div>
-    </div>
+  <script>
+    const output = document.getElementById('output');
+    const wsOutput = document.getElementById('ws-output');
 
-    <script>
-        const statusEl = document.getElementById('status');
-        const logEl = document.getElementById('log');
-        const httpPingBtn = document.getElementById('httpPingBtn');
-        const wsConnectBtn = document.getElementById('wsConnectBtn');
-        const wsSendBtn = document.getElementById('wsSendBtn');
+    document.getElementById('ping').addEventListener('click', async () => {
+      const res = await fetch('/api/ping');
+      output.textContent = JSON.stringify(await res.json(), null, 2);
+    });
 
-        let ws = null;
+    document.getElementById('cookies').addEventListener('click', async () => {
+      const res = await fetch('/api/test-cookies');
+      output.textContent = JSON.stringify(await res.json(), null, 2);
+    });
 
-        function log(message) {
-            const time = new Date().toISOString();
-            logEl.textContent += `[${time}] ${message}\n`;
-            logEl.scrollTop = logEl.scrollHeight;
-        }
+    const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const ws = new WebSocket(proto + location.host + '/ws');
+    ws.onopen = () => { wsOutput.textContent = 'Connected.'; };
+    ws.onmessage = (event) => { wsOutput.textContent = event.data; };
+    ws.onclose = () => { wsOutput.textContent = 'Disconnected.'; };
 
-        httpPingBtn.addEventListener('click', async () => {
-            statusEl.textContent = 'HTTP: Pinging...';
-            try {
-                const res = await fetch('/api/ping');
-                const json = await res.json();
-                statusEl.textContent = 'HTTP: OK';
-                log(`HTTP /api/ping -> ${JSON.stringify(json)}`);
-            } catch (err) {
-                statusEl.textContent = 'HTTP: Error';
-                log(`HTTP error: ${err}`);
-            }
-        });
-
-        document.getElementById('testCookiesBtn').addEventListener('click', async () => {
-            statusEl.textContent = 'Cookies: Testing...';
-            try {
-                const res = await fetch('/api/test-cookies');
-                const json = await res.json();
-                statusEl.textContent = 'Cookies: OK';
-                log(`HTTP /api/test-cookies -> ${JSON.stringify(json)}`);
-
-                // Log response headers
-                log(`Response headers:`);
-                for (const [key, value] of res.headers.entries()) {
-                    log(`  ${key}: ${value}`);
-                }
-
-                // Log current cookies
-                log(`Current document.cookie: ${document.cookie || '(empty)'}`);
-            } catch (err) {
-                statusEl.textContent = 'Cookies: Error';
-                log(`HTTP error: ${err}`);
-            }
-        });
-
-        wsConnectBtn.addEventListener('click', () => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.close();
-                return;
-            }
-
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const basePath = location.pathname.endsWith('/') ? location.pathname : (location.pathname + '/');
-            const url = protocol + '//' + window.location.host + basePath + 'ws';
-
-            statusEl.textContent = 'WS: Connecting...';
-            log(`WS connecting to ${url}`);
-
-            ws = new WebSocket(url);
-
-            ws.onopen = () => {
-                statusEl.textContent = 'WS: Connected';
-                log('WS connected');
-                wsSendBtn.disabled = false;
-                wsConnectBtn.textContent = 'WS Disconnect';
-            };
-
-            ws.onclose = () => {
-                statusEl.textContent = 'WS: Disconnected';
-                log('WS disconnected');
-                wsSendBtn.disabled = true;
-                wsConnectBtn.textContent = 'WS Connect';
-            };
-
-            ws.onerror = (err) => {
-                log(`WS error: ${err.message || err}`);
-            };
-
-            ws.onmessage = (event) => {
-                log(`WS recv: ${event.data}`);
-            };
-        });
-
-        wsSendBtn.addEventListener('click', () => {
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                log('WS send skipped: not connected');
-                return;
-            }
-            const msg = 'hello';
-            ws.send(msg);
-            log(`WS send: ${msg}`);
-        });
-    </script>
+    document.getElementById('ws-send').addEventListener('click', () => {
+      ws.send(document.getElementById('ws-input').value);
+    });
+  </script>
 </body>
-
 </html>

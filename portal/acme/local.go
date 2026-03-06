@@ -10,54 +10,40 @@ import (
 	"fmt"
 	"math/big"
 	"net"
-	"strings"
+	"path/filepath"
 	"time"
-
-	"gosuda.org/portal/types"
 )
 
 const localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
 
-// EnsureLocalDevelopmentCertificate ensures keyless TLS materials exist for localhost-style development.
-// It only acts when baseHost points to localhost/loopback semantics.
-func EnsureLocalDevelopmentCertificate(keyDir, baseHost string) (bool, error) {
-	keyDir = strings.TrimSpace(keyDir)
-	if keyDir == "" {
-		return false, nil
-	}
-
-	baseHost = normalizeLocalDevelopmentHost(baseHost)
-	if !types.IsLocalhost(baseHost) {
-		return false, nil
-	}
-
+func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	domains := localDevelopmentDomains(baseHost)
-	keyFile := keyPath(keyDir)
-	certFile := fullChainPath(keyDir)
+	keyFile := filepath.Join(keyDir, keyFileName)
+	certFile := filepath.Join(keyDir, fullChainFileName)
 
 	if fileExists(keyFile) && fileExists(certFile) {
 		covered, err := certCoversDomains(certFile, domains)
 		if err == nil && covered {
-			return false, nil
+			return nil
 		}
 	}
 
 	if err := ensureParentDir(keyFile); err != nil {
-		return false, err
+		return err
 	}
 	if err := ensureParentDir(certFile); err != nil {
-		return false, err
+		return err
 	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return false, fmt.Errorf("generate local development signing key: %w", err)
+		return fmt.Errorf("generate local dev private key: %w", err)
 	}
 
 	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialLimit)
 	if err != nil {
-		return false, fmt.Errorf("generate local development certificate serial: %w", err)
+		return fmt.Errorf("generate local dev certificate serial: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -75,80 +61,43 @@ func EnsureLocalDevelopmentCertificate(keyDir, baseHost string) (bool, error) {
 		IsCA:                  true,
 	}
 
-	dnsNames := make(map[string]struct{}, len(domains))
-	ipAddresses := make(map[string]net.IP)
 	for _, domain := range domains {
 		if ip := net.ParseIP(domain); ip != nil {
-			ipAddresses[ip.String()] = ip
+			template.IPAddresses = append(template.IPAddresses, ip)
 			continue
 		}
-		domain = strings.TrimSpace(domain)
-		if domain == "" {
-			continue
-		}
-		dnsNames[domain] = struct{}{}
-	}
-
-	for dnsName := range dnsNames {
-		template.DNSNames = append(template.DNSNames, dnsName)
-	}
-	for _, ipAddress := range ipAddresses {
-		template.IPAddresses = append(template.IPAddresses, ipAddress)
+		template.DNSNames = append(template.DNSNames, domain)
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
 	if err != nil {
-		return false, fmt.Errorf("create local development certificate: %w", err)
+		return fmt.Errorf("create local dev certificate: %w", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
-		return false, fmt.Errorf("marshal local development private key: %w", err)
+		return fmt.Errorf("marshal local dev private key: %w", err)
 	}
-	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateKeyDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeFileAtomic(keyFile, privateKeyPEM, 0o600); err != nil {
-		return false, fmt.Errorf("write local development private key: %w", err)
-	}
 	if err := writeFileAtomic(certFile, certPEM, 0o644); err != nil {
-		return false, fmt.Errorf("write local development certificate: %w", err)
+		return fmt.Errorf("write local dev certificate: %w", err)
 	}
-
-	return true, nil
-}
-
-func normalizeLocalDevelopmentHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimPrefix(strings.TrimSuffix(host, "."), "*.")
-	return host
+	if err := writeFileAtomic(keyFile, keyPEM, 0o600); err != nil {
+		return fmt.Errorf("write local dev private key: %w", err)
+	}
+	return nil
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = normalizeLocalDevelopmentHost(baseHost)
-	if baseHost == "" {
-		return []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
-	}
-
+	baseHost = normalizeHost(baseHost)
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
-	domains = append(domains, baseHost)
-
-	if net.ParseIP(baseHost) == nil {
-		domains = append(domains, "*."+baseHost)
-	}
-
-	seen := make(map[string]struct{}, len(domains))
-	out := make([]string, 0, len(domains))
-	for _, domain := range domains {
-		domain = strings.TrimSpace(domain)
-		if domain == "" {
-			continue
+	if baseHost != "" && baseHost != "localhost" {
+		domains = append(domains, baseHost)
+		if net.ParseIP(baseHost) == nil {
+			domains = append(domains, "*."+baseHost)
 		}
-		if _, ok := seen[domain]; ok {
-			continue
-		}
-		seen[domain] = struct{}{}
-		out = append(out, domain)
 	}
-	return out
+	return domains
 }

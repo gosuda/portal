@@ -1,85 +1,46 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+:root {
+  color-scheme: light;
+  font-family: "Georgia", serif;
+  background: #f6f1e8;
+  color: #1f1a17;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #f5f5f5;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
+  margin: 0;
 }
 
-.container {
-  width: 100%;
-  max-width: 520px;
-  background: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
+.shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
 }
 
-h1 {
-  font-size: 18px;
-  margin-bottom: 12px;
-  color: #333333;
-  text-align: center;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-  justify-content: center;
-}
-
-.toolbar button {
-  padding: 6px 12px;
-  font-size: 13px;
-  border-radius: 4px;
-  border: 1px solid #d0d7de;
-  background: #ffffff;
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-}
-
-.toolbar button:hover {
-  background: #f3f4f6;
-  border-color: #c3ccd6;
-}
-
-.canvas-wrapper {
-  border-radius: 4px;
-  border: 1px solid #e1e4e8;
-  background: #111827;
-  padding: 8px;
-  height: 220px;
-  overflow: auto;
-}
-
-.log {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: transparent;
-  color: #e5e7eb;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-    "Liberation Mono", "Courier New", monospace;
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
   font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  color: #8f5e3b;
 }
 
-.status {
-  margin-top: 10px;
-  font-size: 13px;
-  color: #4b5563;
-  text-align: right;
+.card {
+  background: #fff;
+  border: 1px solid #dccdb8;
+  padding: 20px;
+  margin-top: 18px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.06);
+}
+
+button,
+input {
+  font: inherit;
+  margin-right: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+pre {
+  background: #201a17;
+  color: #f7efe4;
+  padding: 14px;
+  overflow: auto;
 }
