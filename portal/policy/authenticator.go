@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,7 +23,6 @@ const (
 	maxFailedLoginEntries  = 4096
 )
 
-// Authenticator manages admin authentication with rate limiting.
 type Authenticator struct {
 	lastSweepAt  time.Time
 	failedLogins map[string]*loginAttempt
@@ -37,17 +37,18 @@ type loginAttempt struct {
 	count      int
 }
 
-// NewAuthenticator creates a new Authenticator with the given secret key.
 func NewAuthenticator(secretKey string) *Authenticator {
+	secretKey = strings.TrimSpace(secretKey)
 	if secretKey == "" {
-		randomBytes := make([]byte, 16)
-		if _, err := rand.Read(randomBytes); err != nil {
-			log.Fatal().Err(err).Msg("[server] failed to generate random admin secret key")
+		generated, err := generateSecretKey()
+		if err != nil {
+			log.Fatal().Err(err).Msg("generate admin secret key")
 		}
-		secretKey = hex.EncodeToString(randomBytes)
-		log.Warn().Int("key_length", len(secretKey)).Msg("[server] auto-generated ADMIN_SECRET_KEY (set ADMIN_SECRET_KEY env to use your own)")
-	} else {
-		log.Info().Int("key_length", len(secretKey)).Msg("[server] admin authentication enabled")
+		secretKey = generated
+		log.Warn().
+			Str("component", "portal-admin").
+			Str("admin_secret_key", secretKey).
+			Msg("generated random admin secret key because ADMIN_SECRET_KEY was empty")
 	}
 
 	return &Authenticator{
@@ -57,177 +58,113 @@ func NewAuthenticator(secretKey string) *Authenticator {
 	}
 }
 
-// IsIPLocked checks if an IP is currently locked out.
-func (m *Authenticator) IsIPLocked(ip string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (a *Authenticator) AuthEnabled() bool {
+	return a != nil && a.secretKey != ""
+}
 
-	attempt, exists := m.failedLogins[ip]
-	if !exists {
+func (a *Authenticator) ValidateKey(key string) bool {
+	if !a.AuthEnabled() {
 		return false
 	}
+	return subtle.ConstantTimeCompare([]byte(a.secretKey), []byte(key)) == 1
+}
+
+func (a *Authenticator) IsIPLocked(ip string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	attempt := a.failedLogins[ip]
 	return lockRemaining(attempt, time.Now()) > 0
 }
 
-// GetLockRemainingSeconds returns the remaining seconds until the IP is unlocked.
-func (m *Authenticator) GetLockRemainingSeconds(ip string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	attempt, exists := m.failedLogins[ip]
-	if !exists {
-		return 0
-	}
-	return int(lockRemaining(attempt, time.Now()).Seconds())
+func (a *Authenticator) LockRemainingSeconds(ip string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return int(lockRemaining(a.failedLogins[ip], time.Now()).Seconds())
 }
 
-// RecordFailedLogin records a failed login attempt and returns true if the IP is now locked.
-func (m *Authenticator) RecordFailedLogin(ip string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (a *Authenticator) RecordFailedLogin(ip string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	now := time.Now()
-	m.maybeSweepFailedLoginsLocked(now)
+	a.maybeSweepFailedLoginsLocked(now)
 
-	attempt, exists := m.failedLogins[ip]
-	if !exists {
+	attempt := a.failedLogins[ip]
+	if attempt == nil {
 		attempt = &loginAttempt{}
-		m.failedLogins[ip] = attempt
+		a.failedLogins[ip] = attempt
 	}
-
-	// Reset if lock has expired
 	if attempt.count >= maxFailedAttempts && now.Sub(attempt.lockedAt) >= lockDuration {
 		attempt.count = 0
 	}
 
 	attempt.count++
 	attempt.lastSeenAt = now
-
 	locked := false
 	if attempt.count >= maxFailedAttempts {
 		attempt.lockedAt = now
 		locked = true
 	}
 
-	m.enforceFailedLoginCapLocked()
+	a.enforceFailedLoginCapLocked()
 	return locked
 }
 
-// ResetFailedLogin resets the failed login count for an IP.
-func (m *Authenticator) ResetFailedLogin(ip string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.failedLogins, ip)
+func (a *Authenticator) ResetFailedLogin(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.failedLogins, ip)
 }
 
-// ValidateKey checks if the provided key matches the secret key.
-func (m *Authenticator) ValidateKey(key string) bool {
-	if m.secretKey == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(key), []byte(m.secretKey)) == 1
-}
-
-// HasSecretKey returns true if a secret key is configured.
-func (m *Authenticator) HasSecretKey() bool {
-	return m.secretKey != ""
-}
-
-// CreateSession creates a new session and returns the token.
-func (m *Authenticator) CreateSession() string {
+func (a *Authenticator) CreateSession() (string, error) {
 	token, err := generateToken()
 	if err != nil {
-		log.Fatal().Err(err).Msg("[server] failed to generate secure admin session token")
+		return "", err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.sessions[token] = time.Now().Add(sessionDuration)
-
-	// Clean up expired sessions
-	m.cleanupExpiredSessions()
-
-	return token
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessions[token] = time.Now().Add(sessionDuration)
+	a.cleanupExpiredSessionsLocked()
+	return token, nil
 }
 
-// ValidateSession checks if a session token is valid.
-func (m *Authenticator) ValidateSession(token string) bool {
+func (a *Authenticator) ValidateSession(token string) bool {
 	if token == "" {
 		return false
 	}
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 
-	expiry, exists := m.sessions[token]
-	if !exists {
-		return false
-	}
-
-	return time.Now().Before(expiry)
+	expiry, ok := a.sessions[token]
+	return ok && time.Now().Before(expiry)
 }
 
-// DeleteSession removes a session.
-func (m *Authenticator) DeleteSession(token string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.sessions, token)
+func (a *Authenticator) DeleteSession(token string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.sessions, token)
 }
 
-// cleanupExpiredSessions removes expired sessions (must be called with lock held).
-func (m *Authenticator) cleanupExpiredSessions() {
-	now := time.Now()
-	for token, expiry := range m.sessions {
-		if now.After(expiry) {
-			delete(m.sessions, token)
-		}
-	}
-}
-
-// generateToken generates a secure random token.
-func generateToken() (string, error) {
-	return generateTokenFromReader(rand.Reader)
-}
-
-func generateTokenFromReader(reader io.Reader) (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := io.ReadFull(reader, bytes); err != nil {
-		return "", fmt.Errorf("read random session token bytes: %w", err)
-	}
-	return hex.EncodeToString(bytes), nil
-}
-
-func (m *Authenticator) maybeSweepFailedLoginsLocked(now time.Time) {
-	if !m.lastSweepAt.IsZero() && now.Sub(m.lastSweepAt) < failedLoginSweepWindow {
+func (a *Authenticator) maybeSweepFailedLoginsLocked(now time.Time) {
+	if !a.lastSweepAt.IsZero() && now.Sub(a.lastSweepAt) < failedLoginSweepWindow {
 		return
 	}
-
-	m.sweepExpiredFailedLoginsLocked(now)
-	m.lastSweepAt = now
-}
-
-func (m *Authenticator) sweepExpiredFailedLoginsLocked(now time.Time) {
-	for ip, attempt := range m.failedLogins {
-		if attempt == nil {
-			delete(m.failedLogins, ip)
-			continue
-		}
-
+	for ip, attempt := range a.failedLogins {
 		lastSeenAt := attempt.lastSeenAt
 		if lastSeenAt.IsZero() {
 			lastSeenAt = attempt.lockedAt
 		}
 		if lastSeenAt.IsZero() || now.Sub(lastSeenAt) >= failedLoginRetention {
-			delete(m.failedLogins, ip)
+			delete(a.failedLogins, ip)
 		}
 	}
+	a.lastSweepAt = now
 }
 
-func (m *Authenticator) enforceFailedLoginCapLocked() {
-	if len(m.failedLogins) <= maxFailedLoginEntries {
+func (a *Authenticator) enforceFailedLoginCapLocked() {
+	if len(a.failedLogins) <= maxFailedLoginEntries {
 		return
 	}
 
@@ -236,32 +173,50 @@ func (m *Authenticator) enforceFailedLoginCapLocked() {
 		ip         string
 	}
 
-	entries := make([]failedEntry, 0, len(m.failedLogins))
-	for ip, attempt := range m.failedLogins {
-		if attempt == nil {
-			entries = append(entries, failedEntry{ip: ip})
-			continue
-		}
-
+	entries := make([]failedEntry, 0, len(a.failedLogins))
+	for ip, attempt := range a.failedLogins {
 		lastSeenAt := attempt.lastSeenAt
 		if lastSeenAt.IsZero() {
 			lastSeenAt = attempt.lockedAt
 		}
-
-		entries = append(entries, failedEntry{
-			ip:         ip,
-			lastSeenAt: lastSeenAt,
-		})
+		entries = append(entries, failedEntry{ip: ip, lastSeenAt: lastSeenAt})
 	}
-
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].lastSeenAt.Before(entries[j].lastSeenAt)
 	})
 
-	overflow := len(m.failedLogins) - maxFailedLoginEntries
-	for i := range overflow {
-		delete(m.failedLogins, entries[i].ip)
+	for i := range len(a.failedLogins) - maxFailedLoginEntries {
+		delete(a.failedLogins, entries[i].ip)
 	}
+}
+
+func (a *Authenticator) cleanupExpiredSessionsLocked() {
+	now := time.Now()
+	for token, expiry := range a.sessions {
+		if now.After(expiry) {
+			delete(a.sessions, token)
+		}
+	}
+}
+
+func generateToken() (string, error) {
+	return generateTokenFromReader(rand.Reader)
+}
+
+func generateSecretKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", fmt.Errorf("read random admin secret key bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func generateTokenFromReader(reader io.Reader) (string, error) {
+	buf := make([]byte, 32)
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return "", fmt.Errorf("read random session token bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 func lockRemaining(attempt *loginAttempt, now time.Time) time.Duration {
@@ -273,6 +228,5 @@ func lockRemaining(attempt *loginAttempt, now time.Time) time.Duration {
 	if remaining <= 0 {
 		return 0
 	}
-
 	return remaining
 }

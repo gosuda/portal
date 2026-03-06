@@ -5,7 +5,6 @@ import (
 	"sync"
 )
 
-// Mode represents the approval mode for new connections.
 type Mode string
 
 const (
@@ -13,7 +12,6 @@ const (
 	ModeManual Mode = "manual"
 )
 
-// Approver manages approval/denial state for leases.
 type Approver struct {
 	approvedLeases map[string]struct{}
 	deniedLeases   map[string]struct{}
@@ -29,78 +27,78 @@ func NewApprover() *Approver {
 	}
 }
 
-func (m *Approver) GetApprovalMode() Mode {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.approvalMode
+func (a *Approver) Mode() Mode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.approvalMode
 }
 
-func (m *Approver) SetApprovalMode(mode Mode) error {
+func (a *Approver) SetMode(mode Mode) error {
 	if mode != ModeAuto && mode != ModeManual {
 		return fmt.Errorf("invalid approval mode: %q", mode)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.approvalMode = mode
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.approvalMode = mode
 	return nil
 }
 
-func (m *Approver) IsLeaseApproved(leaseID string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.approvedLeases[leaseID]
+func (a *Approver) IsApproved(leaseID string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, ok := a.approvedLeases[leaseID]
 	return ok
 }
 
-func (m *Approver) ApproveLease(leaseID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.approvedLeases[leaseID] = struct{}{}
-	delete(m.deniedLeases, leaseID)
+func (a *Approver) Approve(leaseID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.approvedLeases[leaseID] = struct{}{}
+	delete(a.deniedLeases, leaseID)
 }
 
-func (m *Approver) RevokeLease(leaseID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.approvedLeases, leaseID)
+func (a *Approver) Revoke(leaseID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.approvedLeases, leaseID)
 }
 
-func (m *Approver) GetApprovedLeases() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, 0, len(m.approvedLeases))
-	for id := range m.approvedLeases {
-		result = append(result, id)
+func (a *Approver) ApprovedLeases() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]string, 0, len(a.approvedLeases))
+	for leaseID := range a.approvedLeases {
+		out = append(out, leaseID)
 	}
-	return result
+	return out
 }
 
-func (m *Approver) IsLeaseDenied(leaseID string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.deniedLeases[leaseID]
+func (a *Approver) IsDenied(leaseID string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, ok := a.deniedLeases[leaseID]
 	return ok
 }
 
-func (m *Approver) DenyLease(leaseID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.deniedLeases[leaseID] = struct{}{}
-	delete(m.approvedLeases, leaseID)
+func (a *Approver) Deny(leaseID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.deniedLeases[leaseID] = struct{}{}
+	delete(a.approvedLeases, leaseID)
 }
 
-func (m *Approver) UndenyLease(leaseID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.deniedLeases, leaseID)
+func (a *Approver) Undeny(leaseID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.deniedLeases, leaseID)
 }
 
-func (m *Approver) GetDeniedLeases() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, 0, len(m.deniedLeases))
-	for id := range m.deniedLeases {
-		result = append(result, id)
+func (a *Approver) DeniedLeases() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	out := make([]string, 0, len(a.deniedLeases))
+	for leaseID := range a.deniedLeases {
+		out = append(out, leaseID)
 	}
-	return result
+	return out
 }

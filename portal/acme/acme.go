@@ -12,10 +12,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
@@ -23,8 +25,6 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
-
-	"gosuda.org/portal/types"
 )
 
 const (
@@ -33,25 +33,10 @@ const (
 	accountKeyFileName     = "acme-account.key"
 	registrationFileName   = "acme-registration.json"
 	defaultACMEEmailPrefix = "acme@"
+	defaultRenewInterval   = 24 * time.Hour
+	defaultDNSSyncInterval = 10 * time.Minute
+	defaultSyncTimeout     = 2 * time.Minute
 )
-
-type certTarget struct {
-	Name     string
-	KeyFile  string
-	CertFile string
-	Domains  []string
-}
-
-type provisionConfig struct {
-	TargetName       string
-	KeyFile          string
-	CertFile         string
-	Email            string
-	AccountKeyFile   string
-	RegistrationFile string
-	CloudflareToken  string
-	Domains          []string
-}
 
 type Config struct {
 	BaseDomain      string
@@ -62,95 +47,20 @@ type Config struct {
 type Manager struct {
 	stopCh    chan struct{}
 	cfg       Config
-	waitGroup sync.WaitGroup
+	wg        sync.WaitGroup
 	mu        sync.RWMutex
 	startOnce sync.Once
 	stopOnce  sync.Once
 }
 
-func NewManager(ctx context.Context, cfg Config) (*Manager, string, error) {
-	if strings.TrimSpace(cfg.KeyDir) == "" {
-		return nil, "", nil
-	}
-
-	manager := &Manager{
-		cfg: Config{
-			BaseDomain:      cfg.BaseDomain,
-			KeyDir:          cfg.KeyDir,
-			CloudflareToken: cfg.CloudflareToken,
-		},
-		stopCh: make(chan struct{}),
-	}
-
-	generated, err := EnsureLocalDevelopmentCertificate(manager.cfg.KeyDir, manager.cfg.BaseDomain)
-	if err != nil {
-		return nil, "", fmt.Errorf("ensure local development certificate: %w", err)
-	}
-	if generated {
-		log.Info().
-			Str("base_host", manager.cfg.BaseDomain).
-			Str("key_file", manager.SigningKeyFile()).
-			Msg("[signer] generated self-signed localhost development certificate")
-	}
-
-	keyFile, err := manager.PrepareSigningKey(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	return manager, keyFile, nil
-}
-
-// PrepareSigningKey resolves the signer key path and runs ACME provisioning when required.
-// It encapsulates local-host detection and ACME enable/disable policy.
-func (m *Manager) PrepareSigningKey(ctx context.Context) (string, error) {
-	if m == nil {
-		return "", errors.New("acme manager is nil")
-	}
-
-	keyDir := strings.TrimSpace(m.cfg.KeyDir)
-	baseDomain := strings.TrimSpace(m.cfg.BaseDomain)
-	cloudflareToken := strings.TrimSpace(m.cfg.CloudflareToken)
-	isLocalBaseHost := types.IsLocalhost(baseDomain)
-
-	shouldEnsureWithACME := keyDir != "" && cloudflareToken != "" && baseDomain != "" && !isLocalBaseHost
-	if shouldEnsureWithACME {
-		keyFile, err := m.EnsureSigningKey(ctx)
-		if err != nil {
-			return "", fmt.Errorf("ensure keyless signing key: %w", err)
-		}
-		return keyFile, nil
-	}
-
-	log.Info().
-		Bool("has_key_dir", keyDir != "").
-		Bool("has_cloudflare_token", cloudflareToken != "").
-		Bool("has_base_domain", baseDomain != "").
-		Bool("is_local_base_host", isLocalBaseHost).
-		Msg("[signer] ACME issuance disabled (requires key directory, Cloudflare token, and base domain)")
-
-	if keyDir == "" {
-		return "", nil
-	}
-	return m.SigningKeyFile(), nil
-}
-
-func (m *Manager) keyDir() string {
-	if m == nil {
-		return ""
-	}
-	return m.cfg.KeyDir
-}
-
-// SigningKeyFile returns the unified signer key path under configured key directory.
-func (m *Manager) SigningKeyFile() string {
-	if m == nil {
-		return ""
-	}
-	keyDir := m.keyDir()
-	if keyDir == "" {
-		return ""
-	}
-	return keyPath(keyDir)
+type provisionConfig struct {
+	KeyFile          string
+	CertFile         string
+	AccountKeyFile   string
+	RegistrationFile string
+	Email            string
+	CloudflareToken  string
+	Domains          []string
 }
 
 type acmeUser struct {
@@ -159,268 +69,114 @@ type acmeUser struct {
 	Email        string
 }
 
-func (u *acmeUser) GetEmail() string {
-	if u == nil {
-		return ""
-	}
-	return u.Email
-}
+func NewManager(cfg Config) (*Manager, error) {
+	cfg.BaseDomain = normalizeHost(cfg.BaseDomain)
+	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
+	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 
-func (u *acmeUser) GetRegistration() *registration.Resource {
-	if u == nil {
-		return nil
+	if cfg.KeyDir == "" {
+		return nil, errors.New("acme key directory is required")
 	}
-	return u.Registration
-}
-
-func (u *acmeUser) GetPrivateKey() crypto.PrivateKey {
-	if u == nil {
-		return nil
-	}
-	return u.Key
-}
-
-// EnsureSigningKey provisions a keyless signing key via ACME DNS-01 when missing.
-func (m *Manager) EnsureSigningKey(ctx context.Context) (string, error) {
-	if m == nil {
-		return "", errors.New("acme manager is nil")
-	}
-	configuredKeyDir := m.keyDir()
-	if configuredKeyDir == "" {
-		return "", nil
-	}
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("keyless provisioning canceled: %w", err)
+	if cfg.BaseDomain == "" {
+		return nil, errors.New("acme base domain is required")
 	}
 
-	baseDomain := m.cfg.BaseDomain
-	if baseDomain == "" {
-		return "", errors.New("base domain is required for ACME provisioning")
-	}
-
-	targets, err := buildCertTargets(baseDomain, configuredKeyDir)
-	if err != nil {
-		return "", err
-	}
-	signerKeyFile := keyPath(configuredKeyDir)
-
-	missingTargets := make([]certTarget, 0, len(targets))
-	for _, target := range targets {
-		if !fileExists(target.KeyFile) || !fileExists(target.CertFile) {
-			missingTargets = append(missingTargets, target)
-			continue
-		}
-
-		covered, coverageErr := certCoversDomains(target.CertFile, target.Domains)
-		if coverageErr != nil {
-			log.Warn().
-				Err(coverageErr).
-				Str("target", target.Name).
-				Str("cert_file", target.CertFile).
-				Msg("[signer] failed to validate existing certificate; re-issuing via ACME")
-			missingTargets = append(missingTargets, target)
-			continue
-		}
-		if !covered {
-			log.Warn().
-				Str("target", target.Name).
-				Str("cert_file", target.CertFile).
-				Strs("required_domains", target.Domains).
-				Msg("[signer] existing certificate does not cover required domains; re-issuing via ACME")
-			missingTargets = append(missingTargets, target)
-			continue
-		}
-	}
-	if len(missingTargets) == 0 {
-		return signerKeyFile, nil
-	}
-	if !hasCloudflareToken(m.cfg.CloudflareToken) {
-		if !fileExists(signerKeyFile) {
-			log.Warn().
-				Str("key_file", signerKeyFile).
-				Msg("[signer] keyless key file is missing and Cloudflare credentials are not set; signer will stay disabled")
-		}
-		for _, target := range missingTargets {
-			log.Warn().
-				Str("target", target.Name).
-				Str("key_file", target.KeyFile).
-				Str("cert_file", target.CertFile).
-				Msg("[signer] ACME target is missing and Cloudflare credentials are not set")
-		}
-		return signerKeyFile, nil
-	}
-
-	for _, target := range missingTargets {
-		cfg, buildErr := buildProvisionConfig(baseDomain, target, m.cfg.CloudflareToken)
-		if buildErr != nil {
-			return "", buildErr
-		}
-		log.Info().
-			Str("target", cfg.TargetName).
-			Strs("domains", cfg.Domains).
-			Str("key_file", cfg.KeyFile).
-			Str("cert_file", cfg.CertFile).
-			Msg("[signer] ACME target is missing or invalid; issuing certificate with ACME DNS-01 via Cloudflare")
-
-		if err := m.provisionCertificate(cfg); err != nil {
-			return "", err
-		}
-	}
-	return signerKeyFile, nil
-}
-
-// TLSFiles returns the unified fullchain and private key file paths when both exist.
-func (m *Manager) TLSFiles() (string, string) {
-	if m == nil {
-		return "", ""
-	}
-	keyDir := m.keyDir()
-	if keyDir == "" {
-		return "", ""
-	}
-
-	keyFile := keyPath(keyDir)
-	certFile := fullChainPath(keyDir)
-	if fileExists(certFile) && fileExists(keyFile) {
-		return certFile, keyFile
-	}
-
-	return "", ""
-}
-
-func buildProvisionConfig(baseDomain string, target certTarget, cloudflareToken string) (provisionConfig, error) {
-	keyDir := filepath.Dir(target.KeyFile)
-	accountKeyFile := filepath.Join(keyDir, accountKeyFileName)
-	registrationFile := filepath.Join(keyDir, registrationFileName)
-	email := defaultACMEEmailPrefix + baseDomain
-
-	if target.KeyFile == "" || target.CertFile == "" || len(target.Domains) == 0 {
-		return provisionConfig{}, errors.New("invalid ACME target")
-	}
-	if _, err := resolveDomain(baseDomain); err != nil {
-		return provisionConfig{}, err
-	}
-
-	return provisionConfig{
-		TargetName:       target.Name,
-		KeyFile:          target.KeyFile,
-		CertFile:         target.CertFile,
-		Email:            email,
-		Domains:          target.Domains,
-		AccountKeyFile:   accountKeyFile,
-		RegistrationFile: registrationFile,
-		CloudflareToken:  cloudflareToken,
+	return &Manager{
+		cfg:    cfg,
+		stopCh: make(chan struct{}),
 	}, nil
 }
 
-func resolveDomain(baseDomain string) (string, error) {
-	if baseDomain == "" {
-		return "", errors.New("base domain is required")
-	}
-	return baseDomain, nil
-}
-
-func buildCertTargets(baseDomain, configuredKeyDir string) ([]certTarget, error) {
-	base, err := resolveDomain(baseDomain)
-	if err != nil {
-		return nil, err
-	}
-	keyDir := configuredKeyDir
-	if keyDir == "" {
-		return nil, errors.New("key directory is required")
+func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error) {
+	if m == nil {
+		return "", "", errors.New("acme manager is nil")
 	}
 
-	return []certTarget{
-		{
-			Name:     "unified",
-			KeyFile:  keyPath(keyDir),
-			CertFile: fullChainPath(keyDir),
-			Domains:  []string{"*." + base, base},
-		},
-	}, nil
-}
-
-func certCoversDomains(certFile string, domains []string) (bool, error) {
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return false, err
-	}
-
-	cert, err := ParseCertificatePEM(certPEM)
-	if err != nil {
-		return false, err
-	}
-
-	for _, domain := range domains {
-		if after, ok := strings.CutPrefix(domain, "*."); ok {
-			probeHost := "acme-probe." + after
-			if err := cert.VerifyHostname(probeHost); err != nil {
-				return false, err
-			}
-			continue
+	if isLocalhost(m.cfg.BaseDomain) {
+		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
+			return "", "", err
 		}
+		return m.TLSFiles()
+	}
 
-		if err := cert.VerifyHostname(domain); err != nil {
-			return false, err
+	if m.cfg.CloudflareToken == "" {
+		return "", "", errors.New("cloudflare token is required for non-local relay certificates")
+	}
+
+	if err := m.syncDNS(ctx); err != nil {
+		return "", "", fmt.Errorf("ensure dns records: %w", err)
+	}
+
+	certFile, keyFile, err := m.TLSFiles()
+	if err == nil {
+		covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
+		if err == nil && covered {
+			return certFile, keyFile, nil
 		}
 	}
 
-	return true, nil
+	if err := m.provision(ctx); err != nil {
+		return "", "", err
+	}
+	return m.TLSFiles()
 }
 
-func (m *Manager) provisionCertificate(cfg provisionConfig) error {
+func (m *Manager) Start(ctx context.Context) {
+	if m == nil || isLocalhost(m.cfg.BaseDomain) || m.cfg.CloudflareToken == "" {
+		return
+	}
+
+	m.startOnce.Do(func() {
+		m.wg.Add(1)
+		go m.maintenanceLoop(ctx)
+	})
+}
+
+func (m *Manager) Stop() {
+	if m == nil {
+		return
+	}
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
+	m.wg.Wait()
+}
+
+func (m *Manager) TLSFiles() (string, string, error) {
+	if m == nil {
+		return "", "", errors.New("acme manager is nil")
+	}
+	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	if !fileExists(certFile) || !fileExists(keyFile) {
+		return "", "", errors.New("relay certificate files do not exist")
+	}
+	return certFile, keyFile, nil
+}
+
+func (m *Manager) provision(ctx context.Context) error {
+	cfg := provisionConfig{
+		KeyFile:          filepath.Join(m.cfg.KeyDir, keyFileName),
+		CertFile:         filepath.Join(m.cfg.KeyDir, fullChainFileName),
+		AccountKeyFile:   filepath.Join(m.cfg.KeyDir, accountKeyFileName),
+		RegistrationFile: filepath.Join(m.cfg.KeyDir, registrationFileName),
+		Email:            defaultACMEEmailPrefix + m.cfg.BaseDomain,
+		CloudflareToken:  m.cfg.CloudflareToken,
+		Domains:          certificateDomains(m.cfg.BaseDomain),
+	}
+
 	for _, path := range []string{cfg.KeyFile, cfg.CertFile, cfg.AccountKeyFile, cfg.RegistrationFile} {
 		if err := ensureParentDir(path); err != nil {
 			return err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("acme provisioning canceled: %w", err)
+	}
 
-	accountKey, err := loadOrCreateAccountKey(cfg.AccountKeyFile)
+	client, _, err := newClient(cfg)
 	if err != nil {
-		return fmt.Errorf("load ACME account key: %w", err)
-	}
-	accountReg, err := loadRegistration(cfg.RegistrationFile)
-	if err != nil {
-		return fmt.Errorf("load ACME registration: %w", err)
-	}
-
-	user := &acmeUser{
-		Email:        cfg.Email,
-		Key:          accountKey,
-		Registration: accountReg,
-	}
-	clientConfig := lego.NewConfig(user)
-	clientConfig.CADirURL = lego.LEDirectoryProduction
-	clientConfig.Certificate.KeyType = certcrypto.RSA2048
-
-	client, err := lego.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("create ACME client: %w", err)
-	}
-
-	cfConfig := cloudflare.NewDefaultConfig()
-	cfConfig.AuthToken = cfg.CloudflareToken
-
-	provider, err := cloudflare.NewDNSProviderConfig(cfConfig)
-	if err != nil {
-		return fmt.Errorf("create Cloudflare DNS provider: %w", err)
-	}
-	err = client.Challenge.SetDNS01Provider(provider)
-	if err != nil {
-		return fmt.Errorf("set DNS-01 challenge provider: %w", err)
-	}
-
-	if user.Registration == nil {
-		reg, regErr := client.Registration.Register(registration.RegisterOptions{
-			TermsOfServiceAgreed: true,
-		})
-		if regErr != nil {
-			return fmt.Errorf("register ACME account: %w", regErr)
-		}
-		user.Registration = reg
-		if saveErr := saveRegistration(cfg.RegistrationFile, reg); saveErr != nil {
-			return fmt.Errorf("persist ACME registration: %w", saveErr)
-		}
+		return err
 	}
 
 	obtained, err := client.Certificate.Obtain(certificate.ObtainRequest{
@@ -430,37 +186,178 @@ func (m *Manager) provisionCertificate(cfg provisionConfig) error {
 	if err != nil {
 		return fmt.Errorf("obtain certificate: %w", err)
 	}
-	if len(obtained.PrivateKey) == 0 {
-		return errors.New("ACME response did not include private key")
-	}
-	if len(obtained.Certificate) == 0 {
-		return errors.New("ACME response did not include certificate chain")
+	if len(obtained.Certificate) == 0 || len(obtained.PrivateKey) == 0 {
+		return errors.New("acme obtain response missing certificate or private key")
 	}
 
-	if err := writeFileAtomic(cfg.KeyFile, obtained.PrivateKey, 0o600); err != nil {
-		return fmt.Errorf("write keyless private key: %w", err)
-	}
 	if err := writeFileAtomic(cfg.CertFile, obtained.Certificate, 0o644); err != nil {
-		return fmt.Errorf("write keyless certificate chain: %w", err)
+		return fmt.Errorf("write certificate chain: %w", err)
 	}
-
-	log.Info().
-		Str("target", cfg.TargetName).
-		Str("key_file", cfg.KeyFile).
-		Str("cert_file", cfg.CertFile).
-		Strs("domains", cfg.Domains).
-		Msg("[signer] ACME certificate issued and stored")
+	if err := writeFileAtomic(cfg.KeyFile, obtained.PrivateKey, 0o600); err != nil {
+		return fmt.Errorf("write private key: %w", err)
+	}
 	return nil
 }
+
+func (m *Manager) maintenanceLoop(ctx context.Context) {
+	defer m.wg.Done()
+
+	renewTicker := time.NewTicker(defaultRenewInterval)
+	dnsTicker := time.NewTicker(defaultDNSSyncInterval)
+	defer renewTicker.Stop()
+	defer dnsTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-dnsTicker.C:
+			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.syncDNS(syncCtx)
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
+			}
+		case <-renewTicker.C:
+			if !m.shouldRenew() {
+				continue
+			}
+			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.provision(renewCtx)
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+			}
+		}
+	}
+}
+
+func (m *Manager) syncDNS(ctx context.Context) error {
+	if m == nil || isLocalhost(m.cfg.BaseDomain) || m.cfg.CloudflareToken == "" {
+		return nil
+	}
+	return EnsureDNSRecords(ctx, m.cfg.BaseDomain, m.cfg.CloudflareToken)
+}
+
+func (m *Manager) shouldRenew() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	needsRenewal, err := certNeedsRenewal(certFile, certificateDomains(m.cfg.BaseDomain))
+	return err == nil && needsRenewal
+}
+
+func certificateDomains(baseDomain string) []string {
+	return []string{baseDomain, "*." + baseDomain}
+}
+
+func certNeedsRenewal(certFile string, domains []string) (bool, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return false, err
+	}
+	cert, err := ParseCertificatePEM(certPEM)
+	if err != nil {
+		return false, err
+	}
+	if time.Until(cert.NotAfter) < 30*24*time.Hour {
+		return true, nil
+	}
+	covered, err := certCoversDomains(certFile, domains)
+	if err != nil {
+		return false, err
+	}
+	return !covered, nil
+}
+
+func certCoversDomains(certFile string, domains []string) (bool, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return false, err
+	}
+	cert, err := ParseCertificatePEM(certPEM)
+	if err != nil {
+		return false, err
+	}
+	for _, domain := range domains {
+		if wildcardDomain, ok := strings.CutPrefix(domain, "*."); ok {
+			if !certificateCoversHostname(cert, "probe."+wildcardDomain) {
+				return false, nil
+			}
+			continue
+		}
+		if !certificateCoversHostname(cert, domain) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func certificateCoversHostname(cert *x509.Certificate, hostname string) bool {
+	return cert != nil && cert.VerifyHostname(hostname) == nil
+}
+
+func newClient(cfg provisionConfig) (*lego.Client, *acmeUser, error) {
+	accountKey, err := loadOrCreateAccountKey(cfg.AccountKeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load acme account key: %w", err)
+	}
+	accountReg, err := loadRegistration(cfg.RegistrationFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load acme registration: %w", err)
+	}
+
+	user := &acmeUser{
+		Email:        cfg.Email,
+		Key:          accountKey,
+		Registration: accountReg,
+	}
+
+	clientConfig := lego.NewConfig(user)
+	clientConfig.CADirURL = lego.LEDirectoryProduction
+	clientConfig.Certificate.KeyType = certcrypto.RSA2048
+
+	client, err := lego.NewClient(clientConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create acme client: %w", err)
+	}
+
+	cfConfig := cloudflare.NewDefaultConfig()
+	cfConfig.AuthToken = cfg.CloudflareToken
+
+	provider, err := cloudflare.NewDNSProviderConfig(cfConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create cloudflare dns provider: %w", err)
+	}
+	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
+		return nil, nil, fmt.Errorf("set dns01 provider: %w", err)
+	}
+
+	if user.Registration == nil {
+		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return nil, nil, fmt.Errorf("register acme account: %w", err)
+		}
+		user.Registration = reg
+		if err := saveRegistration(cfg.RegistrationFile, reg); err != nil {
+			return nil, nil, fmt.Errorf("persist acme registration: %w", err)
+		}
+	}
+
+	return client, user, nil
+}
+
+func (u *acmeUser) GetEmail() string                        { return u.Email }
+func (u *acmeUser) GetRegistration() *registration.Resource { return u.Registration }
+func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
 
 func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 	keyPEM, err := os.ReadFile(path)
 	if err == nil {
-		key, parseErr := parsePEMPrivateKey(keyPEM)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		return key, nil
+		return parsePEMPrivateKey(keyPEM)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -468,18 +365,15 @@ func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generate ACME account key: %w", err)
+		return nil, fmt.Errorf("generate account key: %w", err)
 	}
 	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("marshal ACME account key: %w", err)
+		return nil, fmt.Errorf("marshal account key: %w", err)
 	}
-	pemData := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkcs8,
-	})
-	if err := writeFileAtomic(path, pemData, 0o600); err != nil {
-		return nil, fmt.Errorf("persist ACME account key: %w", err)
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
+	if err := writeFileAtomic(path, keyPEM, 0o600); err != nil {
+		return nil, fmt.Errorf("persist account key: %w", err)
 	}
 	return key, nil
 }
@@ -487,9 +381,8 @@ func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 func parsePEMPrivateKey(keyPEM []byte) (crypto.PrivateKey, error) {
 	block, _ := pem.Decode(keyPEM)
 	if block == nil {
-		return nil, errors.New("invalid private key PEM")
+		return nil, errors.New("invalid private key pem")
 	}
-
 	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 		switch typed := key.(type) {
 		case *ecdsa.PrivateKey:
@@ -538,10 +431,7 @@ func ensureParentDir(path string) error {
 	if dir == "" || dir == "." {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create directory %s: %w", dir, err)
-	}
-	return nil
+	return os.MkdirAll(dir, 0o700)
 }
 
 func fileExists(path string) bool {
@@ -562,9 +452,7 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer func() {
-		_ = os.Remove(tmpName)
-	}()
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
@@ -583,14 +471,29 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	return os.Chmod(path, mode)
 }
 
-func hasCloudflareToken(cloudflareToken string) bool {
-	return cloudflareToken != ""
+func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, errors.New("no pem block found")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
-func fullChainPath(keyDir string) string {
-	return filepath.Join(keyDir, fullChainFileName)
+func normalizeHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimPrefix(host, "*.")
+	host = strings.TrimSuffix(host, ".")
+	return host
 }
 
-func keyPath(keyDir string) string {
-	return filepath.Join(keyDir, keyFileName)
+func isLocalhost(host string) bool {
+	host = normalizeHost(host)
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.HasSuffix(host, ".localhost")
 }

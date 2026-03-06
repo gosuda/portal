@@ -2,9 +2,12 @@ package keyless
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	ksigner "github.com/gosuda/keyless_tls/relay/signer"
@@ -16,31 +19,16 @@ const (
 	defaultAllowedSkew = 30 * time.Second
 )
 
-var (
-	ErrSignerDisabled   = errors.New("keyless signer is disabled")
-	ErrInvalidArgument  = ksigner.ErrInvalidArgument
-	ErrPermissionDenied = ksigner.ErrPermissionDenied
-)
-
-type SignRequest = signrpc.SignRequest
-type SignResponse = signrpc.SignResponse
-type ErrorResponse = signrpc.ErrorResponse
-
-// Signer serves the keyless signing endpoint used by tunnel keyless mode.
 type Signer struct {
 	service *ksigner.Service
 	keyID   string
 }
 
-func NewSigner(KeyFile string) (*Signer, error) {
-	keyPEM, err := os.ReadFile(KeyFile)
+func NewSigner(keyFile string) (*Signer, error) {
+	keyPEM, err := os.ReadFile(strings.TrimSpace(keyFile))
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("read keyless signing key: %w", err)
 	}
-
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parse keyless signing key: %w", err)
@@ -51,14 +39,12 @@ func NewSigner(KeyFile string) (*Signer, error) {
 		return nil, fmt.Errorf("register keyless signing key: %w", err)
 	}
 
-	svc := &ksigner.Service{
-		Store:       store,
-		AllowedSkew: defaultAllowedSkew,
-	}
-
 	return &Signer{
-		service: svc,
-		keyID:   RelayKeyID,
+		service: &ksigner.Service{
+			Store:       store,
+			AllowedSkew: defaultAllowedSkew,
+		},
+		keyID: RelayKeyID,
 	}, nil
 }
 
@@ -69,9 +55,56 @@ func (s *Signer) KeyID() string {
 	return s.keyID
 }
 
-func (s *Signer) Sign(ctx context.Context, req *SignRequest) (*SignResponse, error) {
+func (s *Signer) Sign(ctx context.Context, req *signrpc.SignRequest) (*signrpc.SignResponse, error) {
 	if s == nil || s.service == nil {
-		return nil, ErrSignerDisabled
+		return nil, errors.New("keyless signer is disabled")
 	}
 	return s.service.Sign(ctx, req)
+}
+
+func (s *Signer) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc(signrpc.SignPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "" && !strings.HasPrefix(ct, "application/json") {
+			writeJSONError(w, http.StatusUnsupportedMediaType, "content type must be application/json")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		defer r.Body.Close()
+
+		var req signrpc.SignRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+
+		resp, err := s.Sign(r.Context(), &req)
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, ksigner.ErrInvalidArgument):
+				status = http.StatusBadRequest
+			case errors.Is(err, ksigner.ErrPermissionDenied):
+				status = http.StatusForbidden
+			}
+			writeJSONError(w, status, err.Error())
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+	return mux
+}
+
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(signrpc.ErrorResponse{Error: message})
 }

@@ -1,205 +1,376 @@
-// Package sdk provides a client for registering leases with the Portal relay.
 package sdk
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
-	"sync"
+	"strings"
 	"time"
-
-	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal/keyless"
 	"gosuda.org/portal/types"
 )
 
-// SDK-specific errors.
-var (
-	ErrNoAvailableRelay = errors.New("no available relay")
-	ErrInvalidName      = errors.New("lease name must be a DNS label (letters, digits, hyphen; no dots or underscores)")
-)
-
-// ClientConfig configures the SDK client.
 type ClientConfig struct {
-	BootstrapServers   []string
-	ReverseDialTimeout time.Duration // Reverse connect dial timeout (default: 5 seconds)
+	RelayURL           string
+	RootCAPEM          []byte
+	InsecureSkipVerify bool
+	DialTimeout        time.Duration
+	RequestTimeout     time.Duration
+	HandshakeTimeout   time.Duration
+	LeaseTTL           time.Duration
+	RenewBefore        time.Duration
+	ReadyTarget        int
 }
 
-// ClientOption configures ClientConfig.
-type ClientOption func(*ClientConfig)
-
-// WithBootstrapServers sets the bootstrap relay servers.
-func WithBootstrapServers(servers []string) ClientOption {
-	return func(c *ClientConfig) {
-		c.BootstrapServers = servers
-	}
-}
-
-// WithReverseDialTimeout sets the reverse dial timeout.
-func WithReverseDialTimeout(timeout time.Duration) ClientOption {
-	return func(c *ClientConfig) {
-		c.ReverseDialTimeout = timeout
-	}
-}
-
-// Client is a minimal client for lease registration with the relay.
 type Client struct {
-	config *ClientConfig
-	mu     sync.Mutex
+	baseURL          *url.URL
+	httpClient       *http.Client
+	rawTLSConfig     *tls.Config
+	dialTimeout      time.Duration
+	handshakeTimeout time.Duration
+	leaseTTL         time.Duration
+	renewBefore      time.Duration
+	readyTarget      int
 }
 
-// NewClient creates a new SDK client.
-func NewClient(opt ...ClientOption) (*Client, error) {
-	config := &ClientConfig{
-		BootstrapServers:   []string{},
-		ReverseDialTimeout: 5 * time.Second,
-	}
-
-	for _, o := range opt {
-		o(config)
-	}
-
-	return &Client{config: config}, nil
-}
-
-// Listen creates a listener and registers it with the relay.
-// In reverse-connect mode (TCP tunnel + TLS SNI routing), this registers the
-// lease and returns a listener that accepts relay-proxied connections.
-func (c *Client) Listen(name string, options ...types.MetadataOption) (net.Listener, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if name == "" {
-		return nil, errors.New("name is required")
-	}
-	if !types.IsValidServiceName(name) {
-		return nil, ErrInvalidName
-	}
-
-	relayAddrs, err := types.NormalizeRelayAPIURLs(c.config.BootstrapServers)
+func NewClient(cfg ClientConfig) (*Client, error) {
+	baseURL, err := url.Parse(strings.TrimSpace(cfg.RelayURL))
 	if err != nil {
-		return nil, ErrNoAvailableRelay
+		return nil, fmt.Errorf("parse relay url: %w", err)
+	}
+	if !strings.EqualFold(baseURL.Scheme, "https") {
+		return nil, fmt.Errorf("relay url must use https: %q", cfg.RelayURL)
+	}
+	if baseURL.Host == "" {
+		return nil, fmt.Errorf("relay url host is empty: %q", cfg.RelayURL)
+	}
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
+
+	if cfg.DialTimeout <= 0 {
+		cfg.DialTimeout = 5 * time.Second
+	}
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = 15 * time.Second
+	}
+	if cfg.HandshakeTimeout <= 0 {
+		cfg.HandshakeTimeout = 15 * time.Second
+	}
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = 2 * time.Minute
+	}
+	if cfg.RenewBefore <= 0 {
+		cfg.RenewBefore = 30 * time.Second
+	}
+	if cfg.ReadyTarget <= 0 {
+		cfg.ReadyTarget = 1
 	}
 
-	lease, err := c.newLease(name, options...)
+	if len(cfg.RootCAPEM) == 0 && !cfg.InsecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout+cfg.HandshakeTimeout)
+		defer cancel()
+
+		_, rootCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
+		if bootstrapErr != nil {
+			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", bootstrapErr)
+		}
+		cfg.RootCAPEM = rootCAPEM
+	}
+
+	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
 	if err != nil {
 		return nil, err
 	}
 
-	listeners := make([]net.Listener, 0, len(relayAddrs))
-	closeActiveListeners := func() {
-		for _, listener := range listeners {
-			_ = listener.Close()
-		}
+	baseTLS := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         baseURL.Hostname(),
+		RootCAs:            rootCAs,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		NextProtos:         []string{"http/1.1"},
 	}
 
-	runCloseFns := func(closeFns []func()) {
-		for _, closeFn := range closeFns {
-			if closeFn != nil {
-				closeFn()
-			}
-		}
+	transport := &http.Transport{
+		TLSClientConfig:   baseTLS.Clone(),
+		ForceAttemptHTTP2: false,
 	}
 
-	for _, relayAddr := range relayAddrs {
-		tlsConfig, listenerCloseFns, tlsErr := c.buildTLSConfig(relayAddr, name)
-		if tlsErr != nil {
-			closeActiveListeners()
-			return nil, tlsErr
-		}
-
-		leaseCopy := *lease
-		listener, listenerErr := NewListener(relayAddr, &leaseCopy, tlsConfig, 0, c.config.ReverseDialTimeout, listenerCloseFns...)
-		if listenerErr != nil {
-			runCloseFns(listenerCloseFns)
-			closeActiveListeners()
-			return nil, fmt.Errorf("create relay listener: %w", listenerErr)
-		}
-
-		if startErr := listener.Start(); startErr != nil {
-			_ = listener.Close()
-			closeActiveListeners()
-			return nil, fmt.Errorf("start relay listener: %w", startErr)
-		}
-
-		listeners = append(listeners, listener)
-	}
-
-	listener := net.Listener(newMultiRelayListener(lease.ID, listeners))
-	if len(listeners) == 1 {
-		listener = listeners[0]
-	}
-
-	log.Info().
-		Str("lease_id", lease.ID).
-		Str("name", name).
-		Bool("tls", true).
-		Msg("[SDK] Lease registered with TLS")
-
-	return listener, nil
-}
-
-func (c *Client) newLease(name string, options ...types.MetadataOption) (*types.Lease, error) {
-	var metadata types.Metadata
-	for _, option := range options {
-		option(&metadata)
-	}
-
-	idBytes := make([]byte, 16)
-	if _, err := rand.Read(idBytes); err != nil {
-		return nil, fmt.Errorf("generate lease ID: %w", err)
-	}
-
-	tokenBytes := make([]byte, 16)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return nil, fmt.Errorf("generate reverse token: %w", err)
-	}
-
-	lease := &types.Lease{
-		ID:           hex.EncodeToString(idBytes),
-		Name:         name,
-		TLS:          true,
-		ReverseToken: hex.EncodeToString(tokenBytes),
-		Metadata: types.Metadata{
-			Description: metadata.Description,
-			Tags:        metadata.Tags,
-			Thumbnail:   metadata.Thumbnail,
-			Owner:       metadata.Owner,
-			Hide:        metadata.Hide,
+	return &Client{
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Transport: transport,
+			Timeout:   cfg.RequestTimeout,
 		},
-		Expires: time.Now().Add(30 * time.Second),
-	}
-	return lease, nil
+		rawTLSConfig:     baseTLS,
+		dialTimeout:      cfg.DialTimeout,
+		handshakeTimeout: cfg.HandshakeTimeout,
+		leaseTTL:         cfg.LeaseTTL,
+		renewBefore:      cfg.RenewBefore,
+		readyTarget:      cfg.ReadyTarget,
+	}, nil
 }
 
-func (c *Client) buildTLSConfig(relayAddr, leaseName string) (*tls.Config, []func(), error) {
-	parsed, err := url.Parse(relayAddr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid relay address: %s, %w", relayAddr, err)
+func (c *Client) Close() {
+	if c == nil || c.httpClient == nil {
+		return
 	}
-	keylessServerName := parsed.Hostname()
-	if keylessServerName == "" {
-		return nil, nil, fmt.Errorf("relay hostname is required: %s", relayAddr)
+	if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
 	}
-	baseHost := types.PortalRootHost(relayAddr)
-	if baseHost == "" {
-		return nil, nil, fmt.Errorf("keyless base host is required for relay %s", relayAddr)
-	}
-	domain := leaseName + "." + baseHost
-
-	tlsConfig, closeFn, err := keyless.BuildClientTLSConfig(relayAddr, keylessServerName, domain)
-	if err != nil {
-		return nil, nil, err
-	}
-	return tlsConfig, []func(){closeFn}, nil
 }
 
-// Close is a no-op kept for caller compatibility.
-func (c *Client) Close() error {
-	return nil
+func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, errors.New("listener name is required")
+	}
+
+	reverseToken := strings.TrimSpace(req.ReverseToken)
+	if reverseToken == "" {
+		reverseToken = randomToken()
+	}
+
+	readyTarget := req.ReadyTarget
+	if readyTarget <= 0 {
+		readyTarget = c.readyTarget
+	}
+	leaseTTL := req.LeaseTTL
+	if leaseTTL <= 0 {
+		leaseTTL = c.leaseTTL
+	}
+	acceptedCap := readyTarget * 2
+	if acceptedCap < 1 {
+		acceptedCap = 1
+	}
+
+	registerReq := types.RegisterRequest{
+		Name:         req.Name,
+		Hostnames:    append([]string(nil), req.Hostnames...),
+		Metadata:     req.Metadata,
+		ReverseToken: reverseToken,
+		TLS:          true,
+		TTLSeconds:   int(leaseTTL / time.Second),
+	}
+
+	var registerResp types.RegisterResponse
+	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
+		return nil, err
+	}
+
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(c.baseURL.String(), registerResp.Hostnames)
+	if err != nil {
+		_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
+		return nil, err
+	}
+
+	listenerCtx, cancel := context.WithCancel(ctx)
+	l := &Listener{
+		client:       c,
+		baseContext:  func() context.Context { return listenerCtx },
+		ctxDone:      listenerCtx.Done(),
+		cancel:       cancel,
+		leaseID:      registerResp.LeaseID,
+		hostnames:    append([]string(nil), registerResp.Hostnames...),
+		metadata:     registerResp.Metadata,
+		reverseToken: reverseToken,
+		leaseTTL:     leaseTTL,
+		readyTarget:  readyTarget,
+		tlsConfig:    tlsConf,
+		tlsCloser:    tlsCloser,
+		accepted:     make(chan net.Conn, acceptedCap),
+		signal:       make(chan struct{}, 1),
+	}
+
+	go l.runSupervisor()
+	go l.runRenewLoop()
+	l.notify()
+	return l, nil
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, payload any, out any) error {
+	var body io.Reader
+	if payload != nil {
+		buf, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal payload: %w", err)
+		}
+		body = bytes.NewReader(buf)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.resolve(path), body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var envelope apiEnvelope
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	if !envelope.OK {
+		if envelope.Error == nil {
+			return fmt.Errorf("api request failed with status %d", resp.StatusCode)
+		}
+		return fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(envelope.Data, out)
+}
+
+func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
+	return c.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
+		LeaseID:      leaseID,
+		ReverseToken: reverseToken,
+		TTLSeconds:   int(ttl / time.Second),
+	}, &types.RenewResponse{})
+}
+
+func (c *Client) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
+	return c.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+		LeaseID:      leaseID,
+		ReverseToken: reverseToken,
+	}, nil)
+}
+
+func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken string) (net.Conn, error) {
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: c.dialTimeout},
+		Config:    c.rawTLSConfig.Clone(),
+	}
+
+	conn, err := dialer.DialContext(ctx, "tcp", ensurePort(c.baseURL.Host))
+	if err != nil {
+		return nil, err
+	}
+
+	connectURL, err := url.Parse(c.resolve(types.PathSDKConnect))
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	query := connectURL.Query()
+	query.Set("lease_id", leaseID)
+	connectURL.RawQuery = query.Encode()
+
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    connectURL,
+		Host:   c.baseURL.Host,
+		Header: make(http.Header),
+	}
+	req.Header.Set(types.HeaderReverseToken, reverseToken)
+	req.Header.Set("Connection", "keep-alive")
+
+	if writeErr := req.Write(conn); writeErr != nil {
+		_ = conn.Close()
+		return nil, writeErr
+	}
+
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, req)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		_ = conn.Close()
+		return nil, fmt.Errorf("reverse connect failed: %s", strings.TrimSpace(string(body)))
+	}
+
+	return wrapBufferedConn(conn, reader), nil
+}
+
+func (c *Client) resolve(path string) string {
+	ref, _ := url.Parse(path)
+	return c.baseURL.ResolveReference(ref).String()
+}
+
+type apiEnvelope struct {
+	Error *types.APIError `json:"error"`
+	Data  json.RawMessage `json:"data"`
+	OK    bool            `json:"ok"`
+}
+
+func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
+	if len(rootCAPEM) == 0 {
+		return nil, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(rootCAPEM) {
+		return nil, errors.New("failed to parse relay root ca")
+	}
+	return pool, nil
+}
+
+func randomToken() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		panic(err)
+	}
+	return "tok_" + hex.EncodeToString(buf)
+}
+
+func ensurePort(host string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(host, "443")
+}
+
+func isLocalRelayHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.HasSuffix(host, ".localhost")
+}
+
+type bufferedConn struct {
+	net.Conn
+	reader *bytes.Reader
+}
+
+func wrapBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
+	if reader == nil || reader.Buffered() == 0 {
+		return conn
+	}
+	buf := make([]byte, reader.Buffered())
+	if _, err := io.ReadFull(reader, buf); err != nil {
+		return conn
+	}
+	return &bufferedConn{Conn: conn, reader: bytes.NewReader(buf)}
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	if c.reader != nil && c.reader.Len() > 0 {
+		return c.reader.Read(p)
+	}
+	return c.Conn.Read(p)
 }

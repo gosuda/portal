@@ -1,17 +1,18 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"html"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
 
-	"github.com/rs/zerolog/log"
-
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/admin"
 )
 
 type readDirFileFS interface {
@@ -19,12 +20,13 @@ type readDirFileFS interface {
 	fs.ReadDirFS
 }
 
-// Frontend handles serving embedded frontend assets and SSR.
+//go:embed dist/*
+var embeddedDistFS embed.FS
+
 type Frontend struct {
-	distFS readDirFileFS
-	admin  *Admin
-	// portalURL is injected runtime config used for OG metadata and SSR links.
+	distFS    readDirFileFS
 	portalURL string
+	server    *portal.Server
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
@@ -32,74 +34,115 @@ type Frontend struct {
 
 func NewFrontend(portalURL string) *Frontend {
 	return &Frontend{
-		distFS:    distFS,
+		distFS:    embeddedDistFS,
 		portalURL: strings.TrimSpace(portalURL),
 	}
 }
 
-// SetAdmin attaches an Admin instance. Frontend methods tolerate nil admin.
-func (f *Frontend) SetAdmin(admin *Admin) {
-	f.admin = admin
+func (f *Frontend) Bind(server *portal.Server) {
+	f.server = server
 }
 
-func (f *Frontend) initPortalHTMLCache() error {
-	var err error
-	f.cachedPortalHTML, err = f.distFS.ReadFile("dist/app/portal.html")
-	return err
-}
-
-func (f *Frontend) ServeAsset(mux *http.ServeMux, route, assetPath, contentType string) {
-	mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
-		fullPath := path.Join("dist", "app", assetPath)
-		b, err := f.distFS.ReadFile(fullPath)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(b)
-	})
-}
-
-// servePortalHTMLWithSSR serves portal.html with SSR data injection.
-func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request, serv *portal.RelayServer) {
-	setCORSHeaders(w)
-
-	// Initialize cache on first use
-	f.cachedPortalHTMLOnce.Do(func() {
-		if err := f.initPortalHTMLCache(); err != nil {
-			log.Error().Err(err).Msg("Failed to cache portal.html")
-		}
-	})
-
-	if f.cachedPortalHTML == nil {
+func (f *Frontend) ServeAsset(w http.ResponseWriter, r *http.Request, assetPath, contentType string) {
+	assetPath, ok := cleanFrontendPath(assetPath)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Inject SSR data into cached template
-	injectedHTML := f.injectServerData(string(f.cachedPortalHTML), serv)
-
-	// Inject OG metadata (defaults for main app)
-	injectedHTML = f.injectOGMetadata(injectedHTML, "", "", "")
-
-	// Set headers
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-
-	// Send response
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte(injectedHTML)); err != nil {
-		log.Debug().Err(err).Msg("failed to write portal HTML response")
+	fullPath := path.Join("dist", "app", assetPath)
+	data, err := f.distFS.ReadFile(fullPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
-
-	log.Debug().Msg("Served portal.html with SSR data")
+	if contentType == "" {
+		contentType = getContentType(path.Ext(assetPath))
+	}
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
-// injectOGMetadata replaces OG placeholders with actual values.
+func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPath string) {
+	appPath, ok := cleanFrontendPath(appPath)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if appPath == "" {
+		f.servePortalHTMLWithSSR(w)
+		return
+	}
+
+	fullPath := path.Join("dist", "app", appPath)
+	data, err := f.distFS.ReadFile(fullPath)
+	if err != nil {
+		if path.Ext(appPath) != "" {
+			http.NotFound(w, r)
+			return
+		}
+		f.servePortalHTMLWithSSR(w)
+		return
+	}
+
+	if contentType := getContentType(path.Ext(appPath)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func cleanFrontendPath(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", true
+	}
+
+	cleaned := strings.TrimPrefix(path.Clean("/"+raw), "/")
+	if cleaned == "." || cleaned == "" {
+		return "", true
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
+	f.cachedPortalHTMLOnce.Do(func() {
+		f.cachedPortalHTML, _ = f.distFS.ReadFile("dist/app/portal.html")
+	})
+
+	if len(f.cachedPortalHTML) == 0 {
+		http.NotFound(w, nil)
+		return
+	}
+
+	htmlContent := string(f.cachedPortalHTML)
+	htmlContent = f.injectServerData(htmlContent)
+	htmlContent = f.injectOGMetadata(htmlContent, "", "", "")
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(htmlContent))
+}
+
+func (f *Frontend) injectServerData(htmlContent string) string {
+	rows := admin.BuildLeaseRows(f.server, false, f.portalURL)
+	jsonData, err := json.Marshal(rows)
+	if err != nil {
+		jsonData = []byte("[]")
+	}
+	ssrScript := `<script id="__SSR_DATA__" type="application/json">` + string(jsonData) + `</script>`
+	return strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
+}
+
 func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL string) string {
 	if title == "" {
 		title = "Portal Proxy Gateway"
@@ -108,7 +151,6 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 	if imageURL == "" {
-		// Use absolute URL if possible
 		base := strings.TrimSuffix(f.portalURL, "/")
 		if !strings.HasPrefix(base, "http") {
 			base = "https://" + base
@@ -121,81 +163,34 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
 		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
 	)
-
 	return replacer.Replace(htmlContent)
 }
 
-// injectServerData injects server data into HTML for SSR.
-func (f *Frontend) injectServerData(htmlContent string, serv *portal.RelayServer) string {
-	// Get server data from lease manager
-	rows := []leaseRow{}
-	if f.admin != nil {
-		rows = convertLeaseEntriesToRows(serv, f.admin, false, f.portalURL)
+func getContentType(ext string) string {
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return ""
+	}
+	if contentType := mime.TypeByExtension(ext); contentType != "" {
+		return contentType
 	}
 
-	// Marshal to JSON
-	jsonData, err := json.Marshal(rows)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to marshal server data for SSR")
-		jsonData = []byte("[]")
+	switch strings.ToLower(ext) {
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".json", ".webmanifest":
+		return "application/json; charset=utf-8"
+	default:
+		return ""
 	}
-
-	// Create SSR script tag
-	ssrScript := `<script id="__SSR_DATA__" type="application/json">` + string(jsonData) + `</script>`
-
-	// Inject before </head> tag
-	injected := strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
-
-	log.Debug().
-		Int("rows", len(rows)).
-		Int("jsonSize", len(jsonData)).
-		Msg("Injected SSR data into HTML")
-
-	return injected
-}
-
-// ServeAppStatic serves static files for app UI (React app) from embedded FS.
-// Falls back to portal.html with SSR when path is root or file not found.
-func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPath string, serv *portal.RelayServer) {
-	// Prevent directory traversal
-	if strings.Contains(appPath, "..") {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	setCORSHeaders(w)
-
-	// If path is empty or "/", serve portal.html with SSR
-	if appPath == "" || appPath == "/" {
-		f.servePortalHTMLWithSSR(w, r, serv)
-		return
-	}
-
-	// Try to read from embedded FS
-	fullPath := path.Join("dist", "app", appPath)
-	data, err := f.distFS.ReadFile(fullPath)
-	if err != nil {
-		// File not found - fallback to portal.html with SSR for SPA routing
-		log.Debug().Err(err).Str("path", appPath).Msg("app static file not found, falling back to SSR")
-		f.servePortalHTMLWithSSR(w, r, serv)
-		return
-	}
-
-	// Set content type based on extension
-	ext := path.Ext(appPath)
-	contentType := getContentType(ext)
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	}
-
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(data); err != nil {
-		log.Debug().Err(err).Str("path", appPath).Msg("failed to write app static response")
-	}
-
-	log.Debug().
-		Str("path", appPath).
-		Int("size", len(data)).
-		Msg("served app static file")
 }

@@ -9,7 +9,12 @@ import (
 	"sync"
 )
 
-// IPFilter manages IP-based bans and lease-to-IP mapping.
+const (
+	xForwardedForHeader = "X-Forwarded-For"
+	xRealIPHeader       = "X-Real-IP"
+	xForwardedProto     = "X-Forwarded-Proto"
+)
+
 type IPFilter struct {
 	bannedIPs  map[string]struct{}
 	leaseToIP  map[string]string
@@ -20,14 +25,19 @@ type IPFilter struct {
 var (
 	trustedProxyMu    sync.RWMutex
 	trustedProxyCIDRs []*net.IPNet
+	defaultProxyCIDRs = mustParseProxyCIDRs(
+		"127.0.0.0/8",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16",
+		"100.64.0.0/10",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	)
 )
 
-const (
-	xForwardedForHeader = "X-Forwarded-For"
-	xRealIPHeader       = "X-Real-IP"
-)
-
-// NewIPFilter creates a new IP filter.
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
 		bannedIPs:  make(map[string]struct{}),
@@ -36,21 +46,6 @@ func NewIPFilter() *IPFilter {
 	}
 }
 
-// SetTrustedProxyCIDRs configures which remote peers can supply trusted forwarded headers.
-func SetTrustedProxyCIDRs(cidrs []*net.IPNet) {
-	trustedProxyMu.Lock()
-	defer trustedProxyMu.Unlock()
-
-	if len(cidrs) == 0 {
-		trustedProxyCIDRs = nil
-		return
-	}
-
-	trustedProxyCIDRs = append(make([]*net.IPNet, 0, len(cidrs)), cidrs...)
-}
-
-// ParseTrustedProxyCIDRs parses a comma-separated CIDR allowlist for trusted proxy peers.
-// Empty input returns nil, nil.
 func ParseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -61,29 +56,34 @@ func ParseTrustedProxyCIDRs(raw string) ([]*net.IPNet, error) {
 	cidrs := make([]*net.IPNet, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
-		candidate := strings.TrimSpace(part)
-		if candidate == "" {
+		part = strings.TrimSpace(part)
+		if part == "" {
 			continue
 		}
-
-		_, network, err := net.ParseCIDR(candidate)
+		_, network, err := net.ParseCIDR(part)
 		if err != nil {
-			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", candidate, err)
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", part, err)
 		}
-
-		networkKey := network.String()
-		if _, exists := seen[networkKey]; exists {
+		key := network.String()
+		if _, ok := seen[key]; ok {
 			continue
 		}
-
-		seen[networkKey] = struct{}{}
+		seen[key] = struct{}{}
 		cidrs = append(cidrs, network)
 	}
-
 	return cidrs, nil
 }
 
-// IsTrustedProxyRemoteAddr reports whether a remote peer is in the trusted proxy allowlist.
+func SetTrustedProxyCIDRs(cidrs []*net.IPNet) {
+	trustedProxyMu.Lock()
+	defer trustedProxyMu.Unlock()
+	if len(cidrs) == 0 {
+		trustedProxyCIDRs = nil
+		return
+	}
+	trustedProxyCIDRs = append(make([]*net.IPNet, 0, len(cidrs)), cidrs...)
+}
+
 func IsTrustedProxyRemoteAddr(remoteAddr string) bool {
 	remoteIP := parseRemoteAddrIP(remoteAddr)
 	if remoteIP == nil {
@@ -92,138 +92,159 @@ func IsTrustedProxyRemoteAddr(remoteAddr string) bool {
 
 	trustedProxyMu.RLock()
 	defer trustedProxyMu.RUnlock()
-
-	for _, network := range trustedProxyCIDRs {
+	networks := trustedProxyCIDRs
+	if len(networks) == 0 {
+		networks = defaultProxyCIDRs
+	}
+	for _, network := range networks {
 		if network != nil && network.Contains(remoteIP) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// BanIP adds an IP to the ban list.
-func (m *IPFilter) BanIP(ip string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.bannedIPs[ip] = struct{}{}
+func ExtractClientIP(r *http.Request, trustProxyHeaders bool) string {
+	if r == nil {
+		return ""
+	}
+
+	if trustProxyHeaders && IsTrustedProxyRemoteAddr(r.RemoteAddr) {
+		if xff := r.Header.Get(xForwardedForHeader); xff != "" {
+			if before, _, ok := strings.Cut(xff, ","); ok {
+				if ip := normalizeClientIPCandidate(before); ip != "" {
+					return ip
+				}
+			} else if ip := normalizeClientIPCandidate(xff); ip != "" {
+				return ip
+			}
+		}
+		if xri := r.Header.Get(xRealIPHeader); xri != "" {
+			if ip := normalizeClientIPCandidate(xri); ip != "" {
+				return ip
+			}
+		}
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	if normalized := normalizeClientIPCandidate(host); normalized != "" {
+		return normalized
+	}
+	return strings.TrimSpace(host)
 }
 
-// UnbanIP removes an IP from the ban list.
-func (m *IPFilter) UnbanIP(ip string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.bannedIPs, ip)
-}
-
-// IsIPBanned checks if an IP is banned.
-func (m *IPFilter) IsIPBanned(ip string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, banned := m.bannedIPs[ip]
-	return banned
-}
-
-// IsIPBannedByPolicy applies shared runtime policy rules before checking the ban map.
-func IsIPBannedByPolicy(ipFilter *IPFilter, candidate string) bool {
-	if ipFilter == nil {
+func IsSecureForwardedRequest(r *http.Request, trustProxyHeaders bool) bool {
+	if r == nil {
 		return false
 	}
-	candidate = strings.TrimSpace(candidate)
-	if candidate == "" {
+	if r.TLS != nil {
+		return true
+	}
+	if !trustProxyHeaders || !IsTrustedProxyRemoteAddr(r.RemoteAddr) {
 		return false
 	}
-	return ipFilter.IsIPBanned(candidate)
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get(xForwardedProto)), "https")
 }
 
-// GetBannedIPs returns all banned IPs.
-func (m *IPFilter) GetBannedIPs() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, 0, len(m.bannedIPs))
-	for ip := range m.bannedIPs {
-		result = append(result, ip)
+func (f *IPFilter) BanIP(ip string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bannedIPs[strings.TrimSpace(ip)] = struct{}{}
+}
+
+func (f *IPFilter) UnbanIP(ip string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.bannedIPs, strings.TrimSpace(ip))
+}
+
+func (f *IPFilter) IsIPBanned(ip string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	_, ok := f.bannedIPs[strings.TrimSpace(ip)]
+	return ok
+}
+
+func (f *IPFilter) BannedIPs() []string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := make([]string, 0, len(f.bannedIPs))
+	for ip := range f.bannedIPs {
+		out = append(out, ip)
 	}
-	return result
+	return out
 }
 
-// SetBannedIPs sets the banned IPs list (for loading from settings).
-func (m *IPFilter) SetBannedIPs(ips []string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.bannedIPs = make(map[string]struct{}, len(ips))
+func (f *IPFilter) SetBannedIPs(ips []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.bannedIPs = make(map[string]struct{}, len(ips))
 	for _, ip := range ips {
-		m.bannedIPs[ip] = struct{}{}
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		f.bannedIPs[ip] = struct{}{}
 	}
 }
 
-// RegisterLeaseIP associates a lease ID with an IP address.
-func (m *IPFilter) RegisterLeaseIP(leaseID, ip string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (f *IPFilter) RegisterLeaseIP(leaseID, ip string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	leaseID = strings.TrimSpace(leaseID)
+	ip = strings.TrimSpace(ip)
 	if leaseID == "" || ip == "" {
 		return
 	}
 
-	if oldIP, exists := m.leaseToIP[leaseID]; exists {
+	if oldIP, ok := f.leaseToIP[leaseID]; ok {
 		if oldIP == ip {
-			// Already registered; avoid duplicate lease entries per IP.
 			return
 		}
-		m.removeLeaseFromIP(leaseID, oldIP)
+		f.removeLeaseFromIPLocked(leaseID, oldIP)
 	}
-
-	// Defensively avoid duplicates if state was previously inconsistent.
-	if slices.Contains(m.ipToLeases[ip], leaseID) {
-		m.leaseToIP[leaseID] = ip
+	if slices.Contains(f.ipToLeases[ip], leaseID) {
+		f.leaseToIP[leaseID] = ip
 		return
 	}
 
-	m.leaseToIP[leaseID] = ip
-	m.ipToLeases[ip] = append(m.ipToLeases[ip], leaseID)
+	f.leaseToIP[leaseID] = ip
+	f.ipToLeases[ip] = append(f.ipToLeases[ip], leaseID)
 }
 
-// removeLeaseFromIP removes a lease from IP's lease list (must hold lock).
-func (m *IPFilter) removeLeaseFromIP(leaseID, ip string) {
-	leases := m.ipToLeases[ip]
-	for i, id := range leases {
-		if id == leaseID {
-			m.ipToLeases[ip] = append(leases[:i], leases[i+1:]...)
+func (f *IPFilter) LeaseIP(leaseID string) string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.leaseToIP[strings.TrimSpace(leaseID)]
+}
+
+func (f *IPFilter) RemoveLeaseIP(leaseID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	leaseID = strings.TrimSpace(leaseID)
+	ip, ok := f.leaseToIP[leaseID]
+	if !ok {
+		return
+	}
+	delete(f.leaseToIP, leaseID)
+	f.removeLeaseFromIPLocked(leaseID, ip)
+}
+
+func (f *IPFilter) removeLeaseFromIPLocked(leaseID, ip string) {
+	leases := f.ipToLeases[ip]
+	for i, candidate := range leases {
+		if candidate == leaseID {
+			f.ipToLeases[ip] = append(leases[:i], leases[i+1:]...)
 			break
 		}
 	}
-	if len(m.ipToLeases[ip]) == 0 {
-		delete(m.ipToLeases, ip)
+	if len(f.ipToLeases[ip]) == 0 {
+		delete(f.ipToLeases, ip)
 	}
-}
-
-// GetLeaseIP returns the IP address for a lease ID.
-func (m *IPFilter) GetLeaseIP(leaseID string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.leaseToIP[leaseID]
-}
-
-// GetIPLeases returns all lease IDs for an IP.
-func (m *IPFilter) GetIPLeases(ip string) []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, len(m.ipToLeases[ip]))
-	copy(result, m.ipToLeases[ip])
-	return result
-}
-
-// RemoveLeaseIP removes lease-to-IP mapping for a lease ID.
-func (m *IPFilter) RemoveLeaseIP(leaseID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	ip, exists := m.leaseToIP[leaseID]
-	if !exists {
-		return
-	}
-	delete(m.leaseToIP, leaseID)
-	m.removeLeaseFromIP(leaseID, ip)
 }
 
 func normalizeClientIPCandidate(raw string) string {
@@ -231,11 +252,9 @@ func normalizeClientIPCandidate(raw string) string {
 	if candidate == "" {
 		return ""
 	}
-
 	if ip := net.ParseIP(candidate); ip != nil {
 		return candidate
 	}
-
 	host, _, err := net.SplitHostPort(candidate)
 	if err != nil {
 		return ""
@@ -252,50 +271,21 @@ func parseRemoteAddrIP(remoteAddr string) net.IP {
 	if remoteAddr == "" {
 		return nil
 	}
-
 	host := remoteAddr
 	if parsedHost, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		host = parsedHost
 	}
-
 	return net.ParseIP(strings.TrimSpace(host))
 }
 
-// ExtractClientIP extracts the client IP from an HTTP request.
-// Forwarded headers are trusted only when trustProxyHeaders is true and peer is trusted.
-func ExtractClientIP(r *http.Request, trustProxyHeaders bool) string {
-	if r == nil {
-		return ""
-	}
-
-	if trustProxyHeaders && IsTrustedProxyRemoteAddr(r.RemoteAddr) {
-		// Check X-Forwarded-For header first (for proxied requests).
-		if xff := r.Header.Get(xForwardedForHeader); xff != "" {
-			// X-Forwarded-For can contain multiple IPs, take the first one.
-			if before, _, ok := strings.Cut(xff, ","); ok {
-				if ip := normalizeClientIPCandidate(before); ip != "" {
-					return ip
-				}
-			} else if ip := normalizeClientIPCandidate(xff); ip != "" {
-				return ip
-			}
+func mustParseProxyCIDRs(values ...string) []*net.IPNet {
+	cidrs := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			panic(err)
 		}
-
-		// Check X-Real-IP header.
-		if xri := r.Header.Get(xRealIPHeader); xri != "" {
-			if ip := normalizeClientIPCandidate(xri); ip != "" {
-				return ip
-			}
-		}
+		cidrs = append(cidrs, network)
 	}
-
-	// Fall back to RemoteAddr.
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	if normalized := normalizeClientIPCandidate(ip); normalized != "" {
-		return normalized
-	}
-	return strings.TrimSpace(ip)
+	return cidrs
 }

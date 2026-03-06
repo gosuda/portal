@@ -12,40 +12,37 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
-
-	"gosuda.org/portal/types"
 )
 
-// BuildClientTLSConfig builds a keyless TLS server config for tunnel-side TLS termination.
-// It returns the TLS config and a close callback for signer resources.
-func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Config, func(), error) {
-	if keylessServerName == "" {
-		return nil, nil, errors.New("keyless server name is required")
+func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioCloser, error) {
+	parsed, err := url.Parse(strings.TrimSpace(relayURL))
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse relay url: %w", err)
 	}
-	if domain == "" {
-		return nil, nil, errors.New("tls domain is required")
+	serverName := parsed.Hostname()
+	if serverName == "" {
+		return nil, nil, errors.New("relay hostname is required")
 	}
-	certPEM, rootCAPEM, err := ResolveMaterials(
-		context.Background(),
-		relayAddr,
-		keylessServerName,
-		nil,
-		nil,
-	)
+
+	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), relayURL, serverName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
-
-	if verifyErr := VerifyCertificateHostname(certPEM, domain); verifyErr != nil {
-		return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, verifyErr)
+	for _, domain := range domains {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		verifyErr := VerifyCertificateHostname(certPEM, domain)
+		if verifyErr != nil {
+			return nil, nil, fmt.Errorf("keyless certificate does not cover %s: %w", domain, verifyErr)
+		}
 	}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
-		Endpoint:   relayAddr,
-		ServerName: keylessServerName,
+		Endpoint:   relayURL,
+		ServerName: serverName,
 		KeyID:      RelayKeyID,
 		RootCAPEM:  rootCAPEM,
 	}, certPEM)
@@ -54,60 +51,33 @@ func BuildClientTLSConfig(relayAddr, keylessServerName, domain string) (*tls.Con
 	}
 
 	tlsConfig, err := keylesstls.NewServerTLSConfig(keylesstls.ServerTLSConfig{
-		CertPEM: certPEM,
-		Signer:  remoteSigner,
+		CertPEM:    certPEM,
+		Signer:     remoteSigner,
+		NextProtos: []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
 	})
 	if err != nil {
 		_ = remoteSigner.Close()
-		return nil, nil, fmt.Errorf("create keyless TLS config: %w", err)
+		return nil, nil, fmt.Errorf("create keyless tls config: %w", err)
 	}
-	tlsConfig.NextProtos = []string{"http/1.1"}
-
-	return tlsConfig, func() { _ = remoteSigner.Close() }, nil
+	return tlsConfig, remoteSigner, nil
 }
 
-// ResolveMaterials prepares certificate chain and root CAs for keyless TLS mode.
-func ResolveMaterials(
-	ctx context.Context,
-	keylessEndpoint string,
-	keylessServerName string,
-	inlineCertPEM []byte,
-	inlineRootCAPEM []byte,
-) ([]byte, []byte, error) {
-	certPEM := append([]byte(nil), inlineCertPEM...)
-	rootCAPEM := append([]byte(nil), inlineRootCAPEM...)
+type ioCloser interface {
+	Close() error
+}
 
-	// If both are explicitly provided, no need for endpoint fetch.
-	if len(certPEM) > 0 && len(rootCAPEM) > 0 {
-		return certPEM, rootCAPEM, nil
-	}
-
-	chainFromEndpoint, err := FetchEndpointCertificateChain(ctx, keylessEndpoint, keylessServerName)
-	if err != nil && len(certPEM) == 0 {
-		return nil, nil, fmt.Errorf("auto-discover certificate chain from signer endpoint: %w", err)
-	}
+func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte, []byte, error) {
+	chainPEM, err := FetchEndpointCertificateChain(ctx, endpoint, serverName)
 	if err != nil {
-		log.Debug().Err(err).Msg("[SDK] Failed to fetch cert from endpoint, using inline materials")
+		return nil, nil, fmt.Errorf("fetch signer certificate chain: %w", err)
 	}
-
-	if len(certPEM) == 0 {
-		certPEM = chainFromEndpoint
-	}
-	if len(certPEM) == 0 {
+	if len(chainPEM) == 0 {
 		return nil, nil, errors.New("keyless certificate chain is required")
 	}
-
-	if len(rootCAPEM) == 0 && len(chainFromEndpoint) > 0 {
-		rootCAPEM = append([]byte(nil), chainFromEndpoint...)
-	}
-	if len(rootCAPEM) == 0 {
-		rootCAPEM = append([]byte(nil), certPEM...)
-	}
-
-	return certPEM, rootCAPEM, nil
+	return append([]byte(nil), chainPEM...), append([]byte(nil), chainPEM...), nil
 }
 
-// VerifyCertificateHostname checks whether the leaf cert covers hostname.
 func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 	_, leaf, err := ParseCertificateChainPEM(certPEM)
 	if err != nil {
@@ -116,7 +86,6 @@ func VerifyCertificateHostname(certPEM []byte, hostname string) error {
 	return leaf.VerifyHostname(hostname)
 }
 
-// ParseCertificateChainPEM parses PEM cert chain and returns DER chain + leaf.
 func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, error) {
 	if len(certPEM) == 0 {
 		return nil, nil, errors.New("certificate PEM is empty")
@@ -142,13 +111,11 @@ func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, erro
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse leaf certificate: %w", err)
 	}
-
 	return chain, leaf, nil
 }
 
-// FetchEndpointCertificateChain fetches peer cert chain from signer endpoint.
-func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverName string) ([]byte, error) {
-	raw := endpoint
+func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {
+	raw := strings.TrimSpace(endpoint)
 	if raw == "" {
 		return nil, errors.New("endpoint is required")
 	}
@@ -158,10 +125,10 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("parse endpoint URL: %w", err)
+		return nil, fmt.Errorf("parse endpoint url: %w", err)
 	}
-	if u.Scheme == "http" {
-		return nil, errors.New("http signer endpoint does not expose TLS certificate chain (use https endpoint)")
+	if !strings.EqualFold(u.Scheme, "https") {
+		return nil, errors.New("keyless endpoint must use https")
 	}
 
 	host := u.Hostname()
@@ -185,11 +152,12 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
-		InsecureSkipVerify: types.IsLocalhost(host),
+		InsecureSkipVerify: isLocalhost(host),
+		NextProtos:         []string{"http/1.1"},
 	})
 	defer tlsConn.Close()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("TLS handshake with signer endpoint: %w", err)
+		return nil, fmt.Errorf("tls handshake with signer endpoint: %w", err)
 	}
 
 	peerCerts := tlsConn.ConnectionState().PeerCertificates
@@ -205,4 +173,16 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint string, serverN
 		})...)
 	}
 	return chainPEM, nil
+}
+
+func isLocalhost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	switch host {
+	case "", "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.HasSuffix(host, ".localhost")
 }

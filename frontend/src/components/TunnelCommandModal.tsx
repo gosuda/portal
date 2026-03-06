@@ -74,14 +74,16 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     const relayUrlVal =
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
     const tunnelScriptURL = new URL(API_PATHS.tunnel, currentOrigin).toString();
+    const localhostRelay = isLocalRelayOrigin(currentOrigin);
 
     if (os === "windows") {
       const windowsScriptURL = new URL(tunnelScriptURL);
       windowsScriptURL.searchParams.set("os", "windows");
-      return `$ProgressPreference = 'SilentlyContinue'; $env:APP_HOST="${hostVal}"; $env:APP_NAME="${nameVal}"; $env:RELAYS="${relayUrlVal}"; irm ${windowsScriptURL.toString()} | iex`;
+      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${windowsScriptURL.toString()} | iex`;
     }
 
-    return `curl -fsSL ${tunnelScriptURL} | APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
+    const curlFlags = localhostRelay ? "-kfsSL" : "-fsSL";
+    return `curl ${curlFlags} ${tunnelScriptURL} | APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
   }, [currentOrigin, host, name, relayUrls, os]);
 
   const handleCopy = async () => {
@@ -124,7 +126,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Host
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_HOST=</span>
+              <span className="px-3 text-sm text-text-muted">
+                {os === "windows" ? "HOST=" : "APP_HOST="}
+              </span>
               <Input
                 id="host"
                 type="text"
@@ -148,7 +152,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Service Name
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_NAME=</span>
+              <span className="px-3 text-sm text-text-muted">
+                {os === "windows" ? "NAME=" : "APP_NAME="}
+              </span>
               <Input
                 id="name"
                 type="text"
@@ -267,4 +273,19 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function isLocalRelayOrigin(origin: string): boolean {
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname.trim().toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
 }

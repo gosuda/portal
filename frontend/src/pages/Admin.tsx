@@ -28,7 +28,6 @@ export function Admin() {
     handleBanFilterChange,
     handleToggleFavorite,
     handleBanStatus,
-    handleBPSChange,
     handleApprovalModeChange,
     handleApproveStatus,
     handleDenyStatus,
@@ -83,7 +82,6 @@ export function Admin() {
         approvalMode={approvalMode}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
-        onBPSChange={handleBPSChange}
         onApprovalModeChange={handleApprovalModeChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
