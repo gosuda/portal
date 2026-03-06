@@ -169,8 +169,8 @@ func (a *Authenticator) enforceFailedLoginCapLocked() {
 	}
 
 	type failedEntry struct {
-		ip         string
 		lastSeenAt time.Time
+		ip         string
 	}
 
 	entries := make([]failedEntry, 0, len(a.failedLogins))

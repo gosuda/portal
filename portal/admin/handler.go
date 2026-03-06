@@ -14,34 +14,28 @@ import (
 
 const cookieName = "portal_admin"
 
-type Config struct {
-	PortalURL      string
-	Secret         string
-	SettingsPath   string
-	TrustProxy     bool
-	ServeAppStatic func(http.ResponseWriter, *http.Request, string)
-}
-
 type Handler struct {
 	auth           *policy.Authenticator
 	runtime        *policy.Runtime
 	server         *portal.Server
 	settings       *stateStore
-	portalURL      string
-	trustProxy     bool
 	serveAppStatic func(http.ResponseWriter, *http.Request, string)
+	buildLeaseRows func(*portal.Server, bool) []LeaseRow
+	trustProxy     bool
 }
 
-func NewHandler(cfg Config) *Handler {
+func NewHandler(portalURL, secret, settingsPath string, trustProxy bool, serveAppStatic func(http.ResponseWriter, *http.Request, string)) *Handler {
 	h := &Handler{
-		auth:       policy.NewAuthenticator(strings.TrimSpace(cfg.Secret)),
-		runtime:    policy.NewRuntime(),
-		settings:   newStateStore(cfg.SettingsPath),
-		portalURL:  strings.TrimSpace(cfg.PortalURL),
-		trustProxy: cfg.TrustProxy,
+		auth:     policy.NewAuthenticator(strings.TrimSpace(secret)),
+		runtime:  policy.NewRuntime(),
+		settings: newStateStore(settingsPath),
+		buildLeaseRows: func(serv *portal.Server, includeAdmin bool) []LeaseRow {
+			return BuildLeaseRows(serv, includeAdmin, portalURL)
+		},
+		trustProxy: trustProxy,
 	}
-	if cfg.ServeAppStatic != nil {
-		h.serveAppStatic = cfg.ServeAppStatic
+	if serveAppStatic != nil {
+		h.serveAppStatic = serveAppStatic
 	} else {
 		h.serveAppStatic = func(w http.ResponseWriter, r *http.Request, _ string) {
 			http.NotFound(w, r)
@@ -205,7 +199,7 @@ func (h *Handler) handleLeases(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	writeAPIData(w, http.StatusOK, BuildLeaseRows(h.server, true, h.portalURL))
+	writeAPIData(w, http.StatusOK, h.buildLeaseRows(h.server, true))
 }
 
 func (h *Handler) handleBannedLeases(w http.ResponseWriter, r *http.Request) {

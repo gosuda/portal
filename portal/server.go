@@ -396,8 +396,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusForbidden, "lease_rejected", "lease is not approved for routing")
 		return
 	}
-	if err := s.authorizeLeaseToken(lease, token); err != nil {
-		writeAPIError(w, http.StatusForbidden, "unauthorized", err.Error())
+	if authErr := s.authorizeLeaseToken(lease, token); authErr != nil {
+		writeAPIError(w, http.StatusForbidden, "unauthorized", authErr.Error())
 		return
 	}
 

@@ -56,17 +56,11 @@ func runServer(cfg relayServerConfig) error {
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
-	adminHandler := portaladmin.NewHandler(portaladmin.Config{
-		PortalURL:    cfg.PortalURL,
-		Secret:       cfg.AdminSecretKey,
-		TrustProxy:   cfg.TrustProxyHeaders,
-		SettingsPath: "admin_settings.json",
-		ServeAppStatic: func(w http.ResponseWriter, r *http.Request, appPath string) {
-			frontend.ServeAppStatic(w, r, appPath)
-		},
+	adminHandler := portaladmin.NewHandler(cfg.PortalURL, cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
+		frontend.ServeAppStatic(w, r, appPath)
 	})
-	if err := adminHandler.LoadSettings(); err != nil {
-		logger.Warn().Err(err).Msg("load admin settings")
+	if loadErr := adminHandler.LoadSettings(); loadErr != nil {
+		logger.Warn().Err(loadErr).Msg("load admin settings")
 	}
 
 	server, err := portal.NewServer(portal.ServerConfig{

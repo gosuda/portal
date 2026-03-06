@@ -15,12 +15,8 @@ import (
 func TestLoginAndProtectedActions(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(Config{
-		Secret:       "secret-key",
-		SettingsPath: filepath.Join(t.TempDir(), "admin_settings.json"),
-		ServeAppStatic: func(w http.ResponseWriter, _ *http.Request, _ string) {
-			w.WriteHeader(http.StatusOK)
-		},
+	handler := NewHandler("https://portal.example.com", "secret-key", filepath.Join(t.TempDir(), "admin_settings.json"), false, func(w http.ResponseWriter, _ *http.Request, _ string) {
+		w.WriteHeader(http.StatusOK)
 	})
 
 	loginRecorder := httptest.NewRecorder()
