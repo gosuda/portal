@@ -14,6 +14,17 @@ import (
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/acme"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
+)
+
+const (
+	pathFaviconICO           = "/favicon.ico"
+	pathFaviconSVG           = "/favicon.svg"
+	pathFavicon96PNG         = "/favicon-96x96.png"
+	pathAppleTouchIconPNG    = "/apple-touch-icon.png"
+	pathWebAppManifest192PNG = "/web-app-manifest-192x192.png"
+	pathWebAppManifest512PNG = "/web-app-manifest-512x512.png"
+	pathPortalJPG            = "/portal.jpg"
 )
 
 func runServer(cfg relayServerConfig) error {
@@ -97,25 +108,25 @@ func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http
 			switch {
 			case isRelayControlPlanePath(r.URL.Path):
 				base.ServeHTTP(w, r)
-			case r.URL.Path == "/v1/sign":
+			case r.URL.Path == types.PathV1Sign:
 				base.ServeHTTP(w, r)
-			case r.URL.Path == "/healthz":
+			case r.URL.Path == types.PathHealthz:
 				base.ServeHTTP(w, r)
 			case isFrontendRootAssetPath(r.URL.Path):
 				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/assets/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAssetsPrefix):
 				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
-			case r.URL.Path == "/" || r.URL.Path == "/app" || r.URL.Path == "/app/":
+			case r.URL.Path == types.PathRoot || r.URL.Path == types.PathApp || r.URL.Path == types.PathAppPrefix:
 				frontend.ServeAppStatic(w, r, "")
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/app/"):
-				frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/app/"))
-			case r.URL.Path == "/admin" || r.URL.Path == "/admin/":
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix):
+				frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+			case r.URL.Path == types.PathAdmin || r.URL.Path == types.PathAdminPrefix:
 				admin.HandleAdminRequest(w, r)
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/admin/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAdminPrefix):
 				admin.HandleAdminRequest(w, r)
-			case r.URL.Path == "/tunnel":
+			case r.URL.Path == types.PathTunnel:
 				serveTunnelScript(w, r, cfg.PortalURL)
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), "/tunnel/bin/"):
+			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathTunnelBinPrefix):
 				serveTunnelBinary(w, r)
 			default:
 				base.ServeHTTP(w, r)
@@ -126,13 +137,13 @@ func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http
 
 func isFrontendRootAssetPath(requestPath string) bool {
 	switch requestPath {
-	case "/favicon.ico",
-		"/favicon.svg",
-		"/favicon-96x96.png",
-		"/apple-touch-icon.png",
-		"/web-app-manifest-192x192.png",
-		"/web-app-manifest-512x512.png",
-		"/portal.jpg":
+	case pathFaviconICO,
+		pathFaviconSVG,
+		pathFavicon96PNG,
+		pathAppleTouchIconPNG,
+		pathWebAppManifest192PNG,
+		pathWebAppManifest512PNG,
+		pathPortalJPG:
 		return true
 	default:
 		return false
@@ -148,4 +159,27 @@ func mustRead(path string) []byte {
 		log.Fatal().Err(err).Str("path", path).Msg("read pem file")
 	}
 	return data
+}
+
+func parseURLs(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func isRelayControlPlanePath(path string) bool {
+	switch strings.TrimSpace(path) {
+	case types.PathSDKRegister, types.PathSDKConnect, types.PathSDKRenew, types.PathSDKUnregister, types.PathSDKDomain:
+		return true
+	}
+	return strings.HasPrefix(path, types.PathSDKPrefix)
 }

@@ -10,16 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
-
-type LeaseMetadata = portal.LeaseMetadata
 
 type ListenRequest struct {
 	Name         string
 	ReverseToken string
 	Hostnames    []string
-	Metadata     LeaseMetadata
+	Metadata     types.LeaseMetadata
 	ReadyTarget  int
 	LeaseTTL     time.Duration
 }
@@ -36,7 +34,7 @@ type Listener struct {
 	leaseID        string
 	reverseToken   string
 	hostnames      []string
-	metadata       LeaseMetadata
+	metadata       types.LeaseMetadata
 	readyTarget    int
 	leaseTTL       time.Duration
 	activeSessions int
@@ -85,7 +83,7 @@ func (l *Listener) Hostnames() []string {
 	return append([]string(nil), l.hostnames...)
 }
 
-func (l *Listener) Metadata() LeaseMetadata {
+func (l *Listener) Metadata() types.LeaseMetadata {
 	return l.metadata
 }
 
@@ -166,9 +164,9 @@ func (l *Listener) awaitActivation(conn net.Conn) error {
 		_ = conn.SetReadDeadline(time.Time{})
 
 		switch marker[0] {
-		case portal.MarkerKeepalive:
+		case types.MarkerKeepalive:
 			continue
-		case portal.MarkerTLSStart:
+		case types.MarkerTLSStart:
 			return l.activate(conn)
 		default:
 			return fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])

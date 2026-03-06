@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"gosuda.org/portal/types"
 )
 
 const (
@@ -108,7 +110,7 @@ func intOrDefault(v, fallback int) int {
 	return fallback
 }
 
-func normalizeMetadata(meta LeaseMetadata) LeaseMetadata {
+func normalizeMetadata(meta types.LeaseMetadata) types.LeaseMetadata {
 	meta.Description = strings.TrimSpace(meta.Description)
 	meta.Owner = strings.TrimSpace(meta.Owner)
 	meta.Thumbnail = strings.TrimSpace(meta.Thumbnail)

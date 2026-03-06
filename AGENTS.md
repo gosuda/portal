@@ -70,6 +70,15 @@ Source of truth for architecture decisions: `docs/adr/README.md` and linked ADRs
 1. **All HTTP responses use the `APIEnvelope` wrapper:** `{ ok: bool, data?: any, error?: { code, message } }` (defined in `types/api.go`). Write responses through `writeAPIData()`, `writeAPIOK()`, or `writeAPIError()` helpers — never raw JSON.
    - Why: cross-cutting contract across all endpoints; inconsistent envelopes break SDK and frontend parsing.
 
+## Shared Types Package
+
+1. **`types/` is reserved for shared wire/public types and protocol constants only.**
+   - Allowed: request/response DTOs, shared metadata structs, protocol marker/header/path constants.
+   - Not allowed: relay runtime state, broker/session state, server config, SDK lifecycle state, generic helpers.
+
+2. **Do not import `portal` from `cmd/*` or `sdk` just to reach shared DTOs or protocol constants.**
+   - Why: `portal` is relay runtime code; shared public shapes belong in `types/`.
+
 ## Operational Truths (CI-Aligned, Minimal)
 
 1. **CI verification commands:** `make vet`, `make lint`, `make test`, `make vuln`. These are the enforced checks in `.github/workflows/ci.yml`. Note: `make tidy` is a local maintenance/pre-release step, not part of CI.

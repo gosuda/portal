@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
 )
 
 type ClientConfig struct {
@@ -46,14 +46,19 @@ type Client struct {
 }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
-	relayURL, err := portal.NormalizeRelayURL(cfg.RelayURL)
-	if err != nil {
-		return nil, err
-	}
-	baseURL, err := url.Parse(relayURL)
+	baseURL, err := url.Parse(strings.TrimSpace(cfg.RelayURL))
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
+	if !strings.EqualFold(baseURL.Scheme, "https") {
+		return nil, fmt.Errorf("relay url must use https: %q", cfg.RelayURL)
+	}
+	if baseURL.Host == "" {
+		return nil, fmt.Errorf("relay url host is empty: %q", cfg.RelayURL)
+	}
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
 
 	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
 	if err != nil {
@@ -134,8 +139,12 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	if leaseTTL <= 0 {
 		leaseTTL = c.leaseTTL
 	}
+	acceptedCap := readyTarget * 2
+	if acceptedCap < 1 {
+		acceptedCap = 1
+	}
 
-	registerReq := portal.RegisterRequest{
+	registerReq := types.RegisterRequest{
 		Name:         req.Name,
 		Hostnames:    append([]string(nil), req.Hostnames...),
 		Metadata:     req.Metadata,
@@ -144,8 +153,8 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		TTLSeconds:   int(leaseTTL / time.Second),
 	}
 
-	var registerResp portal.RegisterResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/sdk/register", registerReq, &registerResp); err != nil {
+	var registerResp types.RegisterResponse
+	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
 		return nil, err
 	}
 
@@ -169,7 +178,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		readyTarget:  readyTarget,
 		tlsConfig:    tlsConf,
 		tlsCloser:    tlsCloser,
-		accepted:     make(chan net.Conn, max(readyTarget*2, 1)),
+		accepted:     make(chan net.Conn, acceptedCap),
 		signal:       make(chan struct{}, 1),
 	}
 
@@ -218,15 +227,15 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 }
 
 func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
-	return c.doJSON(ctx, http.MethodPost, "/sdk/renew", portal.RenewRequest{
+	return c.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
 		TTLSeconds:   int(ttl / time.Second),
-	}, &portal.RenewResponse{})
+	}, &types.RenewResponse{})
 }
 
 func (c *Client) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
-	return c.doJSON(ctx, http.MethodPost, "/sdk/unregister", portal.UnregisterRequest{
+	return c.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
 	}, nil)
@@ -243,7 +252,7 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 		return nil, err
 	}
 
-	connectURL, err := url.Parse(c.resolve("/sdk/connect"))
+	connectURL, err := url.Parse(c.resolve(types.PathSDKConnect))
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -258,7 +267,7 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 		Host:   c.baseURL.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(portal.HeaderReverseToken, reverseToken)
+	req.Header.Set(types.HeaderReverseToken, reverseToken)
 	req.Header.Set("Connection", "keep-alive")
 
 	if writeErr := req.Write(conn); writeErr != nil {
@@ -289,9 +298,9 @@ func (c *Client) resolve(path string) string {
 }
 
 type apiEnvelope struct {
-	Error *portal.APIError `json:"error"`
-	Data  json.RawMessage  `json:"data"`
-	OK    bool             `json:"ok"`
+	Error *types.APIError `json:"error"`
+	Data  json.RawMessage `json:"data"`
+	OK    bool            `json:"ok"`
 }
 
 func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {

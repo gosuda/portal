@@ -3,12 +3,15 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html"
 	"io/fs"
+	"mime"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"gosuda.org/portal/portal"
 )
@@ -162,4 +165,96 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
 	)
 	return replacer.Replace(htmlContent)
+}
+
+func getContentType(ext string) string {
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return ""
+	}
+	if contentType := mime.TypeByExtension(ext); contentType != "" {
+		return contentType
+	}
+
+	switch strings.ToLower(ext) {
+	case ".js", ".mjs":
+		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".svg":
+		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".json", ".webmanifest":
+		return "application/json; charset=utf-8"
+	default:
+		return ""
+	}
+}
+
+type leaseRow struct {
+	TTL       string
+	Metadata  string
+	Kind      string
+	DNS       string
+	Name      string
+	Peer      string
+	Link      string
+	Hide      bool
+	Connected bool
+}
+
+func convertLeaseEntriesToRows(serv *portal.Server, includeHidden bool, portalURL string) []leaseRow {
+	if serv == nil {
+		return nil
+	}
+	snapshots := serv.ListLeases()
+	rows := make([]leaseRow, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if !includeHidden && snapshot.Metadata.Hide {
+			continue
+		}
+		metadataJSON, _ := json.Marshal(snapshot.Metadata)
+		host := ""
+		if len(snapshot.Hostnames) > 0 {
+			host = snapshot.Hostnames[0]
+		}
+		rows = append(rows, leaseRow{
+			TTL:       formatDuration(time.Until(snapshot.ExpiresAt)),
+			Metadata:  string(metadataJSON),
+			Kind:      "https",
+			DNS:       host,
+			Name:      snapshot.Name,
+			Peer:      snapshot.ID,
+			Link:      leaseLink(host, portalURL),
+			Hide:      snapshot.Metadata.Hide,
+			Connected: snapshot.Ready > 0,
+		})
+	}
+	return rows
+}
+
+func formatDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d > time.Hour {
+		return fmt.Sprintf("%.0fh", d.Hours())
+	}
+	if d > time.Minute {
+		return fmt.Sprintf("%.0fm", d.Minutes())
+	}
+	return fmt.Sprintf("%.0fs", d.Seconds())
+}
+
+func leaseLink(host, portalURL string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	return "https://" + host + "/"
 }

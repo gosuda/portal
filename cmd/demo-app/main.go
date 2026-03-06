@@ -21,6 +21,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 //go:embed static
@@ -74,7 +75,7 @@ func runDemo() error {
 
 	listener, err := sdkClient.Listen(ctx, sdk.ListenRequest{
 		Name: flagName,
-		Metadata: sdk.LeaseMetadata{
+		Metadata: types.LeaseMetadata{
 			Description: flagDesc,
 			Tags:        splitCSV(flagTags),
 			Owner:       flagOwner,

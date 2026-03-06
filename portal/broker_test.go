@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"gosuda.org/portal/types"
 )
 
 func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
@@ -49,8 +51,8 @@ func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("ReadFull() error = %v", err)
 	case marker := <-markerCh:
-		if marker != MarkerTLSStart {
-			t.Fatalf("marker = 0x%02x, want 0x%02x", marker, MarkerTLSStart)
+		if marker != types.MarkerTLSStart {
+			t.Fatalf("marker = 0x%02x, want 0x%02x", marker, types.MarkerTLSStart)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for activation marker")

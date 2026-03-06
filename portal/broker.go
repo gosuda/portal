@@ -7,6 +7,10 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
+
+	"gosuda.org/portal/types"
 )
 
 var (
@@ -150,6 +154,12 @@ func (b *leaseBroker) watchSession(session *reverseSession) {
 			break
 		}
 	}
+	log.Info().
+		Str("component", "relay-server").
+		Str("lease_id", b.leaseID).
+		Str("remote_addr", session.RemoteAddr()).
+		Int("ready", len(b.ready)).
+		Msg("sdk reverse disconnected")
 	b.signalLocked()
 }
 
@@ -195,6 +205,13 @@ func (s *reverseSession) Conn() net.Conn {
 
 func (s *reverseSession) Done() <-chan struct{} {
 	return s.done
+}
+
+func (s *reverseSession) RemoteAddr() string {
+	if s == nil || s.conn == nil || s.conn.RemoteAddr() == nil {
+		return ""
+	}
+	return s.conn.RemoteAddr().String()
 }
 
 func (s *reverseSession) IsClosed() bool {
@@ -249,7 +266,7 @@ func (s *reverseSession) Activate() error {
 		return net.ErrClosed
 	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-	_, err := s.conn.Write([]byte{MarkerTLSStart})
+	_, err := s.conn.Write([]byte{types.MarkerTLSStart})
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		_ = s.Close()
@@ -303,7 +320,7 @@ func (s *reverseSession) runKeepalive(stop <-chan struct{}, done chan<- struct{}
 			return
 		}
 		_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-		_, err := s.conn.Write([]byte{MarkerKeepalive})
+		_, err := s.conn.Write([]byte{types.MarkerKeepalive})
 		_ = s.conn.SetWriteDeadline(time.Time{})
 		s.mu.Unlock()
 		if err != nil {

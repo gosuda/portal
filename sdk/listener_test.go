@@ -23,6 +23,7 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
 )
 
 func selfSignedCertPEM(hosts ...string) (certPEM, keyPEM []byte, err error) {
@@ -122,7 +123,7 @@ func TestListenerEndToEndTLSHTTP(t *testing.T) {
 	listener, err := client.Listen(ctx, ListenRequest{
 		Name:      "demo",
 		Hostnames: []string{tenantHost},
-		Metadata: LeaseMetadata{
+		Metadata: types.LeaseMetadata{
 			Description: "demo description",
 			Tags:        []string{"demo", "test", "demo"},
 			Owner:       "portal",

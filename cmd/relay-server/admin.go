@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/types"
 )
 
 type Admin struct {
@@ -38,9 +39,9 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch strings.TrimSuffix(r.URL.Path, "/") {
-	case "/admin":
+	case types.PathAdmin:
 		a.handleAdminIndex(w)
-	case "/admin/leases":
+	case types.PathAdminLeases:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(convertLeaseEntriesToRows(a.server, true, a.frontend.portalURL))
@@ -52,7 +53,7 @@ func (a *Admin) HandleAdminRequest(w http.ResponseWriter, r *http.Request) {
 func (a *Admin) handleAdminIndex(w http.ResponseWriter) {
 	rows := convertLeaseEntriesToRows(a.server, true, a.frontend.portalURL)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `<!doctype html><html><body><h1>Portal Admin</h1><p>%d leases</p><p><a href="/admin/leases">JSON lease list</a></p></body></html>`, len(rows))
+	_, _ = fmt.Fprintf(w, `<!doctype html><html><body><h1>Portal Admin</h1><p>%d leases</p><p><a href="%s">JSON lease list</a></p></body></html>`, len(rows), types.PathAdminLeases)
 }
 
 func (a *Admin) authorize(r *http.Request) bool {

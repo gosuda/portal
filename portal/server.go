@@ -14,11 +14,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
-
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/types"
 )
 
 type ServerConfig struct {
@@ -60,7 +61,7 @@ type leaseRecord struct {
 	Name         string
 	ReverseToken string
 	Hostnames    []string
-	Metadata     LeaseMetadata
+	Metadata     types.LeaseMetadata
 }
 
 type LeaseSnapshot struct {
@@ -68,7 +69,7 @@ type LeaseSnapshot struct {
 	ID        string
 	Name      string
 	Hostnames []string
-	Metadata  LeaseMetadata
+	Metadata  types.LeaseMetadata
 	Ready     int
 }
 
@@ -244,14 +245,14 @@ func (s *Server) ListLeases() []LeaseSnapshot {
 func (s *Server) apiHandler() http.Handler {
 	mux := http.NewServeMux()
 	if s.cfg.KeylessSignerHandler != nil {
-		mux.Handle("/v1/sign", s.cfg.KeylessSignerHandler)
+		mux.Handle(types.PathV1Sign, s.cfg.KeylessSignerHandler)
 	}
-	mux.HandleFunc("/healthz", s.handleHealthz)
-	mux.HandleFunc("/sdk/domain", s.handleDomain)
-	mux.HandleFunc("/sdk/register", s.handleRegister)
-	mux.HandleFunc("/sdk/renew", s.handleRenew)
-	mux.HandleFunc("/sdk/unregister", s.handleUnregister)
-	mux.HandleFunc("/sdk/connect", s.handleConnect)
+	mux.HandleFunc(types.PathHealthz, s.handleHealthz)
+	mux.HandleFunc(types.PathSDKDomain, s.handleDomain)
+	mux.HandleFunc(types.PathSDKRegister, s.handleRegister)
+	mux.HandleFunc(types.PathSDKRenew, s.handleRenew)
+	mux.HandleFunc(types.PathSDKUnregister, s.handleUnregister)
+	mux.HandleFunc(types.PathSDKConnect, s.handleConnect)
 	mux.HandleFunc("/", s.handleRoot)
 	return mux
 }
@@ -273,7 +274,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.URL.Query().Get("name")
-	writeAPIData(w, http.StatusOK, DomainResponse{
+	writeAPIData(w, http.StatusOK, types.DomainResponse{
 		RootHost:          s.cfg.RootHost,
 		SuggestedHostname: suggestHostname(name, s.cfg.RootHost),
 	})
@@ -284,7 +285,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	var req RegisterRequest
+	var req types.RegisterRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
@@ -306,7 +307,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	var req RenewRequest
+	var req types.RenewRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
@@ -331,7 +332,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
-	var req UnregisterRequest
+	var req types.UnregisterRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
@@ -361,7 +362,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
-	token := strings.TrimSpace(r.Header.Get(HeaderReverseToken))
+	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
 	lease, err := s.lookupLeaseByID(leaseID, token)
 	if err != nil {
 		status, code := http.StatusForbidden, "unauthorized"
@@ -395,19 +396,34 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	session := newReverseSession(conn, s.cfg.IdleKeepaliveInterval)
 	if err := lease.Broker.Offer(session); err != nil {
+		log.Warn().
+			Err(err).
+			Str("component", "relay-server").
+			Str("lease_id", lease.ID).
+			Str("lease_name", lease.Name).
+			Str("remote_addr", session.RemoteAddr()).
+			Msg("sdk reverse rejected")
 		_ = session.Close()
+		return
 	}
+	log.Info().
+		Str("component", "relay-server").
+		Str("lease_id", lease.ID).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", session.RemoteAddr()).
+		Int("ready", lease.Broker.ReadyCount()).
+		Msg("sdk reverse connected")
 }
 
-func (s *Server) registerLease(req RegisterRequest) (RegisterResponse, error) {
+func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterResponse, error) {
 	if strings.TrimSpace(req.Name) == "" {
-		return RegisterResponse{}, errors.New("name is required")
+		return types.RegisterResponse{}, errors.New("name is required")
 	}
 	if strings.TrimSpace(req.ReverseToken) == "" {
-		return RegisterResponse{}, errors.New("reverse token is required")
+		return types.RegisterResponse{}, errors.New("reverse token is required")
 	}
 	if !req.TLS {
-		return RegisterResponse{}, errors.New("tls must be true")
+		return types.RegisterResponse{}, errors.New("tls must be true")
 	}
 
 	hostnames := normalizeHostnames(req.Hostnames)
@@ -420,7 +436,7 @@ func (s *Server) registerLease(req RegisterRequest) (RegisterResponse, error) {
 
 	for _, host := range hostnames {
 		if owner := s.findLeaseByHostnameLocked(host); owner != nil {
-			return RegisterResponse{}, fmt.Errorf("%w: %s", errHostnameConflict, host)
+			return types.RegisterResponse{}, fmt.Errorf("%w: %s", errHostnameConflict, host)
 		}
 	}
 
@@ -446,7 +462,7 @@ func (s *Server) registerLease(req RegisterRequest) (RegisterResponse, error) {
 		s.routes.Set(host, leaseID)
 	}
 
-	return RegisterResponse{
+	return types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostnames:  append([]string(nil), hostnames...),
 		Metadata:   record.Metadata,
@@ -455,16 +471,16 @@ func (s *Server) registerLease(req RegisterRequest) (RegisterResponse, error) {
 	}, nil
 }
 
-func (s *Server) renewLease(req RenewRequest) (RenewResponse, error) {
+func (s *Server) renewLease(req types.RenewRequest) (types.RenewResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	record, ok := s.leases[strings.TrimSpace(req.LeaseID)]
 	if !ok {
-		return RenewResponse{}, errLeaseNotFound
+		return types.RenewResponse{}, errLeaseNotFound
 	}
 	if !tokenMatches(record.ReverseToken, req.ReverseToken) {
-		return RenewResponse{}, errUnauthorized
+		return types.RenewResponse{}, errUnauthorized
 	}
 
 	ttl := s.cfg.LeaseTTL
@@ -473,10 +489,10 @@ func (s *Server) renewLease(req RenewRequest) (RenewResponse, error) {
 	}
 	record.ExpiresAt = time.Now().Add(ttl)
 	record.Broker.Reset()
-	return RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
+	return types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
 }
 
-func (s *Server) unregisterLease(req UnregisterRequest) error {
+func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 	s.mu.Lock()
 	record, ok := s.leases[strings.TrimSpace(req.LeaseID)]
 	if !ok {
@@ -644,9 +660,9 @@ func (s *Server) watchContext() error {
 func (s *Server) connectURL() string {
 	base := strings.TrimRight(s.cfg.PortalURL, "/")
 	if base == "" && s.apiListener != nil {
-		return "https://" + HostPortOrLoopback(s.apiListener.Addr().String()) + "/sdk/connect"
+		return "https://" + HostPortOrLoopback(s.apiListener.Addr().String()) + types.PathSDKConnect
 	}
-	return base + "/sdk/connect"
+	return base + types.PathSDKConnect
 }
 
 func (s *Server) wrapAPIHandler(base http.Handler) http.Handler {

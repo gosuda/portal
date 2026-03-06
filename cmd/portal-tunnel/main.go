@@ -17,8 +17,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
+	"gosuda.org/portal/types"
 )
 
 var (
@@ -68,10 +68,7 @@ func runTunnel() error {
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
-	relayURL, err := portal.NormalizeRelayURL(relayURLs[0])
-	if err != nil {
-		return err
-	}
+	relayURL := strings.TrimSpace(relayURLs[0])
 
 	logger.Info().
 		Str("local", flagHost).
@@ -89,7 +86,7 @@ func runTunnel() error {
 
 	listener, err := sdkClient.Listen(ctx, sdk.ListenRequest{
 		Name: flagName,
-		Metadata: portal.LeaseMetadata{
+		Metadata: types.LeaseMetadata{
 			Description: flagDesc,
 			Tags:        parseURLs(flagTags),
 			Owner:       flagOwner,
