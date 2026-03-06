@@ -1,6 +1,6 @@
 services:
   portal:
-    image: ghcr.io/gosuda/portal:1
+    image: ghcr.io/gosuda/portal:2
     build:
       context: .
       dockerfile: Dockerfile
@@ -20,7 +20,14 @@ services:
 
       # TLS/ACME and keyless materials
       KEYLESS_DIR: ${KEYLESS_DIR:-.portal-certs}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-cloudflare}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+      AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
     ports:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
       - "443:443"

@@ -38,9 +38,15 @@ func runServer(cfg relayServerConfig) error {
 	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
 
 	acmeManager, err := acme.NewManager(acme.Config{
-		BaseDomain:      rootHost,
-		KeyDir:          cfg.KeylessDir,
-		CloudflareToken: cfg.CloudflareToken,
+		BaseDomain:         rootHost,
+		KeyDir:             cfg.KeylessDir,
+		DNSProvider:        cfg.ACMEDNSProvider,
+		CloudflareToken:    cfg.CloudflareToken,
+		AWSAccessKeyID:     cfg.AWSAccessKeyID,
+		AWSSecretAccessKey: cfg.AWSSecretAccessKey,
+		AWSSessionToken:    cfg.AWSSessionToken,
+		AWSRegion:          cfg.AWSRegion,
+		AWSHostedZoneID:    cfg.AWSHostedZoneID,
 	})
 	if err != nil {
 		return fmt.Errorf("create acme manager: %w", err)
@@ -100,6 +106,7 @@ func runServer(cfg relayServerConfig) error {
 		Str("api_addr", portal.HostPortOrLoopback(server.APIAddr())).
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
+		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1").
 		Msg("relay server started")
 

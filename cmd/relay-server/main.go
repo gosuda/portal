@@ -19,15 +19,21 @@ const (
 )
 
 type relayServerConfig struct {
-	PortalURL         string
-	Bootstraps        []string
-	APIPort           int
-	SNIPort           int
-	AdminSecretKey    string
-	TrustProxyHeaders bool
-	TrustedProxyCIDRs string
-	KeylessDir        string
-	CloudflareToken   string
+	PortalURL          string
+	Bootstraps         []string
+	APIPort            int
+	SNIPort            int
+	AdminSecretKey     string
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	KeylessDir         string
+	ACMEDNSProvider    string
+	CloudflareToken    string
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSSessionToken    string
+	AWSRegion          string
+	AWSHostedZoneID    string
 }
 
 func main() {
@@ -53,7 +59,19 @@ func main() {
 	if keylessDir == "" {
 		keylessDir = defaultKeylessDir
 	}
+	acmeDNSProvider := trimmedEnv("ACME_DNS_PROVIDER")
+	if acmeDNSProvider == "" {
+		acmeDNSProvider = "cloudflare"
+	}
 	cloudflareToken := trimmedEnv("CLOUDFLARE_TOKEN")
+	awsAccessKeyID := trimmedEnv("AWS_ACCESS_KEY_ID")
+	awsSecretAccessKey := trimmedEnv("AWS_SECRET_ACCESS_KEY")
+	awsSessionToken := trimmedEnv("AWS_SESSION_TOKEN")
+	awsRegion := trimmedEnv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = trimmedEnv("AWS_DEFAULT_REGION")
+	}
+	awsHostedZoneID := trimmedEnv("AWS_HOSTED_ZONE_ID")
 
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
@@ -65,7 +83,13 @@ func main() {
 	flag.StringVar(&cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled (env: TRUSTED_PROXY_CIDRS)")
 
 	flag.StringVar(&cfg.KeylessDir, "keyless-dir", keylessDir, "directory path for relay keyless materials (env: KEYLESS_DIR)")
-	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (Zone:Read + DNS:Edit) (env: CLOUDFLARE_TOKEN)")
+	flag.StringVar(&cfg.ACMEDNSProvider, "acme-dns-provider", acmeDNSProvider, "ACME DNS provider for DNS-01 and A-record sync (cloudflare|route53) (env: ACME_DNS_PROVIDER)")
+	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (required when acme-dns-provider=cloudflare) (env: CLOUDFLARE_TOKEN)")
+	flag.StringVar(&cfg.AWSAccessKeyID, "aws-access-key-id", awsAccessKeyID, "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted (env: AWS_ACCESS_KEY_ID)")
+	flag.StringVar(&cfg.AWSSecretAccessKey, "aws-secret-access-key", awsSecretAccessKey, "AWS secret access key for Route53 static credentials (env: AWS_SECRET_ACCESS_KEY)")
+	flag.StringVar(&cfg.AWSSessionToken, "aws-session-token", awsSessionToken, "AWS session token for Route53 temporary credentials (env: AWS_SESSION_TOKEN)")
+	flag.StringVar(&cfg.AWSRegion, "aws-region", awsRegion, "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset (env: AWS_REGION or AWS_DEFAULT_REGION)")
+	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
 	flag.Parse()
 
 	cfg.Bootstraps = parseURLs(bootstrapsCSV)

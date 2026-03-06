@@ -150,10 +150,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	if leaseTTL <= 0 {
 		leaseTTL = c.leaseTTL
 	}
-	acceptedCap := readyTarget * 2
-	if acceptedCap < 1 {
-		acceptedCap = 1
-	}
+	acceptedCap := max(readyTarget*2, 1)
 
 	registerReq := types.RegisterRequest{
 		Name:         req.Name,

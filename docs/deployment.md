@@ -10,18 +10,29 @@ You need:
 - A public Linux server with a static public IP
 - Open inbound ports: `443/tcp`, `4017/tcp`
 - Docker and Docker Compose
-- A Cloudflare-managed DNS zone (required for ACME DNS-01 automation)
+- A DNS provider account for ACME DNS-01 automation with a supported provider (`cloudflare` or `route53`)
 
-## 2. DNS and Cloudflare Setup
+## 2. DNS Provider Setup
 
-### 2.1 Add Domain to Cloudflare
+### 2.1 Choose ACME DNS provider
+
+Set `ACME_DNS_PROVIDER` to one of the currently supported values:
+
+- `ACME_DNS_PROVIDER=cloudflare`, or
+- `ACME_DNS_PROVIDER=route53`
+
+Both providers keep root and wildcard A records synchronized to the relay public IPv4 and use DNS-01 for certificate issuance.
+
+### 2.2 Cloudflare setup (`ACME_DNS_PROVIDER=cloudflare`)
+
+#### Add domain to Cloudflare
 
 1. Cloudflare Dashboard -> `Websites` -> `Add a Site`
 2. Enter your domain (`example.com`)
 3. Complete onboarding and apply Cloudflare nameservers at your registrar
 4. Wait until zone status is `Active`
 
-### 2.2 Create DNS Records
+#### Create DNS records
 
 Cloudflare Dashboard -> `DNS` -> `Records`:
 
@@ -49,7 +60,7 @@ If you deploy on a non-apex host (for example, `PORTAL_URL=https://portal.exampl
 Portal derives public lease hostnames from the normalized `PORTAL_URL` host.
 Requests to the exact root host are not served by the wildcard route; they fall back to the admin/API listener.
 
-### 2.3 Create Cloudflare API Token
+#### Create Cloudflare API token
 
 Cloudflare Dashboard -> `My Profile` -> `API Tokens` -> `Create Token`.
 
@@ -63,6 +74,29 @@ Scope:
 - Zone resources limited to your target zone (for example, `example.com`)
 
 Save this token for `CLOUDFLARE_TOKEN`.
+
+### 2.3 Route53 setup (`ACME_DNS_PROVIDER=route53`)
+
+Create or select a public hosted zone that covers your `PORTAL_URL` root host and provide Route53 write permissions through either static AWS credentials or ambient AWS credentials (for example, an instance role).
+
+Static credential environment variables:
+
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- Optional `AWS_SESSION_TOKEN` for temporary credentials
+- `AWS_REGION` (for example, `us-east-1`)
+
+Optional:
+
+- `AWS_HOSTED_ZONE_ID` (when omitted, relay selects a matching public hosted zone by domain suffix)
+
+Equivalent relay flags:
+
+- `--aws-access-key-id`
+- `--aws-secret-access-key`
+- `--aws-session-token`
+- `--aws-region`
+- `--aws-hosted-zone-id`
 
 ## 3. Relay Runtime Behavior
 
@@ -81,7 +115,7 @@ Save this token for `CLOUDFLARE_TOKEN`.
 - Relay certificates live in `KEYLESS_DIR`:
   - `fullchain.pem`
   - `privatekey.pem`
-- On non-localhost deployments, ACME DNS-01 uses the Cloudflare token to:
+- On non-localhost deployments, ACME DNS-01 uses the configured supported DNS provider to:
   - ensure root and wildcard A records point to the current public IP
   - provision the relay certificate
   - keep DNS and certificate state refreshed over time
@@ -96,7 +130,21 @@ BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=.portal-certs
+ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
+```
+
+Route53 example:
+
+```bash
+KEYLESS_DIR=.portal-certs
+ACME_DNS_PROVIDER=route53
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=...
+AWS_REGION=us-east-1
+# Optional override
+AWS_HOSTED_ZONE_ID=Z1234567890ABC
 ```
 
 For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).

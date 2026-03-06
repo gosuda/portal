@@ -72,7 +72,7 @@ This keeps the relay out of the tenant data plane while avoiding direct private-
 ## ACME DNS-01
 
 The relay certificate issuance and renewal path for non-localhost deployments.
-It uses a Cloudflare DNS API token to provision the root and wildcard certificate coverage used by the relay.
+It currently supports `cloudflare` and `route53` to provision the root and wildcard certificate coverage used by the relay.
 
 ## Base Domain / Root Host
 
