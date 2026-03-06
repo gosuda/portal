@@ -18,15 +18,15 @@ import (
 )
 
 type relayRuntime struct {
-	relayURL string
 	client   *sdk.Client
 	listener *sdk.Listener
+	relayURL string
 }
 
 type relayLoopResult struct {
+	err      error
 	leaseID  string
 	relayURL string
-	err      error
 }
 
 func (r *relayRuntime) run(ctx context.Context, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64, done chan<- relayLoopResult) {
@@ -144,8 +144,10 @@ func waitForRelayLoops(ctx context.Context, done <-chan relayLoopResult, relayCo
 		}
 	}
 
-	if ctx.Err() != nil {
+	select {
+	case <-ctx.Done():
 		return nil
+	default:
 	}
 	return errors.New("all relay listeners stopped")
 }

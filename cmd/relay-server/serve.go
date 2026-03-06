@@ -29,7 +29,7 @@ func runServer(cfg relayServerConfig) error {
 		cfg.PortalURL = cfg.Bootstraps[0]
 	}
 	rootHost := portal.PortalRootHost(cfg.PortalURL)
-	apiListenAddr := fmt.Sprintf(":%d", cfg.AdminPort)
+	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
 	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {

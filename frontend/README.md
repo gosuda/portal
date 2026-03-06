@@ -152,7 +152,7 @@ npm run build
 
 # Run relay server (embeds dist/ at compile time)
 cd ..
-go run ./cmd/relay-server/*.go -adminport 4017
+go run ./cmd/relay-server/*.go
 ```
 
 Or use the combined script:

@@ -75,6 +75,8 @@ linters:
 
     govet:
       enable-all: true
+      disable:
+        - fieldalignment
 
     perfsprint:
       strconcat: true

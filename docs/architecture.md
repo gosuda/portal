@@ -36,7 +36,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### Relay Server (`cmd/relay-server`)
 
-- Admin/API TLS listener on `--adminport` (default `:4017`)
+- Admin/API TLS listener on `--api-port` (default `:4017`)
 - SNI listener on `--sni-port` (default `:443`)
 - Public frontend routes under `/`, `/app`, `/assets/*`
 - Minimal admin surface at `/admin` and `/admin/leases`

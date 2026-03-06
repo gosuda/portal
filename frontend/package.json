@@ -14,7 +14,7 @@
     "test:coverage": "vitest run --coverage",
     "preview": "vite preview",
     "build:go": "cd .. && CGO_ENABLED=0 go build -o bin/relay-server ./cmd/relay-server/*.go",
-    "serve": "npm run build && npm run build:go && STATIC_DIR=./cmd/relay-server/dist ../bin/relay-server -adminport 4017"
+    "serve": "npm run build && npm run build:go && STATIC_DIR=./cmd/relay-server/dist ../bin/relay-server"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

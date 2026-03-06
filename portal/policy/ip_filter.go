@@ -25,6 +25,17 @@ type IPFilter struct {
 var (
 	trustedProxyMu    sync.RWMutex
 	trustedProxyCIDRs []*net.IPNet
+	defaultProxyCIDRs = mustParseProxyCIDRs(
+		"127.0.0.0/8",
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16",
+		"100.64.0.0/10",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	)
 )
 
 func NewIPFilter() *IPFilter {
@@ -81,7 +92,11 @@ func IsTrustedProxyRemoteAddr(remoteAddr string) bool {
 
 	trustedProxyMu.RLock()
 	defer trustedProxyMu.RUnlock()
-	for _, network := range trustedProxyCIDRs {
+	networks := trustedProxyCIDRs
+	if len(networks) == 0 {
+		networks = defaultProxyCIDRs
+	}
+	for _, network := range networks {
 		if network != nil && network.Contains(remoteIP) {
 			return true
 		}
@@ -261,4 +276,16 @@ func parseRemoteAddrIP(remoteAddr string) net.IP {
 		host = parsedHost
 	}
 	return net.ParseIP(strings.TrimSpace(host))
+}
+
+func mustParseProxyCIDRs(values ...string) []*net.IPNet {
+	cidrs := make([]*net.IPNet, 0, len(values))
+	for _, value := range values {
+		_, network, err := net.ParseCIDR(value)
+		if err != nil {
+			panic(err)
+		}
+		cidrs = append(cidrs, network)
+	}
+	return cidrs
 }

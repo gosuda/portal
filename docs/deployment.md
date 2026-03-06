@@ -95,12 +95,21 @@ PORTAL_URL=https://example.com
 BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
-KEYLESS_DIR=/etc/portal/keyless
+KEYLESS_DIR=.portal-certs
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
 
 For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).
 `PORTAL_URL` path/query segments are ignored for route derivation; only the host component is used.
+
+If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
+
+```bash
+TRUST_PROXY_HEADERS=true
+```
+
+By default, forwarded headers are accepted from private, loopback, and link-local proxy source ranges.
+If your proxy source addresses are public or you want a stricter allowlist, also set `TRUSTED_PROXY_CIDRS`.
 
 ### 4.2 Start Relay
 
