@@ -24,6 +24,7 @@ import (
 	lego "github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -32,6 +33,9 @@ const (
 	accountKeyFileName     = "acme-account.key"
 	registrationFileName   = "acme-registration.json"
 	defaultACMEEmailPrefix = "acme@"
+	defaultRenewInterval   = 24 * time.Hour
+	defaultDNSSyncInterval = 10 * time.Minute
+	defaultSyncTimeout     = 2 * time.Minute
 )
 
 type Config struct {
@@ -99,7 +103,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return "", "", errors.New("cloudflare token is required for non-local relay certificates")
 	}
 
-	if err := EnsureDNSRecords(ctx, m.cfg.BaseDomain, m.cfg.CloudflareToken); err != nil {
+	if err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}
 
@@ -124,7 +128,7 @@ func (m *Manager) Start(ctx context.Context) {
 
 	m.startOnce.Do(func() {
 		m.wg.Add(1)
-		go m.renewalLoop(ctx)
+		go m.maintenanceLoop(ctx)
 	})
 }
 
@@ -195,11 +199,13 @@ func (m *Manager) provision(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) renewalLoop(ctx context.Context) {
+func (m *Manager) maintenanceLoop(ctx context.Context) {
 	defer m.wg.Done()
 
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
+	renewTicker := time.NewTicker(defaultRenewInterval)
+	dnsTicker := time.NewTicker(defaultDNSSyncInterval)
+	defer renewTicker.Stop()
+	defer dnsTicker.Stop()
 
 	for {
 		select {
@@ -207,15 +213,32 @@ func (m *Manager) renewalLoop(ctx context.Context) {
 			return
 		case <-m.stopCh:
 			return
-		case <-ticker.C:
+		case <-dnsTicker.C:
+			syncCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.syncDNS(syncCtx)
+			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
+			}
+		case <-renewTicker.C:
 			if !m.shouldRenew() {
 				continue
 			}
-			renewCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			_ = m.provision(renewCtx)
+			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
+			err := m.provision(renewCtx)
 			cancel()
+			if err != nil {
+				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
+			}
 		}
 	}
+}
+
+func (m *Manager) syncDNS(ctx context.Context) error {
+	if m == nil || isLocalhost(m.cfg.BaseDomain) || m.cfg.CloudflareToken == "" {
+		return nil
+	}
+	return EnsureDNSRecords(ctx, m.cfg.BaseDomain, m.cfg.CloudflareToken)
 }
 
 func (m *Manager) shouldRenew() bool {

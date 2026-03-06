@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -199,14 +197,8 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 		slug = strings.TrimSuffix(slug, ".sha256")
 	}
 
-	path, ok := tunnelBinaryPathBySlug(slug)
+	data, filename, ok := tunnelBinaryBySlug(slug)
 	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
@@ -216,29 +208,25 @@ func serveTunnelBinary(w http.ResponseWriter, r *http.Request) {
 	if checksumRequest {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		if r.Method == http.MethodGet {
-			_, _ = fmt.Fprintf(w, "%s  portal-tunnel-%s\n", checksumHex, slug)
+			_, _ = fmt.Fprintf(w, "%s  %s\n", checksumHex, filename)
 		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.Header().Set("X-Checksum-Sha256", checksumHex)
 	if r.Method == http.MethodGet {
 		_, _ = w.Write(data)
 	}
 }
 
-func tunnelBinaryPathBySlug(slug string) (string, bool) {
-	candidates := []string{
-		filepath.Join("dist", "tunnel", tunnelBinaryName(slug)),
-		filepath.Join("bin", tunnelBinaryName(slug)),
+func tunnelBinaryBySlug(slug string) ([]byte, string, bool) {
+	filename := tunnelBinaryName(slug)
+	if data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename); err == nil {
+		return data, filename, true
 	}
-	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, true
-		}
-	}
-	return "", false
+	return nil, "", false
 }
 
 func tunnelBinaryName(slug string) string {
