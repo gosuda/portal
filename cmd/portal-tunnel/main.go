@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,7 +18,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
 )
 
@@ -173,7 +173,21 @@ loop:
 }
 
 func normalizeRelayURLsForReverseConnect(relayURLs []string) (string, error) {
-	return portal.NormalizeRelayURL(relayURLs[0])
+	raw := relayURLs[0]
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("parse relay url: %w", err)
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return "", fmt.Errorf("relay url must use https: %q", raw)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("relay url host is empty: %q", raw)
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
 }
 
 var bufferPool = sync.Pool{
