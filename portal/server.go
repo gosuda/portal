@@ -708,6 +708,25 @@ func tokenMatches(expected, actual string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
 }
 
+func writeAPIData(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(types.APIEnvelope{OK: true, Data: data})
+}
+
+func writeAPIOK(w http.ResponseWriter, status int) {
+	writeAPIData(w, status, map[string]any{})
+}
+
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(types.APIEnvelope{
+		OK:    false,
+		Error: &types.APIError{Code: code, Message: message},
+	})
+}
+
 func bridgeConns(left, right net.Conn) {
 	defer left.Close()
 	defer right.Close()
