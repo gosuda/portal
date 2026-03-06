@@ -25,5 +25,5 @@ services:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
       - "443:443"
     volumes:
-      - .portal-certs:/.portal-certs
+      - ./.portal-certs:/.portal-certs
     restart: unless-stopped
