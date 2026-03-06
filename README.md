@@ -5,8 +5,9 @@
 </p>
 
 <p align="center">Expose your local application to the public internet — no port forwarding, no NAT, no DNS setup.<br />Portal is a self-hosted relay network. You can connect to any relay or run your own.</p>
-
 <p align="center">将你的本地应用暴露到公网 —— 无需端口映射、无需 NAT、无需 DNS 配置。<br />Portal 是一个可自托管的中继网络，你可以运行自己的中继节点，也可以连接到已有的节点。</p>
+
+<p align="center"><img width="800" src="./portal.mp4" alt="Portal Demo"/></p>
 
 ## Why Portal?
 
