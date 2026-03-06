@@ -13,9 +13,9 @@ const (
 )
 
 type APIEnvelope struct {
-	OK    bool      `json:"ok"`
 	Data  any       `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`
+	OK    bool      `json:"ok"`
 }
 
 type APIError struct {
@@ -25,27 +25,27 @@ type APIError struct {
 
 type LeaseMetadata struct {
 	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
 	Owner       string   `json:"owner,omitempty"`
 	Thumbnail   string   `json:"thumbnail,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 	Hide        bool     `json:"hide,omitempty"`
 }
 
 type RegisterRequest struct {
 	Name         string        `json:"name"`
+	ReverseToken string        `json:"reverse_token"`
 	Hostnames    []string      `json:"hostnames,omitempty"`
 	Metadata     LeaseMetadata `json:"metadata,omitempty"`
-	ReverseToken string        `json:"reverse_token"`
-	TLS          bool          `json:"tls"`
 	TTLSeconds   int           `json:"ttl_seconds,omitempty"`
+	TLS          bool          `json:"tls"`
 }
 
 type RegisterResponse struct {
+	ExpiresAt  time.Time     `json:"expires_at"`
 	LeaseID    string        `json:"lease_id"`
+	ConnectURL string        `json:"connect_url"`
 	Hostnames  []string      `json:"hostnames"`
 	Metadata   LeaseMetadata `json:"metadata,omitempty"`
-	ExpiresAt  time.Time     `json:"expires_at"`
-	ConnectURL string        `json:"connect_url"`
 }
 
 type RenewRequest struct {
@@ -55,8 +55,8 @@ type RenewRequest struct {
 }
 
 type RenewResponse struct {
-	LeaseID   string    `json:"lease_id"`
 	ExpiresAt time.Time `json:"expires_at"`
+	LeaseID   string    `json:"lease_id"`
 }
 
 type UnregisterRequest struct {

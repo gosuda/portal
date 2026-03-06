@@ -17,38 +17,37 @@ type LeaseMetadata = portal.LeaseMetadata
 
 type ListenRequest struct {
 	Name         string
+	ReverseToken string
+	TLS          portal.TLSMaterialConfig
 	Hostnames    []string
 	Metadata     LeaseMetadata
-	ReverseToken string
 	ReadyTarget  int
 	LeaseTTL     time.Duration
-	TLS          portal.TLSMaterialConfig
 }
 
 type Listener struct {
-	client       *Client
-	ctx          context.Context
-	cancel       context.CancelFunc
-	leaseID      string
-	hostnames    []string
-	metadata     LeaseMetadata
-	reverseToken string
-	leaseTTL     time.Duration
-	readyTarget  int
-	tlsConfig    *tls.Config
-	tlsCloser    io.Closer
-
-	accepted chan net.Conn
-	signal   chan struct{}
-
-	mu             sync.Mutex
+	tlsCloser      io.Closer
+	tlsConfig      *tls.Config
+	baseContext    func() context.Context
+	ctxDone        <-chan struct{}
+	cancel         context.CancelFunc
+	client         *Client
+	signal         chan struct{}
+	accepted       chan net.Conn
+	leaseID        string
+	reverseToken   string
+	hostnames      []string
+	metadata       LeaseMetadata
+	readyTarget    int
+	leaseTTL       time.Duration
 	activeSessions int
 	closeOnce      sync.Once
+	mu             sync.Mutex
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
 	select {
-	case <-l.ctx.Done():
+	case <-l.ctxDone:
 		return nil, net.ErrClosed
 	case conn := <-l.accepted:
 		if conn == nil {
@@ -102,7 +101,7 @@ func (l *Listener) PublicURLs() []string {
 func (l *Listener) runSupervisor() {
 	for {
 		select {
-		case <-l.ctx.Done():
+		case <-l.ctxDone:
 			return
 		case <-l.signal:
 		}
@@ -130,10 +129,10 @@ func (l *Listener) runRenewLoop() {
 
 	for {
 		select {
-		case <-l.ctx.Done():
+		case <-l.ctxDone:
 			return
 		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(l.ctx, 10*time.Second)
+			ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
 			_ = l.client.renewLease(ctx, l.leaseID, l.reverseToken, l.leaseTTL)
 			cancel()
 		}
@@ -143,16 +142,17 @@ func (l *Listener) runRenewLoop() {
 func (l *Listener) runSession() {
 	defer l.releaseSessionSlot()
 
-	conn, err := l.client.openReverseSession(l.ctx, l.leaseID, l.reverseToken)
+	sessionCtx := l.context()
+	conn, err := l.client.openReverseSession(sessionCtx, l.leaseID, l.reverseToken)
 	if err != nil {
-		sleepOrDone(l.ctx, time.Second)
+		sleepOrDone(sessionCtx, time.Second)
 		return
 	}
 
 	if err := l.awaitActivation(conn); err != nil {
 		_ = conn.Close()
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
-			sleepOrDone(l.ctx, time.Second)
+			sleepOrDone(sessionCtx, time.Second)
 		}
 	}
 }
@@ -179,16 +179,16 @@ func (l *Listener) awaitActivation(conn net.Conn) error {
 
 func (l *Listener) activate(conn net.Conn) error {
 	tlsConn := tls.Server(conn, l.tlsConfig.Clone())
-	handshakeCtx, cancel := context.WithTimeout(l.ctx, l.client.handshakeTimeout)
+	handshakeCtx, cancel := context.WithTimeout(l.context(), l.client.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		return err
 	}
 
 	select {
-	case <-l.ctx.Done():
+	case <-l.ctxDone:
 		_ = tlsConn.Close()
-		return l.ctx.Err()
+		return l.context().Err()
 	case l.accepted <- tlsConn:
 		return nil
 	}
@@ -197,7 +197,7 @@ func (l *Listener) activate(conn net.Conn) error {
 func (l *Listener) reserveSessionSlot() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.ctx.Err() != nil {
+	if l.isClosed() {
 		return false
 	}
 	if l.activeSessions >= l.readyTarget {
@@ -234,3 +234,24 @@ type listenerAddr string
 
 func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
+
+func (l *Listener) context() context.Context {
+	if l.baseContext != nil {
+		if ctx := l.baseContext(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+func (l *Listener) isClosed() bool {
+	if l.ctxDone == nil {
+		return false
+	}
+	select {
+	case <-l.ctxDone:
+		return true
+	default:
+		return false
+	}
+}

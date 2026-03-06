@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -14,6 +13,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/sdk"
@@ -31,6 +33,10 @@ var (
 )
 
 func main() {
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "portal-tunnel").Logger()
+
 	defaultRelayURLs := os.Getenv("RELAYS")
 	if defaultRelayURLs == "" {
 		defaultRelayURLs = "https://localhost:4017"
@@ -47,12 +53,14 @@ func main() {
 	flag.Parse()
 
 	if err := runTunnel(); err != nil {
-		log.Printf("Exited with error: %v", err)
+		logger.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
 	}
 }
 
 func runTunnel() error {
+	logger := log.With().Str("component", "portal-tunnel").Logger()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -65,12 +73,12 @@ func runTunnel() error {
 		return err
 	}
 
-	log.Printf("Local service is reachable at %s", flagHost)
-	log.Printf("Starting Portal Tunnel...")
-	log.Printf("  Local:    %s", flagHost)
-	log.Printf("  Relays:   %s", strings.Join(relayURLs, ", "))
+	logger.Info().
+		Str("local", flagHost).
+		Strs("relays", relayURLs).
+		Msg("starting portal tunnel")
 	if len(relayURLs) > 1 {
-		log.Printf("  Note: current runtime uses the first relay URL only: %s", relayURL)
+		logger.Warn().Str("selected_relay", relayURL).Msg("multiple relays configured; using first relay only")
 	}
 
 	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURL: relayURL})
@@ -99,14 +107,11 @@ func runTunnel() error {
 		_ = listener.Close()
 	}()
 
-	log.Printf("")
-	log.Printf("Access via:")
-	log.Printf("- Relay:    %s", relayURL)
-	log.Printf("- Lease ID: %s", listener.LeaseID())
-	for _, publicURL := range listener.PublicURLs() {
-		log.Printf("- Public:   %s", publicURL)
-	}
-	log.Printf("")
+	logger.Info().
+		Str("relay", relayURL).
+		Str("lease_id", listener.LeaseID()).
+		Strs("public_urls", listener.PublicURLs()).
+		Msg("tunnel ready")
 
 	connCount := 0
 	var connWG sync.WaitGroup
@@ -115,7 +120,7 @@ loop:
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[tunnel] shutting down...")
+			logger.Info().Msg("tunnel shutting down")
 			break loop
 		default:
 		}
@@ -123,29 +128,32 @@ loop:
 		relayConn, err := listener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				log.Printf("[tunnel] listener closed")
+				logger.Info().Msg("tunnel listener closed")
 				break loop
 			}
 			select {
 			case <-ctx.Done():
 				break loop
 			default:
-				log.Printf("Failed to accept connection: %v", err)
+				logger.Error().Err(err).Msg("failed to accept relay connection")
 				continue
 			}
 		}
 
 		connCount++
-		log.Printf("[#%d] New connection from %s", connCount, relayConn.RemoteAddr())
+		logger.Info().
+			Int("conn_id", connCount).
+			Str("remote_addr", relayConn.RemoteAddr().String()).
+			Msg("accepted relay connection")
 
 		connWG.Add(1)
-		go func(relayConn net.Conn) {
+		go func(connID int, relayConn net.Conn) {
 			defer connWG.Done()
 			if err := proxyConnection(ctx, flagHost, relayConn); err != nil {
-				log.Printf("Proxy error: %v", err)
+				logger.Error().Err(err).Int("conn_id", connID).Msg("proxy connection failed")
 			}
-			log.Printf("Connection closed")
-		}(relayConn)
+			logger.Info().Int("conn_id", connID).Msg("proxy connection closed")
+		}(connCount, relayConn)
 	}
 
 	done := make(chan struct{})
@@ -157,10 +165,10 @@ loop:
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		log.Printf("[tunnel] shutdown timeout, some connections still active")
+		logger.Warn().Msg("tunnel shutdown timeout; connections still active")
 	}
 
-	log.Printf("[tunnel] shutdown complete")
+	logger.Info().Msg("tunnel shutdown complete")
 	return nil
 }
 

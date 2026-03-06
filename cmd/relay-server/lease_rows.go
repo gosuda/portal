@@ -10,15 +10,15 @@ import (
 )
 
 type leaseRow struct {
-	TTL       string `json:"ttl"`
-	Metadata  string `json:"metadata"`
-	Kind      string `json:"kind"`
-	DNS       string `json:"dns"`
-	Name      string `json:"name"`
-	Peer      string `json:"peer"`
-	Link      string `json:"link"`
-	Hide      bool   `json:"hide"`
-	Connected bool   `json:"connected"`
+	TTL       string
+	Metadata  string
+	Kind      string
+	DNS       string
+	Name      string
+	Peer      string
+	Link      string
+	Hide      bool
+	Connected bool
 }
 
 func convertLeaseEntriesToRows(serv *portal.Server, includeHidden bool, portalURL string) []leaseRow {

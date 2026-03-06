@@ -47,8 +47,9 @@ func TestListenerEndToEndTLSHTTP(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := relay.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
+	startErr := relay.Start(ctx)
+	if startErr != nil {
+		t.Fatalf("Start() error = %v", startErr)
 	}
 	t.Cleanup(func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -121,7 +122,7 @@ func TestListenerEndToEndTLSHTTP(t *testing.T) {
 		_ = server.Shutdown(shutdownCtx)
 		select {
 		case err := <-httpDone:
-			if err != nil && err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
+			if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 				t.Fatalf("server.Serve() error = %v", err)
 			}
 		case <-time.After(2 * time.Second):
@@ -170,8 +171,9 @@ func TestListenerEndToEndTLSHTTP_AutoSelfSigned(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := relay.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
+	startErr := relay.Start(ctx)
+	if startErr != nil {
+		t.Fatalf("Start() error = %v", startErr)
 	}
 	t.Cleanup(func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -215,7 +217,7 @@ func TestListenerEndToEndTLSHTTP_AutoSelfSigned(t *testing.T) {
 		_ = server.Shutdown(shutdownCtx)
 		select {
 		case err := <-httpDone:
-			if err != nil && err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) {
+			if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 				t.Fatalf("server.Serve() error = %v", err)
 			}
 		case <-time.After(2 * time.Second):
@@ -249,8 +251,8 @@ func doTenantRequest(addr, host, path string) (string, error) {
 	}
 	defer conn.Close()
 
-	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host); err != nil {
-		return "", err
+	if _, writeErr := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host); writeErr != nil {
+		return "", writeErr
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})

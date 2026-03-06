@@ -24,14 +24,13 @@ const (
 )
 
 type leaseBroker struct {
+	notify       chan struct{}
 	leaseID      string
+	ready        []*reverseSession
 	idleInterval time.Duration
 	readyLimit   int
-
-	mu     sync.Mutex
-	ready  []*reverseSession
-	state  brokerState
-	notify chan struct{}
+	state        brokerState
+	mu           sync.Mutex
 }
 
 func newLeaseBroker(leaseID string, idleInterval time.Duration, readyLimit int) *leaseBroker {
@@ -171,15 +170,14 @@ const (
 )
 
 type reverseSession struct {
-	conn         net.Conn
-	idleInterval time.Duration
-
-	mu            sync.Mutex
-	state         reverseSessionState
+	conn          net.Conn
 	keepaliveStop chan struct{}
 	keepaliveDone chan struct{}
 	done          chan struct{}
+	idleInterval  time.Duration
+	state         reverseSessionState
 	closeOnce     sync.Once
+	mu            sync.Mutex
 }
 
 func newReverseSession(conn net.Conn, idleInterval time.Duration) *reverseSession {
@@ -254,7 +252,7 @@ func (s *reverseSession) Activate() error {
 	_, err := s.conn.Write([]byte{MarkerTLSStart})
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
-		go s.Close()
+		_ = s.Close()
 	}
 	return err
 }

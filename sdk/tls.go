@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -22,7 +23,7 @@ import (
 
 func buildTenantTLSConfig(cfg portal.TLSMaterialConfig) (*tls.Config, io.Closer, error) {
 	if len(cfg.CertPEM) == 0 {
-		return nil, nil, fmt.Errorf("tenant certificate is required")
+		return nil, nil, errors.New("tenant certificate is required")
 	}
 	if cfg.Keyless != nil {
 		remoteSigner, err := keylesslib.NewRemoteSigner(keylesslib.RemoteSignerConfig{

@@ -14,61 +14,58 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gosuda/keyless_tls/relay/l4"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/gosuda/keyless_tls/relay/l4"
 )
 
 type ServerConfig struct {
+	APIHandlerWrapper     func(http.Handler) http.Handler
 	PortalURL             string
 	APIListenAddr         string
 	SNIListenAddr         string
 	RootHost              string
 	RootFallbackAddr      string
+	APITLS                TLSMaterialConfig
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
-	APITLS                TLSMaterialConfig
-	APIHandlerWrapper     func(http.Handler) http.Handler
 }
 
 type Server struct {
-	cfg ServerConfig
-
-	apiServer   *http.Server
-	apiListener net.Listener
-	sniListener net.Listener
-	apiTLSClose io.Closer
-
-	ctx    context.Context
-	cancel context.CancelFunc
-	group  *errgroup.Group
-
-	routes *routeTable
-
-	mu     sync.RWMutex
-	leases map[string]*leaseRecord
-
+	sniListener  net.Listener
+	apiTLSClose  io.Closer
+	apiListener  net.Listener
+	apiServer    *http.Server
+	ctxDone      <-chan struct{}
+	baseContext  func() context.Context
+	cancel       context.CancelFunc
+	group        *errgroup.Group
+	routes       *routeTable
+	leases       map[string]*leaseRecord
+	cfg          ServerConfig
+	mu           sync.RWMutex
 	shutdownOnce sync.Once
 }
 
 type leaseRecord struct {
-	ID           string
-	Name         string
-	Hostnames    []string
-	Metadata     LeaseMetadata
-	ReverseToken string
 	ExpiresAt    time.Time
 	Broker       *leaseBroker
+	ID           string
+	Name         string
+	ReverseToken string
+	Hostnames    []string
+	Metadata     LeaseMetadata
 }
 
 type LeaseSnapshot struct {
+	ExpiresAt time.Time
 	ID        string
 	Name      string
 	Hostnames []string
 	Metadata  LeaseMetadata
-	ExpiresAt time.Time
 	Ready     int
 }
 
@@ -109,17 +106,21 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.New("server already started")
 	}
 
-	apiListener, err := net.Listen("tcp", s.cfg.APIListenAddr)
+	serverCtx, cancel := context.WithCancel(ctx)
+	var listenConfig net.ListenConfig
+
+	apiListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.APIListenAddr)
 	if err != nil {
+		cancel()
 		return fmt.Errorf("listen api: %w", err)
 	}
-	sniListener, err := net.Listen("tcp", s.cfg.SNIListenAddr)
+	sniListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.SNIListenAddr)
 	if err != nil {
 		_ = apiListener.Close()
+		cancel()
 		return fmt.Errorf("listen sni: %w", err)
 	}
 
-	serverCtx, cancel := context.WithCancel(ctx)
 	group, groupCtx := errgroup.WithContext(serverCtx)
 
 	apiServer := &http.Server{
@@ -139,7 +140,8 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
-	s.ctx = groupCtx
+	s.baseContext = func() context.Context { return groupCtx }
+	s.ctxDone = groupCtx.Done()
 	s.cancel = cancel
 	s.group = group
 
@@ -527,7 +529,7 @@ func (s *Server) runSNIListener() error {
 	for {
 		conn, err := s.sniListener.Accept()
 		if err != nil {
-			if s.ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || s.isClosed() {
 				return nil
 			}
 			return err
@@ -568,7 +570,7 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 		return
 	}
 
-	claimCtx, cancel := context.WithTimeout(s.ctx, s.cfg.ClaimTimeout)
+	claimCtx, cancel := context.WithTimeout(s.context(), s.cfg.ClaimTimeout)
 	defer cancel()
 
 	session, err := record.Broker.Claim(claimCtx)
@@ -581,7 +583,8 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 }
 
 func (s *Server) bridgeToFallback(conn net.Conn) {
-	upstream, err := net.DialTimeout("tcp", hostPortOrLoopback(s.cfg.RootFallbackAddr), 5*time.Second)
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	upstream, err := dialer.DialContext(s.context(), "tcp", hostPortOrLoopback(s.cfg.RootFallbackAddr))
 	if err != nil {
 		_ = conn.Close()
 		return
@@ -595,7 +598,7 @@ func (s *Server) runLeaseJanitor() error {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-s.ctxDone:
 			return nil
 		case <-ticker.C:
 			s.cleanupExpiredLeases()
@@ -623,7 +626,10 @@ func (s *Server) cleanupExpiredLeases() {
 }
 
 func (s *Server) watchContext() error {
-	<-s.ctx.Done()
+	if s.ctxDone == nil {
+		return nil
+	}
+	<-s.ctxDone
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
@@ -704,5 +710,26 @@ func closeWrite(conn net.Conn) {
 	}
 	if cw, ok := conn.(closeWriter); ok {
 		_ = cw.CloseWrite()
+	}
+}
+
+func (s *Server) context() context.Context {
+	if s.baseContext != nil {
+		if ctx := s.baseContext(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+func (s *Server) isClosed() bool {
+	if s.ctxDone == nil {
+		return false
+	}
+	select {
+	case <-s.ctxDone:
+		return true
+	default:
+		return false
 	}
 }

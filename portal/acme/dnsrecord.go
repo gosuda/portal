@@ -51,8 +51,8 @@ type cfRecordsResult struct {
 }
 
 type cfRecordResult struct {
-	Errors  []cfError   `json:"errors"`
 	Result  cfDNSRecord `json:"result"`
+	Errors  []cfError   `json:"errors"`
 	Success bool        `json:"success"`
 }
 
@@ -113,7 +113,7 @@ func detectPublicIP(ctx context.Context) (string, error) {
 
 func findZoneID(ctx context.Context, token, domain string) (string, error) {
 	parts := strings.Split(domain, ".")
-	for i := 0; i < len(parts)-1; i++ {
+	for i := range len(parts) - 1 {
 		candidate := strings.Join(parts[i:], ".")
 		zones, err := cfListZones(ctx, token, candidate)
 		if err != nil {

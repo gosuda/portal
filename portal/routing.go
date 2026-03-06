@@ -6,8 +6,8 @@ import (
 )
 
 type routeTable struct {
-	mu    sync.RWMutex
 	exact map[string]string
+	mu    sync.RWMutex
 }
 
 func newRouteTable() *routeTable {

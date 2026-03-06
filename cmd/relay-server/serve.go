@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -11,11 +10,15 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/rs/zerolog/log"
+
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/acme"
 )
 
 func runServer(cfg relayServerConfig) error {
+	logger := log.With().Str("component", "relay-server").Logger()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -68,9 +71,12 @@ func runServer(cfg relayServerConfig) error {
 	acmeManager.Start(ctx)
 	defer acmeManager.Stop()
 
-	log.Printf("[server] https api enabled via ACME/self-signed on %s", loopbackAddr(server.APIAddr()))
-	log.Printf("[server] sni router listening on %s", server.SNIAddr())
-	log.Printf("[server] root host %s", rootHost)
+	logger.Info().
+		Str("api_addr", loopbackAddr(server.APIAddr())).
+		Str("sni_addr", server.SNIAddr()).
+		Str("root_host", rootHost).
+		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1").
+		Msg("relay server started")
 
 	return server.Wait()
 }
@@ -134,11 +140,11 @@ func loopbackAddr(addr string) string {
 
 func mustRead(path string) []byte {
 	if path == "" {
-		log.Fatal("missing required PEM path")
+		log.Fatal().Msg("missing required PEM path")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		log.Fatalf("read %s: %v", path, err)
+		log.Fatal().Err(err).Str("path", path).Msg("read pem file")
 	}
 	return data
 }

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/net/websocket"
 
 	"gosuda.org/portal/sdk"
@@ -37,6 +40,10 @@ var (
 )
 
 func main() {
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "demo-app").Logger()
+
 	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https only)")
 	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
@@ -47,12 +54,14 @@ func main() {
 	flag.Parse()
 
 	if err := runDemo(); err != nil {
-		fmt.Fprintf(os.Stderr, "demo command failed: %v\n", err)
+		logger.Error().Err(err).Msg("demo command failed")
 		os.Exit(1)
 	}
 }
 
 func runDemo() error {
+	logger := log.With().Str("component", "demo-app").Logger()
+
 	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURL: flagServerURL})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
@@ -78,6 +87,12 @@ func runDemo() error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
+
+	logger.Info().
+		Str("lease_id", listener.LeaseID()).
+		Strs("public_urls", listener.PublicURLs()).
+		Int("local_port", flagPort).
+		Msg("demo app registered with relay")
 
 	mux := http.NewServeMux()
 
@@ -131,7 +146,10 @@ func runDemo() error {
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
 		}
-		_ = localSrv.ListenAndServe()
+		logger.Info().Str("addr", localAddr).Msg("demo app listening locally")
+		if err := localSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error().Err(err).Str("addr", localAddr).Msg("demo local server stopped")
+		}
 	}()
 
 	relaySrv := &http.Server{
@@ -149,12 +167,14 @@ func runDemo() error {
 
 	select {
 	case <-sig:
+		logger.Info().Msg("demo app shutting down")
 	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 	}
 
+	logger.Info().Msg("demo app shutdown complete")
 	return nil
 }
 

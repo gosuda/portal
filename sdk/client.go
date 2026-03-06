@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -104,7 +105,7 @@ func (c *Client) Close() {
 
 func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
 	if strings.TrimSpace(req.Name) == "" {
-		return nil, fmt.Errorf("listener name is required")
+		return nil, errors.New("listener name is required")
 	}
 
 	reverseToken := strings.TrimSpace(req.ReverseToken)
@@ -151,7 +152,8 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	listenerCtx, cancel := context.WithCancel(ctx)
 	l := &Listener{
 		client:       c,
-		ctx:          listenerCtx,
+		baseContext:  func() context.Context { return listenerCtx },
+		ctxDone:      listenerCtx.Done(),
 		cancel:       cancel,
 		leaseID:      registerResp.LeaseID,
 		hostnames:    append([]string(nil), registerResp.Hostnames...),
@@ -253,9 +255,9 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 	req.Header.Set(portal.HeaderReverseToken, reverseToken)
 	req.Header.Set("Connection", "keep-alive")
 
-	if err := req.Write(conn); err != nil {
+	if writeErr := req.Write(conn); writeErr != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, writeErr
 	}
 
 	reader := bufio.NewReader(conn)
@@ -281,9 +283,9 @@ func (c *Client) resolve(path string) string {
 }
 
 type apiEnvelope struct {
-	OK    bool             `json:"ok"`
-	Data  json.RawMessage  `json:"data"`
 	Error *portal.APIError `json:"error"`
+	Data  json.RawMessage  `json:"data"`
+	OK    bool             `json:"ok"`
 }
 
 func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
@@ -292,7 +294,7 @@ func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(rootCAPEM) {
-		return nil, fmt.Errorf("failed to parse relay root ca")
+		return nil, errors.New("failed to parse relay root ca")
 	}
 	return pool, nil
 }

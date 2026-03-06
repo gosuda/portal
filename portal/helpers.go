@@ -16,7 +16,7 @@ const (
 	defaultIdleKeepalive     = 15 * time.Second
 	defaultReadyQueueLimit   = 8
 	defaultClientHelloWait   = 2 * time.Second
-	defaultControlBodyLimit  = 32 << 10
+	defaultControlBodyLimit  = 4 << 20
 	defaultSessionWriteLimit = 5 * time.Second
 )
 
@@ -86,28 +86,12 @@ func suggestHostname(name, rootHost string) string {
 	return label + "." + rootHost
 }
 
-func hostnameMatchesWildcard(pattern, host string) bool {
-	if !strings.HasPrefix(pattern, "*.") {
-		return false
-	}
-	suffix := strings.TrimPrefix(pattern, "*.")
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	return normalizeHostname("*."+strings.Join(parts[1:], ".")) == normalizeHostname(pattern) && strings.Count(suffix, ".")+1 == len(parts)-1
-}
-
 func randomID(prefix string) string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(buf)
-}
-
-func randomToken() string {
-	return randomID("tok_")
 }
 
 func durationOrDefault(v, fallback time.Duration) time.Duration {

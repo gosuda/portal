@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"html"
 	"mime"
 	"net/http"
 	"strings"
@@ -13,19 +12,6 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
-}
-
-func isSecureRequestWithPolicy(r *http.Request, trustProxyHeaders bool) bool {
-	if r == nil {
-		return false
-	}
-	if r.TLS != nil {
-		return true
-	}
-	if !trustProxyHeaders {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func hasPathPrefix(path, prefix string) bool {
@@ -41,10 +27,6 @@ func subtleValueMatch(left, right string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
-}
-
-func escapeHTML(value string) string {
-	return html.EscapeString(value)
 }
 
 func getContentType(ext string) string {

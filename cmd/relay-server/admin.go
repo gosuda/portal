@@ -10,10 +10,10 @@ import (
 )
 
 type Admin struct {
-	secret     string
-	trustProxy bool
 	frontend   *Frontend
 	server     *portal.Server
+	secret     string
+	trustProxy bool
 }
 
 func NewAdmin(secret string, trustProxy bool, frontend *Frontend) *Admin {

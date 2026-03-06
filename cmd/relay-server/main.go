@@ -3,9 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -28,6 +31,10 @@ type relayServerConfig struct {
 }
 
 func main() {
+	zerolog.TimeFieldFormat = time.RFC3339
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
+	logger := log.With().Str("component", "relay-server").Logger()
+
 	cfg := relayServerConfig{}
 
 	portalURL := strings.TrimSuffix(trimmedEnv("PORTAL_URL"), "/")
@@ -67,11 +74,13 @@ func main() {
 		cfg.PortalURL = cfg.Bootstraps[0]
 	}
 
-	log.Printf("[server] portal base url %s", cfg.PortalURL)
-	log.Printf("[server] bootstraps %s", strings.Join(cfg.Bootstraps, ", "))
+	logger.Info().
+		Str("portal_url", cfg.PortalURL).
+		Strs("bootstraps", cfg.Bootstraps).
+		Msg("configured relay server")
 
 	if err := runServer(cfg); err != nil {
-		log.Fatalf("execute root command: %v", err)
+		logger.Fatal().Err(err).Msg("execute root command")
 	}
 }
 

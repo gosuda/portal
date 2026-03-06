@@ -2,6 +2,7 @@ package portal
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,9 +11,9 @@ import (
 )
 
 type TLSMaterialConfig struct {
+	Keyless *RemoteSignerConfig
 	CertPEM []byte
 	KeyPEM  []byte
-	Keyless *RemoteSignerConfig
 }
 
 type RemoteSignerConfig struct {
@@ -26,7 +27,7 @@ type RemoteSignerConfig struct {
 
 func attachAPITLS(server *http.Server, cfg TLSMaterialConfig) (io.Closer, error) {
 	if server == nil {
-		return nil, fmt.Errorf("http server is required")
+		return nil, errors.New("http server is required")
 	}
 	if cfg.Keyless != nil {
 		remoteSigner, err := keylesslib.AttachToHTTPServer(server, keylesslib.HTTPServerAttachConfig{

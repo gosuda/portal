@@ -41,13 +41,12 @@ type Config struct {
 }
 
 type Manager struct {
-	cfg Config
-
+	stopCh    chan struct{}
+	cfg       Config
+	wg        sync.WaitGroup
 	mu        sync.RWMutex
 	startOnce sync.Once
 	stopOnce  sync.Once
-	stopCh    chan struct{}
-	wg        sync.WaitGroup
 }
 
 type provisionConfig struct {
@@ -262,16 +261,20 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 	}
 	for _, domain := range domains {
 		if wildcardDomain, ok := strings.CutPrefix(domain, "*."); ok {
-			if err := cert.VerifyHostname("probe." + wildcardDomain); err != nil {
+			if !certificateCoversHostname(cert, "probe."+wildcardDomain) {
 				return false, nil
 			}
 			continue
 		}
-		if err := cert.VerifyHostname(domain); err != nil {
+		if !certificateCoversHostname(cert, domain) {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func certificateCoversHostname(cert *x509.Certificate, hostname string) bool {
+	return cert != nil && cert.VerifyHostname(hostname) == nil
 }
 
 func newClient(cfg provisionConfig) (*lego.Client, *acmeUser, error) {
