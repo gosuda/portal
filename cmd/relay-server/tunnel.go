@@ -92,7 +92,7 @@ exec "$@"
 const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
-$Relays = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
+$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $BaseUrl }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -149,10 +149,10 @@ if ($ActualHash -ne $ExpectedHash) {
     exit 1
 }
 
-$ArgsList = @("--relay", $Relays)
+$ArgsList = @("--relay", $RelayUrl)
 
-if ($env:APP_HOST) { $ArgsList += "--host", $env:APP_HOST } else { $ArgsList += "--host", "localhost:3000" }
-if ($env:APP_NAME) { $ArgsList += "--name", $env:APP_NAME }
+if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
+if ($env:NAME) { $ArgsList += "--name", $env:NAME }
 if ($env:APP_DESCRIPTION) { $ArgsList += "--description", $env:APP_DESCRIPTION }
 if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
 if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }

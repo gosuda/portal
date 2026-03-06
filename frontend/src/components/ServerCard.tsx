@@ -365,17 +365,19 @@ export function ServerCard({
 
           {showAdminControls && leaseId && (
             <div className="flex flex-col gap-2 w-full mt-2">
-              <div className="flex items-center justify-between w-full">
-                <span className="text-xs text-white/60">
-                  BPS: <span className="font-medium text-white">{formatBPS(bps)}</span>
-                </span>
-                <button
-                  onClick={handleBPSSettingsClick}
-                  className="px-3 py-1 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
-                >
-                  Settings
-                </button>
-              </div>
+              {onBPSChange && (
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs text-white/60">
+                    BPS: <span className="font-medium text-white">{formatBPS(bps)}</span>
+                  </span>
+                  <button
+                    onClick={handleBPSSettingsClick}
+                    className="px-3 py-1 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
+                  >
+                    Settings
+                  </button>
+                </div>
+              )}
 
               {isApproved && ip && (
                 <div className="text-[10px] text-white/50">

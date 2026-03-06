@@ -13,18 +13,10 @@ import (
 
 	"gosuda.org/portal/portal"
 	"gosuda.org/portal/portal/acme"
+	portaladmin "gosuda.org/portal/portal/admin"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/types"
-)
-
-const (
-	pathFaviconICO           = "/favicon.ico"
-	pathFaviconSVG           = "/favicon.svg"
-	pathFavicon96PNG         = "/favicon-96x96.png"
-	pathAppleTouchIconPNG    = "/apple-touch-icon.png"
-	pathWebAppManifest192PNG = "/web-app-manifest-192x192.png"
-	pathWebAppManifest512PNG = "/web-app-manifest-512x512.png"
-	pathPortalJPG            = "/portal.jpg"
 )
 
 func runServer(cfg relayServerConfig) error {
@@ -39,6 +31,11 @@ func runServer(cfg relayServerConfig) error {
 	rootHost := portal.PortalRootHost(cfg.PortalURL)
 	apiListenAddr := fmt.Sprintf(":%d", cfg.AdminPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
+	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
+	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
 
 	acmeManager, err := acme.NewManager(acme.Config{
 		BaseDomain:      rootHost,
@@ -59,14 +56,27 @@ func runServer(cfg relayServerConfig) error {
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
-	admin := NewAdmin(cfg.AdminSecretKey, cfg.TrustProxyHeaders, frontend)
+	adminHandler := portaladmin.NewHandler(portaladmin.Config{
+		PortalURL:    cfg.PortalURL,
+		Secret:       cfg.AdminSecretKey,
+		TrustProxy:   cfg.TrustProxyHeaders,
+		SettingsPath: "admin_settings.json",
+		ServeAppStatic: func(w http.ResponseWriter, r *http.Request, appPath string) {
+			frontend.ServeAppStatic(w, r, appPath)
+		},
+	})
+	if err := adminHandler.LoadSettings(); err != nil {
+		logger.Warn().Err(err).Msg("load admin settings")
+	}
 
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:        cfg.PortalURL,
-		APIListenAddr:    apiListenAddr,
-		SNIListenAddr:    sniListenAddr,
-		RootHost:         rootHost,
-		RootFallbackAddr: portal.HostPortOrLoopback(apiListenAddr),
+		PortalURL:         cfg.PortalURL,
+		APIListenAddr:     apiListenAddr,
+		SNIListenAddr:     sniListenAddr,
+		RootHost:          rootHost,
+		RootFallbackAddr:  portal.HostPortOrLoopback(apiListenAddr),
+		Policy:            adminHandler.Runtime(),
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		KeylessSignerHandler: func() http.Handler {
 			if signer == nil {
 				return nil
@@ -77,14 +87,14 @@ func runServer(cfg relayServerConfig) error {
 			CertPEM: mustRead(certFile),
 			KeyPEM:  mustRead(keyFile),
 		},
-		APIHandlerWrapper: serveAPI(frontend, admin, cfg),
+		APIHandlerWrapper: serveAPI(frontend, adminHandler, cfg),
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
 	frontend.Bind(server)
-	admin.Bind(server)
+	adminHandler.Bind(server)
 
 	if err := server.Start(ctx); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
@@ -102,7 +112,7 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http.Handler) http.Handler {
+func serveAPI(frontend *Frontend, adminHandler *portaladmin.Handler, cfg relayServerConfig) func(http.Handler) http.Handler {
 	return func(base http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
@@ -121,9 +131,9 @@ func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http
 			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix):
 				frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
 			case r.URL.Path == types.PathAdmin || r.URL.Path == types.PathAdminPrefix:
-				admin.HandleAdminRequest(w, r)
+				adminHandler.HandleRequest(w, r)
 			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAdminPrefix):
-				admin.HandleAdminRequest(w, r)
+				adminHandler.HandleRequest(w, r)
 			case r.URL.Path == types.PathTunnel:
 				serveTunnelScript(w, r, cfg.PortalURL)
 			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathTunnelBinPrefix):
@@ -137,13 +147,13 @@ func serveAPI(frontend *Frontend, admin *Admin, cfg relayServerConfig) func(http
 
 func isFrontendRootAssetPath(requestPath string) bool {
 	switch requestPath {
-	case pathFaviconICO,
-		pathFaviconSVG,
-		pathFavicon96PNG,
-		pathAppleTouchIconPNG,
-		pathWebAppManifest192PNG,
-		pathWebAppManifest512PNG,
-		pathPortalJPG:
+	case "/favicon.ico",
+		"/favicon.svg",
+		"/favicon-96x96.png",
+		"/apple-touch-icon.png",
+		"/web-app-manifest-192x192.png",
+		"/web-app-manifest-512x512.png",
+		"/portal.jpg":
 		return true
 	default:
 		return false

@@ -79,8 +79,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (os === "windows") {
       const windowsScriptURL = new URL(tunnelScriptURL);
       windowsScriptURL.searchParams.set("os", "windows");
-      const downloadCommand = `& { $proto = [System.Net.ServicePointManager]::SecurityProtocol; try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; irm ${windowsScriptURL.toString()} } finally { [System.Net.ServicePointManager]::SecurityProtocol = $proto } }`;
-      return `$ProgressPreference = 'SilentlyContinue'; $env:APP_HOST="${hostVal}"; $env:APP_NAME="${nameVal}"; $env:RELAYS="${relayUrlVal}"; ${downloadCommand} | iex`;
+      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${windowsScriptURL.toString()} | iex`;
     }
 
     const curlFlags = localhostRelay ? "-kfsSL" : "-fsSL";
@@ -127,7 +126,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Host
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_HOST=</span>
+              <span className="px-3 text-sm text-text-muted">
+                {os === "windows" ? "HOST=" : "APP_HOST="}
+              </span>
               <Input
                 id="host"
                 type="text"
@@ -151,7 +152,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Service Name
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_NAME=</span>
+              <span className="px-3 text-sm text-text-muted">
+                {os === "windows" ? "NAME=" : "APP_NAME="}
+              </span>
               <Input
                 id="name"
                 type="text"

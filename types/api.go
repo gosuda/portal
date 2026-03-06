@@ -64,3 +64,32 @@ type DomainResponse struct {
 	RootHost          string `json:"root_host"`
 	SuggestedHostname string `json:"suggested_hostname"`
 }
+
+type AdminLoginRequest struct {
+	Key string `json:"key"`
+}
+
+type AdminLoginResponse struct {
+	Success          bool `json:"success,omitempty"`
+	Locked           bool `json:"locked,omitempty"`
+	RemainingSeconds int  `json:"remaining_seconds,omitempty"`
+}
+
+type AdminAuthStatusResponse struct {
+	Authenticated bool `json:"authenticated"`
+	AuthEnabled   bool `json:"auth_enabled"`
+}
+
+type AdminApprovalModeRequest struct {
+	Mode string `json:"mode"`
+}
+
+type AdminApprovalModeResponse struct {
+	ApprovalMode string `json:"approval_mode"`
+}
+
+type AdminSettingsResponse struct {
+	ApprovalMode   string   `json:"approval_mode"`
+	ApprovedLeases []string `json:"approved_leases,omitempty"`
+	DeniedLeases   []string `json:"denied_leases,omitempty"`
+}

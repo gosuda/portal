@@ -19,12 +19,14 @@ import (
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"gosuda.org/portal/portal/keyless"
+	"gosuda.org/portal/portal/policy"
 	"gosuda.org/portal/types"
 )
 
 type ServerConfig struct {
 	APIHandlerWrapper     func(http.Handler) http.Handler
 	KeylessSignerHandler  http.Handler
+	Policy                *policy.Runtime
 	PortalURL             string
 	APIListenAddr         string
 	SNIListenAddr         string
@@ -36,6 +38,7 @@ type ServerConfig struct {
 	IdleKeepaliveInterval time.Duration
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
+	TrustProxyHeaders     bool
 }
 
 type Server struct {
@@ -56,21 +59,31 @@ type Server struct {
 
 type leaseRecord struct {
 	ExpiresAt    time.Time
+	FirstSeenAt  time.Time
+	LastSeenAt   time.Time
 	Broker       *leaseBroker
 	ID           string
 	Name         string
 	ReverseToken string
+	ClientIP     string
 	Hostnames    []string
 	Metadata     types.LeaseMetadata
 }
 
 type LeaseSnapshot struct {
-	ExpiresAt time.Time
-	ID        string
-	Name      string
-	Hostnames []string
-	Metadata  types.LeaseMetadata
-	Ready     int
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	ID          string
+	Name        string
+	ClientIP    string
+	Hostnames   []string
+	Metadata    types.LeaseMetadata
+	Ready       int
+	IsApproved  bool
+	IsBanned    bool
+	IsDenied    bool
+	IsIPBanned  bool
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -87,6 +100,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	cfg.ClientHelloTimeout = durationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
 	if cfg.RootHost == "" {
 		cfg.RootHost = PortalRootHost(cfg.PortalURL)
+	}
+	if cfg.Policy == nil {
+		cfg.Policy = policy.NewRuntime()
 	}
 	if cfg.RootHost == "" {
 		return nil, errors.New("root host is required")
@@ -214,14 +230,7 @@ func (s *Server) GetLease(leaseID string) (LeaseSnapshot, bool) {
 	if !ok {
 		return LeaseSnapshot{}, false
 	}
-	return LeaseSnapshot{
-		ID:        record.ID,
-		Name:      record.Name,
-		Hostnames: append([]string(nil), record.Hostnames...),
-		Metadata:  record.Metadata,
-		ExpiresAt: record.ExpiresAt,
-		Ready:     record.Broker.ReadyCount(),
-	}, true
+	return s.snapshotForLease(record), true
 }
 
 func (s *Server) ListLeases() []LeaseSnapshot {
@@ -230,14 +239,7 @@ func (s *Server) ListLeases() []LeaseSnapshot {
 
 	out := make([]LeaseSnapshot, 0, len(s.leases))
 	for _, record := range s.leases {
-		out = append(out, LeaseSnapshot{
-			ID:        record.ID,
-			Name:      record.Name,
-			Hostnames: append([]string(nil), record.Hostnames...),
-			Metadata:  record.Metadata,
-			ExpiresAt: record.ExpiresAt,
-			Ready:     record.Broker.ReadyCount(),
-		})
+		out = append(out, s.snapshotForLease(record))
 	}
 	return out
 }
@@ -285,16 +287,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
+	clientIP := s.clientIPFromRequest(r)
+	if s.isClientIPBanned(clientIP) {
+		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		return
+	}
 	var req types.RegisterRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	resp, err := s.registerLease(req)
+	resp, err := s.registerLease(req, clientIP)
 	if err != nil {
 		status, code := http.StatusBadRequest, "invalid_request"
 		if errors.Is(err, errHostnameConflict) {
 			status, code = http.StatusConflict, "hostname_conflict"
+		}
+		if errors.Is(err, errIPBanned) {
+			status, code = http.StatusForbidden, "ip_banned"
 		}
 		writeAPIError(w, status, code, err.Error())
 		return
@@ -307,12 +317,17 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 		return
 	}
+	clientIP := s.clientIPFromRequest(r)
+	if s.isClientIPBanned(clientIP) {
+		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		return
+	}
 	var req types.RenewRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
-	resp, err := s.renewLease(req)
+	resp, err := s.renewLease(req, clientIP)
 	if err != nil {
 		status, code := http.StatusBadRequest, "invalid_request"
 		if errors.Is(err, errLeaseNotFound) {
@@ -320,6 +335,9 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, errUnauthorized) {
 			status, code = http.StatusForbidden, "unauthorized"
+		}
+		if errors.Is(err, errIPBanned) {
+			status, code = http.StatusForbidden, "ip_banned"
 		}
 		writeAPIError(w, status, code, err.Error())
 		return
@@ -363,13 +381,23 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
 	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
-	lease, err := s.lookupLeaseByID(leaseID, token)
+	clientIP := s.clientIPFromRequest(r)
+	if s.isClientIPBanned(clientIP) {
+		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		return
+	}
+
+	lease, err := s.findLeaseByID(leaseID)
 	if err != nil {
-		status, code := http.StatusForbidden, "unauthorized"
-		if errors.Is(err, errLeaseNotFound) {
-			status, code = http.StatusNotFound, "lease_not_found"
-		}
-		writeAPIError(w, status, code, err.Error())
+		writeAPIError(w, http.StatusNotFound, "lease_not_found", err.Error())
+		return
+	}
+	if !s.isLeaseRoutable(lease) {
+		writeAPIError(w, http.StatusForbidden, "lease_rejected", "lease is not approved for routing")
+		return
+	}
+	if err := s.authorizeLeaseToken(lease, token); err != nil {
+		writeAPIError(w, http.StatusForbidden, "unauthorized", err.Error())
 		return
 	}
 
@@ -406,6 +434,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		_ = session.Close()
 		return
 	}
+	s.touchLease(lease.ID, clientIP)
 	log.Info().
 		Str("component", "relay-server").
 		Str("lease_id", lease.ID).
@@ -415,7 +444,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Msg("sdk reverse connected")
 }
 
-func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterResponse, error) {
+func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return types.RegisterResponse{}, errors.New("name is required")
 	}
@@ -424,6 +453,9 @@ func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterRespons
 	}
 	if !req.TLS {
 		return types.RegisterResponse{}, errors.New("tls must be true")
+	}
+	if s.isClientIPBanned(clientIP) {
+		return types.RegisterResponse{}, errIPBanned
 	}
 
 	hostnames := normalizeHostnames(req.Hostnames)
@@ -446,7 +478,8 @@ func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterRespons
 	}
 
 	leaseID := randomID("lease_")
-	expiresAt := time.Now().Add(ttl)
+	now := time.Now()
+	expiresAt := now.Add(ttl)
 	record := &leaseRecord{
 		ID:           leaseID,
 		Name:         strings.TrimSpace(req.Name),
@@ -454,12 +487,18 @@ func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterRespons
 		Metadata:     normalizeMetadata(req.Metadata),
 		ReverseToken: req.ReverseToken,
 		ExpiresAt:    expiresAt,
+		FirstSeenAt:  now,
+		LastSeenAt:   now,
+		ClientIP:     clientIP,
 		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
 	}
 
 	s.leases[leaseID] = record
 	for _, host := range hostnames {
 		s.routes.Set(host, leaseID)
+	}
+	if strings.TrimSpace(clientIP) != "" {
+		s.cfg.Policy.IPFilter().RegisterLeaseIP(leaseID, clientIP)
 	}
 
 	return types.RegisterResponse{
@@ -471,7 +510,11 @@ func (s *Server) registerLease(req types.RegisterRequest) (types.RegisterRespons
 	}, nil
 }
 
-func (s *Server) renewLease(req types.RenewRequest) (types.RenewResponse, error) {
+func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
+	if s.isClientIPBanned(clientIP) {
+		return types.RenewResponse{}, errIPBanned
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -488,6 +531,11 @@ func (s *Server) renewLease(req types.RenewRequest) (types.RenewResponse, error)
 		ttl = time.Duration(req.TTLSeconds) * time.Second
 	}
 	record.ExpiresAt = time.Now().Add(ttl)
+	record.LastSeenAt = time.Now()
+	if strings.TrimSpace(clientIP) != "" {
+		record.ClientIP = clientIP
+		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
+	}
 	record.Broker.Reset()
 	return types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
 }
@@ -507,11 +555,12 @@ func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 	s.mu.Unlock()
 
 	s.routes.DeleteLease(record.Hostnames)
+	s.cfg.Policy.ForgetLease(record.ID)
 	record.Broker.Drop()
 	return nil
 }
 
-func (s *Server) lookupLeaseByID(leaseID, token string) (*leaseRecord, error) {
+func (s *Server) findLeaseByID(leaseID string) (*leaseRecord, error) {
 	s.mu.RLock()
 	record, ok := s.leases[strings.TrimSpace(leaseID)]
 	s.mu.RUnlock()
@@ -521,10 +570,17 @@ func (s *Server) lookupLeaseByID(leaseID, token string) (*leaseRecord, error) {
 	if time.Now().After(record.ExpiresAt) {
 		return nil, errLeaseNotFound
 	}
-	if !tokenMatches(record.ReverseToken, token) {
-		return nil, errUnauthorized
-	}
 	return record, nil
+}
+
+func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
+	if record == nil {
+		return errLeaseNotFound
+	}
+	if !tokenMatches(record.ReverseToken, token) {
+		return errUnauthorized
+	}
+	return nil
 }
 
 func (s *Server) findLeaseByHostnameLocked(host string) *leaseRecord {
@@ -591,6 +647,10 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 		_ = wrappedConn.Close()
 		return
 	}
+	if !s.isLeaseRoutable(record) {
+		_ = wrappedConn.Close()
+		return
+	}
 
 	claimCtx, cancel := context.WithTimeout(s.context(), s.cfg.ClaimTimeout)
 	defer cancel()
@@ -643,6 +703,7 @@ func (s *Server) cleanupExpiredLeases() {
 
 	for _, lease := range expired {
 		s.routes.DeleteLease(lease.Hostnames)
+		s.cfg.Policy.ForgetLease(lease.ID)
 		lease.Broker.Drop()
 	}
 }
@@ -674,6 +735,7 @@ func (s *Server) wrapAPIHandler(base http.Handler) http.Handler {
 
 var (
 	errLeaseNotFound    = errors.New("lease not found")
+	errIPBanned         = errors.New("request denied because source IP is banned")
 	errUnauthorized     = errors.New("unauthorized")
 	errHostnameConflict = errors.New("hostname already registered")
 )
@@ -772,5 +834,64 @@ func (s *Server) isClosed() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func (s *Server) snapshotForLease(record *leaseRecord) LeaseSnapshot {
+	if record == nil {
+		return LeaseSnapshot{}
+	}
+	clientIP := record.ClientIP
+	runtime := s.cfg.Policy
+	return LeaseSnapshot{
+		ID:          record.ID,
+		Name:        record.Name,
+		ClientIP:    clientIP,
+		Hostnames:   append([]string(nil), record.Hostnames...),
+		Metadata:    record.Metadata,
+		ExpiresAt:   record.ExpiresAt,
+		FirstSeenAt: record.FirstSeenAt,
+		LastSeenAt:  record.LastSeenAt,
+		Ready:       record.Broker.ReadyCount(),
+		IsApproved:  runtime.EffectiveApproval(record.ID),
+		IsBanned:    runtime.IsLeaseBanned(record.ID),
+		IsDenied:    runtime.IsLeaseDenied(record.ID),
+		IsIPBanned:  runtime.IPFilter().IsIPBanned(clientIP),
+	}
+}
+
+func (s *Server) clientIPFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders)
+}
+
+func (s *Server) isClientIPBanned(clientIP string) bool {
+	return s.cfg.Policy.IPFilter().IsIPBanned(clientIP)
+}
+
+func (s *Server) isLeaseRoutable(record *leaseRecord) bool {
+	if record == nil {
+		return false
+	}
+	return s.cfg.Policy.IsLeaseRoutable(record.ID)
+}
+
+func (s *Server) touchLease(leaseID, clientIP string) {
+	now := time.Now()
+
+	s.mu.Lock()
+	record := s.leases[strings.TrimSpace(leaseID)]
+	if record != nil {
+		record.LastSeenAt = now
+		if strings.TrimSpace(clientIP) != "" {
+			record.ClientIP = clientIP
+		}
+	}
+	s.mu.Unlock()
+
+	if record != nil && strings.TrimSpace(clientIP) != "" {
+		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
 	}
 }

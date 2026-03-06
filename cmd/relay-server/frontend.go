@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	"fmt"
 	"html"
 	"io/fs"
 	"mime"
@@ -11,9 +10,9 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"time"
 
 	"gosuda.org/portal/portal"
+	"gosuda.org/portal/portal/admin"
 )
 
 type readDirFileFS interface {
@@ -135,7 +134,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 }
 
 func (f *Frontend) injectServerData(htmlContent string) string {
-	rows := convertLeaseEntriesToRows(f.server, false, f.portalURL)
+	rows := admin.BuildLeaseRows(f.server, false, f.portalURL)
 	jsonData, err := json.Marshal(rows)
 	if err != nil {
 		jsonData = []byte("[]")
@@ -194,67 +193,4 @@ func getContentType(ext string) string {
 	default:
 		return ""
 	}
-}
-
-type leaseRow struct {
-	TTL       string
-	Metadata  string
-	Kind      string
-	DNS       string
-	Name      string
-	Peer      string
-	Link      string
-	Hide      bool
-	Connected bool
-}
-
-func convertLeaseEntriesToRows(serv *portal.Server, includeHidden bool, portalURL string) []leaseRow {
-	if serv == nil {
-		return nil
-	}
-	snapshots := serv.ListLeases()
-	rows := make([]leaseRow, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if !includeHidden && snapshot.Metadata.Hide {
-			continue
-		}
-		metadataJSON, _ := json.Marshal(snapshot.Metadata)
-		host := ""
-		if len(snapshot.Hostnames) > 0 {
-			host = snapshot.Hostnames[0]
-		}
-		rows = append(rows, leaseRow{
-			TTL:       formatDuration(time.Until(snapshot.ExpiresAt)),
-			Metadata:  string(metadataJSON),
-			Kind:      "https",
-			DNS:       host,
-			Name:      snapshot.Name,
-			Peer:      snapshot.ID,
-			Link:      leaseLink(host, portalURL),
-			Hide:      snapshot.Metadata.Hide,
-			Connected: snapshot.Ready > 0,
-		})
-	}
-	return rows
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return ""
-	}
-	if d > time.Hour {
-		return fmt.Sprintf("%.0fh", d.Hours())
-	}
-	if d > time.Minute {
-		return fmt.Sprintf("%.0fm", d.Minutes())
-	}
-	return fmt.Sprintf("%.0fs", d.Seconds())
-}
-
-func leaseLink(host, portalURL string) string {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return ""
-	}
-	return "https://" + host + "/"
 }
