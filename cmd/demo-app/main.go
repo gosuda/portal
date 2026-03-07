@@ -53,7 +53,7 @@ func runDemo() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURL: flagServerURL})
+	sdkClient, err := sdk.NewClient(flagServerURL)
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}

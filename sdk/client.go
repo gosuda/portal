@@ -32,39 +32,114 @@ const (
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
-// ClientConfig configures the SDK client.
-type ClientConfig struct {
-	RelayURL  string
-	RootCAPEM []byte
+type ClientOption func(*Client)
+
+func WithRootCAPEM(rootCAPEM []byte) ClientOption {
+	rootCAPEM = append([]byte(nil), rootCAPEM...)
+	return func(client *Client) {
+		client.rootCAPEM = append([]byte(nil), rootCAPEM...)
+	}
+}
+
+func WithInsecureSkipVerify(skip bool) ClientOption {
+	return func(client *Client) {
+		client.insecureSkipVerify = skip
+	}
+}
+
+func WithDialTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.dialTimeout = timeout
+		}
+	}
+}
+
+func WithRequestTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.requestTimeout = timeout
+		}
+	}
+}
+
+func WithHandshakeTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.handshakeTimeout = timeout
+		}
+	}
+}
+
+func WithLeaseTTL(ttl time.Duration) ClientOption {
+	return func(client *Client) {
+		if ttl > 0 {
+			client.leaseTTL = ttl
+		}
+	}
+}
+
+func WithRenewBefore(d time.Duration) ClientOption {
+	return func(client *Client) {
+		if d > 0 {
+			client.renewBefore = d
+		}
+	}
+}
+
+func WithReadyTarget(n int) ClientOption {
+	return func(client *Client) {
+		if n > 0 {
+			client.readyTarget = n
+		}
+	}
 }
 
 type Client struct {
-	baseURL          *url.URL
-	httpClient       *http.Client
-	rawTLSConfig     *tls.Config
-	dialTimeout      time.Duration
-	handshakeTimeout time.Duration
-	leaseTTL         time.Duration
-	renewBefore      time.Duration
-	readyTarget      int
+	baseURL            *url.URL
+	httpClient         *http.Client
+	rawTLSConfig       *tls.Config
+	rootCAPEM          []byte
+	insecureSkipVerify bool
+	dialTimeout        time.Duration
+	requestTimeout     time.Duration
+	handshakeTimeout   time.Duration
+	leaseTTL           time.Duration
+	renewBefore        time.Duration
+	readyTarget        int
 }
 
-func NewClient(cfg ClientConfig) (*Client, error) {
-	baseURL, err := url.Parse(strings.TrimSpace(cfg.RelayURL))
+func NewClient(relayURL string, options ...ClientOption) (*Client, error) {
+	baseURL, err := url.Parse(strings.TrimSpace(relayURL))
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	if !strings.EqualFold(baseURL.Scheme, "https") {
-		return nil, fmt.Errorf("relay url must use https: %q", cfg.RelayURL)
+		return nil, fmt.Errorf("relay url must use https: %q", relayURL)
 	}
 	if baseURL.Host == "" {
-		return nil, fmt.Errorf("relay url host is empty: %q", cfg.RelayURL)
+		return nil, fmt.Errorf("relay url host is empty: %q", relayURL)
 	}
 	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
 	baseURL.RawQuery = ""
 	baseURL.Fragment = ""
 
-	if len(cfg.RootCAPEM) == 0 && isLocalRelayHost(baseURL.Hostname()) {
+	client := &Client{
+		baseURL:          baseURL,
+		dialTimeout:      defaultDialTimeout,
+		requestTimeout:   defaultRequestTimeout,
+		handshakeTimeout: defaultHandshakeTimeout,
+		leaseTTL:         defaultLeaseTTL,
+		renewBefore:      defaultRenewBefore,
+		readyTarget:      defaultReadyTarget,
+	}
+	for _, option := range options {
+		if option != nil {
+			option(client)
+		}
+	}
+
+	if len(client.rootCAPEM) == 0 && !client.insecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
 		bootstrapCtx, cancel := context.WithTimeout(context.Background(), defaultDialTimeout+defaultHandshakeTimeout)
 		defer cancel()
 
@@ -72,19 +147,20 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		if bootstrapErr != nil {
 			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", bootstrapErr)
 		}
-		cfg.RootCAPEM = rootCAPEM
+		client.rootCAPEM = rootCAPEM
 	}
 
-	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
+	rootCAs, err := buildRootCAs(client.rootCAPEM)
 	if err != nil {
 		return nil, err
 	}
 
 	baseTLS := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ServerName: baseURL.Hostname(),
-		RootCAs:    rootCAs,
-		NextProtos: []string{"http/1.1"},
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         baseURL.Hostname(),
+		RootCAs:            rootCAs,
+		InsecureSkipVerify: client.insecureSkipVerify,
+		NextProtos:         []string{"http/1.1"},
 	}
 
 	transport := &http.Transport{
@@ -92,19 +168,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		ForceAttemptHTTP2: false,
 	}
 
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Transport: transport,
-			Timeout:   defaultRequestTimeout,
-		},
-		rawTLSConfig:     baseTLS,
-		dialTimeout:      defaultDialTimeout,
-		handshakeTimeout: defaultHandshakeTimeout,
-		leaseTTL:         defaultLeaseTTL,
-		renewBefore:      defaultRenewBefore,
-		readyTarget:      defaultReadyTarget,
-	}, nil
+	client.httpClient = &http.Client{
+		Transport: transport,
+		Timeout:   client.requestTimeout,
+	}
+	client.rawTLSConfig = baseTLS
+	return client, nil
 }
 
 func (c *Client) Close() {

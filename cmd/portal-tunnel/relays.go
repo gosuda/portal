@@ -75,7 +75,7 @@ func (r *relayRuntime) run(ctx context.Context, localAddr string, connWG *sync.W
 func startRelayRuntimes(ctx context.Context, relayURLs []string, req sdk.ListenRequest) ([]*relayRuntime, error) {
 	runtimes := make([]*relayRuntime, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
-		client, err := sdk.NewClient(sdk.ClientConfig{RelayURL: relayURL})
+		client, err := sdk.NewClient(relayURL)
 		if err != nil {
 			_ = closeRelayRuntimes(runtimes)
 			return nil, fmt.Errorf("create relay client %s: %w", relayURL, err)

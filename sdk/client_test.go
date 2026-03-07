@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +23,7 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{RelayURL: server.URL})
+	client, err := NewClient(server.URL)
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
@@ -36,6 +37,77 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
+func TestNewClientAppliesOptions(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	rootCAPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	})
+	client, err := NewClient(
+		"https://relay.example.com/base/",
+		WithRootCAPEM(rootCAPEM),
+		WithInsecureSkipVerify(true),
+		WithDialTimeout(2*time.Second),
+		WithRequestTimeout(3*time.Second),
+		WithHandshakeTimeout(4*time.Second),
+		WithLeaseTTL(5*time.Minute),
+		WithRenewBefore(45*time.Second),
+		WithReadyTarget(3),
+	)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	defer client.Close()
+
+	if got := client.baseURL.String(); got != "https://relay.example.com/base" {
+		t.Fatalf("baseURL.String() = %q, want %q", got, "https://relay.example.com/base")
+	}
+	if !client.insecureSkipVerify {
+		t.Fatal("insecureSkipVerify = false, want true")
+	}
+	if client.dialTimeout != 2*time.Second {
+		t.Fatalf("dialTimeout = %v, want %v", client.dialTimeout, 2*time.Second)
+	}
+	if client.requestTimeout != 3*time.Second {
+		t.Fatalf("requestTimeout = %v, want %v", client.requestTimeout, 3*time.Second)
+	}
+	if client.handshakeTimeout != 4*time.Second {
+		t.Fatalf("handshakeTimeout = %v, want %v", client.handshakeTimeout, 4*time.Second)
+	}
+	if client.leaseTTL != 5*time.Minute {
+		t.Fatalf("leaseTTL = %v, want %v", client.leaseTTL, 5*time.Minute)
+	}
+	if client.renewBefore != 45*time.Second {
+		t.Fatalf("renewBefore = %v, want %v", client.renewBefore, 45*time.Second)
+	}
+	if client.readyTarget != 3 {
+		t.Fatalf("readyTarget = %d, want %d", client.readyTarget, 3)
+	}
+	if client.httpClient.Timeout != 3*time.Second {
+		t.Fatalf("httpClient.Timeout = %v, want %v", client.httpClient.Timeout, 3*time.Second)
+	}
+	if !client.rawTLSConfig.InsecureSkipVerify {
+		t.Fatal("rawTLSConfig.InsecureSkipVerify = false, want true")
+	}
+	if string(client.rootCAPEM) != string(rootCAPEM) {
+		t.Fatalf("rootCAPEM = %q, want copied PEM input", string(client.rootCAPEM))
+	}
+
+	rootCAPEM[0] = 'X'
+	if string(client.rootCAPEM) == string(rootCAPEM) {
+		t.Fatalf("rootCAPEM changed with caller slice mutation: %q", string(client.rootCAPEM))
+	}
+	if len(client.rootCAPEM) == 0 || client.rootCAPEM[0] != '-' {
+		t.Fatalf("rootCAPEM changed with caller slice mutation: %q", string(client.rootCAPEM))
 	}
 }
 
