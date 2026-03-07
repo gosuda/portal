@@ -18,7 +18,7 @@ import (
 
 var (
 	flagServerURL string
-	flagPort      int
+	flagAddr      string
 	flagName      string
 	flagDesc      string
 	flagTags      string
@@ -32,7 +32,7 @@ func main() {
 	logger := log.With().Str("component", "demo-app").Logger()
 
 	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URLs (comma-separated, https only)")
-	flag.IntVar(&flagPort, "port", 8092, "local demo HTTP port")
+	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (disable if empty)")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
@@ -74,13 +74,11 @@ func runDemo() error {
 	}
 	defer listener.Close()
 
-	if err := sdk.RunHTTP(ctx, listener, newHandler(), sdk.HTTPServeOptions{
-		LocalAddr: fmt.Sprintf(":%d", flagPort),
-	}); err != nil {
+	logger.Info().Strs("public_urls", listener.PublicURLs()).Str("local_addr", flagAddr).Msg("demo app registered with relay")
+	if err := sdk.RunHTTP(ctx, listener, newHandler(), flagAddr); err != nil {
 		return err
 	}
 
-	logger.Info().Strs("public_urls", listener.PublicURLs()).Int("local_port", flagPort).Msg("demo app registered with relay")
 	if ctx.Err() != nil {
 		logger.Info().Msg("demo app shutting down")
 	}

@@ -25,7 +25,7 @@ func TestRunHTTPAppRelayOnly(t *testing.T) {
 	go func() {
 		errCh <- RunHTTP(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "ok")
-		}), HTTPServeOptions{})
+		}), "")
 	}()
 
 	waitForHTTP(t, "http://"+listener.Addr().String())
@@ -64,9 +64,7 @@ func TestRunHTTPAppLocalAndRelay(t *testing.T) {
 	go func() {
 		errCh <- RunHTTP(ctx, relayListener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "ok")
-		}), HTTPServeOptions{
-			LocalAddr: localAddr,
-		})
+		}), localAddr)
 	}()
 
 	waitForHTTP(t, "http://"+relayListener.Addr().String())

@@ -23,12 +23,14 @@ import (
 )
 
 const (
-	defaultDialTimeout      = 5 * time.Second
-	defaultRequestTimeout   = 15 * time.Second
-	defaultHandshakeTimeout = 15 * time.Second
-	defaultLeaseTTL         = 2 * time.Minute
-	defaultRenewBefore      = 30 * time.Second
-	defaultReadyTarget      = 1
+	defaultDialTimeout         = 5 * time.Second
+	defaultRequestTimeout      = 15 * time.Second
+	defaultHandshakeTimeout    = 15 * time.Second
+	defaultLeaseTTL            = 2 * time.Minute
+	defaultRenewBefore         = 30 * time.Second
+	defaultReadyTarget         = 1
+	defaultRetryDelay          = 5 * time.Second
+	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
 // ClientConfig configures the SDK client.
@@ -86,23 +88,18 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		return nil, errors.New("no relay urls configured")
 	}
 
-	listenerCtx, cancel := context.WithCancel(ctx)
-	listener := &Listener{
-		baseContext: func() context.Context { return listenerCtx },
-		ctxDone:     listenerCtx.Done(),
-		cancel:      cancel,
-	}
+	listener := newListener(ctx)
 
 	entries := make([]*listenerLease, 0, len(c.clients))
 	acceptedCap := 0
 	for _, client := range c.clients {
-		entry, entryAcceptedCap, err := client.listenEntry(listener, req)
+		entry, err := client.listenEntry(listener, req)
 		if err != nil {
-			cancel()
+			listener.cancel()
 			return nil, errors.Join(err, closeListenerEntries(entries))
 		}
 		entries = append(entries, entry)
-		acceptedCap += entryAcceptedCap
+		acceptedCap += entry.readyTarget
 	}
 
 	if acceptedCap <= 0 {
@@ -111,10 +108,9 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 
 	listener.accepted = make(chan acceptedConn, acceptedCap)
 	listener.entries = entries
+	listener.activeCount = len(entries)
 	for _, entry := range entries {
-		go entry.runSupervisor()
-		go entry.runRenewLoop()
-		entry.notify()
+		entry.start()
 	}
 
 	return listener, nil
@@ -211,7 +207,7 @@ func (c *relayClient) Close() {
 	}
 }
 
-func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*listenerLease, int, error) {
+func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*listenerLease, error) {
 	reverseToken := strings.TrimSpace(req.ReverseToken)
 	if reverseToken == "" {
 		reverseToken = randomToken()
@@ -225,7 +221,6 @@ func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*liste
 	if leaseTTL <= 0 {
 		leaseTTL = defaultLeaseTTL
 	}
-	acceptedCap := max(readyTarget*2, 1)
 
 	registerReq := types.RegisterRequest{
 		Name:         req.Name,
@@ -237,14 +232,14 @@ func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*liste
 	}
 
 	var registerResp types.RegisterResponse
-	if err := c.doJSON(listener.baseContext(), http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
-		return nil, 0, err
+	if err := c.doJSON(listener.ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
+		return nil, err
 	}
 
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(c.baseURL.String(), registerResp.Hostnames)
 	if err != nil {
 		_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
-		return nil, 0, err
+		return nil, err
 	}
 
 	return &listenerLease{
@@ -254,15 +249,15 @@ func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*liste
 			RelayURL:  c.baseURL.String(),
 			LeaseID:   registerResp.LeaseID,
 			Hostnames: append([]string(nil), registerResp.Hostnames...),
-			Metadata:  registerResp.Metadata,
+			Metadata:  cloneLeaseMetadata(registerResp.Metadata),
 		},
 		reverseToken: reverseToken,
 		leaseTTL:     leaseTTL,
 		readyTarget:  readyTarget,
 		tlsConfig:    tlsConf,
 		tlsCloser:    tlsCloser,
-		signal:       make(chan struct{}, 1),
-	}, acceptedCap, nil
+		active:       true,
+	}, nil
 }
 
 func (c *relayClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
@@ -275,7 +270,8 @@ func (c *relayClient) doJSON(ctx context.Context, method, path string, payload a
 		body = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.resolve(path), body)
+	ref, _ := url.Parse(path)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL.ResolveReference(ref).String(), body)
 	if err != nil {
 		return err
 	}
@@ -287,15 +283,22 @@ func (c *relayClient) doJSON(ctx context.Context, method, path string, payload a
 	}
 	defer resp.Body.Close()
 
-	var envelope apiEnvelope
+	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
 		if envelope.Error == nil {
-			return fmt.Errorf("api request failed with status %d", resp.StatusCode)
+			return &types.APIRequestError{
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
+			}
 		}
-		return fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+		return &types.APIRequestError{
+			StatusCode: resp.StatusCode,
+			Code:       envelope.Error.Code,
+			Message:    envelope.Error.Message,
+		}
 	}
 	if out == nil {
 		return nil
@@ -329,11 +332,8 @@ func (c *relayClient) openReverseSession(ctx context.Context, leaseID, reverseTo
 		return nil, err
 	}
 
-	connectURL, err := url.Parse(c.resolve(types.PathSDKConnect))
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
+	connectRef, _ := url.Parse(types.PathSDKConnect)
+	connectURL := c.baseURL.ResolveReference(connectRef)
 	query := connectURL.Query()
 	query.Set("lease_id", leaseID)
 	connectURL.RawQuery = query.Encode()
@@ -361,23 +361,55 @@ func (c *relayClient) openReverseSession(ctx context.Context, leaseID, reverseTo
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		apiErr := decodeAPIResponseError(resp)
 		_ = conn.Close()
-		return nil, fmt.Errorf("reverse connect failed: %s", strings.TrimSpace(string(body)))
+		return nil, apiErr
 	}
 
 	return wrapBufferedConn(conn, reader), nil
 }
 
-func (c *relayClient) resolve(path string) string {
-	ref, _ := url.Parse(path)
-	return c.baseURL.ResolveReference(ref).String()
+func decodeAPIResponseError(resp *http.Response) error {
+	if resp == nil {
+		return &types.APIRequestError{Message: "empty api response"}
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	var envelope types.APIEnvelope[json.RawMessage]
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
+		return &types.APIRequestError{
+			StatusCode: resp.StatusCode,
+			Code:       envelope.Error.Code,
+			Message:    envelope.Error.Message,
+		}
+	}
+
+	return &types.APIRequestError{
+		StatusCode: resp.StatusCode,
+		Message:    strings.TrimSpace(string(body)),
+	}
 }
 
-type apiEnvelope struct {
-	Error *types.APIError `json:"error"`
-	Data  json.RawMessage `json:"data"`
-	OK    bool            `json:"ok"`
+func isLeaseResetError(err error) bool {
+	var apiErr *types.APIRequestError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Code == types.APIErrorCodeLeaseNotFound
+}
+
+func isTerminalEntryError(err error) bool {
+	var apiErr *types.APIRequestError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+
+	switch apiErr.Code {
+	case types.APIErrorCodeIPBanned, types.APIErrorCodeUnauthorized:
+		return true
+	default:
+		return false
+	}
 }
 
 func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {

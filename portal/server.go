@@ -273,7 +273,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	name := r.URL.Query().Get("name")
@@ -285,27 +285,27 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	clientIP := s.clientIPFromRequest(r)
 	if s.isClientIPBanned(clientIP) {
-		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
 	var req types.RegisterRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		writeAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
 	resp, err := s.registerLease(req, clientIP)
 	if err != nil {
-		status, code := http.StatusBadRequest, "invalid_request"
+		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
 		if errors.Is(err, errHostnameConflict) {
-			status, code = http.StatusConflict, "hostname_conflict"
+			status, code = http.StatusConflict, types.APIErrorCodeHostnameConflict
 		}
 		if errors.Is(err, errIPBanned) {
-			status, code = http.StatusForbidden, "ip_banned"
+			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
 		}
 		writeAPIError(w, status, code, err.Error())
 		return
@@ -315,30 +315,30 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	clientIP := s.clientIPFromRequest(r)
 	if s.isClientIPBanned(clientIP) {
-		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
 	var req types.RenewRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		writeAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
 	resp, err := s.renewLease(req, clientIP)
 	if err != nil {
-		status, code := http.StatusBadRequest, "invalid_request"
+		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
 		if errors.Is(err, errLeaseNotFound) {
-			status, code = http.StatusNotFound, "lease_not_found"
+			status, code = http.StatusNotFound, types.APIErrorCodeLeaseNotFound
 		}
 		if errors.Is(err, errUnauthorized) {
-			status, code = http.StatusForbidden, "unauthorized"
+			status, code = http.StatusForbidden, types.APIErrorCodeUnauthorized
 		}
 		if errors.Is(err, errIPBanned) {
-			status, code = http.StatusForbidden, "ip_banned"
+			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
 		}
 		writeAPIError(w, status, code, err.Error())
 		return
@@ -348,21 +348,21 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	var req types.UnregisterRequest
 	if err := decodeJSONBody(w, r, &req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		writeAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
 	if err := s.unregisterLease(req); err != nil {
-		status, code := http.StatusBadRequest, "invalid_request"
+		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
 		if errors.Is(err, errLeaseNotFound) {
-			status, code = http.StatusNotFound, "lease_not_found"
+			status, code = http.StatusNotFound, types.APIErrorCodeLeaseNotFound
 		}
 		if errors.Is(err, errUnauthorized) {
-			status, code = http.StatusForbidden, "unauthorized"
+			status, code = http.StatusForbidden, types.APIErrorCodeUnauthorized
 		}
 		writeAPIError(w, status, code, err.Error())
 		return
@@ -372,11 +372,11 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
 	if r.ProtoMajor != 1 {
-		writeAPIError(w, http.StatusHTTPVersionNotSupported, "http11_only", "reverse connect requires HTTP/1.1")
+		writeAPIError(w, http.StatusHTTPVersionNotSupported, types.APIErrorCodeHTTP11Only, "reverse connect requires HTTP/1.1")
 		return
 	}
 
@@ -384,33 +384,33 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
 	clientIP := s.clientIPFromRequest(r)
 	if s.isClientIPBanned(clientIP) {
-		writeAPIError(w, http.StatusForbidden, "ip_banned", "request denied because source IP is banned")
+		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
 
 	lease, err := s.findLeaseByID(leaseID)
 	if err != nil {
-		writeAPIError(w, http.StatusNotFound, "lease_not_found", err.Error())
+		writeAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
 	}
 	if !s.isLeaseRoutable(lease) {
-		writeAPIError(w, http.StatusForbidden, "lease_rejected", "lease is not approved for routing")
+		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
 	}
 	if authErr := s.authorizeLeaseToken(lease, token); authErr != nil {
-		writeAPIError(w, http.StatusForbidden, "unauthorized", authErr.Error())
+		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, authErr.Error())
 		return
 	}
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "hijack_unsupported", "hijacking is not supported")
+		writeAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackUnsupported, "hijacking is not supported")
 		return
 	}
 
 	conn, rw, err := hijacker.Hijack()
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "hijack_failed", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, types.APIErrorCodeHijackFailed, err.Error())
 		return
 	}
 
@@ -737,7 +737,7 @@ func (s *Server) wrapAPIHandler(base http.Handler) http.Handler {
 var (
 	errLeaseNotFound    = errors.New("lease not found")
 	errIPBanned         = errors.New("request denied because source IP is banned")
-	errUnauthorized     = errors.New("unauthorized")
+	errUnauthorized     = errors.New(types.APIErrorCodeUnauthorized)
 	errHostnameConflict = errors.New("hostname already registered")
 )
 
@@ -774,7 +774,7 @@ func tokenMatches(expected, actual string) bool {
 func writeAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope{OK: true, Data: data})
+	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{OK: true, Data: data})
 }
 
 func writeAPIOK(w http.ResponseWriter, status int) {
@@ -784,7 +784,7 @@ func writeAPIOK(w http.ResponseWriter, status int) {
 func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope{
+	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{
 		OK:    false,
 		Error: &types.APIError{Code: code, Message: message},
 	})

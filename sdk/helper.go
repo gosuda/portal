@@ -7,37 +7,24 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 )
 
-const defaultHTTPShutdownTimeout = 5 * time.Second
-
-type HTTPServeOptions struct {
-	LocalAddr         string
-	ReadHeaderTimeout time.Duration
-}
-
-// RunHTTP serves one handler on the relay listener and, optionally, on a
-// local HTTP address for app-local access.
-func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, opts HTTPServeOptions) error {
-	readHeaderTimeout := opts.ReadHeaderTimeout
-	if readHeaderTimeout <= 0 {
-		readHeaderTimeout = defaultRequestTimeout
-	}
-
+// RunHTTP serves one handler on the relay listener and, when localAddr is set,
+// on the provided local HTTP address for app-local access.
+func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	relaySrv := &http.Server{
 		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
+		ReadHeaderTimeout: defaultRequestTimeout,
 	}
 
 	var localSrv *http.Server
-	if opts.LocalAddr != "" {
+	if strings.TrimSpace(localAddr) != "" {
 		localSrv = &http.Server{
-			Addr:              opts.LocalAddr,
+			Addr:              strings.TrimSpace(localAddr),
 			Handler:           handler,
-			ReadHeaderTimeout: readHeaderTimeout,
+			ReadHeaderTimeout: defaultRequestTimeout,
 		}
 	}
 

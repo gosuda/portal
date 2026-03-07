@@ -1,6 +1,10 @@
 package types
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const (
 	HeaderReverseToken = "X-Portal-Token"
@@ -8,8 +12,8 @@ const (
 	MarkerTLSStart     = byte(0x02)
 )
 
-type APIEnvelope struct {
-	Data  any       `json:"data,omitempty"`
+type APIEnvelope[T any] struct {
+	Data  T         `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`
 	OK    bool      `json:"ok"`
 }
@@ -17,6 +21,42 @@ type APIEnvelope struct {
 type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+type APIRequestError struct {
+	StatusCode int    `json:"-"`
+	Code       string `json:"code,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+
+func (e *APIRequestError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Code) != "" {
+		return e.Code + ": " + strings.TrimSpace(e.Message)
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return strings.TrimSpace(e.Message)
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("api request failed with status %d", e.StatusCode)
+	}
+	return "api request failed"
+}
+
+func (e *APIRequestError) Is(target error) bool {
+	other, ok := target.(*APIRequestError)
+	if !ok {
+		return false
+	}
+	if other.Code != "" && e.Code != other.Code {
+		return false
+	}
+	if other.StatusCode != 0 && e.StatusCode != other.StatusCode {
+		return false
+	}
+	return true
 }
 
 type LeaseMetadata struct {
