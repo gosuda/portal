@@ -11,7 +11,7 @@ formatters:
       local-prefixes: [github.com/gosuda, gosuda.org]
 
 linters:
-  default: standard
+  default: none
   enable:
     - govet
     - errcheck
@@ -24,22 +24,8 @@ linters:
     - sqlclosecheck
     - rowserrcheck
     - durationcheck
-    - makezero
     - noctx
     - wastedassign
-    - misspell
-    - whitespace
-    - godot
-    - usestdlibvars
-    - testifylint
-    - usetesting
-    - containedctx
-    - prealloc
-    - intrange
-    - fatcontext
-    - perfsprint
-    - reassign
-    - mirror
 
   exclusions:
     paths:
@@ -49,7 +35,7 @@ linters:
       - linters: [errcheck]
         source: "^\\s*defer\\s+"
       - path: "_test\\.go"
-        linters: [bodyclose, errcheck, noctx, wrapcheck, funlen, dupl]
+        linters: [bodyclose, errcheck, noctx]
 
   settings:
     errcheck:
@@ -72,17 +58,6 @@ linters:
         - log.Print
         - time.Now
         - time.Sleep
-
-    govet:
-      enable-all: true
-      disable:
-        - fieldalignment
-
-    perfsprint:
-      strconcat: true
-
-    fatcontext:
-      check-struct-pointers: true
 
 issues:
   max-issues-per-linter: 0

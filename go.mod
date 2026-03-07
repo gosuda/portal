@@ -1,6 +1,6 @@
 module gosuda.org/portal/v2
 
-go 1.26.0
+go 1.26.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1

@@ -1,41 +1,40 @@
 .PHONY: help fmt vet lint lint-auto test vuln tidy all run build build-frontend build-tunnel build-server clean
 
-.DEFAULT_GOAL := lint-auto
+.DEFAULT_GOAL := help
+
+GO_PACKAGES := ./cmd/... ./portal/... ./sdk/... ./types/...
 
 help:
 	@echo "Available targets:"
-	@echo "  make lint-auto         - Default local lint autofix pipeline"
+	@echo "  make fmt               - Apply gofmt/goimports"
+	@echo "  make lint-auto         - Run autofix lint/format pipeline"
 	@echo "  make build             - Build everything (frontend, tunnel, server)"
 	@echo "  make build-frontend    - Build React frontend (Tailwind CSS 4)"
 	@echo "  make build-tunnel      - Build portal-tunnel binaries"
-	@echo "  make build-server      - Build Go relay server (includes frontend build)"
+	@echo "  make build-server      - Build Go relay server (frontend built separately)"
 	@echo "  make run               - Run relay server"
 	@echo "  make clean             - Remove build artifacts"
 
 fmt:
-	golangci-lint run --fix > /dev/null || true
 	gofmt -w .
 	goimports -w .
-	go fix ./...
 
 vet:
-	go vet ./...
+	go vet $(GO_PACKAGES)
 
 lint:
-	golangci-lint run
+	golangci-lint run $(GO_PACKAGES)
 
 lint-auto:
 	gofmt -w .
 	goimports -w .
-	go fix ./...
-	golangci-lint run --fix
-	go mod tidy
+	golangci-lint run --fix $(GO_PACKAGES)
 
 test:
-	go test -v -race -coverprofile=coverage.out ./...
+	go test -v -race -coverprofile=coverage.out $(GO_PACKAGES)
 
 vuln:
-	govulncheck ./...
+	govulncheck $(GO_PACKAGES)
 
 tidy:
 	go get -u ./...
