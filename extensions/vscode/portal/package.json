@@ -1,0 +1,75 @@
+{
+  "name": "portal",
+  "displayName": "Portal",
+  "description": "Expose local services to the internet via Portal relay tunnels",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "portal.startTunnel",
+        "title": "Start Tunnel",
+        "category": "Portal"
+      },
+      {
+        "command": "portal.stopTunnel",
+        "title": "Stop Tunnel",
+        "category": "Portal"
+      }
+    ],
+    "configuration": {
+      "title": "Portal",
+      "properties": {
+        "portal.relayUrls": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Relay server URLs (e.g. https://my-relay.example.com). Leave empty to be prompted each time."
+        },
+        "portal.defaultHost": {
+          "type": "string",
+          "default": "localhost:3000",
+          "description": "Default host:port of the local service to expose."
+        },
+        "portal.defaultName": {
+          "type": "string",
+          "default": "",
+          "description": "Default tunnel service name. Leave empty to use the workspace folder name."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run package",
+    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.109.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.54.0",
+    "eslint": "^9.39.2",
+    "esbuild": "^0.27.2",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
