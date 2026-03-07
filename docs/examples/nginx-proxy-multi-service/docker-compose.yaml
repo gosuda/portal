@@ -1,0 +1,118 @@
+# Portal relay + multiple services — docker compose deployment example.
+#
+# This example shows how to run Portal alongside other web services
+# behind a single nginx instance on the same host.
+#
+# Architecture:
+#   nginx:443 (L4 stream, ssl_preread)
+#     ├─ portal.example.com    → portal:4017  (TLS passthrough, admin/API)
+#     ├─ *.portal.example.com  → portal:443   (TLS passthrough, tenant SNI)
+#     └─ everything else       → nginx:8443   (L7, TLS termination)
+#           ├─ app-a.example.com → app-a-frontend:3000 / app-a-api:8000
+#           └─ app-b.example.com → app-b-frontend:3000 / app-b-api:8001
+#
+# Prerequisites:
+#   1. Copy .env.example to .env and set all required values.
+#   2. Place TLS certificates in ./certs/:
+#        - Portal: managed by portal itself (ACME via KEYLESS_DIR)
+#        - Other services: app_a_fullchain.pem, app_a_privkey.pem, etc.
+#   3. Create the portal-certs directory with correct ownership (UID 65532 = nonroot in distroless):
+#        mkdir -p ./portal-certs
+#        sudo chown 65532:65532 ./portal-certs
+#        chmod 755 ./portal-certs
+#   4. Start all services:
+#        docker compose up -d
+
+services:
+
+  # ─── nginx ──────────────────────────────────────────────────────────────────
+  # Single entry point for all traffic (ports 80/443).
+  # Routes portal traffic via L4 SNI passthrough.
+  # Terminates TLS and proxies for all other services via L7.
+  nginx:
+    image: nginx:stable-alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/certs:ro
+    depends_on:
+      - portal
+      - app-a-api
+      - app-a-frontend
+    restart: unless-stopped
+    networks:
+      - default
+      - app-a-network
+      - app-b-network
+
+  # ─── portal relay ───────────────────────────────────────────────────────────
+  # NAT-traversal relay. Ports are internal-only — nginx routes to them
+  # via the docker network (L4 SNI passthrough, no TLS termination by nginx).
+  portal:
+    image: ghcr.io/gosuda/portal:2
+    container_name: portal
+    environment:
+      PORTAL_URL: ${PORTAL_URL:-https://portal.example.com}
+      BOOTSTRAP_URIS: ${BOOTSTRAP_URIS:-https://portal.example.com}
+      API_PORT: ${API_PORT:-4017}
+      SNI_PORT: ${SNI_PORT:-443}
+      ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
+      CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+    volumes:
+      - ./portal-certs:/portal-certs
+    expose:
+      - "4017"
+      - "443"
+    restart: unless-stopped
+    networks:
+      - default
+
+  # ─── App A: backend ─────────────────────────────────────────────────────────
+  # Replace with your actual backend service image and config.
+  app-a-api:
+    image: your-registry/app-a-api:latest
+    container_name: app-a-api
+    # environment:
+    #   - DATABASE_URL=...
+    restart: unless-stopped
+    networks:
+      - app-a-network
+
+  # ─── App A: frontend ────────────────────────────────────────────────────────
+  app-a-frontend:
+    image: your-registry/app-a-frontend:latest
+    container_name: app-a-frontend
+    restart: unless-stopped
+    networks:
+      - app-a-network
+    depends_on:
+      - app-a-api
+
+  # ─── App B: backend ─────────────────────────────────────────────────────────
+  # Replace with your actual backend service image and config.
+  app-b-api:
+    image: your-registry/app-b-api:latest
+    container_name: app-b-api
+    restart: unless-stopped
+    networks:
+      - app-b-network
+
+  # ─── App B: frontend ────────────────────────────────────────────────────────
+  app-b-frontend:
+    image: your-registry/app-b-frontend:latest
+    container_name: app-b-frontend
+    restart: unless-stopped
+    networks:
+      - app-b-network
+    depends_on:
+      - app-b-api
+
+networks:
+  app-a-network:
+    driver: bridge
+  app-b-network:
+    driver: bridge

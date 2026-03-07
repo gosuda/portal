@@ -61,6 +61,13 @@ See [portal-toys](https://github.com/gosuda/portal-toys) for more examples.
 See [docs/architecture.md](docs/architecture.md).
 For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [nginx reverse proxy](docs/examples/nginx-proxy/) | Deploy Portal behind nginx with L4 SNI routing and TLS termination |
+| [nginx + multi-service](docs/examples/nginx-proxy-multi-service/) | Run Portal alongside other web services behind a single nginx instance |
+
 ## Contributing
 
 We welcome contributions from the community!
