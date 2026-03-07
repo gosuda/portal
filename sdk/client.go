@@ -22,75 +22,135 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-type ClientConfig struct {
-	RelayURL           string
-	RootCAPEM          []byte
-	InsecureSkipVerify bool
-	DialTimeout        time.Duration
-	RequestTimeout     time.Duration
-	HandshakeTimeout   time.Duration
-	LeaseTTL           time.Duration
-	RenewBefore        time.Duration
-	ReadyTarget        int
+const (
+	defaultDialTimeout         = 5 * time.Second
+	defaultRequestTimeout      = 15 * time.Second
+	defaultHandshakeTimeout    = 15 * time.Second
+	defaultLeaseTTL            = 2 * time.Minute
+	defaultRenewBefore         = 30 * time.Second
+	defaultReadyTarget         = 1
+	defaultHTTPShutdownTimeout = 5 * time.Second
+)
+
+type ClientOption func(*Client)
+
+func WithRootCAPEM(rootCAPEM []byte) ClientOption {
+	rootCAPEM = append([]byte(nil), rootCAPEM...)
+	return func(client *Client) {
+		client.rootCAPEM = append([]byte(nil), rootCAPEM...)
+	}
+}
+
+func WithInsecureSkipVerify(skip bool) ClientOption {
+	return func(client *Client) {
+		client.insecureSkipVerify = skip
+	}
+}
+
+func WithDialTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.dialTimeout = timeout
+		}
+	}
+}
+
+func WithRequestTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.requestTimeout = timeout
+		}
+	}
+}
+
+func WithHandshakeTimeout(timeout time.Duration) ClientOption {
+	return func(client *Client) {
+		if timeout > 0 {
+			client.handshakeTimeout = timeout
+		}
+	}
+}
+
+func WithLeaseTTL(ttl time.Duration) ClientOption {
+	return func(client *Client) {
+		if ttl > 0 {
+			client.leaseTTL = ttl
+		}
+	}
+}
+
+func WithRenewBefore(d time.Duration) ClientOption {
+	return func(client *Client) {
+		if d > 0 {
+			client.renewBefore = d
+		}
+	}
+}
+
+func WithReadyTarget(n int) ClientOption {
+	return func(client *Client) {
+		if n > 0 {
+			client.readyTarget = n
+		}
+	}
 }
 
 type Client struct {
-	baseURL          *url.URL
-	httpClient       *http.Client
-	rawTLSConfig     *tls.Config
-	dialTimeout      time.Duration
-	handshakeTimeout time.Duration
-	leaseTTL         time.Duration
-	renewBefore      time.Duration
-	readyTarget      int
+	baseURL            *url.URL
+	httpClient         *http.Client
+	rawTLSConfig       *tls.Config
+	rootCAPEM          []byte
+	insecureSkipVerify bool
+	dialTimeout        time.Duration
+	requestTimeout     time.Duration
+	handshakeTimeout   time.Duration
+	leaseTTL           time.Duration
+	renewBefore        time.Duration
+	readyTarget        int
 }
 
-func NewClient(cfg ClientConfig) (*Client, error) {
-	baseURL, err := url.Parse(strings.TrimSpace(cfg.RelayURL))
+func NewClient(relayURL string, options ...ClientOption) (*Client, error) {
+	baseURL, err := url.Parse(strings.TrimSpace(relayURL))
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 	if !strings.EqualFold(baseURL.Scheme, "https") {
-		return nil, fmt.Errorf("relay url must use https: %q", cfg.RelayURL)
+		return nil, fmt.Errorf("relay url must use https: %q", relayURL)
 	}
 	if baseURL.Host == "" {
-		return nil, fmt.Errorf("relay url host is empty: %q", cfg.RelayURL)
+		return nil, fmt.Errorf("relay url host is empty: %q", relayURL)
 	}
 	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
 	baseURL.RawQuery = ""
 	baseURL.Fragment = ""
 
-	if cfg.DialTimeout <= 0 {
-		cfg.DialTimeout = 5 * time.Second
+	client := &Client{
+		baseURL:          baseURL,
+		dialTimeout:      defaultDialTimeout,
+		requestTimeout:   defaultRequestTimeout,
+		handshakeTimeout: defaultHandshakeTimeout,
+		leaseTTL:         defaultLeaseTTL,
+		renewBefore:      defaultRenewBefore,
+		readyTarget:      defaultReadyTarget,
 	}
-	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 15 * time.Second
-	}
-	if cfg.HandshakeTimeout <= 0 {
-		cfg.HandshakeTimeout = 15 * time.Second
-	}
-	if cfg.LeaseTTL <= 0 {
-		cfg.LeaseTTL = 2 * time.Minute
-	}
-	if cfg.RenewBefore <= 0 {
-		cfg.RenewBefore = 30 * time.Second
-	}
-	if cfg.ReadyTarget <= 0 {
-		cfg.ReadyTarget = 1
+	for _, option := range options {
+		if option != nil {
+			option(client)
+		}
 	}
 
-	if len(cfg.RootCAPEM) == 0 && !cfg.InsecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
-		bootstrapCtx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout+cfg.HandshakeTimeout)
+	if len(client.rootCAPEM) == 0 && !client.insecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), defaultDialTimeout+defaultHandshakeTimeout)
 		defer cancel()
 
 		_, rootCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
 		if bootstrapErr != nil {
 			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", bootstrapErr)
 		}
-		cfg.RootCAPEM = rootCAPEM
+		client.rootCAPEM = rootCAPEM
 	}
 
-	rootCAs, err := buildRootCAs(cfg.RootCAPEM)
+	rootCAs, err := buildRootCAs(client.rootCAPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +159,7 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         baseURL.Hostname(),
 		RootCAs:            rootCAs,
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		InsecureSkipVerify: client.insecureSkipVerify,
 		NextProtos:         []string{"http/1.1"},
 	}
 
@@ -108,19 +168,12 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		ForceAttemptHTTP2: false,
 	}
 
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Transport: transport,
-			Timeout:   cfg.RequestTimeout,
-		},
-		rawTLSConfig:     baseTLS,
-		dialTimeout:      cfg.DialTimeout,
-		handshakeTimeout: cfg.HandshakeTimeout,
-		leaseTTL:         cfg.LeaseTTL,
-		renewBefore:      cfg.RenewBefore,
-		readyTarget:      cfg.ReadyTarget,
-	}, nil
+	client.httpClient = &http.Client{
+		Transport: transport,
+		Timeout:   client.requestTimeout,
+	}
+	client.rawTLSConfig = baseTLS
+	return client, nil
 }
 
 func (c *Client) Close() {
@@ -135,6 +188,9 @@ func (c *Client) Close() {
 func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return nil, errors.New("listener name is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	reverseToken := strings.TrimSpace(req.ReverseToken)
@@ -154,7 +210,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 
 	registerReq := types.RegisterRequest{
 		Name:         req.Name,
-		Hostnames:    append([]string(nil), req.Hostnames...),
+		Hostnames:    req.Hostnames,
 		Metadata:     req.Metadata,
 		ReverseToken: reverseToken,
 		TLS:          true,
@@ -173,13 +229,13 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	}
 
 	listenerCtx, cancel := context.WithCancel(ctx)
-	l := &Listener{
+	listener := &Listener{
 		client:       c,
 		baseContext:  func() context.Context { return listenerCtx },
 		ctxDone:      listenerCtx.Done(),
 		cancel:       cancel,
 		leaseID:      registerResp.LeaseID,
-		hostnames:    append([]string(nil), registerResp.Hostnames...),
+		hostnames:    registerResp.Hostnames,
 		metadata:     registerResp.Metadata,
 		reverseToken: reverseToken,
 		leaseTTL:     leaseTTL,
@@ -190,10 +246,10 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		signal:       make(chan struct{}, 1),
 	}
 
-	go l.runSupervisor()
-	go l.runRenewLoop()
-	l.notify()
-	return l, nil
+	go listener.runSupervisor()
+	go listener.runRenewLoop()
+	listener.notify()
+	return listener, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any, out any) error {
@@ -206,7 +262,8 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 		body = bytes.NewReader(buf)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, c.resolve(path), body)
+	ref, _ := url.Parse(path)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL.ResolveReference(ref).String(), body)
 	if err != nil {
 		return err
 	}
@@ -218,15 +275,22 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 	}
 	defer resp.Body.Close()
 
-	var envelope apiEnvelope
+	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
 		if envelope.Error == nil {
-			return fmt.Errorf("api request failed with status %d", resp.StatusCode)
+			return &types.APIRequestError{
+				StatusCode: resp.StatusCode,
+				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
+			}
 		}
-		return fmt.Errorf("%s: %s", envelope.Error.Code, envelope.Error.Message)
+		return &types.APIRequestError{
+			StatusCode: resp.StatusCode,
+			Code:       envelope.Error.Code,
+			Message:    envelope.Error.Message,
+		}
 	}
 	if out == nil {
 		return nil
@@ -260,11 +324,8 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 		return nil, err
 	}
 
-	connectURL, err := url.Parse(c.resolve(types.PathSDKConnect))
-	if err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
+	connectRef, _ := url.Parse(types.PathSDKConnect)
+	connectURL := c.baseURL.ResolveReference(connectRef)
 	query := connectURL.Query()
 	query.Set("lease_id", leaseID)
 	connectURL.RawQuery = query.Encode()
@@ -292,23 +353,33 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		apiErr := decodeAPIResponseError(resp)
 		_ = conn.Close()
-		return nil, fmt.Errorf("reverse connect failed: %s", strings.TrimSpace(string(body)))
+		return nil, apiErr
 	}
 
 	return wrapBufferedConn(conn, reader), nil
 }
 
-func (c *Client) resolve(path string) string {
-	ref, _ := url.Parse(path)
-	return c.baseURL.ResolveReference(ref).String()
-}
+func decodeAPIResponseError(resp *http.Response) error {
+	if resp == nil {
+		return &types.APIRequestError{Message: "empty api response"}
+	}
 
-type apiEnvelope struct {
-	Error *types.APIError `json:"error"`
-	Data  json.RawMessage `json:"data"`
-	OK    bool            `json:"ok"`
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	var envelope types.APIEnvelope[json.RawMessage]
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
+		return &types.APIRequestError{
+			StatusCode: resp.StatusCode,
+			Code:       envelope.Error.Code,
+			Message:    envelope.Error.Message,
+		}
+	}
+
+	return &types.APIRequestError{
+		StatusCode: resp.StatusCode,
+		Message:    strings.TrimSpace(string(body)),
+	}
 }
 
 func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {

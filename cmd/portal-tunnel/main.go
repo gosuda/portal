@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -80,7 +81,7 @@ func runTunnel() error {
 		Name: flagName,
 		Metadata: types.LeaseMetadata{
 			Description: flagDesc,
-			Tags:        splitCSV(flagTags),
+			Tags:        sdk.SplitCSV(flagTags),
 			Owner:       flagOwner,
 			Thumbnail:   flagThumbnail,
 			Hide:        flagHide,
@@ -94,7 +95,7 @@ func runTunnel() error {
 
 	var connWG sync.WaitGroup
 	var connCount atomic.Int64
-	relayDone := make(chan relayLoopResult, len(runtimes))
+	listeners := make([]net.Listener, 0, len(runtimes))
 
 	for _, runtime := range runtimes {
 		logger.Info().
@@ -102,14 +103,24 @@ func runTunnel() error {
 			Str("lease_id", runtime.listener.LeaseID()).
 			Strs("public_urls", runtime.listener.PublicURLs()).
 			Msg("relay tunnel ready")
-		go runtime.run(ctx, flagHost, &connWG, &connCount, relayDone)
+		listeners = append(listeners, runtime.listener)
 	}
 
-	waitErr := waitForRelayLoops(ctx, relayDone, len(runtimes))
+	relayListener, err := sdk.MergeListeners(listeners...)
+	if err != nil {
+		closeErr := closeRelayRuntimes(runtimes)
+		return errors.Join(fmt.Errorf("merge relay listeners: %w", err), closeErr)
+	}
+	go func() {
+		<-ctx.Done()
+		_ = relayListener.Close()
+	}()
+
+	waitErr := proxyRelayConnections(ctx, relayListener, flagHost, &connWG, &connCount)
 	if waitErr != nil {
 		stop()
 	}
-	closeErr := closeRelayRuntimes(runtimes)
+	closeErr := errors.Join(relayListener.Close(), closeRelayRuntimes(runtimes))
 	if waitErr != nil {
 		logger.Error().Err(waitErr).Msg("relay supervisor exited with error")
 	}

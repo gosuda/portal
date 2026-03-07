@@ -74,21 +74,12 @@ func TestLoginAndProtectedActions(t *testing.T) {
 func decodeEnvelope[T any](t *testing.T, recorder *httptest.ResponseRecorder) T {
 	t.Helper()
 
-	var envelope types.APIEnvelope
+	var envelope types.APIEnvelope[T]
 	if err := json.NewDecoder(recorder.Body).Decode(&envelope); err != nil {
 		t.Fatalf("Decode envelope error = %v", err)
 	}
 	if !envelope.OK {
 		t.Fatalf("envelope not OK: %+v", envelope)
 	}
-	data, err := json.Marshal(envelope.Data)
-	if err != nil {
-		t.Fatalf("Marshal envelope data error = %v", err)
-	}
-
-	var out T
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Fatalf("Unmarshal envelope data error = %v", err)
-	}
-	return out
+	return envelope.Data
 }

@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Copy, Check, Terminal, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check, Copy, Terminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Dialog,
@@ -35,6 +35,20 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
+  const [thumbnailURL, setThumbnailURL] = useState("");
+  const normalizedThumbnailURL = useMemo(
+    () => normalizeAbsoluteHTTPURL(thumbnailURL),
+    [thumbnailURL]
+  );
+  const thumbnailError = useMemo(() => {
+    if (thumbnailURL.trim() === "") {
+      return "";
+    }
+    if (normalizedThumbnailURL !== "") {
+      return "";
+    }
+    return "Thumbnail must be an absolute http:// or https:// URL.";
+  }, [thumbnailURL, normalizedThumbnailURL]);
 
   const addRelayUrl = (url: string) => {
     const trimmed = url.trim();
@@ -69,8 +83,8 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
 
   // Generate the tunnel command
   const command = useMemo(() => {
-    const hostVal = host === "" ? defaultHost : host;
-    const nameVal = name === "" ? defaultName : name;
+    const hostVal = host.trim() === "" ? defaultHost : host.trim();
+    const nameVal = name.trim() === "" ? defaultName : name.trim();
     const relayUrlVal =
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
     const tunnelScriptURL = new URL(API_PATHS.tunnel, currentOrigin).toString();
@@ -79,12 +93,37 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (os === "windows") {
       const windowsScriptURL = new URL(tunnelScriptURL);
       windowsScriptURL.searchParams.set("os", "windows");
-      return `$ProgressPreference = 'SilentlyContinue'; $env:HOST="${hostVal}"; $env:NAME="${nameVal}"; $env:RELAY_URL="${relayUrlVal}"; irm ${windowsScriptURL.toString()} | iex`;
+      const envAssignments = [
+        "$ProgressPreference = 'SilentlyContinue'",
+        `$env:APP_HOST=${quotePowerShellValue(hostVal)}`,
+        `$env:APP_NAME=${quotePowerShellValue(nameVal)}`,
+        `$env:RELAYS=${quotePowerShellValue(relayUrlVal)}`,
+      ];
+      if (normalizedThumbnailURL) {
+        envAssignments.push(
+          `$env:APP_THUMBNAIL=${quotePowerShellValue(normalizedThumbnailURL)}`
+        );
+      }
+      return `${envAssignments.join("; ")}; irm ${quotePowerShellValue(
+        windowsScriptURL.toString()
+      )} | iex`;
     }
 
     const curlFlags = localhostRelay ? "-kfsSL" : "-fsSL";
-    return `curl ${curlFlags} ${tunnelScriptURL} | APP_HOST=${hostVal} APP_NAME=${nameVal} RELAYS="${relayUrlVal}" sh`;
-  }, [currentOrigin, host, name, relayUrls, os]);
+    const envAssignments = [
+      `APP_HOST=${quoteShellValue(hostVal)}`,
+      `APP_NAME=${quoteShellValue(nameVal)}`,
+      `RELAYS=${quoteShellValue(relayUrlVal)}`,
+    ];
+    if (normalizedThumbnailURL) {
+      envAssignments.push(
+        `APP_THUMBNAIL=${quoteShellValue(normalizedThumbnailURL)}`
+      );
+    }
+    return `curl ${curlFlags} ${quoteShellValue(
+      tunnelScriptURL
+    )} | ${envAssignments.join(" ")} sh`;
+  }, [currentOrigin, host, name, normalizedThumbnailURL, relayUrls, os]);
 
   const handleCopy = async () => {
     try {
@@ -126,9 +165,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Host
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">
-                {os === "windows" ? "HOST=" : "APP_HOST="}
-              </span>
+              <span className="px-3 text-sm text-text-muted">APP_HOST=</span>
               <Input
                 id="host"
                 type="text"
@@ -152,9 +189,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               Service Name
             </label>
             <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">
-                {os === "windows" ? "NAME=" : "APP_NAME="}
-              </span>
+              <span className="px-3 text-sm text-text-muted">APP_NAME=</span>
               <Input
                 id="name"
                 type="text"
@@ -205,6 +240,37 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             </p>
           </div>
 
+          <div className="space-y-2">
+            <label
+              htmlFor="thumbnail-url"
+              className="text-sm font-medium text-foreground"
+            >
+              Thumbnail URL
+            </label>
+            <Input
+              id="thumbnail-url"
+              type="url"
+              value={thumbnailURL}
+              onChange={(e) => setThumbnailURL(e.target.value)}
+              placeholder="https://cdn.example.com/thumb.png"
+            />
+            <p className="text-xs text-text-muted">
+              Image URL passed to `portal-tunnel`.
+            </p>
+            {normalizedThumbnailURL && (
+              <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-input bg-background">
+                <img
+                  src={normalizedThumbnailURL}
+                  alt="Thumbnail preview"
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            )}
+            {thumbnailError && (
+              <p className="text-xs text-destructive">{thumbnailError}</p>
+            )}
+          </div>
+
           {/* OS Selection */}
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground">
@@ -234,17 +300,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 Windows (PowerShell)
               </button>
             </div>
-          </div>
-
-          {/* Transport */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              Transport
-            </label>
-            <p className="text-xs text-text-muted">
-              Reverse connect is TLS-only. Generated commands run tunnel in
-              keyless TLS mode.
-            </p>
           </div>
 
           {/* Generated Command */}
@@ -287,5 +342,30 @@ function isLocalRelayOrigin(origin: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+function quoteShellValue(value: string): string {
+  return "'" + value.replace(/'/g, `'"'"'`) + "'";
+}
+
+function quotePowerShellValue(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function normalizeAbsoluteHTTPURL(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
   }
 }

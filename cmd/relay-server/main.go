@@ -15,7 +15,7 @@ const (
 	defaultAPIPort    = 4017
 	defaultSNIPort    = 443
 	defaultPortalURL  = "https://localhost:4017"
-	defaultKeylessDir = ".portal-certs"
+	defaultKeylessDir = "./.portal-certs"
 )
 
 type relayServerConfig struct {

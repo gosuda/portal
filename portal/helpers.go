@@ -3,13 +3,10 @@ package portal
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"net"
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/gosuda/portal/v2/types"
 )
 
 const (
@@ -28,23 +25,6 @@ func PortalRootHost(portalURL string) string {
 		return ""
 	}
 	return normalizeHostname(u.Hostname())
-}
-
-func NormalizeRelayURL(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", fmt.Errorf("parse relay url: %w", err)
-	}
-	if !strings.EqualFold(u.Scheme, "https") {
-		return "", fmt.Errorf("relay url must use https: %q", raw)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("relay url host is empty: %q", raw)
-	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
 }
 
 func normalizeHostname(host string) string {
@@ -108,37 +88,6 @@ func intOrDefault(v, fallback int) int {
 		return v
 	}
 	return fallback
-}
-
-func normalizeMetadata(meta types.LeaseMetadata) types.LeaseMetadata {
-	meta.Description = strings.TrimSpace(meta.Description)
-	meta.Owner = strings.TrimSpace(meta.Owner)
-	meta.Thumbnail = strings.TrimSpace(meta.Thumbnail)
-	meta.Tags = normalizeTags(meta.Tags)
-	return meta
-}
-
-func normalizeTags(tags []string) []string {
-	if len(tags) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(tags))
-	out := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		if tag == "" {
-			continue
-		}
-		if _, ok := seen[tag]; ok {
-			continue
-		}
-		seen[tag] = struct{}{}
-		out = append(out, tag)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func HostPortOrLoopback(addr string) string {

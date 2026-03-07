@@ -23,59 +23,10 @@ type relayRuntime struct {
 	relayURL string
 }
 
-type relayLoopResult struct {
-	err      error
-	leaseID  string
-	relayURL string
-}
-
-func (r *relayRuntime) run(ctx context.Context, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64, done chan<- relayLoopResult) {
-	logger := log.With().
-		Str("component", "portal-tunnel").
-		Str("relay", r.relayURL).
-		Str("lease_id", r.listener.LeaseID()).
-		Logger()
-
-	var runErr error
-	defer func() {
-		done <- relayLoopResult{
-			leaseID:  r.listener.LeaseID(),
-			relayURL: r.relayURL,
-			err:      runErr,
-		}
-	}()
-
-	for {
-		relayConn, err := r.listener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
-			}
-			runErr = err
-			return
-		}
-
-		connID := connCount.Add(1)
-		logger.Info().
-			Int64("conn_id", connID).
-			Str("remote_addr", relayConn.RemoteAddr().String()).
-			Msg("accepted relay connection")
-
-		connWG.Add(1)
-		go func(connID int64, relayConn net.Conn) {
-			defer connWG.Done()
-			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-				logger.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
-			}
-			logger.Info().Int64("conn_id", connID).Msg("proxy connection closed")
-		}(connID, relayConn)
-	}
-}
-
 func startRelayRuntimes(ctx context.Context, relayURLs []string, req sdk.ListenRequest) ([]*relayRuntime, error) {
 	runtimes := make([]*relayRuntime, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
-		client, err := sdk.NewClient(sdk.ClientConfig{RelayURL: relayURL})
+		client, err := sdk.NewClient(relayURL)
 		if err != nil {
 			_ = closeRelayRuntimes(runtimes)
 			return nil, fmt.Errorf("create relay client %s: %w", relayURL, err)
@@ -113,49 +64,43 @@ func closeRelayRuntimes(runtimes []*relayRuntime) error {
 	return closeErr
 }
 
-func waitForRelayLoops(ctx context.Context, done <-chan relayLoopResult, relayCount int) error {
+func proxyRelayConnections(ctx context.Context, relayListener net.Listener, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
 	logger := log.With().Str("component", "portal-tunnel").Logger()
-	active := relayCount
 
-	for active > 0 {
-		result := <-done
-		active--
-
-		switch {
-		case result.err != nil:
-			logger.Error().
-				Err(result.err).
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped")
-		case ctx.Err() != nil:
-			logger.Info().
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped during shutdown")
-		default:
-			logger.Warn().
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped")
+	for {
+		relayConn, err := relayListener.Accept()
+		if err != nil {
+			switch {
+			case ctx.Err() != nil || errors.Is(err, context.Canceled):
+				return nil
+			case errors.Is(err, net.ErrClosed):
+				return errors.New("all relay listeners stopped")
+			default:
+				return err
+			}
 		}
-	}
 
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
+		connID := connCount.Add(1)
+		logger.Info().
+			Int64("conn_id", connID).
+			Str("remote_addr", relayConn.RemoteAddr().String()).
+			Msg("accepted relay connection")
+
+		connWG.Add(1)
+		go func(connID int64, relayConn net.Conn) {
+			defer connWG.Done()
+			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
+				logger.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
+			}
+			logger.Info().Int64("conn_id", connID).Msg("proxy connection closed")
+		}(connID, relayConn)
 	}
-	return errors.New("all relay listeners stopped")
 }
 
 func normalizeRelayURLs(raw string) ([]string, error) {
 	seen := make(map[string]struct{})
 	var relayURLs []string
-	for _, relayURL := range splitCSV(raw) {
+	for _, relayURL := range sdk.SplitCSV(raw) {
 		normalized, err := normalizeRelayURL(relayURL)
 		if err != nil {
 			return nil, err
@@ -271,39 +216,42 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 	return err
 }
 
-func splitCSV(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
 func normalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", errors.New("target address is required")
 	}
+
 	if strings.Contains(raw, "://") {
-		if strings.HasPrefix(strings.ToLower(raw), "http://") {
-			raw = strings.TrimPrefix(raw, "http://")
+		targetURL, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("parse target url: %w", err)
 		}
-		if strings.HasPrefix(strings.ToLower(raw), "https://") {
-			raw = strings.TrimPrefix(raw, "https://")
+		if !strings.EqualFold(targetURL.Scheme, "http") && !strings.EqualFold(targetURL.Scheme, "https") {
+			return "", fmt.Errorf("unsupported target url scheme %q", targetURL.Scheme)
 		}
-		raw = strings.TrimSuffix(raw, "/")
+		if targetURL.Host == "" {
+			return "", errors.New("target url host is empty")
+		}
+		if targetURL.Path != "" && targetURL.Path != "/" {
+			return "", errors.New("target url path is not supported")
+		}
+		if targetURL.RawQuery != "" {
+			return "", errors.New("target url query is not supported")
+		}
+		if targetURL.Fragment != "" {
+			return "", errors.New("target url fragment is not supported")
+		}
+		raw = targetURL.Host
 	}
+
 	if _, _, err := net.SplitHostPort(raw); err == nil {
 		return raw, nil
 	}
 	if strings.Count(raw, ":") == 0 {
+		return net.JoinHostPort(raw, "80"), nil
+	}
+	if ip := net.ParseIP(raw); ip != nil {
 		return net.JoinHostPort(raw, "80"), nil
 	}
 	return "", fmt.Errorf("invalid target address %q", raw)

@@ -23,20 +23,21 @@ type ListenRequest struct {
 }
 
 type Listener struct {
-	tlsCloser      io.Closer
-	tlsConfig      *tls.Config
-	baseContext    func() context.Context
-	ctxDone        <-chan struct{}
-	cancel         context.CancelFunc
-	client         *Client
-	signal         chan struct{}
-	accepted       chan net.Conn
-	leaseID        string
-	reverseToken   string
-	hostnames      []string
-	metadata       types.LeaseMetadata
-	readyTarget    int
-	leaseTTL       time.Duration
+	tlsCloser    io.Closer
+	tlsConfig    *tls.Config
+	baseContext  func() context.Context
+	ctxDone      <-chan struct{}
+	cancel       context.CancelFunc
+	client       *Client
+	signal       chan struct{}
+	accepted     chan net.Conn
+	leaseID      string
+	reverseToken string
+	hostnames    []string
+	metadata     types.LeaseMetadata
+	readyTarget  int
+	leaseTTL     time.Duration
+
 	activeSessions int
 	closeOnce      sync.Once
 	mu             sync.Mutex
@@ -65,7 +66,7 @@ func (l *Listener) Close() error {
 			closeErr = err
 		}
 		if l.tlsCloser != nil {
-			_ = l.tlsCloser.Close()
+			closeErr = errors.Join(closeErr, l.tlsCloser.Close())
 		}
 	})
 	return closeErr
@@ -80,7 +81,7 @@ func (l *Listener) LeaseID() string {
 }
 
 func (l *Listener) Hostnames() []string {
-	return append([]string(nil), l.hostnames...)
+	return l.hostnames
 }
 
 func (l *Listener) Metadata() types.LeaseMetadata {

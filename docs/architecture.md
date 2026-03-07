@@ -54,13 +54,16 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `Client`: validates relay URL, owns HTTP client and raw TLS dial config
-- `Listener`: registers a lease, maintains `readyTarget` reverse sessions, renews lease TTL, and yields accepted tenant TLS connections
+- `Client`: validates one or more relay URLs and owns per-relay HTTP client and raw TLS dial config
+- `Listener`: registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections through one aggregate listener surface
+- Default app flow is `RelayURLs -> NewClient -> Listen -> PublicURLs -> http.Server.Serve(listener)`
+- `helper.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
+- Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
 
 ### Tunnel (`cmd/portal-tunnel`)
 
-- Registers a lease through the SDK
+- Creates one SDK client, registers one lease per relay through the SDK, and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
 - Proxies raw TCP to a local `--host`
 - Returns an HTTP 503 response when the local target is unavailable
@@ -69,9 +72,9 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### Raw reverse transport (`TLS=true` only)
 
-1. SDK/tunnel registers a lease with `POST /sdk/register`.
-2. SDK opens one or more reverse sessions with `GET /sdk/connect?lease_id=...`.
-3. Relay hijacks each `/sdk/connect` request and places the connection in the per-lease broker ready queue.
+1. SDK/tunnel registers one lease per relay with `POST /sdk/register`.
+2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?lease_id=...`.
+3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease broker ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A browser connects to the relay SNI listener.
 6. Relay extracts SNI from ClientHello, resolves a lease, and claims one ready reverse session.

@@ -19,7 +19,7 @@ services:
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
 
       # TLS/ACME and keyless materials
-      KEYLESS_DIR: ${KEYLESS_DIR:-.portal-certs}
+      KEYLESS_DIR: /.portal-certs
       ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-cloudflare}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -32,5 +32,5 @@ services:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
       - "443:443"
     volumes:
-      - ./.portal-certs:/.portal-certs
+      - ${KEYLESS_DIR:-./.portal-certs}:/.portal-certs
     restart: unless-stopped

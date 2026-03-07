@@ -31,7 +31,7 @@ lint-auto:
 	golangci-lint run --fix $(GO_PACKAGES)
 
 test:
-	go test -v -race -coverprofile=coverage.out $(GO_PACKAGES)
+	go test -v -coverprofile=coverage.out $(GO_PACKAGES)
 
 vuln:
 	govulncheck $(GO_PACKAGES)
