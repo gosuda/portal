@@ -1,71 +1,58 @@
-# portal README
+# Portal — VSCode Extension
 
-This is the README for your extension "portal". After writing up a brief description, we recommend including the following sections.
+Expose your local service to the internet via a [Portal](https://github.com/gosuda/portal) relay tunnel, directly from VSCode — no terminal copy-paste needed.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- **Portal: Start Tunnel** — prompts for host, service name, relay URL, and optional thumbnail, then runs the tunnel command in the integrated terminal
+- **Portal: Stop Tunnel** — stops the active tunnel terminal
+- Persisted settings for relay URLs, default host, and default service name
+- Auto-detects OS (macOS/Linux uses `curl`, Windows uses PowerShell)
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- A running [Portal relay server](https://github.com/gosuda/portal) (self-hosted or public)
+- `curl` on macOS/Linux, PowerShell on Windows
 
-## Extension Settings
+## Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+| Setting | Default | Description |
+|---|---|---|
+| `portal.relayUrls` | `[]` | Relay server URLs. If empty, prompted on each start. |
+| `portal.defaultHost` | `localhost:3000` | Default local host:port to expose. |
+| `portal.defaultName` | `""` | Default tunnel service name. Falls back to workspace folder name. |
 
-For example:
+Example `settings.json`:
 
-This extension contributes the following settings:
+```json
+{
+  "portal.relayUrls": ["https://my-relay.example.com"],
+  "portal.defaultHost": "localhost:3000",
+  "portal.defaultName": "my-app"
+}
+```
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+## Usage
 
-## Known Issues
+1. Open Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
+2. Run **Portal: Start Tunnel**
+3. Fill in the prompts (host, name, relay URL, thumbnail URL — all pre-filled from settings)
+4. Tunnel starts in the integrated terminal and prints the public URL
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+To stop: run **Portal: Stop Tunnel** or close the `Portal Tunnel` terminal.
+
+## Development
+
+```bash
+git clone https://github.com/gosuda/portal
+cd portal/extensions/vscode/portal
+pnpm install
+```
+
+Open the folder in VSCode, then press `F5` to launch the Extension Development Host.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.0.1
 
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+Initial release — Start/Stop Tunnel commands with thumbnail support.
