@@ -30,6 +30,7 @@ Portal-tunnel connects a local service to a Portal relay with the legacy CLI sha
 ## Notes
 
 - Multiple relay URLs are registered independently. Each relay gets its own lease ID and public URLs.
+- Portal-tunnel now consumes one aggregate SDK listener, so the CLI no longer manages per-relay listener loops itself.
 - Startup is fail-fast: if any configured relay cannot register, the tunnel exits instead of partially publishing.
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.

@@ -22,65 +22,112 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
+const (
+	defaultDialTimeout      = 5 * time.Second
+	defaultRequestTimeout   = 15 * time.Second
+	defaultHandshakeTimeout = 15 * time.Second
+	defaultLeaseTTL         = 2 * time.Minute
+	defaultRenewBefore      = 30 * time.Second
+	defaultReadyTarget      = 1
+)
+
+// ClientConfig configures the SDK client.
 type ClientConfig struct {
-	RelayURL           string
-	RootCAPEM          []byte
-	InsecureSkipVerify bool
-	DialTimeout        time.Duration
-	RequestTimeout     time.Duration
-	HandshakeTimeout   time.Duration
-	LeaseTTL           time.Duration
-	RenewBefore        time.Duration
-	ReadyTarget        int
+	RelayURLs []string
+	RootCAPEM []byte
 }
 
 type Client struct {
-	baseURL          *url.URL
-	httpClient       *http.Client
-	rawTLSConfig     *tls.Config
-	dialTimeout      time.Duration
-	handshakeTimeout time.Duration
-	leaseTTL         time.Duration
-	renewBefore      time.Duration
-	readyTarget      int
+	clients []*relayClient
+}
+
+type relayClient struct {
+	baseURL      *url.URL
+	httpClient   *http.Client
+	rawTLSConfig *tls.Config
 }
 
 func NewClient(cfg ClientConfig) (*Client, error) {
-	baseURL, err := url.Parse(strings.TrimSpace(cfg.RelayURL))
+	relayURLs, err := normalizeRelayURLs(cfg.RelayURLs)
+	if err != nil {
+		return nil, err
+	}
+
+	clients := make([]*relayClient, 0, len(relayURLs))
+	for _, relayURL := range relayURLs {
+		client, err := newRelayClient(cfg, relayURL)
+		if err != nil {
+			for _, existing := range clients {
+				existing.Close()
+			}
+			return nil, err
+		}
+		clients = append(clients, client)
+	}
+
+	return &Client{clients: clients}, nil
+}
+
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+
+	for _, client := range c.clients {
+		client.Close()
+	}
+}
+
+func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, errors.New("listener name is required")
+	}
+	if len(c.clients) == 0 {
+		return nil, errors.New("no relay urls configured")
+	}
+
+	listenerCtx, cancel := context.WithCancel(ctx)
+	listener := &Listener{
+		baseContext: func() context.Context { return listenerCtx },
+		ctxDone:     listenerCtx.Done(),
+		cancel:      cancel,
+	}
+
+	entries := make([]*listenerLease, 0, len(c.clients))
+	acceptedCap := 0
+	for _, client := range c.clients {
+		entry, entryAcceptedCap, err := client.listenEntry(listener, req)
+		if err != nil {
+			cancel()
+			return nil, errors.Join(err, closeListenerEntries(entries))
+		}
+		entries = append(entries, entry)
+		acceptedCap += entryAcceptedCap
+	}
+
+	if acceptedCap <= 0 {
+		acceptedCap = len(entries)
+	}
+
+	listener.accepted = make(chan acceptedConn, acceptedCap)
+	listener.entries = entries
+	for _, entry := range entries {
+		go entry.runSupervisor()
+		go entry.runRenewLoop()
+		entry.notify()
+	}
+
+	return listener, nil
+}
+
+func newRelayClient(cfg ClientConfig, relayURL string) (*relayClient, error) {
+	baseURL, err := url.Parse(relayURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
-	if !strings.EqualFold(baseURL.Scheme, "https") {
-		return nil, fmt.Errorf("relay url must use https: %q", cfg.RelayURL)
-	}
-	if baseURL.Host == "" {
-		return nil, fmt.Errorf("relay url host is empty: %q", cfg.RelayURL)
-	}
-	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
-	baseURL.RawQuery = ""
-	baseURL.Fragment = ""
 
-	if cfg.DialTimeout <= 0 {
-		cfg.DialTimeout = 5 * time.Second
-	}
-	if cfg.RequestTimeout <= 0 {
-		cfg.RequestTimeout = 15 * time.Second
-	}
-	if cfg.HandshakeTimeout <= 0 {
-		cfg.HandshakeTimeout = 15 * time.Second
-	}
-	if cfg.LeaseTTL <= 0 {
-		cfg.LeaseTTL = 2 * time.Minute
-	}
-	if cfg.RenewBefore <= 0 {
-		cfg.RenewBefore = 30 * time.Second
-	}
-	if cfg.ReadyTarget <= 0 {
-		cfg.ReadyTarget = 1
-	}
-
-	if len(cfg.RootCAPEM) == 0 && !cfg.InsecureSkipVerify && isLocalRelayHost(baseURL.Hostname()) {
-		bootstrapCtx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout+cfg.HandshakeTimeout)
+	if len(cfg.RootCAPEM) == 0 && isLocalRelayHost(baseURL.Hostname()) {
+		bootstrapCtx, cancel := context.WithTimeout(context.Background(), defaultDialTimeout+defaultHandshakeTimeout)
 		defer cancel()
 
 		_, rootCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
@@ -96,11 +143,10 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 
 	baseTLS := &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		ServerName:         baseURL.Hostname(),
-		RootCAs:            rootCAs,
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
-		NextProtos:         []string{"http/1.1"},
+		MinVersion: tls.VersionTLS12,
+		ServerName: baseURL.Hostname(),
+		RootCAs:    rootCAs,
+		NextProtos: []string{"http/1.1"},
 	}
 
 	transport := &http.Transport{
@@ -108,22 +154,55 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		ForceAttemptHTTP2: false,
 	}
 
-	return &Client{
+	return &relayClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Transport: transport,
-			Timeout:   cfg.RequestTimeout,
+			Timeout:   defaultRequestTimeout,
 		},
-		rawTLSConfig:     baseTLS,
-		dialTimeout:      cfg.DialTimeout,
-		handshakeTimeout: cfg.HandshakeTimeout,
-		leaseTTL:         cfg.LeaseTTL,
-		renewBefore:      cfg.RenewBefore,
-		readyTarget:      cfg.ReadyTarget,
+		rawTLSConfig: baseTLS,
 	}, nil
 }
 
-func (c *Client) Close() {
+func normalizeRelayURLs(rawURLs []string) ([]string, error) {
+	if len(rawURLs) == 0 {
+		return nil, errors.New("relay url is required")
+	}
+
+	seen := make(map[string]struct{}, len(rawURLs))
+	relayURLs := make([]string, 0, len(rawURLs))
+	for _, raw := range rawURLs {
+		normalized, err := normalizeRelayURL(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		relayURLs = append(relayURLs, normalized)
+	}
+	return relayURLs, nil
+}
+
+func normalizeRelayURL(raw string) (string, error) {
+	baseURL, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("parse relay url: %w", err)
+	}
+	if !strings.EqualFold(baseURL.Scheme, "https") {
+		return "", fmt.Errorf("relay url must use https: %q", raw)
+	}
+	if baseURL.Host == "" {
+		return "", fmt.Errorf("relay url host is empty: %q", raw)
+	}
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
+	baseURL.RawQuery = ""
+	baseURL.Fragment = ""
+	return baseURL.String(), nil
+}
+
+func (c *relayClient) Close() {
 	if c == nil || c.httpClient == nil {
 		return
 	}
@@ -132,11 +211,7 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
-	if strings.TrimSpace(req.Name) == "" {
-		return nil, errors.New("listener name is required")
-	}
-
+func (c *relayClient) listenEntry(listener *Listener, req ListenRequest) (*listenerLease, int, error) {
 	reverseToken := strings.TrimSpace(req.ReverseToken)
 	if reverseToken == "" {
 		reverseToken = randomToken()
@@ -144,11 +219,11 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 
 	readyTarget := req.ReadyTarget
 	if readyTarget <= 0 {
-		readyTarget = c.readyTarget
+		readyTarget = defaultReadyTarget
 	}
 	leaseTTL := req.LeaseTTL
 	if leaseTTL <= 0 {
-		leaseTTL = c.leaseTTL
+		leaseTTL = defaultLeaseTTL
 	}
 	acceptedCap := max(readyTarget*2, 1)
 
@@ -162,41 +237,35 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	}
 
 	var registerResp types.RegisterResponse
-	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
-		return nil, err
+	if err := c.doJSON(listener.baseContext(), http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
+		return nil, 0, err
 	}
 
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(c.baseURL.String(), registerResp.Hostnames)
 	if err != nil {
 		_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
-		return nil, err
+		return nil, 0, err
 	}
 
-	listenerCtx, cancel := context.WithCancel(ctx)
-	l := &Listener{
-		client:       c,
-		baseContext:  func() context.Context { return listenerCtx },
-		ctxDone:      listenerCtx.Done(),
-		cancel:       cancel,
-		leaseID:      registerResp.LeaseID,
-		hostnames:    append([]string(nil), registerResp.Hostnames...),
-		metadata:     registerResp.Metadata,
+	return &listenerLease{
+		parent: listener,
+		client: c,
+		info: ListenerEntry{
+			RelayURL:  c.baseURL.String(),
+			LeaseID:   registerResp.LeaseID,
+			Hostnames: append([]string(nil), registerResp.Hostnames...),
+			Metadata:  registerResp.Metadata,
+		},
 		reverseToken: reverseToken,
 		leaseTTL:     leaseTTL,
 		readyTarget:  readyTarget,
 		tlsConfig:    tlsConf,
 		tlsCloser:    tlsCloser,
-		accepted:     make(chan net.Conn, acceptedCap),
 		signal:       make(chan struct{}, 1),
-	}
-
-	go l.runSupervisor()
-	go l.runRenewLoop()
-	l.notify()
-	return l, nil
+	}, acceptedCap, nil
 }
 
-func (c *Client) doJSON(ctx context.Context, method, path string, payload any, out any) error {
+func (c *relayClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
 	var body io.Reader
 	if payload != nil {
 		buf, err := json.Marshal(payload)
@@ -234,7 +303,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 	return json.Unmarshal(envelope.Data, out)
 }
 
-func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
+func (c *relayClient) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
 	return c.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
@@ -242,16 +311,16 @@ func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, t
 	}, &types.RenewResponse{})
 }
 
-func (c *Client) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
+func (c *relayClient) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
 	return c.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
 	}, nil)
 }
 
-func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken string) (net.Conn, error) {
+func (c *relayClient) openReverseSession(ctx context.Context, leaseID, reverseToken string) (net.Conn, error) {
 	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: c.dialTimeout},
+		NetDialer: &net.Dialer{Timeout: defaultDialTimeout},
 		Config:    c.rawTLSConfig.Clone(),
 	}
 
@@ -300,7 +369,7 @@ func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken s
 	return wrapBufferedConn(conn, reader), nil
 }
 
-func (c *Client) resolve(path string) string {
+func (c *relayClient) resolve(path string) string {
 	ref, _ := url.Parse(path)
 	return c.baseURL.ResolveReference(ref).String()
 }

@@ -485,7 +485,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		ID:           leaseID,
 		Name:         strings.TrimSpace(req.Name),
 		Hostnames:    hostnames,
-		Metadata:     normalizeMetadata(req.Metadata),
+		Metadata:     req.Metadata,
 		ReverseToken: req.ReverseToken,
 		ExpiresAt:    expiresAt,
 		FirstSeenAt:  now,
