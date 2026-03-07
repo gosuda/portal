@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	_ "embed"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
@@ -26,10 +24,7 @@ var (
 	flagTags      string
 	flagOwner     string
 	flagHide      bool
-
-	//go:embed static/thumbnail.png
-	thumbnailPNG  []byte
-	flagThumbnail = "data:image/png;base64," + base64.StdEncoding.EncodeToString(thumbnailPNG)
+	flagThumbnail string
 )
 
 func main() {
@@ -42,6 +37,7 @@ func main() {
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
+	flag.StringVar(&flagThumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
 	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
 
 	flag.Parse()
@@ -54,7 +50,6 @@ func main() {
 
 func runDemo() error {
 	logger := log.With().Str("component", "demo-app").Logger()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -79,17 +74,13 @@ func runDemo() error {
 	}
 	defer listener.Close()
 
-	logger.Info().
-		Strs("public_urls", listener.PublicURLs()).
-		Int("local_port", flagPort).
-		Msg("demo app registered with relay")
-
-	if err := sdk.RunHTTPApp(ctx, listener, newHandler(), sdk.HTTPServeOptions{
+	if err := sdk.RunHTTP(ctx, listener, newHandler(), sdk.HTTPServeOptions{
 		LocalAddr: fmt.Sprintf(":%d", flagPort),
 	}); err != nil {
 		return err
 	}
 
+	logger.Info().Strs("public_urls", listener.PublicURLs()).Int("local_port", flagPort).Msg("demo app registered with relay")
 	if ctx.Err() != nil {
 		logger.Info().Msg("demo app shutting down")
 	}

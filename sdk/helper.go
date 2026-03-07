@@ -19,9 +19,9 @@ type HTTPServeOptions struct {
 	ReadHeaderTimeout time.Duration
 }
 
-// RunHTTPApp serves one handler on the relay listener and, optionally, on a
+// RunHTTP serves one handler on the relay listener and, optionally, on a
 // local HTTP address for app-local access.
-func RunHTTPApp(ctx context.Context, relayListener net.Listener, handler http.Handler, opts HTTPServeOptions) error {
+func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, opts HTTPServeOptions) error {
 	readHeaderTimeout := opts.ReadHeaderTimeout
 	if readHeaderTimeout <= 0 {
 		readHeaderTimeout = defaultRequestTimeout

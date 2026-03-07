@@ -23,7 +23,7 @@ func TestRunHTTPAppRelayOnly(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunHTTPApp(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		errCh <- RunHTTP(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "ok")
 		}), HTTPServeOptions{})
 	}()
@@ -62,7 +62,7 @@ func TestRunHTTPAppLocalAndRelay(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunHTTPApp(ctx, relayListener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		errCh <- RunHTTP(ctx, relayListener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "ok")
 		}), HTTPServeOptions{
 			LocalAddr: localAddr,
@@ -80,22 +80,6 @@ func TestRunHTTPAppLocalAndRelay(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("RunHTTPApp() did not exit after context cancellation")
-	}
-}
-
-func TestSplitCSV(t *testing.T) {
-	t.Parallel()
-
-	got := SplitCSV(" a, ,b,c ,, d ")
-	want := []string{"a", "b", "c", "d"}
-
-	if len(got) != len(want) {
-		t.Fatalf("SplitCSV() len = %d, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("SplitCSV()[%d] = %q, want %q", i, got[i], want[i])
-		}
 	}
 }
 

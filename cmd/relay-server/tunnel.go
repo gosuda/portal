@@ -151,8 +151,8 @@ if ($ActualHash -ne $ExpectedHash) {
 
 $ArgsList = @("--relays", $RelayUrls)
 
-if ($env:HOST) { $ArgsList += "--host", $env:HOST } else { $ArgsList += "--host", "localhost:3000" }
-if ($env:NAME) { $ArgsList += "--name", $env:NAME }
+if ($env:APP_HOST) { $ArgsList += "--host", $env:APP_HOST } else { $ArgsList += "--host", "localhost:3000" }
+if ($env:APP_NAME) { $ArgsList += "--name", $env:APP_NAME }
 if ($env:APP_DESCRIPTION) { $ArgsList += "--description", $env:APP_DESCRIPTION }
 if ($env:APP_TAGS) { $ArgsList += "--tags", $env:APP_TAGS }
 if ($env:APP_THUMBNAIL) { $ArgsList += "--thumbnail", $env:APP_THUMBNAIL }
