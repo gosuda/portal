@@ -32,7 +32,7 @@ func runProxyLoop(ctx context.Context, listener *sdk.Listener, targetAddr string
 		relayConn, entry, err := listener.AcceptEntry()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return nil
+				err = nil
 			}
 			return err
 		}
