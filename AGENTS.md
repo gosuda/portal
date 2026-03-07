@@ -82,9 +82,9 @@ Descriptive docs under `docs/` should match current code paths.
 2. **`make build-server` does not build the frontend first.**
    - Why: `cmd/relay-server/dist/*` is embed input; build the frontend explicitly before packaging the relay binary.
 
-3. **ACME management keeps both root and wildcard DNS A records in sync for non-localhost deployments.**
+3. **ACME management supports only `cloudflare` and `route53`, and keeps both root and wildcard DNS A records in sync for non-localhost deployments.**
    - Certificates and keys live under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.
-   - Localhost uses the development certificate path instead of Cloudflare-managed ACME.
+   - Localhost uses the development certificate path instead of DNS-provider-managed ACME.
 
 ## Change Discipline
 

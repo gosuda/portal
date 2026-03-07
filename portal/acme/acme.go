@@ -12,7 +12,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +24,6 @@ import (
 	"github.com/go-acme/lego/v4/certcrypto"
 	"github.com/go-acme/lego/v4/certificate"
 	lego "github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
 )
@@ -39,9 +40,15 @@ const (
 )
 
 type Config struct {
-	BaseDomain      string
-	KeyDir          string
-	CloudflareToken string
+	BaseDomain         string
+	KeyDir             string
+	DNSProvider        string
+	CloudflareToken    string
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSSessionToken    string
+	AWSRegion          string
+	AWSHostedZoneID    string
 }
 
 type Manager struct {
@@ -49,6 +56,7 @@ type Manager struct {
 	cfg       Config
 	wg        sync.WaitGroup
 	mu        sync.RWMutex
+	dns       DNSProvider
 	startOnce sync.Once
 	stopOnce  sync.Once
 }
@@ -59,7 +67,7 @@ type provisionConfig struct {
 	AccountKeyFile   string
 	RegistrationFile string
 	Email            string
-	CloudflareToken  string
+	DNSProvider      DNSProvider
 	Domains          []string
 }
 
@@ -72,7 +80,13 @@ type acmeUser struct {
 func NewManager(cfg Config) (*Manager, error) {
 	cfg.BaseDomain = normalizeHost(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
+	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
+	cfg.AWSAccessKeyID = strings.TrimSpace(cfg.AWSAccessKeyID)
+	cfg.AWSSecretAccessKey = strings.TrimSpace(cfg.AWSSecretAccessKey)
+	cfg.AWSSessionToken = strings.TrimSpace(cfg.AWSSessionToken)
+	cfg.AWSRegion = strings.TrimSpace(cfg.AWSRegion)
+	cfg.AWSHostedZoneID = strings.TrimSpace(cfg.AWSHostedZoneID)
 
 	if cfg.KeyDir == "" {
 		return nil, errors.New("acme key directory is required")
@@ -80,10 +94,30 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.BaseDomain == "" {
 		return nil, errors.New("acme base domain is required")
 	}
+	if isLocalhost(cfg.BaseDomain) {
+		return &Manager{
+			cfg:    cfg,
+			stopCh: make(chan struct{}),
+		}, nil
+	}
+
+	dns, err := NewDNSProvider(DNSProviderConfig{
+		Type:               cfg.DNSProvider,
+		CloudflareToken:    cfg.CloudflareToken,
+		AWSAccessKeyID:     cfg.AWSAccessKeyID,
+		AWSSecretAccessKey: cfg.AWSSecretAccessKey,
+		AWSSessionToken:    cfg.AWSSessionToken,
+		AWSRegion:          cfg.AWSRegion,
+		AWSHostedZoneID:    cfg.AWSHostedZoneID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create acme dns provider: %w", err)
+	}
 
 	return &Manager{
 		cfg:    cfg,
 		stopCh: make(chan struct{}),
+		dns:    dns,
 	}, nil
 }
 
@@ -97,10 +131,6 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 			return "", "", err
 		}
 		return m.TLSFiles()
-	}
-
-	if m.cfg.CloudflareToken == "" {
-		return "", "", errors.New("cloudflare token is required for non-local relay certificates")
 	}
 
 	if err := m.syncDNS(ctx); err != nil {
@@ -122,7 +152,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || isLocalhost(m.cfg.BaseDomain) || m.cfg.CloudflareToken == "" {
+	if m == nil || isLocalhost(m.cfg.BaseDomain) {
 		return
 	}
 
@@ -161,7 +191,7 @@ func (m *Manager) provision(ctx context.Context) error {
 		AccountKeyFile:   filepath.Join(m.cfg.KeyDir, accountKeyFileName),
 		RegistrationFile: filepath.Join(m.cfg.KeyDir, registrationFileName),
 		Email:            defaultACMEEmailPrefix + m.cfg.BaseDomain,
-		CloudflareToken:  m.cfg.CloudflareToken,
+		DNSProvider:      m.dns,
 		Domains:          certificateDomains(m.cfg.BaseDomain),
 	}
 
@@ -174,7 +204,7 @@ func (m *Manager) provision(ctx context.Context) error {
 		return fmt.Errorf("acme provisioning canceled: %w", err)
 	}
 
-	client, _, err := newClient(cfg)
+	client, _, err := newClient(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -235,10 +265,19 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) error {
-	if m == nil || isLocalhost(m.cfg.BaseDomain) || m.cfg.CloudflareToken == "" {
+	if m == nil || isLocalhost(m.cfg.BaseDomain) {
 		return nil
 	}
-	return EnsureDNSRecords(ctx, m.cfg.BaseDomain, m.cfg.CloudflareToken)
+	if m.dns == nil {
+		return errors.New("acme dns provider is required")
+	}
+
+	publicIP, err := detectPublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip: %w", err)
+	}
+
+	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
 }
 
 func (m *Manager) shouldRenew() bool {
@@ -300,7 +339,7 @@ func certificateCoversHostname(cert *x509.Certificate, hostname string) bool {
 	return cert != nil && cert.VerifyHostname(hostname) == nil
 }
 
-func newClient(cfg provisionConfig) (*lego.Client, *acmeUser, error) {
+func newClient(ctx context.Context, cfg provisionConfig) (*lego.Client, *acmeUser, error) {
 	accountKey, err := loadOrCreateAccountKey(cfg.AccountKeyFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load acme account key: %w", err)
@@ -325,14 +364,14 @@ func newClient(cfg provisionConfig) (*lego.Client, *acmeUser, error) {
 		return nil, nil, fmt.Errorf("create acme client: %w", err)
 	}
 
-	cfConfig := cloudflare.NewDefaultConfig()
-	cfConfig.AuthToken = cfg.CloudflareToken
-
-	provider, err := cloudflare.NewDNSProviderConfig(cfConfig)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create cloudflare dns provider: %w", err)
+	if cfg.DNSProvider == nil {
+		return nil, nil, errors.New("acme dns provider is required")
 	}
-	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
+	challengeProvider, err := cfg.DNSProvider.ChallengeProvider(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create dns challenge provider: %w", err)
+	}
+	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
 		return nil, nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
 
@@ -496,4 +535,31 @@ func isLocalhost(host string) bool {
 		return ip.IsLoopback()
 	}
 	return strings.HasSuffix(host, ".localhost")
+}
+
+func detectPublicIPv4(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api4.ipify.org", nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if err != nil {
+		return "", err
+	}
+	ip := strings.TrimSpace(string(body))
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		return "", fmt.Errorf("invalid ipv4 address: %q", ip)
+	}
+	return ip, nil
 }

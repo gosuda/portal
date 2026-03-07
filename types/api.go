@@ -31,7 +31,7 @@ type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
 	Hostnames    []string      `json:"hostnames,omitempty"`
-	Metadata     LeaseMetadata `json:"metadata,omitempty"`
+	Metadata     LeaseMetadata `json:"metadata"`
 	TTLSeconds   int           `json:"ttl_seconds,omitempty"`
 	TLS          bool          `json:"tls"`
 }
@@ -41,7 +41,7 @@ type RegisterResponse struct {
 	LeaseID    string        `json:"lease_id"`
 	ConnectURL string        `json:"connect_url"`
 	Hostnames  []string      `json:"hostnames"`
-	Metadata   LeaseMetadata `json:"metadata,omitempty"`
+	Metadata   LeaseMetadata `json:"metadata"`
 }
 
 type RenewRequest struct {

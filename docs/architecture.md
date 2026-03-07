@@ -49,7 +49,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `routeTable`: exact + single-label wildcard hostname lookup
 - `leaseBroker`: per-lease ready queue for reverse sessions
 - `reverseSession`: idle keepalive + activation state machine for one reverse TCP connection
-- `acme`: Cloudflare DNS sync + certificate provisioning/renewal for the relay root host and wildcard
+- `acme`: Cloudflare/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 
 ### SDK (`sdk/`)
@@ -170,7 +170,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Relay admin/API TLS uses the certificate in `KEYLESS_DIR`
   - `fullchain.pem`
   - `privatekey.pem`
-- For non-localhost deployments, ACME DNS-01 uses Cloudflare and keeps:
+- For non-localhost deployments, ACME DNS-01 currently supports `cloudflare` and `route53`, and keeps:
   - root host A record
   - wildcard host A record
   - relay certificate renewal
