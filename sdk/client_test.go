@@ -22,17 +22,13 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(ClientConfig{RelayURLs: []string{server.URL}})
+	client, err := NewClient(ClientConfig{RelayURL: server.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	defer client.Close()
 
-	if len(client.clients) != 1 {
-		t.Fatalf("client count = %d, want 1", len(client.clients))
-	}
-
-	resp, err := client.clients[0].httpClient.Get(server.URL)
+	resp, err := client.httpClient.Get(server.URL)
 	if err != nil {
 		t.Fatalf("httpClient.Get() error = %v", err)
 	}
@@ -40,43 +36,6 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-}
-
-func TestNewClientSupportsDedupedRelayURLs(t *testing.T) {
-	t.Parallel()
-
-	serverA := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer serverA.Close()
-
-	serverB := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer serverB.Close()
-
-	client, err := NewClient(ClientConfig{
-		RelayURLs: []string{serverA.URL, serverB.URL},
-	})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	defer client.Close()
-
-	if len(client.clients) != 2 {
-		t.Fatalf("client count = %d, want 2", len(client.clients))
-	}
-
-	for i, relayClient := range client.clients {
-		resp, err := relayClient.httpClient.Get(relayClient.baseURL.String())
-		if err != nil {
-			t.Fatalf("client[%d].httpClient.Get() error = %v", i, err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("client[%d] status = %d, want %d", i, resp.StatusCode, http.StatusOK)
-		}
 	}
 }
 
@@ -116,7 +75,7 @@ func TestOpenReverseSessionPreservesAPIErrorCode(t *testing.T) {
 		t.Fatalf("server client transport type = %T, want *http.Transport", server.Client().Transport)
 	}
 
-	relayClient := &relayClient{
+	client := &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Transport: transport.Clone(),
@@ -128,9 +87,10 @@ func TestOpenReverseSessionPreservesAPIErrorCode(t *testing.T) {
 			RootCAs:    transport.TLSClientConfig.RootCAs,
 			NextProtos: []string{"http/1.1"},
 		},
+		dialTimeout: defaultDialTimeout,
 	}
 
-	_, err = relayClient.openReverseSession(context.Background(), "lease-123", "tok_123")
+	_, err = client.openReverseSession(context.Background(), "lease-123", "tok_123")
 	if err == nil {
 		t.Fatal("openReverseSession() error = nil, want APIRequestError")
 	}

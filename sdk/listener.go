@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -24,98 +22,36 @@ type ListenRequest struct {
 	LeaseTTL     time.Duration
 }
 
-type ListenerEntry struct {
-	RelayURL  string
-	LeaseID   string
-	Hostnames []string
-	Metadata  types.LeaseMetadata
-}
-
-// PublicURLs returns the HTTPS URLs exposed by one relay-specific lease.
-func (e ListenerEntry) PublicURLs() []string {
-	urls := make([]string, 0, len(e.Hostnames))
-	for _, host := range e.Hostnames {
-		urls = append(urls, "https://"+host)
-	}
-	return urls
-}
-
-func (e ListenerEntry) clone() ListenerEntry {
-	e.Hostnames = append([]string(nil), e.Hostnames...)
-	e.Metadata = cloneLeaseMetadata(e.Metadata)
-	return e
-}
-
 type Listener struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	accepted  chan acceptedConn
-	entries   []*listenerLease
-	workers   errgroup.Group
-	closeOnce sync.Once
-
-	mu          sync.RWMutex
-	activeCount int
-	terminalErr error
-}
-
-type listenerLease struct {
-	parent       *Listener
-	client       *relayClient
+	tlsCloser    io.Closer
+	tlsConfig    *tls.Config
+	baseContext  func() context.Context
+	ctxDone      <-chan struct{}
+	cancel       context.CancelFunc
+	client       *Client
+	signal       chan struct{}
+	accepted     chan net.Conn
+	leaseID      string
 	reverseToken string
+	hostnames    []string
+	metadata     types.LeaseMetadata
 	readyTarget  int
 	leaseTTL     time.Duration
 
-	mu          sync.RWMutex
-	info        ListenerEntry
-	tlsConfig   *tls.Config
-	tlsCloser   io.Closer
-	active      bool
-	terminalErr error
-}
-
-type acceptedConn struct {
-	conn  net.Conn
-	entry ListenerEntry
-}
-
-type sessionSnapshot struct {
-	info        ListenerEntry
-	tlsConfig   *tls.Config
-	active      bool
-	terminalErr error
-}
-
-func newListener(ctx context.Context) *Listener {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	listenerCtx, cancel := context.WithCancel(ctx)
-	return &Listener{
-		ctx:    listenerCtx,
-		cancel: cancel,
-	}
+	activeSessions int
+	closeOnce      sync.Once
+	mu             sync.Mutex
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
-	conn, _, err := l.AcceptEntry()
-	return conn, err
-}
-
-// AcceptEntry returns the next accepted connection plus relay-specific lease
-// metadata for callers that need to distinguish which relay claimed it.
-func (l *Listener) AcceptEntry() (net.Conn, ListenerEntry, error) {
-	for {
-		select {
-		case <-l.ctx.Done():
-			return nil, ListenerEntry{}, l.closeError()
-		case accepted := <-l.accepted:
-			if accepted.conn == nil {
-				return nil, ListenerEntry{}, l.closeError()
-			}
-			return accepted.conn, accepted.entry.clone(), nil
+	select {
+	case <-l.ctxDone:
+		return nil, net.ErrClosed
+	case conn := <-l.accepted:
+		if conn == nil {
+			return nil, net.ErrClosed
 		}
+		return conn, nil
 	}
 }
 
@@ -123,164 +59,106 @@ func (l *Listener) Close() error {
 	var closeErr error
 	l.closeOnce.Do(func() {
 		l.cancel()
-		closeErr = errors.Join(l.workers.Wait(), closeListenerEntries(l.entries))
-		l.drainAccepted()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := l.client.unregisterLease(ctx, l.leaseID, l.reverseToken); err != nil {
+			closeErr = err
+		}
+		if l.tlsCloser != nil {
+			closeErr = errors.Join(closeErr, l.tlsCloser.Close())
+		}
 	})
 	return closeErr
 }
 
 func (l *Listener) Addr() net.Addr {
-	if entry, ok := l.singleEntry(); ok {
-		return listenerAddr("portal:" + entry.LeaseID)
-	}
-	return listenerAddr("portal:multi")
+	return listenerAddr("portal:" + l.leaseID)
 }
 
-// Entries returns relay-specific lease details for advanced multi-relay callers.
-func (l *Listener) Entries() []ListenerEntry {
-	entries := make([]ListenerEntry, 0, len(l.entries))
-	for _, entry := range l.entries {
-		info, ok := entry.snapshotInfo()
-		if !ok {
-			continue
-		}
-		entries = append(entries, info)
-	}
-	return entries
+func (l *Listener) LeaseID() string {
+	return l.leaseID
 }
 
-func (l *Listener) singleEntry() (ListenerEntry, bool) {
-	entries := l.Entries()
-	if len(entries) != 1 {
-		return ListenerEntry{}, false
-	}
-	return entries[0], true
+func (l *Listener) Hostnames() []string {
+	return append([]string(nil), l.hostnames...)
 }
 
-// PublicURLs returns all public HTTPS URLs exposed by the listener.
+func (l *Listener) Metadata() types.LeaseMetadata {
+	return cloneLeaseMetadata(l.metadata)
+}
+
 func (l *Listener) PublicURLs() []string {
-	var urls []string
-	for _, entry := range l.Entries() {
-		urls = append(urls, entry.PublicURLs()...)
+	urls := make([]string, 0, len(l.hostnames))
+	for _, host := range l.hostnames {
+		urls = append(urls, "https://"+host)
 	}
 	return urls
 }
 
-func closeListenerEntries(entries []*listenerLease) error {
-	if len(entries) == 0 {
-		return nil
-	}
-
-	var closeErr error
-	var mu sync.Mutex
-	var group errgroup.Group
-	group.SetLimit(min(len(entries), 4))
-
-	for _, entry := range entries {
-		if entry == nil {
-			continue
+func (l *Listener) runSupervisor() {
+	for {
+		select {
+		case <-l.ctxDone:
+			return
+		case <-l.signal:
 		}
-		group.Go(func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 
-			if err := entry.close(ctx); err != nil {
-				mu.Lock()
-				closeErr = errors.Join(closeErr, err)
-				mu.Unlock()
-			}
-			return nil
-		})
-	}
-
-	_ = group.Wait()
-
-	return closeErr
-}
-
-func (l *listenerLease) start() {
-	if l == nil || l.parent == nil {
-		return
-	}
-
-	l.parent.workers.Go(func() error {
-		l.runRenewLoop()
-		return nil
-	})
-	for i := 0; i < l.readyTarget; i++ {
-		l.parent.workers.Go(func() error {
-			l.runSessionWorker()
-			return nil
-		})
+		for l.reserveSessionSlot() {
+			go l.runSession()
+		}
 	}
 }
 
-func (l *listenerLease) runRenewLoop() {
-	ticker := time.NewTicker(l.renewInterval())
+func (l *Listener) runRenewLoop() {
+	interval := l.leaseTTL / 2
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	if l.client.renewBefore > 0 && l.leaseTTL > l.client.renewBefore {
+		interval = l.leaseTTL - l.client.renewBefore
+	}
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-l.parent.ctx.Done():
+		case <-l.ctxDone:
 			return
 		case <-ticker.C:
-			if l.shouldStop() {
-				return
-			}
-
-			ctx, cancel := context.WithTimeout(l.parent.ctx, 10*time.Second)
-			err := l.client.renewLease(ctx, l.leaseID(), l.reverseToken, l.leaseTTL)
+			ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
+			_ = l.client.renewLease(ctx, l.leaseID, l.reverseToken, l.leaseTTL)
 			cancel()
-			if err == nil {
-				continue
-			}
-			if isLeaseResetError(err) || isTerminalEntryError(err) {
-				l.stop(err)
-				return
-			}
 		}
 	}
 }
 
-func (l *listenerLease) runSessionWorker() {
-	for {
-		if l.shouldStop() {
-			return
-		}
+func (l *Listener) runSession() {
+	defer l.releaseSessionSlot()
 
-		snapshot := l.sessionSnapshot()
-		if !snapshot.active {
-			return
-		}
+	sessionCtx := l.context()
+	conn, err := l.client.openReverseSession(sessionCtx, l.leaseID, l.reverseToken)
+	if err != nil {
+		sleepOrDone(sessionCtx, time.Second)
+		return
+	}
 
-		conn, err := l.client.openReverseSession(l.parent.ctx, snapshot.info.LeaseID, l.reverseToken)
-		if err != nil {
-			if isLeaseResetError(err) || isTerminalEntryError(err) {
-				l.stop(err)
-				return
-			}
-			sleepOrDone(l.parent.ctx, defaultRetryDelay)
-			continue
-		}
-
-		if err := l.parent.awaitActivation(conn, snapshot.tlsConfig, snapshot.info); err != nil {
-			_ = conn.Close()
-			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			if isLeaseResetError(err) || isTerminalEntryError(err) {
-				l.stop(err)
-				return
-			}
-			sleepOrDone(l.parent.ctx, defaultRetryDelay)
+	if err := l.awaitActivation(conn); err != nil {
+		_ = conn.Close()
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+			sleepOrDone(sessionCtx, time.Second)
 		}
 	}
 }
 
-func (l *Listener) awaitActivation(conn net.Conn, tlsConfig *tls.Config, info ListenerEntry) error {
+func (l *Listener) awaitActivation(conn net.Conn) error {
 	var marker [1]byte
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(2 * defaultHandshakeTimeout))
+		_ = conn.SetReadDeadline(time.Now().Add(2 * l.client.handshakeTimeout))
 		if _, err := io.ReadFull(conn, marker[:]); err != nil {
 			return err
 		}
@@ -290,189 +168,54 @@ func (l *Listener) awaitActivation(conn net.Conn, tlsConfig *tls.Config, info Li
 		case types.MarkerKeepalive:
 			continue
 		case types.MarkerTLSStart:
-			return l.activate(conn, tlsConfig, info)
+			return l.activate(conn)
 		default:
 			return fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
 		}
 	}
 }
 
-func (l *Listener) activate(conn net.Conn, tlsConfig *tls.Config, info ListenerEntry) error {
-	if tlsConfig == nil {
-		return errors.New("missing tls config")
-	}
-
-	tlsConn := tls.Server(conn, tlsConfig.Clone())
-	handshakeCtx, cancel := context.WithTimeout(l.ctx, defaultHandshakeTimeout)
+func (l *Listener) activate(conn net.Conn) error {
+	tlsConn := tls.Server(conn, l.tlsConfig.Clone())
+	handshakeCtx, cancel := context.WithTimeout(l.context(), l.client.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		return err
 	}
 
 	select {
-	case <-l.ctx.Done():
+	case <-l.ctxDone:
 		_ = tlsConn.Close()
-		return l.closeError()
-	case l.accepted <- acceptedConn{conn: tlsConn, entry: info.clone()}:
+		return l.context().Err()
+	case l.accepted <- tlsConn:
 		return nil
 	}
 }
 
-func (l *listenerLease) close(ctx context.Context) error {
-	if l == nil {
-		return nil
-	}
-
-	var closeErr error
-	if l.client != nil {
-		if err := l.client.unregisterLease(ctx, l.info.LeaseID, l.reverseToken); err != nil {
-			closeErr = errors.Join(closeErr, err)
-		}
-	}
-	if l.tlsCloser != nil {
-		closeErr = errors.Join(closeErr, l.tlsCloser.Close())
-	}
-	return closeErr
-}
-
-func (l *listenerLease) renewInterval() time.Duration {
-	interval := l.leaseTTL / 2
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	if defaultRenewBefore > 0 && l.leaseTTL > defaultRenewBefore {
-		interval = l.leaseTTL - defaultRenewBefore
-	}
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	return interval
-}
-
-func (l *Listener) fail(err error) {
+func (l *Listener) reserveSessionSlot() bool {
 	l.mu.Lock()
-	if err != nil && l.terminalErr == nil {
-		l.terminalErr = err
-	}
-	l.mu.Unlock()
-	l.cancel()
-}
-
-func (l *Listener) closeError() error {
-	l.mu.RLock()
-	terminalErr := l.terminalErr
-	l.mu.RUnlock()
-	if terminalErr != nil {
-		return terminalErr
-	}
-	if err := l.ctx.Err(); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return net.ErrClosed
-		}
-		return err
-	}
-	return net.ErrClosed
-}
-
-func (l *Listener) isClosed() bool {
-	if l == nil || l.ctx == nil {
+	defer l.mu.Unlock()
+	if l.isClosed() {
 		return false
 	}
+	if l.activeSessions >= l.readyTarget {
+		return false
+	}
+	l.activeSessions++
+	return true
+}
+
+func (l *Listener) releaseSessionSlot() {
+	l.mu.Lock()
+	l.activeSessions--
+	l.mu.Unlock()
+	l.notify()
+}
+
+func (l *Listener) notify() {
 	select {
-	case <-l.ctx.Done():
-		return true
+	case l.signal <- struct{}{}:
 	default:
-		return false
-	}
-}
-
-func (l *Listener) drainAccepted() {
-	for {
-		select {
-		case accepted := <-l.accepted:
-			if accepted.conn != nil {
-				_ = accepted.conn.Close()
-			}
-		default:
-			return
-		}
-	}
-}
-
-func (l *Listener) entryStopped(_ *listenerLease, err error) {
-	l.mu.Lock()
-	if l.activeCount > 0 {
-		l.activeCount--
-	}
-	shouldFail := l.activeCount == 0
-	l.mu.Unlock()
-
-	if shouldFail {
-		l.fail(err)
-	}
-}
-
-func (l *listenerLease) snapshotInfo() (ListenerEntry, bool) {
-	snapshot := l.sessionSnapshot()
-	if !snapshot.active {
-		return ListenerEntry{}, false
-	}
-	return snapshot.info, true
-}
-
-func (l *listenerLease) leaseID() string {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.info.LeaseID
-}
-
-func (l *listenerLease) sessionSnapshot() sessionSnapshot {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	return sessionSnapshot{
-		info:        l.info.clone(),
-		tlsConfig:   l.tlsConfig,
-		active:      l.active,
-		terminalErr: l.terminalErr,
-	}
-}
-
-func (l *listenerLease) shutdownState() (bool, error) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return !l.active, l.terminalErr
-}
-
-func (l *listenerLease) shouldStop() bool {
-	if l == nil {
-		return true
-	}
-	if l.parent != nil && l.parent.isClosed() {
-		return true
-	}
-	stopped, _ := l.shutdownState()
-	return stopped
-}
-
-func (l *listenerLease) stop(err error) {
-	if l == nil {
-		return
-	}
-
-	l.mu.Lock()
-	if !l.active {
-		l.mu.Unlock()
-		return
-	}
-	l.active = false
-	if err != nil && l.terminalErr == nil {
-		l.terminalErr = err
-	}
-	l.mu.Unlock()
-
-	if l.parent != nil {
-		l.parent.entryStopped(l, err)
 	}
 }
 
@@ -489,6 +232,27 @@ type listenerAddr string
 
 func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
+
+func (l *Listener) context() context.Context {
+	if l.baseContext != nil {
+		if ctx := l.baseContext(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
+}
+
+func (l *Listener) isClosed() bool {
+	if l.ctxDone == nil {
+		return false
+	}
+	select {
+	case <-l.ctxDone:
+		return true
+	default:
+		return false
+	}
+}
 
 func cloneLeaseMetadata(metadata types.LeaseMetadata) types.LeaseMetadata {
 	metadata.Tags = append([]string(nil), metadata.Tags...)

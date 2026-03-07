@@ -31,7 +31,7 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "demo-app").Logger()
 
-	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URLs (comma-separated, https only)")
+	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https only)")
 	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (disable if empty)")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
@@ -53,7 +53,7 @@ func runDemo() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURLs: sdk.SplitCSV(flagServerURL)})
+	sdkClient, err := sdk.NewClient(sdk.ClientConfig{RelayURL: flagServerURL})
 	if err != nil {
 		return fmt.Errorf("new client: %w", err)
 	}
@@ -74,7 +74,12 @@ func runDemo() error {
 	}
 	defer listener.Close()
 
-	logger.Info().Strs("public_urls", listener.PublicURLs()).Str("local_addr", flagAddr).Msg("demo app registered with relay")
+	logger.Info().
+		Str("relay", flagServerURL).
+		Str("lease_id", listener.LeaseID()).
+		Strs("public_urls", listener.PublicURLs()).
+		Str("local_addr", flagAddr).
+		Msg("demo app registered with relay")
 	if err := sdk.RunHTTP(ctx, listener, newHandler(), flagAddr); err != nil {
 		return err
 	}

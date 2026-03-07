@@ -45,12 +45,14 @@ func handleWebSocket(conn *websocket.Conn) {
 	}
 }
 
-func handleCookies(w http.ResponseWriter, _ *http.Request) {
+func handleCookies(w http.ResponseWriter, r *http.Request) {
+	secure := r != nil && r.TLS != nil
+
 	for _, cookie := range []*http.Cookie{
-		{Name: "session_id", Value: "abc123", Path: "/", MaxAge: 3600},
-		{Name: "auth_token", Value: "secret456", Path: "/", MaxAge: 3600},
-		{Name: "csrf_token", Value: "xyz789", Path: "/", MaxAge: 3600},
-		{Name: "user_pref", Value: "dark_mode", Path: "/", MaxAge: 86400},
+		{Name: "session_id", Value: "abc123", Path: "/", MaxAge: 3600, Secure: secure},
+		{Name: "auth_token", Value: "secret456", Path: "/", MaxAge: 3600, Secure: secure},
+		{Name: "csrf_token", Value: "xyz789", Path: "/", MaxAge: 3600, Secure: secure},
+		{Name: "user_pref", Value: "dark_mode", Path: "/", MaxAge: 86400, Secure: secure},
 	} {
 		http.SetCookie(w, cookie)
 	}

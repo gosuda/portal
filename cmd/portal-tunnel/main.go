@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal/v2/sdk"
 	"github.com/gosuda/portal/v2/types"
@@ -62,18 +62,16 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	relayURLs := sdk.SplitCSV(flagRelayURLs)
+	relayURLs, err := normalizeRelayURLs(flagRelayURLs)
+	if err != nil {
+		return err
+	}
 	if len(relayURLs) == 0 {
 		return errors.New("no relay URLs provided")
 	}
 
-	targetAddr, err := normalizeTargetAddr(flagHost)
-	if err != nil {
-		return fmt.Errorf("invalid --host value %q: %w", flagHost, err)
-	}
-
 	logger.Info().
-		Str("local", targetAddr).
+		Str("local", flagHost).
 		Int("relay_count", len(relayURLs)).
 		Strs("relays", relayURLs).
 		Msg("starting portal tunnel")
@@ -89,67 +87,52 @@ func runTunnel() error {
 		},
 	}
 
-	client, err := sdk.NewClient(sdk.ClientConfig{RelayURLs: relayURLs})
+	runtimes, err := startRelayRuntimes(ctx, relayURLs, listenReq)
 	if err != nil {
-		return fmt.Errorf("service %s: failed to create client: %w", flagName, err)
-	}
-	defer client.Close()
-
-	listener, err := client.Listen(ctx, listenReq)
-	if err != nil {
-		return fmt.Errorf("service %s: failed to start listener: %w", flagName, err)
-	}
-	defer listener.Close()
-
-	for _, entry := range listener.Entries() {
-		logger.Info().
-			Str("relay", entry.RelayURL).
-			Str("lease_id", entry.LeaseID).
-			Strs("public_urls", entry.PublicURLs()).
-			Msg("relay tunnel ready")
+		return fmt.Errorf("service %s: failed to start relays: %w", flagName, err)
 	}
 
-	var connGroup errgroup.Group
+	var connWG sync.WaitGroup
 	var connCount atomic.Int64
-	group, groupCtx := errgroup.WithContext(ctx)
-	group.Go(func() error {
-		if err := runProxyLoop(groupCtx, listener, targetAddr, &connGroup, &connCount); err != nil {
-			return fmt.Errorf("relay accept loop: %w", err)
-		}
-		return nil
-	})
-	group.Go(func() error {
-		<-groupCtx.Done()
-		if err := listener.Close(); err != nil {
-			return fmt.Errorf("listener close: %w", err)
-		}
-		return nil
-	})
+	relayDone := make(chan relayLoopResult, len(runtimes))
 
-	waitErr := group.Wait()
+	for _, runtime := range runtimes {
+		logger.Info().
+			Str("relay", runtime.relayURL).
+			Str("lease_id", runtime.listener.LeaseID()).
+			Strs("public_urls", runtime.listener.PublicURLs()).
+			Msg("relay tunnel ready")
+		go runtime.run(ctx, flagHost, &connWG, &connCount, relayDone)
+	}
+
+	waitErr := waitForRelayLoops(ctx, relayDone, len(runtimes))
+	if waitErr != nil {
+		stop()
+	}
+	closeErr := closeRelayRuntimes(runtimes)
 	if waitErr != nil {
 		logger.Error().Err(waitErr).Msg("relay supervisor exited with error")
+	}
+	if closeErr != nil {
+		logger.Error().Err(closeErr).Msg("relay shutdown failed")
 	}
 
 	if ctx.Err() != nil {
 		logger.Info().Msg("tunnel shutting down")
 	}
 
-	done := make(chan error, 1)
+	done := make(chan struct{})
 	go func() {
-		done <- connGroup.Wait()
+		connWG.Wait()
+		close(done)
 	}()
 
 	select {
-	case err := <-done:
-		if err != nil {
-			logger.Error().Err(err).Msg("proxy connection group failed")
-			waitErr = errors.Join(waitErr, err)
-		}
+	case <-done:
 	case <-time.After(5 * time.Second):
 		logger.Warn().Msg("tunnel shutdown timeout; connections still active")
 	}
 
 	logger.Info().Msg("tunnel shutdown complete")
-	return waitErr
+	return errors.Join(waitErr, closeErr)
 }
