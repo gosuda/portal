@@ -129,7 +129,7 @@ PORTAL_URL=https://example.com
 BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
-KEYLESS_DIR=.portal-certs
+KEYLESS_DIR=./.portal-certs
 ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
@@ -137,7 +137,7 @@ CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 Route53 example:
 
 ```bash
-KEYLESS_DIR=.portal-certs
+KEYLESS_DIR=./.portal-certs
 ACME_DNS_PROVIDER=route53
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
