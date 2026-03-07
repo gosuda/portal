@@ -210,7 +210,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 
 	registerReq := types.RegisterRequest{
 		Name:         req.Name,
-		Hostnames:    append([]string(nil), req.Hostnames...),
+		Hostnames:    req.Hostnames,
 		Metadata:     req.Metadata,
 		ReverseToken: reverseToken,
 		TLS:          true,
@@ -235,8 +235,8 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		ctxDone:      listenerCtx.Done(),
 		cancel:       cancel,
 		leaseID:      registerResp.LeaseID,
-		hostnames:    append([]string(nil), registerResp.Hostnames...),
-		metadata:     cloneLeaseMetadata(registerResp.Metadata),
+		hostnames:    registerResp.Hostnames,
+		metadata:     registerResp.Metadata,
 		reverseToken: reverseToken,
 		leaseTTL:     leaseTTL,
 		readyTarget:  readyTarget,

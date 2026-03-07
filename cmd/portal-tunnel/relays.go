@@ -23,55 +23,6 @@ type relayRuntime struct {
 	relayURL string
 }
 
-type relayLoopResult struct {
-	err      error
-	leaseID  string
-	relayURL string
-}
-
-func (r *relayRuntime) run(ctx context.Context, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64, done chan<- relayLoopResult) {
-	logger := log.With().
-		Str("component", "portal-tunnel").
-		Str("relay", r.relayURL).
-		Str("lease_id", r.listener.LeaseID()).
-		Logger()
-
-	var runErr error
-	defer func() {
-		done <- relayLoopResult{
-			leaseID:  r.listener.LeaseID(),
-			relayURL: r.relayURL,
-			err:      runErr,
-		}
-	}()
-
-	for {
-		relayConn, err := r.listener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
-			}
-			runErr = err
-			return
-		}
-
-		connID := connCount.Add(1)
-		logger.Info().
-			Int64("conn_id", connID).
-			Str("remote_addr", relayConn.RemoteAddr().String()).
-			Msg("accepted relay connection")
-
-		connWG.Add(1)
-		go func(connID int64, relayConn net.Conn) {
-			defer connWG.Done()
-			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-				logger.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
-			}
-			logger.Info().Int64("conn_id", connID).Msg("proxy connection closed")
-		}(connID, relayConn)
-	}
-}
-
 func startRelayRuntimes(ctx context.Context, relayURLs []string, req sdk.ListenRequest) ([]*relayRuntime, error) {
 	runtimes := make([]*relayRuntime, 0, len(relayURLs))
 	for _, relayURL := range relayURLs {
@@ -113,43 +64,37 @@ func closeRelayRuntimes(runtimes []*relayRuntime) error {
 	return closeErr
 }
 
-func waitForRelayLoops(ctx context.Context, done <-chan relayLoopResult, relayCount int) error {
+func proxyRelayConnections(ctx context.Context, relayListener net.Listener, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
 	logger := log.With().Str("component", "portal-tunnel").Logger()
-	active := relayCount
 
-	for active > 0 {
-		result := <-done
-		active--
-
-		switch {
-		case result.err != nil:
-			logger.Error().
-				Err(result.err).
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped")
-		case ctx.Err() != nil:
-			logger.Info().
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped during shutdown")
-		default:
-			logger.Warn().
-				Str("relay", result.relayURL).
-				Str("lease_id", result.leaseID).
-				Int("remaining_relays", active).
-				Msg("relay accept loop stopped")
+	for {
+		relayConn, err := relayListener.Accept()
+		if err != nil {
+			switch {
+			case ctx.Err() != nil || errors.Is(err, context.Canceled):
+				return nil
+			case errors.Is(err, net.ErrClosed):
+				return errors.New("all relay listeners stopped")
+			default:
+				return err
+			}
 		}
-	}
 
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
+		connID := connCount.Add(1)
+		logger.Info().
+			Int64("conn_id", connID).
+			Str("remote_addr", relayConn.RemoteAddr().String()).
+			Msg("accepted relay connection")
+
+		connWG.Add(1)
+		go func(connID int64, relayConn net.Conn) {
+			defer connWG.Done()
+			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
+				logger.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
+			}
+			logger.Info().Int64("conn_id", connID).Msg("proxy connection closed")
+		}(connID, relayConn)
 	}
-	return errors.New("all relay listeners stopped")
 }
 
 func normalizeRelayURLs(raw string) ([]string, error) {

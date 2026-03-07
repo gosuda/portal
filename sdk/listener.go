@@ -81,11 +81,11 @@ func (l *Listener) LeaseID() string {
 }
 
 func (l *Listener) Hostnames() []string {
-	return append([]string(nil), l.hostnames...)
+	return l.hostnames
 }
 
 func (l *Listener) Metadata() types.LeaseMetadata {
-	return cloneLeaseMetadata(l.metadata)
+	return l.metadata
 }
 
 func (l *Listener) PublicURLs() []string {
@@ -252,9 +252,4 @@ func (l *Listener) isClosed() bool {
 	default:
 		return false
 	}
-}
-
-func cloneLeaseMetadata(metadata types.LeaseMetadata) types.LeaseMetadata {
-	metadata.Tags = append([]string(nil), metadata.Tags...)
-	return metadata
 }
