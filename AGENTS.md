@@ -96,7 +96,7 @@ Descriptive docs under `docs/` should match current code paths.
 
 ## Go Conventions
 
-**Imports:** stdlib -> external -> internal (blank-line separated), local prefix `gosuda.org/portal/v2`.  
+**Imports:** stdlib -> external -> internal (blank-line separated), local prefix `github.com/gosuda/portal/v2`.  
 **Concurrency:** `errgroup.Group` over `WaitGroup`; `errgroup.SetLimit` for bounded work; `context.WithTimeout` over `time.After` in loops; no bare `go func()` without owned lifecycle.  
 **I/O:** prefer directory-scoped operations when touching filesystem trees.
 

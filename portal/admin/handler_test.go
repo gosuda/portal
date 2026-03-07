@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gosuda.org/portal/v2/portal/policy"
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 )
 
 func TestLoginAndProtectedActions(t *testing.T) {

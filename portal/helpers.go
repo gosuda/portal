@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/types"
 )
 
 const (

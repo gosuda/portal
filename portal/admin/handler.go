@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"strings"
 
-	"gosuda.org/portal/v2/portal"
-	"gosuda.org/portal/v2/portal/policy"
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/portal"
+	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 )
 
 const cookieName = "portal_admin"

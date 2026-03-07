@@ -18,9 +18,10 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
-	"gosuda.org/portal/v2/portal/keyless"
-	"gosuda.org/portal/v2/portal/policy"
-	"gosuda.org/portal/v2/types"
+
+	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 )
 
 type ServerConfig struct {
