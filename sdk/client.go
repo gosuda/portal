@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
-	"gosuda.org/portal/v2/portal/keyless"
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/types"
 )
 
 type ClientConfig struct {

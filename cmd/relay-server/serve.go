@@ -11,12 +11,12 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/v2/portal"
-	"gosuda.org/portal/v2/portal/acme"
-	"gosuda.org/portal/v2/portal/admin"
-	"gosuda.org/portal/v2/portal/keyless"
-	"gosuda.org/portal/v2/portal/policy"
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/portal"
+	"github.com/gosuda/portal/v2/portal/acme"
+	"github.com/gosuda/portal/v2/portal/admin"
+	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 )
 
 func runServer(cfg relayServerConfig) error {

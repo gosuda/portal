@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"gosuda.org/portal/v2/sdk"
+	"github.com/gosuda/portal/v2/sdk"
 )
 
 type relayRuntime struct {

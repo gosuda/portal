@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gosuda.org/portal/v2/types"
+	"github.com/gosuda/portal/v2/types"
 )
 
 func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge"
 
-	"gosuda.org/portal/v2/portal/acme/cloudflare"
-	"gosuda.org/portal/v2/portal/acme/route53"
+	"github.com/gosuda/portal/v2/portal/acme/cloudflare"
+	"github.com/gosuda/portal/v2/portal/acme/route53"
 )
 
 const (

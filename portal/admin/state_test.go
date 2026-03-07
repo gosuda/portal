@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gosuda.org/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/policy"
 )
 
 func TestStateStoreRoundTrip(t *testing.T) {

@@ -8,7 +8,7 @@ formatters:
   enable: [goimports]
   settings:
     goimports:
-      local-prefixes: [github.com/gosuda, gosuda.org]
+      local-prefixes: [github.com/gosuda/portal/v2]
 
 linters:
   default: none

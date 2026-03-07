@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gosuda.org/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/policy"
 )
 
 type stateStore struct {
