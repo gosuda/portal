@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -50,7 +51,7 @@ func main() {
 
 func runDemo() error {
 	logger := log.With().Str("component", "demo-app").Logger()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
 	exposure, err := sdk.Expose(ctx, sdk.SplitCSV(flagServerURLs), flagName, types.LeaseMetadata{
@@ -73,6 +74,9 @@ func runDemo() error {
 		return fmt.Errorf("invalid --addr value %q: %w", flagAddr, err)
 	}
 	if err := exposure.RunHTTP(ctx, newHandler(), flagAddr); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			err = nil
+		}
 		return err
 	}
 
