@@ -45,7 +45,7 @@ async function startTunnel() {
   if (tunnelTerminal) {
     tunnelTerminal.dispose();
   }
-  tunnelTerminal = vscode.window.createTerminal("Portal Tunnel");
+  tunnelTerminal = createTunnelTerminal();
   tunnelTerminal.show();
   tunnelTerminal.sendText(command);
 }
@@ -137,6 +137,19 @@ function buildCommand(opts: TunnelCommandOptions): string {
 
   const curlFlags = isLocal ? "-kfsSL" : "-fsSL";
   return `curl ${curlFlags} ${tunnelScript} | APP_HOST=${host} APP_NAME=${name}${thumbEnv} RELAYS="${relayList}" sh`;
+}
+
+function createTunnelTerminal(): vscode.Terminal {
+  if (os.platform() !== "win32") {
+    return vscode.window.createTerminal("Portal Tunnel");
+  }
+
+  // Force PowerShell on Windows so command syntax is consistent even if the
+  // user's default profile is cmd/WSL/Git Bash.
+  return vscode.window.createTerminal({
+    name: "Portal Tunnel",
+    shellPath: "powershell.exe",
+  });
 }
 
 function isLocalhost(url: string): boolean {
