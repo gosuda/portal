@@ -130,7 +130,7 @@ function buildCommand(opts: TunnelCommandOptions): string {
     const thumbEnvWin = thumbnail ? ` $env:APP_THUMBNAIL="${thumbnail}";` : "";
     return (
       `$ProgressPreference = 'SilentlyContinue'; ` +
-      `$env:HOST="${host}"; $env:NAME="${name}"; $env:RELAY_URL="${relayList}";${thumbEnvWin} ` +
+      `$env:APP_HOST="${host}"; $env:APP_NAME="${name}"; $env:RELAYS="${relayList}";${thumbEnvWin} ` +
       `irm ${tunnelScript}?os=windows | iex`
     );
   }
