@@ -144,8 +144,7 @@ function createTunnelTerminal(): vscode.Terminal {
     return vscode.window.createTerminal("Portal Tunnel");
   }
 
-  // Force PowerShell on Windows so command syntax is consistent even if the
-  // user's default profile is cmd/WSL/Git Bash.
+  // Use PowerShell on Windows for non-PowerShell terminal profiles (Git Bash, WSL, etc.).
   return vscode.window.createTerminal({
     name: "Portal Tunnel",
     shellPath: "powershell.exe",
