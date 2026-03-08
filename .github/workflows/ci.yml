@@ -32,9 +32,7 @@ jobs:
         run: go mod download
 
       - name: Install CI tools
-        run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.1
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+        run: make install
 
       - name: Run checks
         run: |
