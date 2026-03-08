@@ -6,7 +6,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -150,9 +149,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             <Terminal className="w-5 h-5" />
             Tunnel Setup Command
           </DialogTitle>
-          <DialogDescription>
-            Set options and copy the command.
-          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4 [&>div]:flex [&>div]:flex-col">
@@ -175,9 +171,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 className="rounded-l-none"
               />
             </div>
-            <p className="text-xs text-text-muted">
-              The hostname or IP:Port where your service is running
-            </p>
           </div>
 
           {/* Name Input */}
@@ -199,9 +192,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 className="rounded-l-none"
               />
             </div>
-            <p className="text-xs text-text-muted">
-              A unique identifier for your tunnel
-            </p>
           </div>
 
           {/* Relay URLs Input */}
@@ -235,9 +225,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 className="min-w-[140px] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
             </div>
-            <p className="text-xs text-text-muted">
-              Press Enter to add. Multiple relay servers for redundancy.
-            </p>
           </div>
 
           <div className="space-y-2">
@@ -254,9 +241,6 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
               onChange={(e) => setThumbnailURL(e.target.value)}
               placeholder="https://cdn.example.com/thumb.png"
             />
-            <p className="text-xs text-text-muted">
-              Image URL passed to `portal-tunnel`.
-            </p>
             {normalizedThumbnailURL && (
               <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border border-input bg-background">
                 <img

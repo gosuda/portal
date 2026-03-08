@@ -26,7 +26,7 @@ const (
 	defaultDialTimeout         = 5 * time.Second
 	defaultRequestTimeout      = 15 * time.Second
 	defaultHandshakeTimeout    = 15 * time.Second
-	defaultLeaseTTL            = 2 * time.Minute
+	defaultLeaseTTL            = 30 * time.Second
 	defaultRenewBefore         = 30 * time.Second
 	defaultReadyTarget         = 1
 	defaultHTTPShutdownTimeout = 5 * time.Second

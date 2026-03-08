@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultLeaseTTL          = 2 * time.Minute
+	defaultLeaseTTL          = 30 * time.Second
 	defaultClaimTimeout      = 10 * time.Second
 	defaultIdleKeepalive     = 15 * time.Second
 	defaultReadyQueueLimit   = 8

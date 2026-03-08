@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -41,7 +40,7 @@ func main() {
 		defaultRelayURLs = "https://localhost:4017"
 	}
 
-	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Portal relay server API URLs (comma-separated, https only) [env: RELAYS]")
+	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Portal relay server API URLs (comma-separated; scheme omitted defaults to https) [env: RELAYS]")
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
@@ -63,64 +62,38 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	relayURLs, err := normalizeRelayURLs(flagRelayURLs)
-	if err != nil {
-		return err
-	}
-	if len(relayURLs) == 0 {
-		return errors.New("no relay URLs provided")
-	}
-
-	logger.Info().
-		Str("local", flagHost).
-		Int("relay_count", len(relayURLs)).
-		Strs("relays", relayURLs).
-		Msg("starting portal tunnel")
-
-	listenReq := sdk.ListenRequest{
-		Name: flagName,
-		Metadata: types.LeaseMetadata{
-			Description: flagDesc,
-			Tags:        sdk.SplitCSV(flagTags),
-			Owner:       flagOwner,
-			Thumbnail:   flagThumbnail,
-			Hide:        flagHide,
-		},
-	}
-
-	runtimes, err := startRelayRuntimes(ctx, relayURLs, listenReq)
+	exposure, err := sdk.Expose(ctx, sdk.SplitCSV(flagRelayURLs), flagName, types.LeaseMetadata{
+		Description: flagDesc,
+		Tags:        sdk.SplitCSV(flagTags),
+		Owner:       flagOwner,
+		Thumbnail:   flagThumbnail,
+		Hide:        flagHide,
+	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to start relays: %w", flagName, err)
 	}
+	if exposure == nil {
+		return errors.New("no relay URLs provided")
+	}
+	defer exposure.Close()
+
+	logger.Info().
+		Str("local", flagHost).
+		Msg("starting portal tunnel")
 
 	var connWG sync.WaitGroup
 	var connCount atomic.Int64
-	listeners := make([]net.Listener, 0, len(runtimes))
 
-	for _, runtime := range runtimes {
-		logger.Info().
-			Str("relay", runtime.relayURL).
-			Str("lease_id", runtime.listener.LeaseID()).
-			Strs("public_urls", runtime.listener.PublicURLs()).
-			Msg("relay tunnel ready")
-		listeners = append(listeners, runtime.listener)
-	}
-
-	relayListener, err := sdk.MergeListeners(listeners...)
-	if err != nil {
-		closeErr := closeRelayRuntimes(runtimes)
-		return errors.Join(fmt.Errorf("merge relay listeners: %w", err), closeErr)
-	}
 	go func() {
 		<-ctx.Done()
-		_ = relayListener.Close()
+		_ = exposure.Close()
 	}()
 
-	waitErr := proxyRelayConnections(ctx, relayListener, flagHost, &connWG, &connCount)
+	waitErr := proxyRelayConnections(ctx, exposure, flagHost, &connWG, &connCount)
 	if waitErr != nil {
 		stop()
 	}
-	closeErr := errors.Join(relayListener.Close(), closeRelayRuntimes(runtimes))
+	closeErr := exposure.Close()
 	if waitErr != nil {
 		logger.Error().Err(waitErr).Msg("relay supervisor exited with error")
 	}

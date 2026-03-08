@@ -45,7 +45,7 @@ async function startTunnel() {
   if (tunnelTerminal) {
     tunnelTerminal.dispose();
   }
-  tunnelTerminal = vscode.window.createTerminal("Portal Tunnel");
+  tunnelTerminal = createTunnelTerminal();
   tunnelTerminal.show();
   tunnelTerminal.sendText(command);
 }
@@ -130,13 +130,25 @@ function buildCommand(opts: TunnelCommandOptions): string {
     const thumbEnvWin = thumbnail ? ` $env:APP_THUMBNAIL="${thumbnail}";` : "";
     return (
       `$ProgressPreference = 'SilentlyContinue'; ` +
-      `$env:HOST="${host}"; $env:NAME="${name}"; $env:RELAY_URL="${relayList}";${thumbEnvWin} ` +
+      `$env:APP_HOST="${host}"; $env:APP_NAME="${name}"; $env:RELAYS="${relayList}";${thumbEnvWin} ` +
       `irm ${tunnelScript}?os=windows | iex`
     );
   }
 
   const curlFlags = isLocal ? "-kfsSL" : "-fsSL";
   return `curl ${curlFlags} ${tunnelScript} | APP_HOST=${host} APP_NAME=${name}${thumbEnv} RELAYS="${relayList}" sh`;
+}
+
+function createTunnelTerminal(): vscode.Terminal {
+  if (os.platform() !== "win32") {
+    return vscode.window.createTerminal("Portal Tunnel");
+  }
+
+  // Use PowerShell on Windows for non-PowerShell terminal profiles (Git Bash, WSL, etc.).
+  return vscode.window.createTerminal({
+    name: "Portal Tunnel",
+    shellPath: "powershell.exe",
+  });
 }
 
 function isLocalhost(url: string): boolean {
