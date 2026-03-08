@@ -17,22 +17,22 @@ import (
 )
 
 var (
-	flagServerURL string
-	flagAddr      string
-	flagName      string
-	flagDesc      string
-	flagTags      string
-	flagOwner     string
-	flagHide      bool
-	flagThumbnail string
+	flagServerURLs string
+	flagAddr       string
+	flagName       string
+	flagDesc       string
+	flagTags       string
+	flagOwner      string
+	flagHide       bool
+	flagThumbnail  string
 )
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "demo-app").Logger()
 
-	flag.StringVar(&flagServerURL, "server-url", "https://localhost:4017", "relay API URL (https only)")
-	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (disable if empty)")
+	flag.StringVar(&flagServerURLs, "server-urls", "https://localhost:4017", "relay API URLs (comma-separated; scheme omitted defaults to https)")
+	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
 	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
@@ -53,34 +53,26 @@ func runDemo() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	sdkClient, err := sdk.NewClient(flagServerURL)
-	if err != nil {
-		return fmt.Errorf("new client: %w", err)
-	}
-	defer sdkClient.Close()
-
-	listener, err := sdkClient.Listen(ctx, sdk.ListenRequest{
-		Name: flagName,
-		Metadata: types.LeaseMetadata{
-			Description: flagDesc,
-			Tags:        sdk.SplitCSV(flagTags),
-			Owner:       flagOwner,
-			Thumbnail:   flagThumbnail,
-			Hide:        flagHide,
-		},
+	exposure, err := sdk.Expose(ctx, sdk.SplitCSV(flagServerURLs), flagName, types.LeaseMetadata{
+		Description: flagDesc,
+		Tags:        sdk.SplitCSV(flagTags),
+		Owner:       flagOwner,
+		Thumbnail:   flagThumbnail,
+		Hide:        flagHide,
 	})
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("exposure listen error: %w", err)
 	}
-	defer listener.Close()
+	defer exposure.Close()
+	if exposure == nil {
+		logger.Info().Msg("demo app running without relay")
+	}
 
-	logger.Info().
-		Str("relay", flagServerURL).
-		Str("lease_id", listener.LeaseID()).
-		Strs("public_urls", listener.PublicURLs()).
-		Str("local_addr", flagAddr).
-		Msg("demo app registered with relay")
-	if err := sdk.RunHTTP(ctx, listener, newHandler(), flagAddr); err != nil {
+	flagAddr, err := sdk.NormalizeTargetAddr(flagAddr)
+	if err != nil {
+		return fmt.Errorf("invalid --addr value %q: %w", flagAddr, err)
+	}
+	if err := exposure.RunHTTP(ctx, newHandler(), flagAddr); err != nil {
 		return err
 	}
 

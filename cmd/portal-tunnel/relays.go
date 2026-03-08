@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,53 +14,6 @@ import (
 
 	"github.com/gosuda/portal/v2/sdk"
 )
-
-type relayRuntime struct {
-	client   *sdk.Client
-	listener *sdk.Listener
-	relayURL string
-}
-
-func startRelayRuntimes(ctx context.Context, relayURLs []string, req sdk.ListenRequest) ([]*relayRuntime, error) {
-	runtimes := make([]*relayRuntime, 0, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		client, err := sdk.NewClient(relayURL)
-		if err != nil {
-			_ = closeRelayRuntimes(runtimes)
-			return nil, fmt.Errorf("create relay client %s: %w", relayURL, err)
-		}
-
-		listener, err := client.Listen(ctx, req)
-		if err != nil {
-			client.Close()
-			_ = closeRelayRuntimes(runtimes)
-			return nil, fmt.Errorf("register relay lease %s: %w", relayURL, err)
-		}
-
-		runtimes = append(runtimes, &relayRuntime{
-			relayURL: relayURL,
-			client:   client,
-			listener: listener,
-		})
-	}
-	return runtimes, nil
-}
-
-func closeRelayRuntimes(runtimes []*relayRuntime) error {
-	var closeErr error
-	for _, runtime := range runtimes {
-		if runtime == nil {
-			continue
-		}
-		if runtime.listener != nil {
-			closeErr = errors.Join(closeErr, runtime.listener.Close())
-		}
-		if runtime.client != nil {
-			runtime.client.Close()
-		}
-	}
-	return closeErr
-}
 
 func proxyRelayConnections(ctx context.Context, relayListener net.Listener, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
 	logger := log.With().Str("component", "portal-tunnel").Logger()
@@ -97,40 +48,6 @@ func proxyRelayConnections(ctx context.Context, relayListener net.Listener, loca
 	}
 }
 
-func normalizeRelayURLs(raw string) ([]string, error) {
-	seen := make(map[string]struct{})
-	var relayURLs []string
-	for _, relayURL := range sdk.SplitCSV(raw) {
-		normalized, err := normalizeRelayURL(relayURL)
-		if err != nil {
-			return nil, err
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		relayURLs = append(relayURLs, normalized)
-	}
-	return relayURLs, nil
-}
-
-func normalizeRelayURL(raw string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return "", fmt.Errorf("parse relay url: %w", err)
-	}
-	if !strings.EqualFold(u.Scheme, "https") {
-		return "", fmt.Errorf("relay url must use https: %q", raw)
-	}
-	if u.Host == "" {
-		return "", fmt.Errorf("relay url host is empty: %q", raw)
-	}
-	u.Path = strings.TrimRight(u.Path, "/")
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String(), nil
-}
-
 var bufferPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 64*1024)
@@ -141,7 +58,7 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	targetAddr, err := normalizeTargetAddr(localAddr)
+	targetAddr, err := sdk.NormalizeTargetAddr(localAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
 	}
@@ -214,45 +131,4 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 		"\r\n%s", len(htmlBody), htmlBody)
 	_, err := conn.Write([]byte(response))
 	return err
-}
-
-func normalizeTargetAddr(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", errors.New("target address is required")
-	}
-
-	if strings.Contains(raw, "://") {
-		targetURL, err := url.Parse(raw)
-		if err != nil {
-			return "", fmt.Errorf("parse target url: %w", err)
-		}
-		if !strings.EqualFold(targetURL.Scheme, "http") && !strings.EqualFold(targetURL.Scheme, "https") {
-			return "", fmt.Errorf("unsupported target url scheme %q", targetURL.Scheme)
-		}
-		if targetURL.Host == "" {
-			return "", errors.New("target url host is empty")
-		}
-		if targetURL.Path != "" && targetURL.Path != "/" {
-			return "", errors.New("target url path is not supported")
-		}
-		if targetURL.RawQuery != "" {
-			return "", errors.New("target url query is not supported")
-		}
-		if targetURL.Fragment != "" {
-			return "", errors.New("target url fragment is not supported")
-		}
-		raw = targetURL.Host
-	}
-
-	if _, _, err := net.SplitHostPort(raw); err == nil {
-		return raw, nil
-	}
-	if strings.Count(raw, ":") == 0 {
-		return net.JoinHostPort(raw, "80"), nil
-	}
-	if ip := net.ParseIP(raw); ip != nil {
-		return net.JoinHostPort(raw, "80"), nil
-	}
-	return "", fmt.Errorf("invalid target address %q", raw)
 }
