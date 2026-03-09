@@ -165,9 +165,90 @@ If your proxy source addresses are public or you want a stricter allowlist, also
 docker compose up
 ```
 
-## 5. Troubleshooting
+## 5. Auto-Update
 
-### 5.1 Ports blocked
+Automatically redeploy when a new `ghcr.io/gosuda/portal:latest` image is pushed.
+
+### 5.1 Deploy script
+
+Create `deploy_portal.sh` in your project directory:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+docker compose pull
+docker compose up -d
+docker image prune -f
+```
+
+### 5.2 Watcher script
+
+The repository includes `watch_and_deploy.sh`, which polls the remote image digest and runs the deploy script on change.
+
+Environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `INTERVAL` | `60` | Poll interval in seconds |
+| `DEPLOY_SCRIPT` | `deploy_portal.sh` | Path to deploy script |
+| `DIGEST_FILE` | `.portal_image_digest` | File storing the last known digest |
+
+### 5.3 Register as systemd service
+
+Set `WorkingDirectory` and `ExecStart` to the directory where `watch_and_deploy.sh` and `deploy_portal.sh` are located:
+
+```bash
+sudo tee /etc/systemd/system/portal-watcher.service << 'EOF'
+[Unit]
+Description=Portal Docker Image Watcher
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=opc
+# Set to the directory containing watch_and_deploy.sh and deploy_portal.sh
+WorkingDirectory=<path-to-project>
+ExecStart=/bin/bash <path-to-project>/watch_and_deploy.sh
+Restart=always
+RestartSec=10
+Environment=INTERVAL=60
+Environment=DEPLOY_SCRIPT=deploy_portal.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now portal-watcher
+```
+
+Adjust `User` to match your environment. Ensure the user belongs to the `docker` group:
+
+```bash
+sudo usermod -aG docker opc
+```
+
+### 5.4 Verify and monitor
+
+```bash
+# Service status
+sudo systemctl status portal-watcher
+
+# Live logs
+sudo journalctl -u portal-watcher -f
+
+# Today's logs only
+sudo journalctl -u portal-watcher --since today
+```
+
+## 6. Troubleshooting
+
+### 6.1 Ports blocked
 
 Required inbound ports:
 
