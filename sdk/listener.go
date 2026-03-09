@@ -242,7 +242,8 @@ func (l *Listener) activate(conn net.Conn) error {
 	l.mu.Lock()
 	tlsCfg := l.tlsConfig
 	l.mu.Unlock()
-	tlsConn := tls.Server(conn, tlsCfg.Clone())
+	// Reuse the shared config so session ticket state survives across connections.
+	tlsConn := tls.Server(conn, tlsCfg)
 	handshakeCtx, cancel := context.WithTimeout(l.context(), l.client.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
