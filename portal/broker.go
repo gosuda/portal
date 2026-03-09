@@ -17,6 +17,7 @@ var (
 	errLeaseDropped = errors.New("lease dropped")
 	errLeaseStopped = errors.New("lease stopped")
 	errBrokerFull   = errors.New("broker ready queue full")
+	errNoSessions   = errors.New("no reverse sessions available")
 )
 
 type brokerState int
@@ -28,13 +29,14 @@ const (
 )
 
 type leaseBroker struct {
-	notify       chan struct{}
-	leaseID      string
-	ready        []*reverseSession
-	idleInterval time.Duration
-	readyLimit   int
-	state        brokerState
-	mu           sync.Mutex
+	notify        chan struct{}
+	leaseID       string
+	ready         []*reverseSession
+	idleInterval  time.Duration
+	readyLimit    int
+	totalSessions int
+	state         brokerState
+	mu            sync.Mutex
 }
 
 func newLeaseBroker(leaseID string, idleInterval time.Duration, readyLimit int) *leaseBroker {
@@ -67,6 +69,7 @@ func (b *leaseBroker) Offer(session *reverseSession) error {
 
 	session.StartIdle()
 	b.ready = append(b.ready, session)
+	b.totalSessions++
 	b.signalLocked()
 	go b.watchSession(session)
 	return nil
@@ -97,6 +100,10 @@ func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
 				continue
 			}
 			return session, nil
+		}
+		if b.totalSessions == 0 {
+			b.mu.Unlock()
+			return nil, errNoSessions
 		}
 		b.mu.Unlock()
 
@@ -154,11 +161,13 @@ func (b *leaseBroker) watchSession(session *reverseSession) {
 			break
 		}
 	}
+	b.totalSessions--
 	log.Info().
 		Str("component", "relay-server").
 		Str("lease_id", b.leaseID).
 		Str("remote_addr", session.RemoteAddr()).
 		Int("ready", len(b.ready)).
+		Int("total_sessions", b.totalSessions).
 		Msg("sdk reverse disconnected")
 	b.signalLocked()
 }

@@ -234,6 +234,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		baseContext:  func() context.Context { return listenerCtx },
 		ctxDone:      listenerCtx.Done(),
 		cancel:       cancel,
+		name:         strings.TrimSpace(req.Name),
 		leaseID:      registerResp.LeaseID,
 		hostnames:    registerResp.Hostnames,
 		metadata:     registerResp.Metadata,
@@ -296,6 +297,14 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 		return nil
 	}
 	return json.Unmarshal(envelope.Data, out)
+}
+
+func (c *Client) registerLease(ctx context.Context, req types.RegisterRequest) (types.RegisterResponse, error) {
+	var resp types.RegisterResponse
+	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, req, &resp); err != nil {
+		return types.RegisterResponse{}, err
+	}
+	return resp, nil
 }
 
 func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
