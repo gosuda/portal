@@ -586,7 +586,11 @@ func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
 
 func (s *Server) findLeaseByHostnameLocked(host string) *leaseRecord {
 	host = normalizeHostname(host)
+	now := time.Now()
 	for _, lease := range s.leases {
+		if now.After(lease.ExpiresAt) {
+			continue
+		}
 		for _, candidate := range lease.Hostnames {
 			if normalizeHostname(candidate) == host {
 				return lease
@@ -663,6 +667,7 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 	}
 
 	bridgeConns(wrappedConn, session.Conn())
+	_ = session.Close()
 }
 
 func (s *Server) bridgeToFallback(conn net.Conn) {
