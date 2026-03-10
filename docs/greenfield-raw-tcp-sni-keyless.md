@@ -129,26 +129,22 @@ If future work wants tenant HTTP/2, it must first remove cross-tenant certificat
 ```text
 LeaseBroker
   lease_id
-  state: active | dropped | stopped
+  state: open | closed
   ready queue: bounded FIFO of idle reverse sessions
-  metrics: ready_count, claimed_count, dropped_count, last_claim_at
+  metrics: ready_count, claim_wait_duration
 ```
 
 ### LeaseBroker API
 
 - `Offer(session) error`
 - `Claim(ctx) (*ReverseSession, error)`
-- `Drop()`
-- `Reset()`
-- `Stop()`
+- `Close()`
 
 ### Rules
 
-- `Offer` rejects immediately if broker is dropped or stopped
+- `Offer` rejects immediately if broker is closed
 - `Claim` blocks until a valid idle session is available or timeout/cancel fires
-- `Drop` drains ready queue and closes all idle sessions
-- `Reset` reopens a dropped lease after successful re-registration
-- `Stop` is terminal and used only for process shutdown
+- `Close` drains the ready queue, closes all idle sessions, and wakes blocked claimers
 
 No separate global `dropped` map exists outside the broker.
 
@@ -324,9 +320,9 @@ Transient:
 
 ### SDK Agent Rules
 
-- Fatal rejection closes the current listener
-- Recovery creates a fresh listener; the SDK does not reactivate a failed listener in place
-- Transient failure retries with bounded backoff inside one listener lifecycle
+- Fatal rejection pauses the agent
+- Successful renew/register clears pause
+- Transient failure retries with bounded backoff
 
 ## Backpressure
 
@@ -356,8 +352,7 @@ Required structured logs:
 - bridge started
 - bridge ended
 - session evicted
-- lease dropped
-- lease reset
+- broker closed
 - fatal agent pause
 
 Core metrics:

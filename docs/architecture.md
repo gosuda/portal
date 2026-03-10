@@ -54,10 +54,10 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `Listener`: validates one relay URL, registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections; listener failure is terminal and callers create a new listener instead of reactivating the old one
+- `Listener`: validates one relay URL, registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections
 - `relayclient.go`: internal relay transport helper for control-plane requests and reverse session dialing
 - Default app flow is `RelayURL -> NewListener -> PublicURLs -> http.Server.Serve(listener)` or `RelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`
-- `expose.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
+- `expose.go`: optional `RunHTTP` helper for serving one handler on both a local HTTP port and the relay listener
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
 
@@ -77,8 +77,8 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease broker ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A browser connects to the relay SNI listener.
-6. Relay extracts SNI from ClientHello, resolves a lease, and claims one ready reverse session.
-7. Relay writes `0x02` to activate that session.
+6. Relay extracts SNI from ClientHello, resolves a lease, and waits up to `ClaimTimeout` for one reverse session from that lease broker.
+7. Relay writes `0x02` to activate the claimed session.
 8. SDK/tunnel receives `0x02`, starts tenant TLS locally using the relay-backed keyless signer, and the relay bridges raw encrypted bytes end-to-end.
 
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
@@ -94,8 +94,9 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
   - `reverse_token`
   - optional `hostnames`
   - optional `metadata`
-  - optional `ttl_seconds`
+  - optional `ttl`
 - If no hostname is supplied, relay derives one from `name + root host`
+- Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
 ### 2. Reverse Connect
@@ -113,7 +114,6 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - `POST /sdk/renew`
 - Requires `lease_id` + `reverse_token`
 - Extends lease TTL
-- Resets a previously dropped broker back to active
 
 ### 4. Unregister
 

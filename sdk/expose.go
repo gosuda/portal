@@ -83,7 +83,8 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	logger.Info().
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
-		Msg("exposure starting")
+		Strs("public_urls", exposure.PublicURLs()).
+		Msg("exposure ready")
 
 	return exposure, nil
 }
@@ -155,7 +156,7 @@ func (e *Exposure) PublicURLs() []string {
 		if relay.listener == nil {
 			continue
 		}
-		for _, rawURL := range relay.listener.publicURLs() {
+		for _, rawURL := range relay.listener.PublicURLs() {
 			if _, ok := seen[rawURL]; ok {
 				continue
 			}

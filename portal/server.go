@@ -189,7 +189,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		s.mu.Lock()
 		for _, lease := range s.leases {
-			lease.Broker.Stop()
+			lease.Broker.Close()
 		}
 		s.mu.Unlock()
 
@@ -535,7 +535,6 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 		record.ClientIP = clientIP
 		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
 	}
-	record.Broker.Reset()
 	return types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
 }
 
@@ -555,7 +554,7 @@ func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 
 	s.routes.DeleteLease(record.Hostnames)
 	s.cfg.Policy.ForgetLease(record.ID)
-	record.Broker.Drop()
+	record.Broker.Close()
 	return nil
 }
 
@@ -708,7 +707,7 @@ func (s *Server) cleanupExpiredLeases() {
 	for _, lease := range expired {
 		s.routes.DeleteLease(lease.Hostnames)
 		s.cfg.Policy.ForgetLease(lease.ID)
-		lease.Broker.Drop()
+		lease.Broker.Close()
 	}
 }
 

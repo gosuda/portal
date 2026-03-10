@@ -33,17 +33,17 @@ const (
 )
 
 type relayClient struct {
-	baseURL            *url.URL
-	httpClient         *http.Client
-	rawTLSConfig       *tls.Config
-	dialTimeout        time.Duration
-	name               string
-	requestedHostnames []string
-	reverseToken       string
-	metadata           types.LeaseMetadata
+	baseURL      *url.URL
+	httpClient   *http.Client
+	rawTLSConfig *tls.Config
+	dialTimeout  time.Duration
+	name         string
+	hostnames    []string
+	reverseToken string
+	metadata     types.LeaseMetadata
 }
 
-func newRelayClient(relayURL string, cfg ListenerConfig) (*relayClient, error) {
+func newRelayClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*relayClient, error) {
 	name := strings.TrimSpace(cfg.Name)
 	if name == "" {
 		return nil, errors.New("listener name is required")
@@ -70,7 +70,11 @@ func newRelayClient(relayURL string, cfg ListenerConfig) (*relayClient, error) {
 
 	rootCAPEM := append([]byte(nil), cfg.RootCAPEM...)
 	if len(rootCAPEM) == 0 && isLocalRelayHost(baseURL.Hostname()) {
-		bootstrapCtx, cancel := context.WithTimeout(context.Background(), defaultDialTimeout+defaultHandshakeTimeout)
+		bootstrapParent := ctx
+		if bootstrapParent == nil {
+			bootstrapParent = context.Background()
+		}
+		bootstrapCtx, cancel := context.WithTimeout(bootstrapParent, defaultDialTimeout+defaultHandshakeTimeout)
 		defer cancel()
 
 		_, resolvedCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
@@ -83,6 +87,15 @@ func newRelayClient(relayURL string, cfg ListenerConfig) (*relayClient, error) {
 	rootCAs, err := buildRootCAs(rootCAPEM)
 	if err != nil {
 		return nil, err
+	}
+
+	dialTimeout := cfg.DialTimeout
+	if dialTimeout <= 0 {
+		dialTimeout = defaultDialTimeout
+	}
+	requestTimeout := cfg.RequestTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = defaultRequestTimeout
 	}
 
 	baseTLS := &tls.Config{
@@ -98,24 +111,20 @@ func newRelayClient(relayURL string, cfg ListenerConfig) (*relayClient, error) {
 	}
 
 	api := &relayClient{
-		baseURL:            baseURL,
-		httpClient:         &http.Client{Transport: transport, Timeout: defaultRequestTimeout},
-		rawTLSConfig:       baseTLS,
-		dialTimeout:        defaultDialTimeout,
-		name:               name,
-		requestedHostnames: append([]string(nil), cfg.Hostnames...),
-		reverseToken:       reverseToken,
-		metadata:           cloneMetadata(cfg.Metadata),
+		baseURL:      baseURL,
+		httpClient:   &http.Client{Transport: transport, Timeout: requestTimeout},
+		rawTLSConfig: baseTLS,
+		dialTimeout:  dialTimeout,
+		name:         name,
+		hostnames:    append([]string(nil), cfg.Hostnames...),
+		reverseToken: reverseToken,
+		metadata:     cloneMetadata(cfg.Metadata),
 	}
 
-	checkCtx, cancel := context.WithTimeout(context.Background(), defaultRequestTimeout)
-	defer cancel()
-
-	if err := api.ensureCompatible(checkCtx); err != nil {
+	if err := api.ensureCompatible(ctx); err != nil {
 		api.close()
 		return nil, err
 	}
-
 	return api, nil
 }
 
@@ -130,7 +139,7 @@ func (a *relayClient) close() {
 
 func (a *relayClient) registerLease(ctx context.Context, hostnames []string, ttl time.Duration) (types.RegisterResponse, error) {
 	if len(hostnames) == 0 {
-		hostnames = a.requestedHostnames
+		hostnames = a.hostnames
 	}
 
 	var resp types.RegisterResponse
