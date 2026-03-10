@@ -248,7 +248,7 @@ All HTTP endpoints in this list are HTTP/1.1 only.
 
 ### Register
 
-- Requires `lease_id`, `name`, `reverse_token`, `tls=true`
+- Requires `name` and `reverse_token`
 - Creates or resets lease broker
 - Registers route in `RouteTable`
 
@@ -324,9 +324,9 @@ Transient:
 
 ### SDK Agent Rules
 
-- Fatal rejection pauses the agent
-- Successful renew/register clears pause
-- Transient failure retries with bounded backoff
+- Fatal rejection closes the current listener
+- Recovery creates a fresh listener; the SDK does not reactivate a failed listener in place
+- Transient failure retries with bounded backoff inside one listener lifecycle
 
 ## Backpressure
 

@@ -54,23 +54,23 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `RelayClient`: validates one or more relay URLs and owns per-relay HTTP client and raw TLS dial config
-- `Listener`: registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections through one aggregate listener surface
-- Default app flow is `RelayURLs -> NewRelayClient -> Listener -> PublicURLs -> http.Server.Serve(listener)`
-- `helper.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
+- `Listener`: validates one relay URL, registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections; listener failure is terminal and callers create a new listener instead of reactivating the old one
+- `relayclient.go`: internal relay transport helper for control-plane requests and reverse session dialing
+- Default app flow is `RelayURL -> NewListener -> PublicURLs -> http.Server.Serve(listener)` or `RelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`
+- `expose.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
 
 ### Tunnel (`cmd/portal-tunnel`)
 
-- Creates one SDK client, registers one lease per relay through the SDK, and consumes one aggregate listener
+- Creates one SDK listener per relay through the SDK and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
 - Proxies raw TCP to a local `--host`
 - Returns an HTTP 503 response when the local target is unavailable
 
 ## Transport Model
 
-### Raw reverse transport (`TLS=true` only)
+### Raw reverse transport (TLS only)
 
 1. SDK/tunnel registers one lease per relay with `POST /sdk/register`.
 2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?lease_id=...`.
@@ -92,7 +92,6 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - Caller provides:
   - `name`
   - `reverse_token`
-  - `tls=true`
   - optional `hostnames`
   - optional `metadata`
   - optional `ttl_seconds`

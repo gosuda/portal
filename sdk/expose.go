@@ -45,39 +45,21 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 			if relay.listener != nil {
 				closeErr = errors.Join(closeErr, relay.listener.Close())
 			}
-			if relay.client != nil {
-				relay.client.Close()
-			}
 		}
 		return closeErr
 	}
 
 	for _, relayURL := range relayURLs {
-		client, err := NewRelayClient(relayURL)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("new client %q: %w", relayURL, err), cleanup())
-		}
-
-		listener, err := NewListener(ctx, ListenRequest{
+		listener, err := NewListener(ctx, relayURL, ListenerConfig{
 			Name:     name,
 			Metadata: metadata,
-		}, listenerOptions{
-			client:             client,
-			handshakeTimeout:   client.handshakeTimeout,
-			renewBefore:        client.renewBefore,
-			retryCount:         defaultListenerRetryCount,
-			retryDelay:         defaultListenerRetryDelay,
-			defaultLeaseTTL:    client.leaseTTL,
-			defaultReadyTarget: client.readyTarget,
 		})
 		if err != nil {
-			client.Close()
 			return nil, errors.Join(fmt.Errorf("listen %q: %w", relayURL, err), cleanup())
 		}
 
 		relays = append(relays, exposureRelay{
 			relayURL: relayURL,
-			client:   client,
 			listener: listener,
 		})
 	}
@@ -198,7 +180,7 @@ func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr 
 	return RunHTTP(ctx, relayListener, handler, localAddr)
 }
 
-// Close closes the merged listener and all underlying relay listeners and clients.
+// Close closes the merged listener and all underlying relay listeners.
 func (e *Exposure) Close() error {
 	if e == nil {
 		return nil
@@ -208,11 +190,6 @@ func (e *Exposure) Close() error {
 	e.closeOnce.Do(func() {
 		if e.listener != nil {
 			closeErr = errors.Join(closeErr, e.listener.Close())
-		}
-		for _, relay := range e.relays {
-			if relay.client != nil {
-				relay.client.Close()
-			}
 		}
 
 		logger := log.With().Str("component", "sdk-exposure").Logger()
@@ -338,7 +315,6 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 
 type exposureRelay struct {
 	relayURL string
-	client   *RelayClient
 	listener *Listener
 }
 

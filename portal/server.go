@@ -280,6 +280,7 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	writeAPIData(w, http.StatusOK, types.DomainResponse{
 		RootHost:          s.cfg.RootHost,
 		SuggestedHostname: suggestHostname(name, s.cfg.RootHost),
+		Version:           types.SDKProtocolVersion,
 	})
 }
 
@@ -452,9 +453,6 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if strings.TrimSpace(req.ReverseToken) == "" {
 		return types.RegisterResponse{}, errors.New("reverse token is required")
 	}
-	if !req.TLS {
-		return types.RegisterResponse{}, errors.New("tls must be true")
-	}
 	if s.isClientIPBanned(clientIP) {
 		return types.RegisterResponse{}, errIPBanned
 	}
@@ -474,8 +472,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	}
 
 	ttl := s.cfg.LeaseTTL
-	if req.TTLSeconds > 0 {
-		ttl = time.Duration(req.TTLSeconds) * time.Second
+	if req.TTL > 0 {
+		ttl = time.Duration(req.TTL) * time.Second
 	}
 
 	leaseID := randomID("lease_")
@@ -528,8 +526,8 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 	}
 
 	ttl := s.cfg.LeaseTTL
-	if req.TTLSeconds > 0 {
-		ttl = time.Duration(req.TTLSeconds) * time.Second
+	if req.TTL > 0 {
+		ttl = time.Duration(req.TTL) * time.Second
 	}
 	record.ExpiresAt = time.Now().Add(ttl)
 	record.LastSeenAt = time.Now()
