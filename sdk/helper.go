@@ -16,8 +16,8 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-// Exposure owns the lifecycle of one or more relay listeners plus their
-// clients and accepts traffic from all of them through one net.Listener.
+// Exposure owns the lifecycle of one or more relay listeners and accepts
+// traffic from all of them through one net.Listener.
 type Exposure struct {
 	listener net.Listener
 	relays   []exposureRelay
@@ -53,14 +53,22 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	}
 
 	for _, relayURL := range relayURLs {
-		client, err := NewClient(relayURL)
+		client, err := NewRelayClient(relayURL)
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("new client %q: %w", relayURL, err), cleanup())
 		}
 
-		listener, err := client.Listen(ctx, ListenRequest{
+		listener, err := NewListener(ctx, ListenRequest{
 			Name:     name,
 			Metadata: metadata,
+		}, listenerOptions{
+			client:             client,
+			handshakeTimeout:   client.handshakeTimeout,
+			renewBefore:        client.renewBefore,
+			retryCount:         defaultListenerRetryCount,
+			retryDelay:         defaultListenerRetryDelay,
+			defaultLeaseTTL:    client.leaseTTL,
+			defaultReadyTarget: client.readyTarget,
 		})
 		if err != nil {
 			client.Close()
@@ -68,10 +76,9 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 		}
 
 		relays = append(relays, exposureRelay{
-			relayURL:   relayURL,
-			publicURLs: append([]string(nil), listener.PublicURLs()...),
-			client:     client,
-			listener:   listener,
+			relayURL: relayURL,
+			client:   client,
+			listener: listener,
 		})
 	}
 
@@ -94,8 +101,7 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	logger.Info().
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
-		Strs("public_urls", exposure.PublicURLs()).
-		Msg("exposure ready")
+		Msg("exposure starting")
 
 	return exposure, nil
 }
@@ -164,7 +170,10 @@ func (e *Exposure) PublicURLs() []string {
 	out := make([]string, 0, len(e.relays))
 	seen := make(map[string]struct{})
 	for _, relay := range e.relays {
-		for _, rawURL := range relay.publicURLs {
+		if relay.listener == nil {
+			continue
+		}
+		for _, rawURL := range relay.listener.publicURLs() {
 			if _, ok := seen[rawURL]; ok {
 				continue
 			}
@@ -189,7 +198,7 @@ func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr 
 	return RunHTTP(ctx, relayListener, handler, localAddr)
 }
 
-// Close closes the merged listener and all underlying SDK clients.
+// Close closes the merged listener and all underlying relay listeners and clients.
 func (e *Exposure) Close() error {
 	if e == nil {
 		return nil
@@ -328,10 +337,9 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 }
 
 type exposureRelay struct {
-	relayURL   string
-	publicURLs []string
-	client     *Client
-	listener   *Listener
+	relayURL string
+	client   *RelayClient
+	listener *Listener
 }
 
 type exposureConn struct {

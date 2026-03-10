@@ -32,70 +32,70 @@ const (
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
-type ClientOption func(*Client)
+type RelayClientOption func(*RelayClient)
 
-func WithRootCAPEM(rootCAPEM []byte) ClientOption {
+func WithRootCAPEM(rootCAPEM []byte) RelayClientOption {
 	rootCAPEM = append([]byte(nil), rootCAPEM...)
-	return func(client *Client) {
+	return func(client *RelayClient) {
 		client.rootCAPEM = append([]byte(nil), rootCAPEM...)
 	}
 }
 
-func WithInsecureSkipVerify(skip bool) ClientOption {
-	return func(client *Client) {
+func WithInsecureSkipVerify(skip bool) RelayClientOption {
+	return func(client *RelayClient) {
 		client.insecureSkipVerify = skip
 	}
 }
 
-func WithDialTimeout(timeout time.Duration) ClientOption {
-	return func(client *Client) {
+func WithDialTimeout(timeout time.Duration) RelayClientOption {
+	return func(client *RelayClient) {
 		if timeout > 0 {
 			client.dialTimeout = timeout
 		}
 	}
 }
 
-func WithRequestTimeout(timeout time.Duration) ClientOption {
-	return func(client *Client) {
+func WithRequestTimeout(timeout time.Duration) RelayClientOption {
+	return func(client *RelayClient) {
 		if timeout > 0 {
 			client.requestTimeout = timeout
 		}
 	}
 }
 
-func WithHandshakeTimeout(timeout time.Duration) ClientOption {
-	return func(client *Client) {
+func WithHandshakeTimeout(timeout time.Duration) RelayClientOption {
+	return func(client *RelayClient) {
 		if timeout > 0 {
 			client.handshakeTimeout = timeout
 		}
 	}
 }
 
-func WithLeaseTTL(ttl time.Duration) ClientOption {
-	return func(client *Client) {
+func WithLeaseTTL(ttl time.Duration) RelayClientOption {
+	return func(client *RelayClient) {
 		if ttl > 0 {
 			client.leaseTTL = ttl
 		}
 	}
 }
 
-func WithRenewBefore(d time.Duration) ClientOption {
-	return func(client *Client) {
+func WithRenewBefore(d time.Duration) RelayClientOption {
+	return func(client *RelayClient) {
 		if d > 0 {
 			client.renewBefore = d
 		}
 	}
 }
 
-func WithReadyTarget(n int) ClientOption {
-	return func(client *Client) {
+func WithReadyTarget(n int) RelayClientOption {
+	return func(client *RelayClient) {
 		if n > 0 {
 			client.readyTarget = n
 		}
 	}
 }
 
-type Client struct {
+type RelayClient struct {
 	baseURL            *url.URL
 	httpClient         *http.Client
 	rawTLSConfig       *tls.Config
@@ -109,7 +109,7 @@ type Client struct {
 	readyTarget        int
 }
 
-func NewClient(relayURL string, options ...ClientOption) (*Client, error) {
+func NewRelayClient(relayURL string, options ...RelayClientOption) (*RelayClient, error) {
 	baseURL, err := url.Parse(strings.TrimSpace(relayURL))
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
@@ -124,7 +124,7 @@ func NewClient(relayURL string, options ...ClientOption) (*Client, error) {
 	baseURL.RawQuery = ""
 	baseURL.Fragment = ""
 
-	client := &Client{
+	client := &RelayClient{
 		baseURL:          baseURL,
 		dialTimeout:      defaultDialTimeout,
 		requestTimeout:   defaultRequestTimeout,
@@ -176,7 +176,7 @@ func NewClient(relayURL string, options ...ClientOption) (*Client, error) {
 	return client, nil
 }
 
-func (c *Client) Close() {
+func (c *RelayClient) Close() {
 	if c == nil || c.httpClient == nil {
 		return
 	}
@@ -184,76 +184,7 @@ func (c *Client) Close() {
 		transport.CloseIdleConnections()
 	}
 }
-
-func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, error) {
-	if strings.TrimSpace(req.Name) == "" {
-		return nil, errors.New("listener name is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	reverseToken := strings.TrimSpace(req.ReverseToken)
-	if reverseToken == "" {
-		reverseToken = randomToken()
-	}
-
-	readyTarget := req.ReadyTarget
-	if readyTarget <= 0 {
-		readyTarget = c.readyTarget
-	}
-	leaseTTL := req.LeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = c.leaseTTL
-	}
-	acceptedCap := max(readyTarget*2, 1)
-
-	registerReq := types.RegisterRequest{
-		Name:         req.Name,
-		Hostnames:    req.Hostnames,
-		Metadata:     req.Metadata,
-		ReverseToken: reverseToken,
-		TLS:          true,
-		TTLSeconds:   int(leaseTTL / time.Second),
-	}
-
-	var registerResp types.RegisterResponse
-	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
-		return nil, err
-	}
-
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(c.baseURL.String(), registerResp.Hostnames)
-	if err != nil {
-		_ = c.unregisterLease(context.Background(), registerResp.LeaseID, reverseToken)
-		return nil, err
-	}
-
-	listenerCtx, cancel := context.WithCancel(ctx)
-	listener := &Listener{
-		client:       c,
-		baseContext:  func() context.Context { return listenerCtx },
-		ctxDone:      listenerCtx.Done(),
-		cancel:       cancel,
-		name:         strings.TrimSpace(req.Name),
-		leaseID:      registerResp.LeaseID,
-		hostnames:    registerResp.Hostnames,
-		metadata:     registerResp.Metadata,
-		reverseToken: reverseToken,
-		leaseTTL:     leaseTTL,
-		readyTarget:  readyTarget,
-		tlsConfig:    tlsConf,
-		tlsCloser:    tlsCloser,
-		accepted:     make(chan net.Conn, acceptedCap),
-		signal:       make(chan struct{}, 1),
-	}
-
-	go listener.runSupervisor()
-	go listener.runRenewLoop()
-	listener.notify()
-	return listener, nil
-}
-
-func (c *Client) doJSON(ctx context.Context, method, path string, payload any, out any) error {
+func (c *RelayClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
 	var body io.Reader
 	if payload != nil {
 		buf, err := json.Marshal(payload)
@@ -299,7 +230,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 	return json.Unmarshal(envelope.Data, out)
 }
 
-func (c *Client) registerLease(ctx context.Context, req types.RegisterRequest) (types.RegisterResponse, error) {
+func (c *RelayClient) registerLease(ctx context.Context, req types.RegisterRequest) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
 	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, req, &resp); err != nil {
 		return types.RegisterResponse{}, err
@@ -307,7 +238,7 @@ func (c *Client) registerLease(ctx context.Context, req types.RegisterRequest) (
 	return resp, nil
 }
 
-func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
+func (c *RelayClient) renewLease(ctx context.Context, leaseID, reverseToken string, ttl time.Duration) error {
 	return c.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
@@ -315,14 +246,14 @@ func (c *Client) renewLease(ctx context.Context, leaseID, reverseToken string, t
 	}, &types.RenewResponse{})
 }
 
-func (c *Client) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
+func (c *RelayClient) unregisterLease(ctx context.Context, leaseID, reverseToken string) error {
 	return c.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:      leaseID,
 		ReverseToken: reverseToken,
 	}, nil)
 }
 
-func (c *Client) openReverseSession(ctx context.Context, leaseID, reverseToken string) (net.Conn, error) {
+func (c *RelayClient) openReverseSession(ctx context.Context, leaseID, reverseToken string) (net.Conn, error) {
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: c.dialTimeout},
 		Config:    c.rawTLSConfig.Clone(),

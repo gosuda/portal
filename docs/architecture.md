@@ -54,9 +54,9 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `Client`: validates one or more relay URLs and owns per-relay HTTP client and raw TLS dial config
+- `RelayClient`: validates one or more relay URLs and owns per-relay HTTP client and raw TLS dial config
 - `Listener`: registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections through one aggregate listener surface
-- Default app flow is `RelayURLs -> NewClient -> Listen -> PublicURLs -> http.Server.Serve(listener)`
+- Default app flow is `RelayURLs -> NewRelayClient -> Listener -> PublicURLs -> http.Server.Serve(listener)`
 - `helper.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path

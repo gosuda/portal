@@ -15,7 +15,7 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
+func TestNewRelayClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -23,9 +23,9 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewClient(server.URL)
+	client, err := NewRelayClient(server.URL)
 	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
+		t.Fatalf("NewRelayClient() error = %v", err)
 	}
 	defer client.Close()
 
@@ -40,7 +40,7 @@ func TestNewClientAutoTrustsLocalhostRelayCertificate(t *testing.T) {
 	}
 }
 
-func TestNewClientAppliesOptions(t *testing.T) {
+func TestNewRelayClientAppliesOptions(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -52,7 +52,7 @@ func TestNewClientAppliesOptions(t *testing.T) {
 		Type:  "CERTIFICATE",
 		Bytes: server.Certificate().Raw,
 	})
-	client, err := NewClient(
+	client, err := NewRelayClient(
 		"https://relay.example.com/base/",
 		WithRootCAPEM(rootCAPEM),
 		WithInsecureSkipVerify(true),
@@ -64,7 +64,7 @@ func TestNewClientAppliesOptions(t *testing.T) {
 		WithReadyTarget(3),
 	)
 	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
+		t.Fatalf("NewRelayClient() error = %v", err)
 	}
 	defer client.Close()
 
@@ -147,7 +147,7 @@ func TestOpenReverseSessionPreservesAPIErrorCode(t *testing.T) {
 		t.Fatalf("server client transport type = %T, want *http.Transport", server.Client().Transport)
 	}
 
-	client := &Client{
+	client := &RelayClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Transport: transport.Clone(),

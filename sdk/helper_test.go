@@ -531,12 +531,18 @@ func TestExposureAccessorsReturnCopies(t *testing.T) {
 	exposure := &Exposure{
 		relays: []exposureRelay{
 			{
-				relayURL:   "https://relay-1.example.com",
-				publicURLs: []string{"https://app.example.com"},
+				relayURL: "https://relay-1.example.com",
+				listener: &Listener{
+					hostnames: []string{"app.example.com"},
+					state:     listenerStateReady,
+				},
 			},
 			{
-				relayURL:   "https://relay-2.example.com",
-				publicURLs: []string{"https://app.example.com"},
+				relayURL: "https://relay-2.example.com",
+				listener: &Listener{
+					hostnames: []string{"app.example.com"},
+					state:     listenerStateReady,
+				},
 			},
 		},
 	}
@@ -556,8 +562,8 @@ func TestExposureAccessorsReturnCopies(t *testing.T) {
 	if got, want := exposure.relays[0].relayURL, "https://relay-1.example.com"; got != want {
 		t.Fatalf("relays[0].relayURL = %q, want %q", got, want)
 	}
-	if got, want := exposure.relays[0].publicURLs, []string{"https://app.example.com"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("relays[0].publicURLs = %v, want %v", got, want)
+	if got, want := exposure.relays[0].listener.publicURLs(), []string{"https://app.example.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("relays[0].listener.publicURLs() = %v, want %v", got, want)
 	}
 }
 
