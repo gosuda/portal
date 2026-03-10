@@ -189,6 +189,65 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 	})
 }
 
+func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) {
+	t.Parallel()
+
+	var connectCount atomic.Int32
+	var unregisterCount atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					RootHost: "localhost",
+					Version:  types.SDKProtocolVersion,
+				},
+			})
+		case types.PathSDKRegister:
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					LeaseID:   "lease-1",
+					Hostnames: []string{"127.0.0.1"},
+				},
+			})
+		case types.PathSDKConnect:
+			connectCount.Add(1)
+			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
+				OK:    false,
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
+			})
+		case types.PathSDKUnregister:
+			unregisterCount.Add(1)
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
+		Name:       "demo",
+		RetryCount: 1,
+		RetryWait:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewListener() error = %v", err)
+	}
+	defer listener.Close()
+
+	waitForSDKTest(t, func() bool {
+		return listener.isClosed()
+	})
+	if connectCount.Load() < 2 {
+		t.Fatalf("connect count = %d, want at least 2", connectCount.Load())
+	}
+	if unregisterCount.Load() == 0 {
+		t.Fatal("expected listener to unregister lease after retry budget exhaustion")
+	}
+}
+
 func TestExposeFailsFastWhenAnyRelayCannotRegister(t *testing.T) {
 	t.Parallel()
 

@@ -28,27 +28,29 @@ type ListenerConfig struct {
 	LeaseTTL         time.Duration
 	RenewBefore      time.Duration
 	ReadyTarget      int
+	RetryCount       int
+	RetryWait        time.Duration
 }
 
 type Listener struct {
 	tlsCloser        io.Closer
 	tlsConfig        *tls.Config
 	readyTarget      int
+	retryCount       int
+	retryWait        time.Duration
 	leaseTTL         time.Duration
 	renewBefore      time.Duration
 	handshakeTimeout time.Duration
 	ctx              context.Context
 	cancel           context.CancelFunc
 	api              *relayClient
-	signal           chan struct{}
 	accepted         chan net.Conn
 	leaseID          string
 	hostnames        []string
 	metadata         types.LeaseMetadata
 
-	activeSessions int
-	closeOnce      sync.Once
-	mu             sync.Mutex
+	closeOnce sync.Once
+	mu        sync.Mutex
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -74,6 +76,10 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	if renewBefore <= 0 {
 		renewBefore = defaultRenewBefore
 	}
+	retryWait := cfg.RetryWait
+	if retryWait <= 0 {
+		retryWait = defaultRetryWait
+	}
 
 	api, err := newRelayClient(listenerCtx, relayURL, cfg)
 	if err != nil {
@@ -85,9 +91,10 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		ctx:              listenerCtx,
 		cancel:           cancel,
 		api:              api,
-		signal:           make(chan struct{}, 1),
 		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
 		readyTarget:      readyTarget,
+		retryCount:       cfg.RetryCount,
+		retryWait:        retryWait,
 		leaseTTL:         leaseTTL,
 		renewBefore:      renewBefore,
 		handshakeTimeout: handshakeTimeout,
@@ -124,9 +131,10 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	l.tlsCloser = tlsCloser
 	l.mu.Unlock()
 
-	go l.runSupervisor()
+	for i := 0; i < l.readyTarget; i++ {
+		go l.runSessionLoop()
+	}
 	go l.runRenewLoop()
-	l.notify()
 	return l, nil
 }
 
@@ -135,9 +143,6 @@ func (l *Listener) Accept() (net.Conn, error) {
 	case <-l.ctx.Done():
 		return nil, net.ErrClosed
 	case conn := <-l.accepted:
-		if conn == nil {
-			return nil, net.ErrClosed
-		}
 		return conn, nil
 	}
 }
@@ -156,7 +161,6 @@ func (l *Listener) Close() error {
 		l.leaseID = ""
 		l.tlsConfig = nil
 		l.tlsCloser = nil
-		l.activeSessions = 0
 		l.mu.Unlock()
 
 		l.drainAccepted()
@@ -180,7 +184,7 @@ func (l *Listener) Addr() net.Addr {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.leaseID == "" {
-		return listenerAddr("portal:pending")
+		return listenerAddr("portal:closed")
 	}
 	return listenerAddr("portal:" + l.leaseID)
 }
@@ -215,16 +219,25 @@ func (l *Listener) PublicURLs() []string {
 	return urls
 }
 
-func (l *Listener) runSupervisor() {
-	for {
-		select {
-		case <-l.ctx.Done():
-			return
-		case <-l.signal:
-		}
+func (l *Listener) runSessionLoop() {
+	var retries int
 
-		for l.reserveSessionSlot() {
-			go l.runSession()
+	for {
+		claimed, err := l.runSession()
+		switch {
+		case err == nil:
+			retries = 0
+		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+			return
+		case claimed:
+			// A claimed connection already reached the data plane.
+			// Do not spend retry budget on browser-side TLS failures or disconnects.
+			retries = 0
+		default:
+			retries++
+			if !l.retryOrClose("reverse session connect", err, retries) {
+				return
+			}
 		}
 	}
 }
@@ -241,65 +254,33 @@ func (l *Listener) runRenewLoop() {
 		interval = 30 * time.Second
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	var consecutiveFailures int
-
 	for {
-		select {
-		case <-l.ctx.Done():
+		sleepOrDone(l.context(), interval)
+		if l.isClosed() {
 			return
-		case <-ticker.C:
-			l.mu.Lock()
-			leaseID := l.leaseID
-			l.mu.Unlock()
+		}
 
-			ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
-			err := l.api.renewLease(ctx, leaseID, l.leaseTTL)
-			cancel()
-
-			if err != nil {
-				if isLeaseNotFound(err) {
-					log.Warn().
-						Str("component", "sdk-listener").
-						Str("lease_id", leaseID).
-						Msg("lease not found on relay, attempting re-registration")
-					if reregErr := l.reregister(); reregErr != nil {
-						log.Error().Err(reregErr).
-							Str("component", "sdk-listener").
-							Msg("lease re-registration failed")
-					} else {
-						consecutiveFailures = 0
-						log.Info().
-							Str("component", "sdk-listener").
-							Str("lease_id", l.LeaseID()).
-							Strs("hostnames", l.Hostnames()).
-							Msg("lease re-registered successfully")
-						continue
-					}
+		var retries int
+		for {
+			err := l.renewLease()
+			switch {
+			case err == nil:
+				goto nextRenew
+			case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+				return
+			default:
+				retries++
+				if !l.retryOrClose("lease renewal", err, retries) {
+					return
 				}
-
-				consecutiveFailures++
-				event := log.Warn()
-				if consecutiveFailures >= 3 {
-					event = log.Error()
-				}
-				event.Err(err).
-					Str("component", "sdk-listener").
-					Str("lease_id", l.LeaseID()).
-					Int("consecutive_failures", consecutiveFailures).
-					Msg("lease renewal failed")
-			} else {
-				consecutiveFailures = 0
 			}
 		}
+
+	nextRenew:
 	}
 }
 
-func (l *Listener) runSession() {
-	defer l.releaseSessionSlot()
-
+func (l *Listener) runSession() (bool, error) {
 	sessionCtx := l.context()
 	l.mu.Lock()
 	leaseID := l.leaseID
@@ -307,17 +288,15 @@ func (l *Listener) runSession() {
 
 	conn, err := l.api.openReverseSession(sessionCtx, leaseID)
 	if err != nil {
-		sleepOrDone(sessionCtx, time.Second)
-		return
+		return false, err
 	}
 
 	claimed, err := l.awaitActivation(conn)
 	if err != nil {
 		_ = conn.Close()
-		if !claimed && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
-			sleepOrDone(sessionCtx, time.Second)
-		}
+		return claimed, err
 	}
+	return claimed, nil
 }
 
 func (l *Listener) awaitActivation(conn net.Conn) (bool, error) {
@@ -364,6 +343,39 @@ func (l *Listener) activate(conn net.Conn) error {
 	}
 }
 
+func (l *Listener) renewLease() error {
+	l.mu.Lock()
+	leaseID := l.leaseID
+	l.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
+	err := l.api.renewLease(ctx, leaseID, l.leaseTTL)
+	cancel()
+	if err == nil {
+		return nil
+	}
+	if !isLeaseNotFound(err) {
+		return err
+	}
+
+	log.Warn().
+		Err(err).
+		Str("component", "sdk-listener").
+		Str("lease_id", leaseID).
+		Msg("lease not found on relay, attempting re-registration")
+
+	if err := l.reregister(); err != nil {
+		return err
+	}
+
+	log.Info().
+		Str("component", "sdk-listener").
+		Str("lease_id", l.LeaseID()).
+		Strs("hostnames", l.Hostnames()).
+		Msg("lease re-registered successfully")
+	return nil
+}
+
 func (l *Listener) reregister() error {
 	ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
 	defer cancel()
@@ -401,8 +413,6 @@ func (l *Listener) reregister() error {
 	if oldCloser != nil {
 		_ = oldCloser.Close()
 	}
-
-	l.notify()
 	return nil
 }
 
@@ -410,33 +420,35 @@ func isLeaseNotFound(err error) bool {
 	return errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound})
 }
 
-func (l *Listener) reserveSessionSlot() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+func (l *Listener) retryOrClose(operation string, err error, retries int) bool {
 	if l.isClosed() {
 		return false
 	}
-	if l.activeSessions >= l.readyTarget {
+
+	logger := log.With().
+		Str("component", "sdk-listener").
+		Str("operation", operation).
+		Str("lease_id", l.LeaseID()).
+		Logger()
+
+	if l.retryCount > 0 && retries > l.retryCount {
+		logger.Error().
+			Err(err).
+			Int("retry_count", l.retryCount).
+			Msg("retry budget exhausted; closing listener")
+		_ = l.Close()
 		return false
 	}
-	l.activeSessions++
-	return true
-}
 
-func (l *Listener) releaseSessionSlot() {
-	l.mu.Lock()
-	if l.activeSessions > 0 {
-		l.activeSessions--
-	}
-	l.mu.Unlock()
-	l.notify()
-}
+	logger.Warn().
+		Err(err).
+		Int("retry_attempt", retries).
+		Int("retry_count", l.retryCount).
+		Dur("retry_wait", l.retryWait).
+		Msg("operation failed; retrying")
 
-func (l *Listener) notify() {
-	select {
-	case l.signal <- struct{}{}:
-	default:
-	}
+	sleepOrDone(l.context(), l.retryWait)
+	return !l.isClosed()
 }
 
 func sleepOrDone(ctx context.Context, d time.Duration) {

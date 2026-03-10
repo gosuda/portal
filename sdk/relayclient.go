@@ -29,6 +29,7 @@ const (
 	defaultLeaseTTL            = 30 * time.Second
 	defaultRenewBefore         = 30 * time.Second
 	defaultReadyTarget         = 1
+	defaultRetryWait           = 10 * time.Second
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
