@@ -100,7 +100,7 @@ func (e *Exposure) Accept() (net.Conn, error) {
 			logger := log.With().Str("component", "sdk-exposure").Logger()
 			logger.Warn().
 				Err(err).
-				Str("local_addr", exposureAddrString(e.listener.Addr())).
+				Str("local_addr", utils.AddrString(e.listener.Addr())).
 				Msg("exposure accept failed")
 		}
 		return nil, err
@@ -110,15 +110,15 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	logger := log.With().Str("component", "sdk-exposure").Logger()
 	logger.Info().
 		Uint64("conn_id", connID).
-		Str("local_addr", exposureAddrString(conn.LocalAddr())).
-		Str("remote_addr", exposureAddrString(conn.RemoteAddr())).
+		Str("local_addr", utils.AddrString(conn.LocalAddr())).
+		Str("remote_addr", utils.AddrString(conn.RemoteAddr())).
 		Msg("exposure connection accepted")
 
 	return &exposureConn{
 		Conn:       conn,
 		id:         connID,
-		localAddr:  exposureAddrString(conn.LocalAddr()),
-		remoteAddr: exposureAddrString(conn.RemoteAddr()),
+		localAddr:  utils.AddrString(conn.LocalAddr()),
+		remoteAddr: utils.AddrString(conn.RemoteAddr()),
 	}, nil
 }
 
@@ -351,13 +351,6 @@ func (c *exposureConn) Close() error {
 		event.Msg("exposure connection closed")
 	})
 	return closeErr
-}
-
-func exposureAddrString(addr net.Addr) string {
-	if addr == nil {
-		return ""
-	}
-	return addr.String()
 }
 
 // mergeListeners fans in multiple listeners into one net.Listener. It keeps

@@ -111,7 +111,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	l.mu.Lock()
 	l.leaseID = resp.LeaseID
 	l.hostname = resp.Hostname
-	l.metadata = cloneMetadata(resp.Metadata)
+	l.metadata = resp.Metadata.Copy()
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
 	l.mu.Unlock()
@@ -190,7 +190,7 @@ func (l *Listener) Hostname() string {
 func (l *Listener) Metadata() types.LeaseMetadata {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return cloneMetadata(l.metadata)
+	return l.metadata.Copy()
 }
 
 func (l *Listener) PublicURL() string {
@@ -240,7 +240,7 @@ func (l *Listener) runRenewLoop(ctx context.Context) {
 	}
 
 	for {
-		if !sleepOrDone(ctx, interval) {
+		if !utils.SleepOrDone(ctx, interval) {
 			return
 		}
 
@@ -376,7 +376,7 @@ func (l *Listener) reregister(ctx context.Context) error {
 	oldCloser := l.tlsCloser
 	l.leaseID = resp.LeaseID
 	l.hostname = resp.Hostname
-	l.metadata = cloneMetadata(resp.Metadata)
+	l.metadata = resp.Metadata.Copy()
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
 	l.mu.Unlock()
@@ -418,18 +418,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 		Dur("retry_wait", l.retryWait).
 		Msg("operation failed; retrying")
 
-	return sleepOrDone(ctx, l.retryWait)
-}
-
-func sleepOrDone(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
+	return utils.SleepOrDone(ctx, l.retryWait)
 }
 
 type listenerAddr string

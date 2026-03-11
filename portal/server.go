@@ -241,6 +241,16 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	return apiTLS, manager, nil
 }
 
+func validateAPITLS(apiTLS keyless.TLSMaterialConfig) error {
+	if len(apiTLS.CertPEM) == 0 {
+		return errors.New("api tls certificate is required")
+	}
+	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
+		return errors.New("api tls key or keyless signer is required")
+	}
+	return nil
+}
+
 func (s *Server) runSNIListener(ctx context.Context) error {
 	for {
 		conn, err := s.sniListener.Accept()
@@ -292,7 +302,7 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	bridgeConns(wrappedConn, session.Conn())
+	BridgeConns(wrappedConn, session.Conn())
 	_ = session.Close()
 }
 
@@ -307,7 +317,7 @@ func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
-	bridgeConns(conn, upstream)
+	BridgeConns(conn, upstream)
 }
 
 func (s *Server) watchContext(ctx context.Context) error {
@@ -315,4 +325,31 @@ func (s *Server) watchContext(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
+}
+
+func BridgeConns(left, right net.Conn) {
+	defer left.Close()
+	defer right.Close()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := io.Copy(right, left)
+		closeWrite(right)
+		return err
+	})
+	group.Go(func() error {
+		_, err := io.Copy(left, right)
+		closeWrite(left)
+		return err
+	})
+	_ = group.Wait()
+}
+
+func closeWrite(conn net.Conn) {
+	type closeWriter interface {
+		CloseWrite() error
+	}
+	if cw, ok := conn.(closeWriter); ok {
+		_ = cw.CloseWrite()
+	}
 }

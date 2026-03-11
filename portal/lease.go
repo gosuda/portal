@@ -145,7 +145,7 @@ func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, c
 	if !ok {
 		return nil, errLeaseNotFound
 	}
-	if !tokenMatches(record.ReverseToken, reverseToken) {
+	if !utils.TokenMatches(record.ReverseToken, reverseToken) {
 		return nil, errUnauthorized
 	}
 
@@ -167,7 +167,7 @@ func (r *leaseRegistry) Unregister(leaseID, reverseToken string) (*leaseRecord, 
 	if !ok {
 		return nil, errLeaseNotFound
 	}
-	if !tokenMatches(record.ReverseToken, reverseToken) {
+	if !utils.TokenMatches(record.ReverseToken, reverseToken) {
 		return nil, errUnauthorized
 	}
 

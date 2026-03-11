@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +14,7 @@ import (
 	"time"
 )
 
+// Input parsing and normalization.
 func SplitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -25,30 +29,6 @@ func SplitCSV(raw string) []string {
 		}
 	}
 	return out
-}
-
-func NormalizeRelayURLs(inputs []string) ([]string, error) {
-	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-
-	for _, input := range inputs {
-		for _, part := range SplitCSV(input) {
-			normalized, err := NormalizeRelayURL(part)
-			if err != nil {
-				return nil, err
-			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			out = append(out, normalized)
-		}
-	}
-
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
 }
 
 func NormalizeDNSLabel(raw string) (string, error) {
@@ -72,18 +52,6 @@ func NormalizeDNSLabel(raw string) (string, error) {
 		return "", errors.New("name must contain only letters, numbers, or hyphen")
 	}
 	return label, nil
-}
-
-func LeaseHostname(name, rootHost string) (string, error) {
-	label, err := NormalizeDNSLabel(name)
-	if err != nil {
-		return "", err
-	}
-	rootHost = NormalizeHostname(rootHost)
-	if rootHost == "" {
-		return "", errors.New("root host is required")
-	}
-	return label + "." + rootHost, nil
 }
 
 func NormalizeRelayURL(raw string) (string, error) {
@@ -121,6 +89,57 @@ func NormalizeRelayURL(raw string) (string, error) {
 	return parsed.String(), nil
 }
 
+func PortalRootHost(portalURL string) string {
+	u, err := url.Parse(strings.TrimSpace(portalURL))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return NormalizeHostname(u.Hostname())
+}
+
+func NormalizeHostname(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	host = strings.TrimSuffix(host, ".")
+	return host
+}
+
+func NormalizeRelayURLs(inputs []string) ([]string, error) {
+	out := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+
+	for _, input := range inputs {
+		for _, part := range SplitCSV(input) {
+			normalized, err := NormalizeRelayURL(part)
+			if err != nil {
+				return nil, err
+			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			out = append(out, normalized)
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func LeaseHostname(name, rootHost string) (string, error) {
+	label, err := NormalizeDNSLabel(name)
+	if err != nil {
+		return "", err
+	}
+	rootHost = NormalizeHostname(rootHost)
+	if rootHost == "" {
+		return "", errors.New("root host is required")
+	}
+	return label + "." + rootHost, nil
+}
+
+// Network and transport helpers.
 func NormalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -162,20 +181,6 @@ func NormalizeTargetAddr(raw string) (string, error) {
 	return "", fmt.Errorf("invalid target address %q", raw)
 }
 
-func PortalRootHost(portalURL string) string {
-	u, err := url.Parse(strings.TrimSpace(portalURL))
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return NormalizeHostname(u.Hostname())
-}
-
-func NormalizeHostname(host string) string {
-	host = strings.TrimSpace(strings.ToLower(host))
-	host = strings.TrimSuffix(host, ".")
-	return host
-}
-
 func HostPortOrLoopback(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -206,11 +211,49 @@ func IsLocalRelayHost(host string) bool {
 	return strings.HasSuffix(host, ".localhost")
 }
 
+func AddrString(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
+// Security and TLS helpers.
+func TokenMatches(expected, actual string) bool {
+	if len(expected) == 0 || len(actual) == 0 {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
+}
+
+func CertPoolFromPEM(rootCAPEM []byte) (*x509.CertPool, error) {
+	if len(rootCAPEM) == 0 {
+		return nil, nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(rootCAPEM) {
+		return nil, errors.New("failed to parse relay root ca")
+	}
+	return pool, nil
+}
+
+// Generic value helpers.
 func DurationOrDefault(v, fallback time.Duration) time.Duration {
 	if v > 0 {
 		return v
 	}
 	return fallback
+}
+
+func SleepOrDone(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func IntOrDefault(v, fallback int) int {
@@ -220,6 +263,7 @@ func IntOrDefault(v, fallback int) int {
 	return fallback
 }
 
+// Random value helpers.
 func RandomID(prefix string) string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {

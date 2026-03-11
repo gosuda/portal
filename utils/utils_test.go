@@ -1,9 +1,11 @@
 package utils
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeRelayURLs(t *testing.T) {
@@ -71,5 +73,16 @@ func TestRandomID(t *testing.T) {
 	}
 	if len(got) != len("tok_")+16 {
 		t.Fatalf("RandomID() length = %d, want %d", len(got), len("tok_")+16)
+	}
+}
+
+func TestSleepOrDoneCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if SleepOrDone(ctx, time.Second) {
+		t.Fatal("SleepOrDone() = true, want false for canceled context")
 	}
 }

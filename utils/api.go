@@ -77,3 +77,9 @@ func DecodeAPIRequestError(resp *http.Response) error {
 		Message:    strings.TrimSpace(string(body)),
 	}
 }
+
+func DecodeJSONBody(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	defer r.Body.Close()
+	return json.NewDecoder(r.Body).Decode(dst)
+}

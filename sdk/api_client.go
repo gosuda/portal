@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -79,7 +77,7 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 		rootCAPEM = resolvedCAPEM
 	}
 
-	rootCAs, err := buildRootCAs(rootCAPEM)
+	rootCAs, err := utils.CertPoolFromPEM(rootCAPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +104,7 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 		dialTimeout:  dialTimeout,
 		name:         name,
 		reverseToken: reverseToken,
-		metadata:     cloneMetadata(cfg.Metadata),
+		metadata:     cfg.Metadata.Copy(),
 	}
 
 	if err := api.ensureCompatible(ctx); err != nil {
@@ -129,7 +127,7 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration) (types
 	var resp types.RegisterResponse
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
-		Metadata:     cloneMetadata(a.metadata),
+		Metadata:     a.metadata.Copy(),
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
 	}, &resp); err != nil {
@@ -246,27 +244,6 @@ func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any
 		return nil
 	}
 	return json.Unmarshal(envelope.Data, out)
-}
-
-func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
-	if len(rootCAPEM) == 0 {
-		return nil, nil
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(rootCAPEM) {
-		return nil, errors.New("failed to parse relay root ca")
-	}
-	return pool, nil
-}
-
-func cloneMetadata(metadata types.LeaseMetadata) types.LeaseMetadata {
-	return types.LeaseMetadata{
-		Description: metadata.Description,
-		Owner:       metadata.Owner,
-		Thumbnail:   metadata.Thumbnail,
-		Tags:        append([]string(nil), metadata.Tags...),
-		Hide:        metadata.Hide,
-	}
 }
 
 type bufferedConn struct {

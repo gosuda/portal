@@ -68,6 +68,16 @@ type LeaseMetadata struct {
 	Hide        bool     `json:"hide,omitempty"`
 }
 
+func (m LeaseMetadata) Copy() LeaseMetadata {
+	return LeaseMetadata{
+		Description: m.Description,
+		Owner:       m.Owner,
+		Thumbnail:   m.Thumbnail,
+		Tags:        append([]string(nil), m.Tags...),
+		Hide:        m.Hide,
+	}
+}
+
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`

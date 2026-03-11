@@ -112,7 +112,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req types.RegisterRequest
-	if err := decodeJSONBody(w, r, &req); err != nil {
+	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
@@ -146,7 +146,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req types.RenewRequest
-	if err := decodeJSONBody(w, r, &req); err != nil {
+	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
@@ -177,7 +177,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req types.UnregisterRequest
-	if err := decodeJSONBody(w, r, &req); err != nil {
+	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
@@ -357,7 +357,7 @@ func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
 	if record == nil {
 		return errLeaseNotFound
 	}
-	if !tokenMatches(record.ReverseToken, token) {
+	if !utils.TokenMatches(record.ReverseToken, token) {
 		return errUnauthorized
 	}
 	return nil
