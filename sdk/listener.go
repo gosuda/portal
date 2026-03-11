@@ -41,7 +41,7 @@ type Listener struct {
 	leaseTTL         time.Duration
 	renewBefore      time.Duration
 	handshakeTimeout time.Duration
-	ctx              context.Context
+	doneCh           <-chan struct{}
 	cancel           context.CancelFunc
 	api              *apiClient
 	accepted         chan net.Conn
@@ -88,7 +88,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	}
 
 	l := &Listener{
-		ctx:              listenerCtx,
+		doneCh:           listenerCtx.Done(),
 		cancel:           cancel,
 		api:              api,
 		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
@@ -132,15 +132,15 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	l.mu.Unlock()
 
 	for i := 0; i < l.readyTarget; i++ {
-		go l.runSessionLoop()
+		go l.runSessionLoop(listenerCtx)
 	}
-	go l.runRenewLoop()
+	go l.runRenewLoop(listenerCtx)
 	return l, nil
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
 	select {
-	case <-l.ctx.Done():
+	case <-l.doneCh:
 		return nil, net.ErrClosed
 	case conn := <-l.accepted:
 		return conn, nil
@@ -219,11 +219,11 @@ func (l *Listener) PublicURLs() []string {
 	return urls
 }
 
-func (l *Listener) runSessionLoop() {
+func (l *Listener) runSessionLoop(ctx context.Context) {
 	var retries int
 
 	for {
-		claimed, err := l.runSession()
+		claimed, err := l.runSession(ctx)
 		switch {
 		case err == nil:
 			retries = 0
@@ -235,14 +235,14 @@ func (l *Listener) runSessionLoop() {
 			retries = 0
 		default:
 			retries++
-			if !l.retryOrClose("reverse session connect", err, retries) {
+			if !l.retryOrClose(ctx, "reverse session connect", err, retries) {
 				return
 			}
 		}
 	}
 }
 
-func (l *Listener) runRenewLoop() {
+func (l *Listener) runRenewLoop(ctx context.Context) {
 	interval := l.leaseTTL / 2
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -255,55 +255,43 @@ func (l *Listener) runRenewLoop() {
 	}
 
 	for {
-		sleepOrDone(l.context(), interval)
-		if l.isClosed() {
+		if !sleepOrDone(ctx, interval) {
 			return
 		}
 
 		var retries int
 		for {
-			err := l.renewLease()
-			switch {
-			case err == nil:
-				goto nextRenew
-			case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+			err := l.renewLease(ctx)
+			if err == nil {
+				break
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 				return
-			default:
-				retries++
-				if !l.retryOrClose("lease renewal", err, retries) {
-					return
-				}
+			}
+
+			retries++
+			if !l.retryOrClose(ctx, "lease renewal", err, retries) {
+				return
 			}
 		}
-
-	nextRenew:
 	}
 }
 
-func (l *Listener) runSession() (bool, error) {
-	sessionCtx := l.context()
+func (l *Listener) runSession(ctx context.Context) (bool, error) {
 	l.mu.Lock()
 	leaseID := l.leaseID
 	l.mu.Unlock()
 
-	conn, err := l.api.openReverseSession(sessionCtx, leaseID)
+	conn, err := l.api.openReverseSession(ctx, leaseID)
 	if err != nil {
 		return false, err
 	}
 
-	claimed, err := l.awaitActivation(conn)
-	if err != nil {
-		_ = conn.Close()
-		return claimed, err
-	}
-	return claimed, nil
-}
-
-func (l *Listener) awaitActivation(conn net.Conn) (bool, error) {
 	var marker [1]byte
 	for {
 		_ = conn.SetReadDeadline(time.Now().Add(2 * l.handshakeTimeout))
 		if _, err := io.ReadFull(conn, marker[:]); err != nil {
+			_ = conn.Close()
 			return false, err
 		}
 		_ = conn.SetReadDeadline(time.Time{})
@@ -312,44 +300,46 @@ func (l *Listener) awaitActivation(conn net.Conn) (bool, error) {
 		case types.MarkerKeepalive:
 			continue
 		case types.MarkerTLSStart:
-			if err := l.activate(conn); err != nil {
+			if err := l.activate(ctx, conn); err != nil {
+				_ = conn.Close()
 				return true, err
 			}
 			return true, nil
 		default:
+			_ = conn.Close()
 			return false, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
 		}
 	}
 }
 
-func (l *Listener) activate(conn net.Conn) error {
+func (l *Listener) activate(ctx context.Context, conn net.Conn) error {
 	l.mu.Lock()
 	tlsCfg := l.tlsConfig
 	l.mu.Unlock()
 
 	tlsConn := tls.Server(conn, tlsCfg)
-	handshakeCtx, cancel := context.WithTimeout(l.context(), l.handshakeTimeout)
+	handshakeCtx, cancel := context.WithTimeout(ctx, l.handshakeTimeout)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		return err
 	}
 
 	select {
-	case <-l.ctx.Done():
+	case <-ctx.Done():
 		_ = tlsConn.Close()
-		return l.context().Err()
+		return ctx.Err()
 	case l.accepted <- tlsConn:
 		return nil
 	}
 }
 
-func (l *Listener) renewLease() error {
+func (l *Listener) renewLease(ctx context.Context) error {
 	l.mu.Lock()
 	leaseID := l.leaseID
 	l.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
-	err := l.api.renewLease(ctx, leaseID, l.leaseTTL)
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err := l.api.renewLease(requestCtx, leaseID, l.leaseTTL)
 	cancel()
 	if err == nil {
 		return nil
@@ -364,7 +354,7 @@ func (l *Listener) renewLease() error {
 		Str("lease_id", leaseID).
 		Msg("lease not found on relay, attempting re-registration")
 
-	if err := l.reregister(); err != nil {
+	if err := l.reregister(ctx); err != nil {
 		return err
 	}
 
@@ -376,29 +366,29 @@ func (l *Listener) renewLease() error {
 	return nil
 }
 
-func (l *Listener) reregister() error {
-	ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
+func (l *Listener) reregister(ctx context.Context) error {
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	l.mu.Lock()
 	hostnames := append([]string(nil), l.hostnames...)
 	l.mu.Unlock()
 
-	resp, err := l.api.registerLease(ctx, hostnames, l.leaseTTL)
+	resp, err := l.api.registerLease(requestCtx, hostnames, l.leaseTTL)
 	if err != nil {
 		return err
 	}
 
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), resp.Hostnames)
 	if err != nil {
-		_ = l.api.unregisterLease(ctx, resp.LeaseID)
+		_ = l.api.unregisterLease(requestCtx, resp.LeaseID)
 		return err
 	}
 
-	if l.isClosed() {
+	if ctx.Err() != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
 		_ = tlsCloser.Close()
-		return context.Canceled
+		return ctx.Err()
 	}
 
 	l.mu.Lock()
@@ -420,8 +410,8 @@ func isLeaseNotFound(err error) bool {
 	return errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound})
 }
 
-func (l *Listener) retryOrClose(operation string, err error, retries int) bool {
-	if l.isClosed() {
+func (l *Listener) retryOrClose(ctx context.Context, operation string, err error, retries int) bool {
+	if ctx.Err() != nil {
 		return false
 	}
 
@@ -447,16 +437,17 @@ func (l *Listener) retryOrClose(operation string, err error, retries int) bool {
 		Dur("retry_wait", l.retryWait).
 		Msg("operation failed; retrying")
 
-	sleepOrDone(l.context(), l.retryWait)
-	return !l.isClosed()
+	return sleepOrDone(ctx, l.retryWait)
 }
 
-func sleepOrDone(ctx context.Context, d time.Duration) {
+func sleepOrDone(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		return false
 	case <-timer.C:
+		return true
 	}
 }
 
@@ -465,19 +456,9 @@ type listenerAddr string
 func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
 
-func (l *Listener) context() context.Context {
-	if l.ctx != nil {
-		return l.ctx
-	}
-	return context.Background()
-}
-
-func (l *Listener) isClosed() bool {
-	if l.ctx == nil {
-		return false
-	}
+func (l *Listener) done() bool {
 	select {
-	case <-l.ctx.Done():
+	case <-l.doneCh:
 		return true
 	default:
 		return false

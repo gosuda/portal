@@ -52,7 +52,6 @@ type Server struct {
 	apiTLSClose  io.Closer
 	apiListener  net.Listener
 	apiServer    *http.Server
-	ctx          context.Context
 	cancel       context.CancelFunc
 	group        *errgroup.Group
 	routes       *routeTable
@@ -160,14 +159,13 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
-	s.ctx = groupCtx
 	s.cancel = cancel
 	s.group = group
 
 	group.Go(s.runAPIServer)
-	group.Go(s.runSNIListener)
-	group.Go(s.runLeaseJanitor)
-	group.Go(s.watchContext)
+	group.Go(func() error { return s.runSNIListener(groupCtx) })
+	group.Go(func() error { return s.runLeaseJanitor(groupCtx) })
+	group.Go(func() error { return s.watchContext(groupCtx) })
 	return nil
 }
 
@@ -243,20 +241,20 @@ func (s *Server) ListLeases() []LeaseSnapshot {
 	return out
 }
 
-func (s *Server) runSNIListener() error {
+func (s *Server) runSNIListener(ctx context.Context) error {
 	for {
 		conn, err := s.sniListener.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) || s.isClosed() {
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		go s.handleSNIConn(conn)
+		go s.handleSNIConn(ctx, conn)
 	}
 }
 
-func (s *Server) handleSNIConn(conn net.Conn) {
+func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 	clientHello, wrappedConn, err := l4.InspectClientHello(conn, s.cfg.ClientHelloTimeout)
 	if err != nil {
 		_ = wrappedConn.Close()
@@ -270,7 +268,7 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 	}
 
 	if serverName == s.cfg.RootHost && s.cfg.RootFallbackAddr != "" {
-		s.bridgeToFallback(wrappedConn)
+		s.bridgeToFallback(ctx, wrappedConn)
 		return
 	}
 
@@ -292,7 +290,7 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 		return
 	}
 
-	claimCtx, cancel := context.WithTimeout(s.context(), s.cfg.ClaimTimeout)
+	claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
 	defer cancel()
 
 	session, err := record.Broker.Claim(claimCtx)
@@ -305,9 +303,9 @@ func (s *Server) handleSNIConn(conn net.Conn) {
 	_ = session.Close()
 }
 
-func (s *Server) bridgeToFallback(conn net.Conn) {
+func (s *Server) bridgeToFallback(ctx context.Context, conn net.Conn) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	upstream, err := dialer.DialContext(s.context(), "tcp", HostPortOrLoopback(s.cfg.RootFallbackAddr))
+	upstream, err := dialer.DialContext(ctx, "tcp", HostPortOrLoopback(s.cfg.RootFallbackAddr))
 	if err != nil {
 		_ = conn.Close()
 		return
@@ -315,11 +313,10 @@ func (s *Server) bridgeToFallback(conn net.Conn) {
 	bridgeConns(conn, upstream)
 }
 
-func (s *Server) runLeaseJanitor() error {
+func (s *Server) runLeaseJanitor(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	ctx := s.context()
 	for {
 		select {
 		case <-ctx.Done():
@@ -350,11 +347,8 @@ func (s *Server) cleanupExpiredLeases() {
 	}
 }
 
-func (s *Server) watchContext() error {
-	if s.ctx == nil {
-		return nil
-	}
-	<-s.ctx.Done()
+func (s *Server) watchContext(ctx context.Context) error {
+	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
@@ -384,25 +378,6 @@ func closeWrite(conn net.Conn) {
 	}
 	if cw, ok := conn.(closeWriter); ok {
 		_ = cw.CloseWrite()
-	}
-}
-
-func (s *Server) context() context.Context {
-	if s.ctx != nil {
-		return s.ctx
-	}
-	return context.Background()
-}
-
-func (s *Server) isClosed() bool {
-	if s.ctx == nil {
-		return false
-	}
-	select {
-	case <-s.ctx.Done():
-		return true
-	default:
-		return false
 	}
 }
 

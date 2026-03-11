@@ -238,7 +238,7 @@ func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) 
 	defer listener.Close()
 
 	waitForSDKTest(t, func() bool {
-		return listener.isClosed()
+		return listener.done()
 	})
 	if connectCount.Load() < 2 {
 		t.Fatalf("connect count = %d, want at least 2", connectCount.Load())
