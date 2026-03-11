@@ -43,7 +43,7 @@ type Listener struct {
 	handshakeTimeout time.Duration
 	ctx              context.Context
 	cancel           context.CancelFunc
-	api              *relayClient
+	api              *apiClient
 	accepted         chan net.Conn
 	leaseID          string
 	hostnames        []string
@@ -81,7 +81,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		retryWait = defaultRetryWait
 	}
 
-	api, err := newRelayClient(listenerCtx, relayURL, cfg)
+	api, err := newApiClient(listenerCtx, relayURL, cfg)
 	if err != nil {
 		cancel()
 		return nil, err

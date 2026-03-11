@@ -9,16 +9,6 @@ import (
 	"time"
 )
 
-const (
-	defaultLeaseTTL          = 30 * time.Second
-	defaultClaimTimeout      = 10 * time.Second
-	defaultIdleKeepalive     = 15 * time.Second
-	defaultReadyQueueLimit   = 8
-	defaultClientHelloWait   = 2 * time.Second
-	defaultControlBodyLimit  = 4 << 20
-	defaultSessionWriteLimit = 5 * time.Second
-)
-
 func PortalRootHost(portalURL string) string {
 	u, err := url.Parse(strings.TrimSpace(portalURL))
 	if err != nil || u.Host == "" {
