@@ -95,3 +95,18 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 		t.Fatalf("Start() error = %v, want base domain mismatch", err)
 	}
 }
+
+func TestNewServerRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewServer(ServerConfig{
+		PortalURL:         "https://portal.example.com",
+		TrustedProxyCIDRs: "not-a-cidr",
+	})
+	if err == nil {
+		t.Fatal("NewServer() error = nil, want invalid trusted proxy cidr error")
+	}
+	if !strings.Contains(err.Error(), "parse trusted proxy cidrs") {
+		t.Fatalf("NewServer() error = %v, want trusted proxy parse error", err)
+	}
+}

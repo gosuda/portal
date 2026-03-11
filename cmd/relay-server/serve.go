@@ -14,7 +14,6 @@ import (
 	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/admin"
-	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -30,12 +29,6 @@ func runServer(cfg relayServerConfig) error {
 	rootHost := portal.PortalRootHost(cfg.PortalURL)
 	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
-	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-	if err != nil {
-		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
-	}
-	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
-
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL: cfg.PortalURL,
 		ACME: acme.Config{
@@ -50,6 +43,7 @@ func runServer(cfg relayServerConfig) error {
 		},
 		APIListenAddr:     apiListenAddr,
 		SNIListenAddr:     sniListenAddr,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 	})
 	if err != nil {

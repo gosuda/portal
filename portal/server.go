@@ -33,6 +33,7 @@ type ServerConfig struct {
 	ACME                  acme.Config
 	APIListenAddr         string
 	SNIListenAddr         string
+	TrustedProxyCIDRs     string
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
@@ -67,6 +68,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	cfg.IdleKeepaliveInterval = durationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
 	cfg.ReadyQueueLimit = intOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
 	cfg.ClientHelloTimeout = durationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
+	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
+	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
 	rootHost := PortalRootHost(cfg.PortalURL)
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
