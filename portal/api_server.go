@@ -94,11 +94,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := r.URL.Query().Get("name")
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		RootHost:          s.rootHost,
-		SuggestedHostname: suggestHostname(name, s.rootHost),
-		Version:           types.SDKProtocolVersion,
+		Version: types.SDKProtocolVersion,
 	})
 }
 
@@ -277,8 +274,9 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
-	if strings.TrimSpace(req.Name) == "" {
-		return types.RegisterResponse{}, errors.New("name is required")
+	name, err := utils.NormalizeDNSLabel(req.Name)
+	if err != nil {
+		return types.RegisterResponse{}, err
 	}
 	if strings.TrimSpace(req.ReverseToken) == "" {
 		return types.RegisterResponse{}, errors.New("reverse token is required")
@@ -286,10 +284,9 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if s.isClientIPBanned(clientIP) {
 		return types.RegisterResponse{}, errIPBanned
 	}
-
-	hostnames := normalizeHostnames(req.Hostnames)
-	if len(hostnames) == 0 {
-		hostnames = []string{suggestHostname(req.Name, s.rootHost)}
+	hostname, err := utils.LeaseHostname(name, s.rootHost)
+	if err != nil {
+		return types.RegisterResponse{}, err
 	}
 
 	ttl := s.cfg.LeaseTTL
@@ -302,8 +299,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	expiresAt := now.Add(ttl)
 	record := &leaseRecord{
 		ID:           leaseID,
-		Name:         strings.TrimSpace(req.Name),
-		Hostnames:    hostnames,
+		Name:         name,
+		Hostname:     hostname,
 		Metadata:     req.Metadata,
 		ReverseToken: req.ReverseToken,
 		ExpiresAt:    expiresAt,
@@ -319,7 +316,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 
 	return types.RegisterResponse{
 		LeaseID:    leaseID,
-		Hostnames:  append([]string(nil), hostnames...),
+		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
 		ConnectURL: s.connectURL(),

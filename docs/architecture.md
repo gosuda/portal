@@ -92,10 +92,9 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - Caller provides:
   - `name`
   - `reverse_token`
-  - optional `hostnames`
   - optional `metadata`
   - optional `ttl`
-- If no hostname is supplied, relay derives one from `name + root host`
+- `name` must be a valid single DNS label and relay publishes the lease at `<name>.<root host>`
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
@@ -133,7 +132,7 @@ Notes:
 
 - Wildcards are one level only.
 - The exact root host is never served by the wildcard route.
-- For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, public lease hosts become `<lease>.portal.example.com`.
+- For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, a lease named `demo` is published at `demo.portal.example.com`.
 
 ## Admin and Frontend Surface
 

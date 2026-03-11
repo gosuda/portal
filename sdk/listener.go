@@ -20,7 +20,6 @@ import (
 type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
-	Hostnames        []string
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -47,7 +46,7 @@ type Listener struct {
 	api              *apiClient
 	accepted         chan net.Conn
 	leaseID          string
-	hostnames        []string
+	hostname         string
 	metadata         types.LeaseMetadata
 
 	closeOnce sync.Once
@@ -86,14 +85,14 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		handshakeTimeout: handshakeTimeout,
 	}
 
-	resp, err := api.registerLease(listenerCtx, cfg.Hostnames, leaseTTL)
+	resp, err := api.registerLease(listenerCtx, leaseTTL)
 	if err != nil {
 		api.close()
 		cancel()
 		return nil, err
 	}
 
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(api.baseURL.String(), resp.Hostnames)
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
 		_ = api.unregisterLease(context.Background(), resp.LeaseID)
 		api.close()
@@ -111,7 +110,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 
 	l.mu.Lock()
 	l.leaseID = resp.LeaseID
-	l.hostnames = append([]string(nil), resp.Hostnames...)
+	l.hostname = resp.Hostname
 	l.metadata = cloneMetadata(resp.Metadata)
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
@@ -145,6 +144,7 @@ func (l *Listener) Close() error {
 		tlsCloser := l.tlsCloser
 		api := l.api
 		l.leaseID = ""
+		l.hostname = ""
 		l.tlsConfig = nil
 		l.tlsCloser = nil
 		l.mu.Unlock()
@@ -181,10 +181,10 @@ func (l *Listener) LeaseID() string {
 	return l.leaseID
 }
 
-func (l *Listener) Hostnames() []string {
+func (l *Listener) Hostname() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]string(nil), l.hostnames...)
+	return l.hostname
 }
 
 func (l *Listener) Metadata() types.LeaseMetadata {
@@ -193,16 +193,15 @@ func (l *Listener) Metadata() types.LeaseMetadata {
 	return cloneMetadata(l.metadata)
 }
 
-func (l *Listener) PublicURLs() []string {
+func (l *Listener) PublicURL() string {
 	l.mu.Lock()
-	hostnames := append([]string(nil), l.hostnames...)
+	hostname := l.hostname
 	l.mu.Unlock()
 
-	urls := make([]string, 0, len(hostnames))
-	for _, host := range hostnames {
-		urls = append(urls, "https://"+host)
+	if hostname == "" {
+		return ""
 	}
-	return urls
+	return "https://" + hostname
 }
 
 func (l *Listener) runSessionLoop(ctx context.Context) {
@@ -347,7 +346,7 @@ func (l *Listener) renewLease(ctx context.Context) error {
 	log.Info().
 		Str("component", "sdk-listener").
 		Str("lease_id", l.LeaseID()).
-		Strs("hostnames", l.Hostnames()).
+		Str("hostname", l.Hostname()).
 		Msg("lease re-registered successfully")
 	return nil
 }
@@ -356,16 +355,12 @@ func (l *Listener) reregister(ctx context.Context) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	l.mu.Lock()
-	hostnames := append([]string(nil), l.hostnames...)
-	l.mu.Unlock()
-
-	resp, err := l.api.registerLease(requestCtx, hostnames, l.leaseTTL)
+	resp, err := l.api.registerLease(requestCtx, l.leaseTTL)
 	if err != nil {
 		return err
 	}
 
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), resp.Hostnames)
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
 		_ = l.api.unregisterLease(requestCtx, resp.LeaseID)
 		return err
@@ -380,7 +375,7 @@ func (l *Listener) reregister(ctx context.Context) error {
 	l.mu.Lock()
 	oldCloser := l.tlsCloser
 	l.leaseID = resp.LeaseID
-	l.hostnames = append([]string(nil), resp.Hostnames...)
+	l.hostname = resp.Hostname
 	l.metadata = cloneMetadata(resp.Metadata)
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser

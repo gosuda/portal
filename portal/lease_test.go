@@ -16,7 +16,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
 		ID:           "lease_1",
-		Hostnames:    []string{"demo.example.com"},
+		Hostname:     "demo.example.com",
 		ReverseToken: "tok_1",
 		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
@@ -63,7 +63,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	registry := newLeaseRegistry(policy.NewRuntime())
 	wildcardLease := &leaseRecord{
 		ID:           "lease_wildcard",
-		Hostnames:    []string{"*.example.com"},
+		Hostname:     "*.example.com",
 		ReverseToken: "tok_wildcard",
 		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
@@ -80,7 +80,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 
 	conflict := &leaseRecord{
 		ID:           "lease_conflict",
-		Hostnames:    []string{"*.example.com"},
+		Hostname:     "*.example.com",
 		ReverseToken: "tok_conflict",
 		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
@@ -102,7 +102,7 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 	record := &leaseRecord{
 		ID:           "lease_policy",
 		Name:         "demo",
-		Hostnames:    []string{"demo.example.com"},
+		Hostname:     "demo.example.com",
 		ReverseToken: "tok_policy",
 		ExpiresAt:    time.Now().Add(30 * time.Second),
 		ClientIP:     "203.0.113.20",
@@ -141,7 +141,7 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 	registry := newLeaseRegistry(policy.NewRuntime())
 	record := &leaseRecord{
 		ID:           "lease_expired",
-		Hostnames:    []string{"expired.example.com"},
+		Hostname:     "expired.example.com",
 		ReverseToken: "tok_expired",
 		ExpiresAt:    time.Now().Add(-time.Second),
 		Broker:       newLeaseBroker("lease_expired", time.Minute, 1),

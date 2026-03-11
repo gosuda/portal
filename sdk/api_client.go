@@ -38,15 +38,14 @@ type apiClient struct {
 	rawTLSConfig *tls.Config
 	dialTimeout  time.Duration
 	name         string
-	hostnames    []string
 	reverseToken string
 	metadata     types.LeaseMetadata
 }
 
 func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*apiClient, error) {
-	name := strings.TrimSpace(cfg.Name)
-	if name == "" {
-		return nil, errors.New("listener name is required")
+	name, err := utils.NormalizeDNSLabel(cfg.Name)
+	if err != nil {
+		return nil, err
 	}
 
 	reverseToken := strings.TrimSpace(cfg.ReverseToken)
@@ -106,7 +105,6 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 		rawTLSConfig: baseTLS,
 		dialTimeout:  dialTimeout,
 		name:         name,
-		hostnames:    append([]string(nil), cfg.Hostnames...),
 		reverseToken: reverseToken,
 		metadata:     cloneMetadata(cfg.Metadata),
 	}
@@ -127,15 +125,10 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, hostnames []string, ttl time.Duration) (types.RegisterResponse, error) {
-	if len(hostnames) == 0 {
-		hostnames = a.hostnames
-	}
-
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
-		Hostnames:    append([]string(nil), hostnames...),
 		Metadata:     cloneMetadata(a.metadata),
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),

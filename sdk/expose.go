@@ -79,8 +79,7 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 		relays:   relays,
 	}
 
-	logger := log.With().Str("component", "sdk-exposure").Logger()
-	logger.Info().
+	log.Info().
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
 		Strs("public_urls", exposure.PublicURLs()).
@@ -156,13 +155,15 @@ func (e *Exposure) PublicURLs() []string {
 		if relay.listener == nil {
 			continue
 		}
-		for _, rawURL := range relay.listener.PublicURLs() {
-			if _, ok := seen[rawURL]; ok {
-				continue
-			}
-			seen[rawURL] = struct{}{}
-			out = append(out, rawURL)
+		rawURL := relay.listener.PublicURL()
+		if rawURL == "" {
+			continue
 		}
+		if _, ok := seen[rawURL]; ok {
+			continue
+		}
+		seen[rawURL] = struct{}{}
+		out = append(out, rawURL)
 	}
 	if len(out) == 0 {
 		return nil

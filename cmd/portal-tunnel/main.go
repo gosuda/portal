@@ -43,7 +43,7 @@ func main() {
 
 	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Portal relay server API URLs (comma-separated; scheme omitted defaults to https) [env: RELAYS]")
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
-	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Service name [env: APP_NAME]")
+	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Public hostname prefix (single DNS label) [env: APP_NAME]")
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
 	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")

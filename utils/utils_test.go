@@ -38,6 +38,30 @@ func TestNormalizeTargetAddr(t *testing.T) {
 	}
 }
 
+func TestNormalizeDNSLabel(t *testing.T) {
+	t.Parallel()
+
+	got, err := NormalizeDNSLabel("Demo-App")
+	if err != nil {
+		t.Fatalf("NormalizeDNSLabel() error = %v", err)
+	}
+	if got != "demo-app" {
+		t.Fatalf("NormalizeDNSLabel() = %q, want %q", got, "demo-app")
+	}
+}
+
+func TestLeaseHostname(t *testing.T) {
+	t.Parallel()
+
+	got, err := LeaseHostname("Demo-App", "portal.example.com")
+	if err != nil {
+		t.Fatalf("LeaseHostname() error = %v", err)
+	}
+	if got != "demo-app.portal.example.com" {
+		t.Fatalf("LeaseHostname() = %q, want %q", got, "demo-app.portal.example.com")
+	}
+}
+
 func TestRandomID(t *testing.T) {
 	t.Parallel()
 

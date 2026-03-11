@@ -115,26 +115,22 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	if leaseID == "" {
 		return errors.New("lease id is required")
 	}
-	hostnames := normalizeHostnames(record.Hostnames)
-	if len(hostnames) == 0 {
-		return errors.New("lease hostnames are required")
+	hostname := utils.NormalizeHostname(record.Hostname)
+	if hostname == "" {
+		return errors.New("lease hostname is required")
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for _, host := range hostnames {
-		if ownerLeaseID, ok := r.routes.LookupExact(host); ok && ownerLeaseID != leaseID {
-			return fmt.Errorf("%w: %s", errHostnameConflict, host)
-		}
+	if ownerLeaseID, ok := r.routes.LookupExact(hostname); ok && ownerLeaseID != leaseID {
+		return fmt.Errorf("%w: %s", errHostnameConflict, hostname)
 	}
 
 	record.ID = leaseID
-	record.Hostnames = hostnames
+	record.Hostname = hostname
 	r.leaseByID[leaseID] = record
-	for _, host := range hostnames {
-		r.routes.Set(host, leaseID)
-	}
+	r.routes.Set(hostname, leaseID)
 	if strings.TrimSpace(record.ClientIP) != "" {
 		r.policy.IPFilter().RegisterLeaseIP(leaseID, record.ClientIP)
 	}
@@ -176,7 +172,7 @@ func (r *leaseRegistry) Unregister(leaseID, reverseToken string) (*leaseRecord, 
 	}
 
 	delete(r.leaseByID, record.ID)
-	r.routes.DeleteLease(record.Hostnames)
+	r.routes.Delete(record.Hostname)
 	r.policy.ForgetLease(record.ID)
 	return record, nil
 }
@@ -223,7 +219,7 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 		if now.After(record.ExpiresAt) {
 			expired = append(expired, record)
 			delete(r.leaseByID, leaseID)
-			r.routes.DeleteLease(record.Hostnames)
+			r.routes.Delete(record.Hostname)
 			r.policy.ForgetLease(record.ID)
 		}
 	}
@@ -251,7 +247,7 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) LeaseSnapshot {
 		ID:          record.ID,
 		Name:        record.Name,
 		ClientIP:    clientIP,
-		Hostnames:   append([]string(nil), record.Hostnames...),
+		Hostname:    record.Hostname,
 		Metadata:    record.Metadata,
 		ExpiresAt:   record.ExpiresAt,
 		FirstSeenAt: record.FirstSeenAt,
@@ -273,7 +269,7 @@ type leaseRecord struct {
 	Name         string
 	ReverseToken string
 	ClientIP     string
-	Hostnames    []string
+	Hostname     string
 	Metadata     types.LeaseMetadata
 }
 
@@ -284,7 +280,7 @@ type LeaseSnapshot struct {
 	ID          string
 	Name        string
 	ClientIP    string
-	Hostnames   []string
+	Hostname    string
 	Metadata    types.LeaseMetadata
 	Ready       int
 	IsApproved  bool
@@ -309,10 +305,8 @@ func (t *routeTable) Set(host, leaseID string) {
 	t.exact[host] = leaseID
 }
 
-func (t *routeTable) DeleteLease(hosts []string) {
-	for _, host := range hosts {
-		delete(t.exact, utils.NormalizeHostname(host))
-	}
+func (t *routeTable) Delete(host string) {
+	delete(t.exact, utils.NormalizeHostname(host))
 }
 
 func (t *routeTable) LookupExact(host string) (string, bool) {

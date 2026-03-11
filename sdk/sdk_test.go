@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,8 +21,7 @@ func TestNewListenerFailsFastOnRegisterError(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:
@@ -38,9 +36,23 @@ func TestNewListenerFailsFastOnRegisterError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{Name: "demo"})
+	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
+		Name: "demo",
+	})
 	if err == nil {
 		t.Fatal("NewListener() error = nil, want register failure")
+	}
+	if listener != nil {
+		t.Fatalf("NewListener() listener = %#v, want nil", listener)
+	}
+}
+
+func TestNewListenerRejectsInvalidName(t *testing.T) {
+	t.Parallel()
+
+	listener, err := NewListener(context.Background(), "https://relay.example.com", ListenerConfig{Name: "demo app"})
+	if err == nil {
+		t.Fatal("NewListener() error = nil, want invalid name error")
 	}
 	if listener != nil {
 		t.Fatalf("NewListener() listener = %#v, want nil", listener)
@@ -57,8 +69,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:
@@ -68,9 +79,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   "lease-1",
-					Hostnames: []string{"127.0.0.1"},
-					Metadata:  registerReq.Metadata,
+					LeaseID:  "lease-1",
+					Hostname: "127.0.0.1",
+					Metadata: registerReq.Metadata,
 				},
 			})
 		case types.PathSDKConnect:
@@ -92,7 +103,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	defer server.Close()
 
 	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:     "demo",
+		Name:     "Demo-App",
 		Metadata: types.LeaseMetadata{Owner: "alice"},
 		LeaseTTL: 42 * time.Second,
 	})
@@ -104,14 +115,17 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if registerReq.TTL != 42 {
 		t.Fatalf("register request TTL = %d, want 42", registerReq.TTL)
 	}
+	if registerReq.Name != "demo-app" {
+		t.Fatalf("register request Name = %q, want %q", registerReq.Name, "demo-app")
+	}
 	if listener.LeaseID() != "lease-1" {
 		t.Fatalf("LeaseID() = %q, want %q", listener.LeaseID(), "lease-1")
 	}
-	if got := listener.Hostnames(); !reflect.DeepEqual(got, []string{"127.0.0.1"}) {
-		t.Fatalf("Hostnames() = %v, want %v", got, []string{"127.0.0.1"})
+	if got := listener.Hostname(); got != "127.0.0.1" {
+		t.Fatalf("Hostname() = %q, want %q", got, "127.0.0.1")
 	}
-	if got := listener.PublicURLs(); !reflect.DeepEqual(got, []string{"https://127.0.0.1"}) {
-		t.Fatalf("PublicURLs() = %v, want %v", got, []string{"https://127.0.0.1"})
+	if got := listener.PublicURL(); got != "https://127.0.0.1" {
+		t.Fatalf("PublicURL() = %q, want %q", got, "https://127.0.0.1")
 	}
 	if got := listener.Metadata(); got.Owner != "alice" {
 		t.Fatalf("Metadata().Owner = %q, want %q", got.Owner, "alice")
@@ -128,8 +142,7 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:
@@ -141,8 +154,8 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   leaseID,
-					Hostnames: []string{"127.0.0.1"},
+					LeaseID:  leaseID,
+					Hostname: "127.0.0.1",
 				},
 			})
 		case types.PathSDKRenew:
@@ -200,16 +213,15 @@ func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) 
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   "lease-1",
-					Hostnames: []string{"127.0.0.1"},
+					LeaseID:  "lease-1",
+					Hostname: "127.0.0.1",
 				},
 			})
 		case types.PathSDKConnect:
@@ -258,16 +270,15 @@ func TestExposeFailsFastWhenAnyRelayCannotRegister(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   "lease-good",
-					Hostnames: []string{"127.0.0.1"},
+					LeaseID:  "lease-good",
+					Hostname: "127.0.0.1",
 				},
 			})
 		case types.PathSDKConnect:
@@ -295,8 +306,7 @@ func TestExposeFailsFastWhenAnyRelayCannotRegister(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					RootHost: "localhost",
-					Version:  types.SDKProtocolVersion,
+					Version: types.SDKProtocolVersion,
 				},
 			})
 		case types.PathSDKRegister:

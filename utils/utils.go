@@ -51,6 +51,41 @@ func NormalizeRelayURLs(inputs []string) ([]string, error) {
 	return out, nil
 }
 
+func NormalizeDNSLabel(raw string) (string, error) {
+	label := NormalizeHostname(raw)
+	if label == "" {
+		return "", errors.New("name is required")
+	}
+	if strings.Contains(label, ".") {
+		return "", errors.New("name must be a single dns label")
+	}
+	if len(label) > 63 {
+		return "", errors.New("name must be 63 characters or fewer")
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return "", errors.New("name must not start or end with hyphen")
+	}
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return "", errors.New("name must contain only letters, numbers, or hyphen")
+	}
+	return label, nil
+}
+
+func LeaseHostname(name, rootHost string) (string, error) {
+	label, err := NormalizeDNSLabel(name)
+	if err != nil {
+		return "", err
+	}
+	rootHost = NormalizeHostname(rootHost)
+	if rootHost == "" {
+		return "", errors.New("root host is required")
+	}
+	return label + "." + rootHost, nil
+}
+
 func NormalizeRelayURL(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

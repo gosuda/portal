@@ -19,7 +19,7 @@ Portal-tunnel connects a local service to a Portal relay with the legacy CLI sha
 ```text
 --relays        Portal relay server API URLs (comma-separated, https only) [env: RELAYS]
 --host          Target host to proxy to (host:port or URL) [env: APP_HOST]
---name          Service name [env: APP_NAME]
+--name          Public hostname prefix (single DNS label) [env: APP_NAME]
 --description   Service description metadata [env: APP_DESCRIPTION]
 --tags          Service tags metadata (comma-separated) [env: APP_TAGS]
 --thumbnail     Service thumbnail URL metadata [env: APP_THUMBNAIL]
@@ -30,6 +30,7 @@ Portal-tunnel connects a local service to a Portal relay with the legacy CLI sha
 ## Notes
 
 - Multiple relay URLs are registered independently. Each relay gets its own lease ID and public URLs.
+- Relay publishes each service at `<name>.<portal root host>`.
 - Portal-tunnel now consumes one aggregate SDK listener, so the CLI no longer manages per-relay listener loops itself.
 - Startup is fail-fast: if any configured relay cannot register, the tunnel exits instead of partially publishing.
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.

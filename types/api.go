@@ -71,7 +71,6 @@ type LeaseMetadata struct {
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
-	Hostnames    []string      `json:"hostnames,omitempty"`
 	Metadata     LeaseMetadata `json:"metadata"`
 	TTL          int           `json:"ttl,omitempty"`
 }
@@ -80,7 +79,7 @@ type RegisterResponse struct {
 	ExpiresAt  time.Time     `json:"expires_at"`
 	LeaseID    string        `json:"lease_id"`
 	ConnectURL string        `json:"connect_url"`
-	Hostnames  []string      `json:"hostnames"`
+	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
 }
 
@@ -101,9 +100,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	RootHost          string `json:"root_host"`
-	SuggestedHostname string `json:"suggested_hostname"`
-	Version           string `json:"version"`
+	Version string `json:"version"`
 }
 
 type AdminLoginRequest struct {

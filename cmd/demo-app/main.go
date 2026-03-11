@@ -35,7 +35,7 @@ func main() {
 
 	flag.StringVar(&flagServerURLs, "server-urls", "https://localhost:4017", "relay API URLs (comma-separated; scheme omitted defaults to https)")
 	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
-	flag.StringVar(&flagName, "name", "demo-app", "backend display name")
+	flag.StringVar(&flagName, "name", "demo-app", "public hostname prefix (single DNS label)")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
 	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")

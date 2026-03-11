@@ -111,3 +111,57 @@ func TestNewServerRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
 		t.Fatalf("NewServer() error = %v, want trusted proxy parse error", err)
 	}
 }
+
+func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://portal.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp, err := server.registerLease(types.RegisterRequest{
+		Name:         "Demo-App",
+		ReverseToken: "tok_1",
+	}, "203.0.113.10")
+	if err != nil {
+		t.Fatalf("registerLease() error = %v", err)
+	}
+
+	wantHostname := "demo-app.portal.example.com"
+	if resp.Hostname != wantHostname {
+		t.Fatalf("registerLease() hostname = %q, want %q", resp.Hostname, wantHostname)
+	}
+
+	snapshot, ok := server.GetLease(resp.LeaseID)
+	if !ok {
+		t.Fatal("GetLease() = false, want registered lease")
+	}
+	if snapshot.Name != "demo-app" {
+		t.Fatalf("GetLease().Name = %q, want %q", snapshot.Name, "demo-app")
+	}
+	if snapshot.Hostname != wantHostname {
+		t.Fatalf("GetLease().Hostname = %q, want %q", snapshot.Hostname, wantHostname)
+	}
+}
+
+func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://portal.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	_, err = server.registerLease(types.RegisterRequest{
+		Name:         "demo app",
+		ReverseToken: "tok_1",
+	}, "203.0.113.10")
+	if err == nil {
+		t.Fatal("registerLease() error = nil, want invalid name error")
+	}
+}
