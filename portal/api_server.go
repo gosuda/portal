@@ -20,20 +20,25 @@ import (
 )
 
 var (
-	errLeaseNotFound    = errors.New("lease not found")
-	errIPBanned         = errors.New("request denied because source IP is banned")
+	errLeaseNotFound    = errors.New(types.APIErrorCodeLeaseNotFound)
+	errIPBanned         = errors.New(types.APIErrorCodeIPBanned)
 	errUnauthorized     = errors.New(types.APIErrorCodeUnauthorized)
-	errHostnameConflict = errors.New("hostname already registered")
+	errHostnameConflict = errors.New(types.APIErrorCodeHostnameConflict)
 )
 
-func (s *Server) newAPIServer(listener net.Listener) (net.Listener, *http.Server, io.Closer, error) {
+func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
+	keylessSignerHandler, err := newKeylessSignerHandler(apiTLS)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	apiServer := &http.Server{
-		Handler:           s.wrapAPIHandler(s.apiHandler()),
+		Handler:           s.apiHandler(apiMux, keylessSignerHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 		TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 
-	apiCloser, err := keyless.AttachToHTTPServer(apiServer, s.cfg.APITLS)
+	apiCloser, err := keyless.AttachToHTTPServer(apiServer, apiTLS)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configure api tls: %w", err)
 	}
@@ -41,25 +46,42 @@ func (s *Server) newAPIServer(listener net.Listener) (net.Listener, *http.Server
 	return tls.NewListener(listener, apiServer.TLSConfig), apiServer, apiCloser, nil
 }
 
-func (s *Server) apiHandler() http.Handler {
-	mux := http.NewServeMux()
-	if s.cfg.KeylessSignerHandler != nil {
-		mux.Handle(types.PathV1Sign, s.cfg.KeylessSignerHandler)
+func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handler) http.Handler {
+	if base == nil {
+		base = http.NewServeMux()
+		base.HandleFunc("/{$}", s.handleRoot)
 	}
-	mux.HandleFunc(types.PathHealthz, s.handleHealthz)
-	mux.HandleFunc(types.PathSDKDomain, s.handleDomain)
-	mux.HandleFunc(types.PathSDKRegister, s.handleRegister)
-	mux.HandleFunc(types.PathSDKRenew, s.handleRenew)
-	mux.HandleFunc(types.PathSDKUnregister, s.handleUnregister)
-	mux.HandleFunc(types.PathSDKConnect, s.handleConnect)
-	mux.HandleFunc("/", s.handleRoot)
-	return mux
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimSpace(r.URL.Path) {
+		case types.PathHealthz:
+			s.handleHealthz(w, r)
+		case types.PathSDKDomain:
+			s.handleDomain(w, r)
+		case types.PathSDKRegister:
+			s.handleRegister(w, r)
+		case types.PathSDKRenew:
+			s.handleRenew(w, r)
+		case types.PathSDKUnregister:
+			s.handleUnregister(w, r)
+		case types.PathSDKConnect:
+			s.handleConnect(w, r)
+		case types.PathV1Sign:
+			if keylessSignerHandler == nil {
+				http.NotFound(w, r)
+				return
+			}
+			keylessSignerHandler.ServeHTTP(w, r)
+		default:
+			base.ServeHTTP(w, r)
+		}
+	})
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	writeAPIData(w, http.StatusOK, map[string]any{
 		"service": "portal-relay",
-		"root":    s.cfg.RootHost,
+		"root":    s.rootHost,
 	})
 }
 
@@ -75,8 +97,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 
 	name := r.URL.Query().Get("name")
 	writeAPIData(w, http.StatusOK, types.DomainResponse{
-		RootHost:          s.cfg.RootHost,
-		SuggestedHostname: suggestHostname(name, s.cfg.RootHost),
+		RootHost:          s.rootHost,
+		SuggestedHostname: suggestHostname(name, s.rootHost),
 		Version:           types.SDKProtocolVersion,
 	})
 }
@@ -202,7 +224,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
 	}
-	if !s.isLeaseRoutable(lease) {
+	if !s.registry.IsRoutable(lease) {
 		writeAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
 	}
@@ -245,7 +267,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.touchLease(lease.ID, clientIP)
+	s.registry.Touch(lease.ID, clientIP, time.Now())
 	log.Info().
 		Str("component", "relay-server").
 		Str("lease_id", lease.ID).
@@ -268,16 +290,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 
 	hostnames := normalizeHostnames(req.Hostnames)
 	if len(hostnames) == 0 {
-		hostnames = []string{suggestHostname(req.Name, s.cfg.RootHost)}
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, host := range hostnames {
-		if owner := s.findLeaseByHostnameLocked(host); owner != nil {
-			return types.RegisterResponse{}, fmt.Errorf("%w: %s", errHostnameConflict, host)
-		}
+		hostnames = []string{suggestHostname(req.Name, s.rootHost)}
 	}
 
 	ttl := s.cfg.LeaseTTL
@@ -301,12 +314,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
 	}
 
-	s.leases[leaseID] = record
-	for _, host := range hostnames {
-		s.routes.Set(host, leaseID)
-	}
-	if strings.TrimSpace(clientIP) != "" {
-		s.cfg.Policy.IPFilter().RegisterLeaseIP(leaseID, clientIP)
+	if err := s.registry.Register(record); err != nil {
+		return types.RegisterResponse{}, err
 	}
 
 	return types.RegisterResponse{
@@ -323,62 +332,29 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 		return types.RenewResponse{}, errIPBanned
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record, ok := s.leases[strings.TrimSpace(req.LeaseID)]
-	if !ok {
-		return types.RenewResponse{}, errLeaseNotFound
-	}
-	if !tokenMatches(record.ReverseToken, req.ReverseToken) {
-		return types.RenewResponse{}, errUnauthorized
-	}
-
 	ttl := s.cfg.LeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record.ExpiresAt = time.Now().Add(ttl)
-	record.LastSeenAt = time.Now()
-	if strings.TrimSpace(clientIP) != "" {
-		record.ClientIP = clientIP
-		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
+	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP)
+	if err != nil {
+		return types.RenewResponse{}, err
 	}
 
 	return types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
 }
 
 func (s *Server) unregisterLease(req types.UnregisterRequest) error {
-	s.mu.Lock()
-	record, ok := s.leases[strings.TrimSpace(req.LeaseID)]
-	if !ok {
-		s.mu.Unlock()
-		return errLeaseNotFound
+	record, err := s.registry.Unregister(req.LeaseID, req.ReverseToken)
+	if err != nil {
+		return err
 	}
-	if !tokenMatches(record.ReverseToken, req.ReverseToken) {
-		s.mu.Unlock()
-		return errUnauthorized
-	}
-	delete(s.leases, record.ID)
-	s.mu.Unlock()
-
-	s.routes.DeleteLease(record.Hostnames)
-	s.cfg.Policy.ForgetLease(record.ID)
 	record.Broker.Close()
 	return nil
 }
 
 func (s *Server) findLeaseByID(leaseID string) (*leaseRecord, error) {
-	s.mu.RLock()
-	record, ok := s.leases[strings.TrimSpace(leaseID)]
-	s.mu.RUnlock()
-	if !ok {
-		return nil, errLeaseNotFound
-	}
-	if time.Now().After(record.ExpiresAt) {
-		return nil, errLeaseNotFound
-	}
-	return record, nil
+	return s.registry.FindByID(leaseID)
 }
 
 func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
@@ -387,22 +363,6 @@ func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
 	}
 	if !tokenMatches(record.ReverseToken, token) {
 		return errUnauthorized
-	}
-	return nil
-}
-
-func (s *Server) findLeaseByHostnameLocked(host string) *leaseRecord {
-	host = normalizeHostname(host)
-	now := time.Now()
-	for _, lease := range s.leases {
-		if now.After(lease.ExpiresAt) {
-			continue
-		}
-		for _, candidate := range lease.Hostnames {
-			if normalizeHostname(candidate) == host {
-				return lease
-			}
-		}
 	}
 	return nil
 }
@@ -417,17 +377,7 @@ func (s *Server) runAPIServer() error {
 
 func (s *Server) connectURL() string {
 	base := strings.TrimRight(s.cfg.PortalURL, "/")
-	if base == "" && s.apiListener != nil {
-		return "https://" + HostPortOrLoopback(s.apiListener.Addr().String()) + types.PathSDKConnect
-	}
 	return base + types.PathSDKConnect
-}
-
-func (s *Server) wrapAPIHandler(base http.Handler) http.Handler {
-	if s.cfg.APIHandlerWrapper == nil {
-		return base
-	}
-	return s.cfg.APIHandlerWrapper(base)
 }
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
@@ -487,5 +437,27 @@ func (s *Server) clientIPFromRequest(r *http.Request) string {
 }
 
 func (s *Server) isClientIPBanned(clientIP string) bool {
-	return s.cfg.Policy.IPFilter().IsIPBanned(clientIP)
+	return s.registry.IsClientIPBanned(clientIP)
+}
+
+func validateAPITLS(apiTLS keyless.TLSMaterialConfig) error {
+	if len(apiTLS.CertPEM) == 0 {
+		return errors.New("api tls certificate is required")
+	}
+	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
+		return errors.New("api tls key or keyless signer is required")
+	}
+	return nil
+}
+
+func newKeylessSignerHandler(apiTLS keyless.TLSMaterialConfig) (http.Handler, error) {
+	if len(apiTLS.KeyPEM) == 0 {
+		return nil, nil
+	}
+
+	signer, err := keyless.NewSigner(apiTLS.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("configure api signer: %w", err)
+	}
+	return signer.Handler(), nil
 }

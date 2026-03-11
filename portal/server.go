@@ -7,16 +7,15 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
-	"github.com/gosuda/portal/v2/types"
 )
 
 const (
@@ -30,15 +29,10 @@ const (
 )
 
 type ServerConfig struct {
-	APIHandlerWrapper     func(http.Handler) http.Handler
-	KeylessSignerHandler  http.Handler
-	Policy                *policy.Runtime
 	PortalURL             string
+	ACME                  acme.Config
 	APIListenAddr         string
 	SNIListenAddr         string
-	RootHost              string
-	RootFallbackAddr      string
-	APITLS                keyless.TLSMaterialConfig
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
@@ -49,45 +43,16 @@ type ServerConfig struct {
 
 type Server struct {
 	sniListener  net.Listener
-	apiTLSClose  io.Closer
 	apiListener  net.Listener
 	apiServer    *http.Server
+	apiTLSClose  io.Closer
+	acmeManager  *acme.Manager
 	cancel       context.CancelFunc
 	group        *errgroup.Group
-	routes       *routeTable
-	leases       map[string]*leaseRecord
+	registry     *leaseRegistry
 	cfg          ServerConfig
-	mu           sync.RWMutex
+	rootHost     string
 	shutdownOnce sync.Once
-}
-
-type leaseRecord struct {
-	ExpiresAt    time.Time
-	FirstSeenAt  time.Time
-	LastSeenAt   time.Time
-	Broker       *leaseBroker
-	ID           string
-	Name         string
-	ReverseToken string
-	ClientIP     string
-	Hostnames    []string
-	Metadata     types.LeaseMetadata
-}
-
-type LeaseSnapshot struct {
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ID          string
-	Name        string
-	ClientIP    string
-	Hostnames   []string
-	Metadata    types.LeaseMetadata
-	Ready       int
-	IsApproved  bool
-	IsBanned    bool
-	IsDenied    bool
-	IsIPBanned  bool
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -102,32 +67,25 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	cfg.IdleKeepaliveInterval = durationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
 	cfg.ReadyQueueLimit = intOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
 	cfg.ClientHelloTimeout = durationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
-	if cfg.RootHost == "" {
-		cfg.RootHost = PortalRootHost(cfg.PortalURL)
-	}
-	if cfg.Policy == nil {
-		cfg.Policy = policy.NewRuntime()
-	}
-	if cfg.RootHost == "" {
+	rootHost := PortalRootHost(cfg.PortalURL)
+	if rootHost == "" {
 		return nil, errors.New("root host is required")
-	}
-	if len(cfg.APITLS.CertPEM) == 0 {
-		return nil, errors.New("api tls certificate is required")
-	}
-	if len(cfg.APITLS.KeyPEM) == 0 && cfg.APITLS.Keyless == nil {
-		return nil, errors.New("api tls key or keyless signer is required")
 	}
 
 	return &Server{
-		cfg:    cfg,
-		routes: newRouteTable(),
-		leases: make(map[string]*leaseRecord),
+		cfg:      cfg,
+		rootHost: rootHost,
+		registry: newLeaseRegistry(policy.NewRuntime()),
 	}, nil
 }
 
-func (s *Server) Start(ctx context.Context) error {
+func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	if s.group != nil {
 		return errors.New("server already started")
+	}
+	apiTLS, acmeManager, err := s.prepareAPITLS(ctx)
+	if err != nil {
+		return err
 	}
 
 	serverCtx, cancel := context.WithCancel(ctx)
@@ -135,20 +93,22 @@ func (s *Server) Start(ctx context.Context) error {
 
 	apiListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.APIListenAddr)
 	if err != nil {
+		acmeManager.Stop()
 		cancel()
 		return fmt.Errorf("listen api: %w", err)
 	}
 	sniListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.SNIListenAddr)
 	if err != nil {
+		acmeManager.Stop()
 		_ = apiListener.Close()
 		cancel()
 		return fmt.Errorf("listen sni: %w", err)
 	}
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
-
-	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener)
+	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
 	if err != nil {
+		acmeManager.Stop()
 		_ = apiListener.Close()
 		_ = sniListener.Close()
 		cancel()
@@ -159,13 +119,15 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sniListener = sniListener
 	s.apiServer = apiServer
 	s.apiTLSClose = apiCloser
+	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
 
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
-	group.Go(func() error { return s.runLeaseJanitor(groupCtx) })
+	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
 	group.Go(func() error { return s.watchContext(groupCtx) })
+	s.acmeManager.Start(serverCtx)
 	return nil
 }
 
@@ -183,11 +145,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			s.cancel()
 		}
 
-		s.mu.Lock()
-		for _, lease := range s.leases {
+		for _, lease := range s.registry.CloseAll() {
 			lease.Broker.Close()
 		}
-		s.mu.Unlock()
 
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -202,8 +162,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		if s.apiTLSClose != nil {
 			_ = s.apiTLSClose.Close()
 		}
+		if s.acmeManager != nil {
+			s.acmeManager.Stop()
+		}
 	})
 	return shutdownErr
+}
+
+func (s *Server) PolicyRuntime() *policy.Runtime {
+	return s.registry.PolicyRuntime()
 }
 
 func (s *Server) APIAddr() string {
@@ -221,36 +188,63 @@ func (s *Server) SNIAddr() string {
 }
 
 func (s *Server) GetLease(leaseID string) (LeaseSnapshot, bool) {
-	s.mu.RLock()
-	record, ok := s.leases[strings.TrimSpace(leaseID)]
-	s.mu.RUnlock()
+	record, ok := s.registry.Get(leaseID)
 	if !ok {
 		return LeaseSnapshot{}, false
 	}
-	return s.snapshotForLease(record), true
+	return s.registry.Snapshot(record), true
 }
 
 func (s *Server) ListLeases() []LeaseSnapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	out := make([]LeaseSnapshot, 0, len(s.leases))
-	for _, record := range s.leases {
-		out = append(out, s.snapshotForLease(record))
+	records := s.registry.List()
+	out := make([]LeaseSnapshot, 0, len(records))
+	for _, record := range records {
+		out = append(out, s.registry.Snapshot(record))
 	}
 	return out
+}
+
+func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
+	acmeCfg := s.cfg.ACME
+	if baseDomain := normalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.rootHost {
+		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.rootHost)
+	}
+	acmeCfg.BaseDomain = s.rootHost
+
+	manager, err := acme.NewManager(acmeCfg)
+	if err != nil {
+		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("create acme manager: %w", err)
+	}
+
+	certPEM, keyPEM, err := manager.EnsureTLSMaterial(ctx)
+	if err != nil {
+		manager.Stop()
+		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("ensure relay certificate: %w", err)
+	}
+
+	apiTLS := keyless.TLSMaterialConfig{
+		CertPEM: certPEM,
+		KeyPEM:  keyPEM,
+	}
+	if err := validateAPITLS(apiTLS); err != nil {
+		manager.Stop()
+		return keyless.TLSMaterialConfig{}, nil, err
+	}
+
+	return apiTLS, manager, nil
 }
 
 func (s *Server) runSNIListener(ctx context.Context) error {
 	for {
 		conn, err := s.sniListener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
-				return nil
-			}
+		switch {
+		case err == nil:
+			go s.handleSNIConn(ctx, conn)
+		case errors.Is(err, net.ErrClosed):
+			return nil
+		default:
 			return err
 		}
-		go s.handleSNIConn(ctx, conn)
 	}
 }
 
@@ -267,25 +261,17 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if serverName == s.cfg.RootHost && s.cfg.RootFallbackAddr != "" {
-		s.bridgeToFallback(ctx, wrappedConn)
+	if serverName == s.rootHost {
+		s.bridgeToAPI(ctx, wrappedConn)
 		return
 	}
 
-	leaseID, ok := s.routes.Lookup(serverName)
-	if !ok {
+	record, ok := s.registry.Lookup(serverName)
+	if !ok || time.Now().After(record.ExpiresAt) {
 		_ = wrappedConn.Close()
 		return
 	}
-
-	s.mu.RLock()
-	record := s.leases[leaseID]
-	s.mu.RUnlock()
-	if record == nil || time.Now().After(record.ExpiresAt) {
-		_ = wrappedConn.Close()
-		return
-	}
-	if !s.isLeaseRoutable(record) {
+	if !s.registry.IsRoutable(record) {
 		_ = wrappedConn.Close()
 		return
 	}
@@ -303,48 +289,18 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 	_ = session.Close()
 }
 
-func (s *Server) bridgeToFallback(ctx context.Context, conn net.Conn) {
+func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
+	if s.apiListener == nil {
+		_ = conn.Close()
+		return
+	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	upstream, err := dialer.DialContext(ctx, "tcp", HostPortOrLoopback(s.cfg.RootFallbackAddr))
+	upstream, err := dialer.DialContext(ctx, "tcp", HostPortOrLoopback(s.apiListener.Addr().String()))
 	if err != nil {
 		_ = conn.Close()
 		return
 	}
 	bridgeConns(conn, upstream)
-}
-
-func (s *Server) runLeaseJanitor(ctx context.Context) error {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			s.cleanupExpiredLeases()
-		}
-	}
-}
-
-func (s *Server) cleanupExpiredLeases() {
-	now := time.Now()
-
-	s.mu.Lock()
-	expired := make([]*leaseRecord, 0)
-	for leaseID, lease := range s.leases {
-		if now.After(lease.ExpiresAt) {
-			expired = append(expired, lease)
-			delete(s.leases, leaseID)
-		}
-	}
-	s.mu.Unlock()
-
-	for _, lease := range expired {
-		s.routes.DeleteLease(lease.Hostnames)
-		s.cfg.Policy.ForgetLease(lease.ID)
-		lease.Broker.Close()
-	}
 }
 
 func (s *Server) watchContext(ctx context.Context) error {
@@ -378,53 +334,5 @@ func closeWrite(conn net.Conn) {
 	}
 	if cw, ok := conn.(closeWriter); ok {
 		_ = cw.CloseWrite()
-	}
-}
-
-func (s *Server) snapshotForLease(record *leaseRecord) LeaseSnapshot {
-	if record == nil {
-		return LeaseSnapshot{}
-	}
-	clientIP := record.ClientIP
-	runtime := s.cfg.Policy
-	return LeaseSnapshot{
-		ID:          record.ID,
-		Name:        record.Name,
-		ClientIP:    clientIP,
-		Hostnames:   append([]string(nil), record.Hostnames...),
-		Metadata:    record.Metadata,
-		ExpiresAt:   record.ExpiresAt,
-		FirstSeenAt: record.FirstSeenAt,
-		LastSeenAt:  record.LastSeenAt,
-		Ready:       record.Broker.ReadyCount(),
-		IsApproved:  runtime.EffectiveApproval(record.ID),
-		IsBanned:    runtime.IsLeaseBanned(record.ID),
-		IsDenied:    runtime.IsLeaseDenied(record.ID),
-		IsIPBanned:  runtime.IPFilter().IsIPBanned(clientIP),
-	}
-}
-
-func (s *Server) isLeaseRoutable(record *leaseRecord) bool {
-	if record == nil {
-		return false
-	}
-	return s.cfg.Policy.IsLeaseRoutable(record.ID)
-}
-
-func (s *Server) touchLease(leaseID, clientIP string) {
-	now := time.Now()
-
-	s.mu.Lock()
-	record := s.leases[strings.TrimSpace(leaseID)]
-	if record != nil {
-		record.LastSeenAt = now
-		if strings.TrimSpace(clientIP) != "" {
-			record.ClientIP = clientIP
-		}
-	}
-	s.mu.Unlock()
-
-	if record != nil && strings.TrimSpace(clientIP) != "" {
-		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
 	}
 }

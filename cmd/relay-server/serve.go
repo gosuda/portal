@@ -14,7 +14,6 @@ import (
 	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/admin"
-	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
 )
@@ -37,70 +36,39 @@ func runServer(cfg relayServerConfig) error {
 	}
 	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
 
-	acmeManager, err := acme.NewManager(acme.Config{
-		BaseDomain:         rootHost,
-		KeyDir:             cfg.KeylessDir,
-		DNSProvider:        cfg.ACMEDNSProvider,
-		CloudflareToken:    cfg.CloudflareToken,
-		AWSAccessKeyID:     cfg.AWSAccessKeyID,
-		AWSSecretAccessKey: cfg.AWSSecretAccessKey,
-		AWSSessionToken:    cfg.AWSSessionToken,
-		AWSRegion:          cfg.AWSRegion,
-		AWSHostedZoneID:    cfg.AWSHostedZoneID,
+	server, err := portal.NewServer(portal.ServerConfig{
+		PortalURL: cfg.PortalURL,
+		ACME: acme.Config{
+			KeyDir:             cfg.KeylessDir,
+			DNSProvider:        cfg.ACMEDNSProvider,
+			CloudflareToken:    cfg.CloudflareToken,
+			AWSAccessKeyID:     cfg.AWSAccessKeyID,
+			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
+			AWSSessionToken:    cfg.AWSSessionToken,
+			AWSRegion:          cfg.AWSRegion,
+			AWSHostedZoneID:    cfg.AWSHostedZoneID,
+		},
+		APIListenAddr:     apiListenAddr,
+		SNIListenAddr:     sniListenAddr,
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
 	})
 	if err != nil {
-		return fmt.Errorf("create acme manager: %w", err)
-	}
-
-	certFile, keyFile, err := acmeManager.EnsureCertificate(ctx)
-	if err != nil {
-		return fmt.Errorf("ensure relay certificate: %w", err)
-	}
-	signer, err := keyless.NewSigner(keyFile)
-	if err != nil {
-		return fmt.Errorf("create keyless signer: %w", err)
+		return fmt.Errorf("create relay server: %w", err)
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
 	adminHandler := admin.NewHandler(cfg.PortalURL, cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
 		frontend.ServeAppStatic(w, r, appPath)
 	})
+	frontend.Bind(server)
+	adminHandler.Bind(server)
 	if loadErr := adminHandler.LoadSettings(); loadErr != nil {
 		logger.Warn().Err(loadErr).Msg("load admin settings")
 	}
 
-	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:         cfg.PortalURL,
-		APIListenAddr:     apiListenAddr,
-		SNIListenAddr:     sniListenAddr,
-		RootHost:          rootHost,
-		RootFallbackAddr:  portal.HostPortOrLoopback(apiListenAddr),
-		Policy:            adminHandler.Runtime(),
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
-		KeylessSignerHandler: func() http.Handler {
-			if signer == nil {
-				return nil
-			}
-			return signer.Handler()
-		}(),
-		APITLS: keyless.TLSMaterialConfig{
-			CertPEM: mustRead(certFile),
-			KeyPEM:  mustRead(keyFile),
-		},
-		APIHandlerWrapper: serveAPI(frontend, adminHandler, cfg),
-	})
-	if err != nil {
-		return fmt.Errorf("create relay server: %w", err)
-	}
-
-	frontend.Bind(server)
-	adminHandler.Bind(server)
-
-	if err := server.Start(ctx); err != nil {
+	if err := server.Start(ctx, newAPIMux(frontend, adminHandler, cfg)); err != nil {
 		return fmt.Errorf("start relay server: %w", err)
 	}
-	acmeManager.Start(ctx)
-	defer acmeManager.Stop()
 
 	logger.Info().
 		Str("api_addr", portal.HostPortOrLoopback(server.APIAddr())).
@@ -113,63 +81,47 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func serveAPI(frontend *Frontend, adminHandler *admin.Handler, cfg relayServerConfig) func(http.Handler) http.Handler {
-	return func(base http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case isRelayControlPlanePath(r.URL.Path):
-				base.ServeHTTP(w, r)
-			case r.URL.Path == types.PathV1Sign:
-				base.ServeHTTP(w, r)
-			case r.URL.Path == types.PathHealthz:
-				base.ServeHTTP(w, r)
-			case isFrontendRootAssetPath(r.URL.Path):
-				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAssetsPrefix):
-				frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
-			case r.URL.Path == types.PathRoot || r.URL.Path == types.PathApp || r.URL.Path == types.PathAppPrefix:
-				frontend.ServeAppStatic(w, r, "")
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix):
-				frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
-			case r.URL.Path == types.PathAdmin || r.URL.Path == types.PathAdminPrefix:
-				adminHandler.HandleRequest(w, r)
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathAdminPrefix):
-				adminHandler.HandleRequest(w, r)
-			case r.URL.Path == types.PathTunnel:
-				serveTunnelScript(w, r, cfg.PortalURL)
-			case strings.HasPrefix(strings.TrimSpace(r.URL.Path), types.PathTunnelBinPrefix):
-				serveTunnelBinary(w, r)
-			default:
-				base.ServeHTTP(w, r)
-			}
+func newAPIMux(frontend *Frontend, adminHandler *admin.Handler, cfg relayServerConfig) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		frontend.ServeAppStatic(w, r, "")
+	})
+	mux.HandleFunc(types.PathApp, func(w http.ResponseWriter, r *http.Request) {
+		frontend.ServeAppStatic(w, r, "")
+	})
+	mux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
+		frontend.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+	})
+	mux.HandleFunc(types.PathAssetsPrefix, func(w http.ResponseWriter, r *http.Request) {
+		frontend.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
+	})
+	for _, assetPath := range frontendRootAssetPaths() {
+		mux.HandleFunc(assetPath, func(w http.ResponseWriter, r *http.Request) {
+			frontend.ServeAsset(w, r, strings.TrimPrefix(assetPath, "/"), "")
 		})
 	}
+
+	mux.HandleFunc(types.PathAdmin, adminHandler.HandleRequest)
+	mux.HandleFunc(types.PathAdminPrefix, adminHandler.HandleRequest)
+	mux.HandleFunc(types.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
+		serveTunnelScript(w, r, cfg.PortalURL)
+	})
+	mux.HandleFunc(types.PathTunnelBinPrefix, serveTunnelBinary)
+
+	return mux
 }
 
-func isFrontendRootAssetPath(requestPath string) bool {
-	switch requestPath {
-	case "/favicon.ico",
+func frontendRootAssetPaths() []string {
+	return []string{
+		"/favicon.ico",
 		"/favicon.svg",
 		"/favicon-96x96.png",
 		"/apple-touch-icon.png",
 		"/web-app-manifest-192x192.png",
 		"/web-app-manifest-512x512.png",
-		"/portal.jpg":
-		return true
-	default:
-		return false
+		"/portal.jpg",
 	}
-}
-
-func mustRead(path string) []byte {
-	if path == "" {
-		log.Fatal().Msg("missing required PEM path")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatal().Err(err).Str("path", path).Msg("read pem file")
-	}
-	return data
 }
 
 func parseURLs(raw string) []string {
@@ -185,12 +137,4 @@ func parseURLs(raw string) []string {
 		}
 	}
 	return out
-}
-
-func isRelayControlPlanePath(path string) bool {
-	switch strings.TrimSpace(path) {
-	case types.PathSDKRegister, types.PathSDKConnect, types.PathSDKRenew, types.PathSDKUnregister, types.PathSDKDomain:
-		return true
-	}
-	return strings.HasPrefix(path, types.PathSDKPrefix)
 }

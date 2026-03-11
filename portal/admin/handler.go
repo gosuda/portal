@@ -16,7 +16,6 @@ const cookieName = "portal_admin"
 
 type Handler struct {
 	auth           *policy.Authenticator
-	runtime        *policy.Runtime
 	server         *portal.Server
 	settings       *stateStore
 	serveAppStatic func(http.ResponseWriter, *http.Request, string)
@@ -27,7 +26,6 @@ type Handler struct {
 func NewHandler(portalURL, secret, settingsPath string, trustProxy bool, serveAppStatic func(http.ResponseWriter, *http.Request, string)) *Handler {
 	h := &Handler{
 		auth:     policy.NewAuthenticator(strings.TrimSpace(secret)),
-		runtime:  policy.NewRuntime(),
 		settings: newStateStore(settingsPath),
 		buildLeaseRows: func(serv *portal.Server, includeAdmin bool) []LeaseRow {
 			return BuildLeaseRows(serv, includeAdmin, portalURL)
@@ -48,12 +46,8 @@ func (h *Handler) Bind(server *portal.Server) {
 	h.server = server
 }
 
-func (h *Handler) Runtime() *policy.Runtime {
-	return h.runtime
-}
-
 func (h *Handler) LoadSettings() error {
-	return h.settings.Load(h.runtime)
+	return h.settings.Load(h.policyRuntime())
 }
 
 func (h *Handler) HandleRequest(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +79,10 @@ func (h *Handler) HandleRequest(w http.ResponseWriter, r *http.Request) {
 
 	if !h.isAuthenticated(r) {
 		writeAPIError(w, http.StatusUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized")
+		return
+	}
+	if h.server == nil {
+		writeAPIError(w, http.StatusInternalServerError, types.APIErrorCodeFeatureUnavailable, "admin handler is not bound to a server")
 		return
 	}
 
@@ -207,7 +205,7 @@ func (h *Handler) handleBannedLeases(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeAPIData(w, http.StatusOK, h.runtime.BannedLeases())
+	writeAPIData(w, http.StatusOK, h.policyRuntime().BannedLeases())
 }
 
 func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +213,7 @@ func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
-	approver := h.runtime.Approver()
+	approver := h.policyRuntime().Approver()
 	writeAPIData(w, http.StatusOK, types.AdminSettingsResponse{
 		ApprovalMode:   string(approver.Mode()),
 		ApprovedLeases: approver.ApprovedLeases(),
@@ -224,7 +222,8 @@ func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleApprovalMode(w http.ResponseWriter, r *http.Request) {
-	approver := h.runtime.Approver()
+	runtime := h.policyRuntime()
+	approver := runtime.Approver()
 	switch r.Method {
 	case http.MethodGet:
 		writeAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{ApprovalMode: string(approver.Mode())})
@@ -238,7 +237,7 @@ func (h *Handler) handleApprovalMode(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "invalid mode (must be 'auto' or 'manual')")
 			return
 		}
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{ApprovalMode: string(approver.Mode())})
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
@@ -274,14 +273,15 @@ func (h *Handler) handleLeaseAction(w http.ResponseWriter, r *http.Request, path
 }
 
 func (h *Handler) handleLeaseBan(w http.ResponseWriter, r *http.Request, leaseID string) {
+	runtime := h.policyRuntime()
 	switch r.Method {
 	case http.MethodPost:
-		h.runtime.BanLease(leaseID)
-		_ = h.settings.Save(h.runtime)
+		runtime.BanLease(leaseID)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
-		h.runtime.UnbanLease(leaseID)
-		_ = h.settings.Save(h.runtime)
+		runtime.UnbanLease(leaseID)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
@@ -289,16 +289,17 @@ func (h *Handler) handleLeaseBan(w http.ResponseWriter, r *http.Request, leaseID
 }
 
 func (h *Handler) handleLeaseApproval(w http.ResponseWriter, r *http.Request, leaseID string) {
-	approver := h.runtime.Approver()
+	runtime := h.policyRuntime()
+	approver := runtime.Approver()
 	switch r.Method {
 	case http.MethodPost:
 		approver.Approve(leaseID)
 		approver.Undeny(leaseID)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		approver.Revoke(leaseID)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
@@ -306,15 +307,16 @@ func (h *Handler) handleLeaseApproval(w http.ResponseWriter, r *http.Request, le
 }
 
 func (h *Handler) handleLeaseDenial(w http.ResponseWriter, r *http.Request, leaseID string) {
-	approver := h.runtime.Approver()
+	runtime := h.policyRuntime()
+	approver := runtime.Approver()
 	switch r.Method {
 	case http.MethodPost:
 		approver.Deny(leaseID)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		approver.Undeny(leaseID)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
@@ -333,15 +335,16 @@ func (h *Handler) handleIPBan(w http.ResponseWriter, r *http.Request, path strin
 		return
 	}
 
-	ipFilter := h.runtime.IPFilter()
+	runtime := h.policyRuntime()
+	ipFilter := runtime.IPFilter()
 	switch r.Method {
 	case http.MethodPost:
 		ipFilter.BanIP(rawIP)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	case http.MethodDelete:
 		ipFilter.UnbanIP(rawIP)
-		_ = h.settings.Save(h.runtime)
+		_ = h.settings.Save(runtime)
 		writeAPIOK(w, http.StatusOK)
 	default:
 		writeAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
@@ -403,4 +406,11 @@ func writeAPIErrorWithData(w http.ResponseWriter, status int, code, message stri
 		Data:  data,
 		Error: &types.APIError{Code: code, Message: message},
 	})
+}
+
+func (h *Handler) policyRuntime() *policy.Runtime {
+	if h.server == nil {
+		return nil
+	}
+	return h.server.PolicyRuntime()
 }

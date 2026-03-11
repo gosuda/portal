@@ -151,6 +151,23 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 	return m.TLSFiles()
 }
 
+func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error) {
+	certFile, keyFile, err := m.EnsureCertificate(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read api tls certificate: %w", err)
+	}
+	keyPEM, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read api tls private key: %w", err)
+	}
+	return certPEM, keyPEM, nil
+}
+
 func (m *Manager) Start(ctx context.Context) {
 	if m == nil || isLocalhost(m.cfg.BaseDomain) {
 		return

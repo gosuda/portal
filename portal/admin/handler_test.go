@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
 )
@@ -18,6 +19,11 @@ func TestLoginAndProtectedActions(t *testing.T) {
 	handler := NewHandler("https://portal.example.com", "secret-key", filepath.Join(t.TempDir(), "admin_settings.json"), false, func(w http.ResponseWriter, _ *http.Request, _ string) {
 		w.WriteHeader(http.StatusOK)
 	})
+	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://portal.example.com"})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	handler.Bind(server)
 
 	loginRecorder := httptest.NewRecorder()
 	loginRequest := httptest.NewRequest(http.MethodPost, types.PathAdminLogin, bytes.NewBufferString(`{"key":"secret-key"}`))
@@ -54,7 +60,7 @@ func TestLoginAndProtectedActions(t *testing.T) {
 	if approvalRecorder.Code != http.StatusOK {
 		t.Fatalf("approval status = %d, want %d", approvalRecorder.Code, http.StatusOK)
 	}
-	if got := handler.runtime.Approver().Mode(); got != policy.ModeManual {
+	if got := server.PolicyRuntime().Approver().Mode(); got != policy.ModeManual {
 		t.Fatalf("approval mode = %q, want %q", got, policy.ModeManual)
 	}
 
@@ -66,7 +72,7 @@ func TestLoginAndProtectedActions(t *testing.T) {
 	if ipBanRecorder.Code != http.StatusOK {
 		t.Fatalf("ip ban status = %d, want %d", ipBanRecorder.Code, http.StatusOK)
 	}
-	if !handler.runtime.IPFilter().IsIPBanned("203.0.113.10") {
+	if !server.PolicyRuntime().IPFilter().IsIPBanned("203.0.113.10") {
 		t.Fatalf("IsIPBanned() = false, want true")
 	}
 }
