@@ -54,6 +54,7 @@ type Listener struct {
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
+// Only local config validation fails immediately; relay startup runs in the background until ready.
 func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Listener, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -66,7 +67,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	renewBefore := utils.DurationOrDefault(cfg.RenewBefore, defaultRenewBefore)
 	retryWait := utils.DurationOrDefault(cfg.RetryWait, defaultRetryWait)
 
-	api, err := newApiClient(listenerCtx, relayURL, cfg)
+	api, err := newApiClient(relayURL, cfg)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -85,42 +86,36 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		handshakeTimeout: handshakeTimeout,
 	}
 
-	resp, err := api.registerLease(listenerCtx, leaseTTL)
-	if err != nil {
-		api.close()
-		cancel()
-		return nil, err
-	}
-
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(api.baseURL.String(), []string{resp.Hostname})
-	if err != nil {
-		_ = api.unregisterLease(context.Background(), resp.LeaseID)
-		api.close()
-		cancel()
-		return nil, err
-	}
-
-	if listenerCtx.Err() != nil {
-		_ = api.unregisterLease(context.Background(), resp.LeaseID)
-		_ = tlsCloser.Close()
-		api.close()
-		cancel()
-		return nil, listenerCtx.Err()
-	}
-
-	l.mu.Lock()
-	l.leaseID = resp.LeaseID
-	l.hostname = resp.Hostname
-	l.metadata = resp.Metadata.Copy()
-	l.tlsConfig = tlsConf
-	l.tlsCloser = tlsCloser
-	l.mu.Unlock()
-
-	for i := 0; i < l.readyTarget; i++ {
-		go l.runSessionLoop(listenerCtx)
-	}
-	go l.runRenewLoop(listenerCtx)
+	go l.runStartup(listenerCtx)
 	return l, nil
+}
+
+func (l *Listener) runStartup(ctx context.Context) {
+	var retries int
+
+	for {
+		err := l.registerAndConfigure(ctx)
+		switch {
+		case err == nil:
+			for i := 0; i < l.readyTarget; i++ {
+				go l.runSessionLoop(ctx)
+			}
+			go l.runRenewLoop(ctx)
+			log.Info().
+				Str("component", "sdk-listener").
+				Str("lease_id", l.LeaseID()).
+				Str("hostname", l.Hostname()).
+				Msg("listener ready")
+			return
+		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
+			return
+		default:
+			retries++
+			if !l.retryOrClose(ctx, "lease registration", err, retries) {
+				return
+			}
+		}
+	}
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
@@ -333,36 +328,25 @@ func (l *Listener) renewLease(ctx context.Context) error {
 		return err
 	}
 
-	log.Warn().
-		Err(err).
-		Str("component", "sdk-listener").
-		Str("lease_id", leaseID).
-		Msg("lease not found on relay, attempting re-registration")
-
 	if err := l.reregister(ctx); err != nil {
 		return err
 	}
-
-	log.Info().
-		Str("component", "sdk-listener").
-		Str("lease_id", l.LeaseID()).
-		Str("hostname", l.Hostname()).
-		Msg("lease re-registered successfully")
 	return nil
 }
 
-func (l *Listener) reregister(ctx context.Context) error {
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+func (l *Listener) registerAndConfigure(ctx context.Context) error {
+	if err := l.api.ensureReady(ctx); err != nil {
+		return err
+	}
 
-	resp, err := l.api.registerLease(requestCtx, l.leaseTTL)
+	resp, err := l.api.registerLease(ctx, l.leaseTTL)
 	if err != nil {
 		return err
 	}
 
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
-		_ = l.api.unregisterLease(requestCtx, resp.LeaseID)
+		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
 		return err
 	}
 
@@ -373,6 +357,12 @@ func (l *Listener) reregister(ctx context.Context) error {
 	}
 
 	l.mu.Lock()
+	if ctx.Err() != nil {
+		l.mu.Unlock()
+		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		_ = tlsCloser.Close()
+		return ctx.Err()
+	}
 	oldCloser := l.tlsCloser
 	l.leaseID = resp.LeaseID
 	l.hostname = resp.Hostname
@@ -385,6 +375,13 @@ func (l *Listener) reregister(ctx context.Context) error {
 		_ = oldCloser.Close()
 	}
 	return nil
+}
+
+func (l *Listener) reregister(ctx context.Context) error {
+	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	return l.registerAndConfigure(requestCtx)
 }
 
 func isLeaseNotFound(err error) bool {
@@ -403,20 +400,24 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 		Logger()
 
 	if l.retryCount > 0 && retries > l.retryCount {
-		logger.Error().
-			Err(err).
-			Int("retry_count", l.retryCount).
-			Msg("retry budget exhausted; closing listener")
+		if operation != "lease renewal" {
+			logger.Error().
+				Err(err).
+				Int("retry_count", l.retryCount).
+				Msg("retry budget exhausted; closing listener")
+		}
 		_ = l.Close()
 		return false
 	}
 
-	logger.Warn().
-		Err(err).
-		Int("retry_attempt", retries).
-		Int("retry_count", l.retryCount).
-		Dur("retry_wait", l.retryWait).
-		Msg("operation failed; retrying")
+	if operation != "lease renewal" {
+		logger.Warn().
+			Err(err).
+			Int("retry_attempt", retries).
+			Int("retry_count", l.retryCount).
+			Dur("retry_wait", l.retryWait).
+			Msg("operation failed; retrying")
+	}
 
 	return utils.SleepOrDone(ctx, l.retryWait)
 }

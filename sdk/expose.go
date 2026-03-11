@@ -83,7 +83,7 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
 		Strs("public_urls", exposure.PublicURLs()).
-		Msg("exposure ready")
+		Msg("exposure started")
 
 	return exposure, nil
 }
@@ -373,7 +373,6 @@ func mergeListeners(listeners ...net.Listener) (net.Listener, error) {
 		merged.listeners = append(merged.listeners, listener)
 	}
 
-	merged.addr = merged.buildAddr()
 	merged.active = len(merged.listeners)
 	for _, listener := range merged.listeners {
 		source := listener
@@ -386,7 +385,6 @@ type mergedListener struct {
 	listeners []net.Listener
 	accepted  chan net.Conn
 	closed    chan struct{}
-	addr      net.Addr
 
 	closeOnce   sync.Once
 	mu          sync.Mutex
@@ -426,10 +424,6 @@ func (l *mergedListener) Close() error {
 }
 
 func (l *mergedListener) Addr() net.Addr {
-	return l.addr
-}
-
-func (l *mergedListener) buildAddr() net.Addr {
 	if len(l.listeners) == 1 {
 		return l.listeners[0].Addr()
 	}

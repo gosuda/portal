@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -31,16 +32,18 @@ const (
 )
 
 type apiClient struct {
-	baseURL      *url.URL
-	httpClient   *http.Client
-	rawTLSConfig *tls.Config
-	dialTimeout  time.Duration
-	name         string
-	reverseToken string
-	metadata     types.LeaseMetadata
+	baseURL        *url.URL
+	httpClient     *http.Client
+	rawTLSConfig   *tls.Config
+	dialTimeout    time.Duration
+	requestTimeout time.Duration
+	rootCAPEM      []byte
+	name           string
+	reverseToken   string
+	metadata       types.LeaseMetadata
 }
 
-func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*apiClient, error) {
+func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	name, err := utils.NormalizeDNSLabel(cfg.Name)
 	if err != nil {
 		return nil, err
@@ -61,55 +64,17 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
 
-	rootCAPEM := append([]byte(nil), cfg.RootCAPEM...)
-	if len(rootCAPEM) == 0 && utils.IsLocalRelayHost(baseURL.Hostname()) {
-		bootstrapParent := ctx
-		if bootstrapParent == nil {
-			bootstrapParent = context.Background()
-		}
-		bootstrapCtx, cancel := context.WithTimeout(bootstrapParent, defaultDialTimeout+defaultHandshakeTimeout)
-		defer cancel()
-
-		_, resolvedCAPEM, bootstrapErr := keyless.ResolveMaterials(bootstrapCtx, baseURL.String(), baseURL.Hostname())
-		if bootstrapErr != nil {
-			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", bootstrapErr)
-		}
-		rootCAPEM = resolvedCAPEM
-	}
-
-	rootCAs, err := utils.CertPoolFromPEM(rootCAPEM)
-	if err != nil {
-		return nil, err
-	}
-
 	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
-	baseTLS := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ServerName: baseURL.Hostname(),
-		RootCAs:    rootCAs,
-		NextProtos: []string{"http/1.1"},
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig:   baseTLS.Clone(),
-		ForceAttemptHTTP2: false,
-	}
-
 	api := &apiClient{
-		baseURL:      baseURL,
-		httpClient:   &http.Client{Transport: transport, Timeout: requestTimeout},
-		rawTLSConfig: baseTLS,
-		dialTimeout:  dialTimeout,
-		name:         name,
-		reverseToken: reverseToken,
-		metadata:     cfg.Metadata.Copy(),
-	}
-
-	if err := api.ensureCompatible(ctx); err != nil {
-		api.close()
-		return nil, err
+		baseURL:        baseURL,
+		dialTimeout:    dialTimeout,
+		requestTimeout: requestTimeout,
+		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
+		name:           name,
+		reverseToken:   reverseToken,
+		metadata:       cfg.Metadata.Copy(),
 	}
 	return api, nil
 }
@@ -136,9 +101,59 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration) (types
 	return resp, nil
 }
 
-func (a *apiClient) ensureCompatible(ctx context.Context) error {
+func (a *apiClient) ensureReady(ctx context.Context) error {
+	if a.httpClient != nil && a.rawTLSConfig != nil {
+		return nil
+	}
+
+	rootCAPEM := append([]byte(nil), a.rootCAPEM...)
+	if len(rootCAPEM) == 0 && utils.IsLocalRelayHost(a.baseURL.Hostname()) {
+		bootstrapParent := ctx
+		if bootstrapParent == nil {
+			bootstrapParent = context.Background()
+		}
+		bootstrapCtx, cancel := context.WithTimeout(bootstrapParent, defaultDialTimeout+defaultHandshakeTimeout)
+		defer cancel()
+
+		_, resolvedCAPEM, err := keyless.ResolveMaterials(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname())
+		if err != nil {
+			return fmt.Errorf("bootstrap localhost relay trust: %w", err)
+		}
+		rootCAPEM = resolvedCAPEM
+	}
+
+	rootCAs, err := utils.CertPoolFromPEM(rootCAPEM)
+	if err != nil {
+		return err
+	}
+
+	rawTLSConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: a.baseURL.Hostname(),
+		RootCAs:    rootCAs,
+		NextProtos: []string{"http/1.1"},
+	}
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   rawTLSConfig.Clone(),
+			ForceAttemptHTTP2: false,
+		},
+		Timeout: a.requestTimeout,
+	}
+	if err := a.ensureCompatible(ctx, httpClient); err != nil {
+		a.close()
+		return err
+	}
+
+	a.close()
+	a.httpClient = httpClient
+	a.rawTLSConfig = rawTLSConfig
+	return nil
+}
+
+func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
 	var resp types.DomainResponse
-	if err := a.doJSON(ctx, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
+	if err := a.doJSONWithClient(ctx, httpClient, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
 		return fmt.Errorf("check relay compatibility: %w", err)
 	}
 	if strings.TrimSpace(resp.Version) != types.SDKProtocolVersion {
@@ -211,6 +226,14 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 }
 
 func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
+	return a.doJSONWithClient(ctx, a.httpClient, method, path, payload, out)
+}
+
+func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Client, method, path string, payload any, out any) error {
+	if httpClient == nil {
+		return errors.New("api client is not ready")
+	}
+
 	var body io.Reader
 	if payload != nil {
 		buf, err := json.Marshal(payload)
@@ -227,7 +250,7 @@ func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}

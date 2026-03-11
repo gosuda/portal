@@ -32,6 +32,9 @@ Portal-tunnel connects a local service to a Portal relay with the legacy CLI sha
 - Multiple relay URLs are registered independently. Each relay gets its own lease ID and public URLs.
 - Relay publishes each service at `<name>.<portal root host>`.
 - Portal-tunnel now consumes one aggregate SDK listener, so the CLI no longer manages per-relay listener loops itself.
-- Startup is fail-fast: if any configured relay cannot register, the tunnel exits instead of partially publishing.
+- Relay startup and reconnect failures are retried independently in the background. A relay that is down does not stop healthy relays from continuing to serve traffic.
+- The tunnel starts once relay URLs pass local validation. Remote compatibility checks, lease registration, and reconnects continue in the background until each relay becomes ready.
+- The configured relay list stays fixed, but published public URLs appear only for relays that have registered successfully.
+- SDK callers that do not set `ListenerConfig.RetryCount` use infinite retry semantics for each relay.
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.
