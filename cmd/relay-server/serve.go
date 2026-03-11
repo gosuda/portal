@@ -15,6 +15,7 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/admin"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 func runServer(cfg relayServerConfig) error {
@@ -26,7 +27,7 @@ func runServer(cfg relayServerConfig) error {
 	if len(cfg.Bootstraps) > 0 && cfg.PortalURL == "" {
 		cfg.PortalURL = cfg.Bootstraps[0]
 	}
-	rootHost := portal.PortalRootHost(cfg.PortalURL)
+	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
 	server, err := portal.NewServer(portal.ServerConfig{
@@ -65,7 +66,7 @@ func runServer(cfg relayServerConfig) error {
 	}
 
 	logger.Info().
-		Str("api_addr", portal.HostPortOrLoopback(server.APIAddr())).
+		Str("api_addr", utils.HostPortOrLoopback(server.APIAddr())).
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
@@ -116,19 +117,4 @@ func frontendRootAssetPaths() []string {
 		"/web-app-manifest-512x512.png",
 		"/portal.jpg",
 	}
-}
-
-func parseURLs(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }

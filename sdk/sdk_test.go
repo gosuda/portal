@@ -336,26 +336,6 @@ func TestExposeNoRelayInputs(t *testing.T) {
 	}
 }
 
-func TestNormalizeRelayURLs(t *testing.T) {
-	t.Parallel()
-
-	got, err := NormalizeRelayURLs([]string{
-		" localhost:4017 , https://relay.example.com/base/relay?x=1#frag ",
-		"https://relay.example.com/base",
-	})
-	if err != nil {
-		t.Fatalf("NormalizeRelayURLs() error = %v", err)
-	}
-
-	want := []string{
-		"https://localhost:4017",
-		"https://relay.example.com/base",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("NormalizeRelayURLs() = %v, want %v", got, want)
-	}
-}
-
 func writeSDKTestEnvelope[T any](w http.ResponseWriter, status int, envelope types.APIEnvelope[T]) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

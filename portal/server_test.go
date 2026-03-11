@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
@@ -45,7 +46,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		}
 	})
 
-	healthResp, err := client.Get("https://" + HostPortOrLoopback(server.APIAddr()) + types.PathHealthz)
+	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("GET /healthz error = %v", err)
 	}
@@ -63,7 +64,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		t.Fatalf("GET /healthz response = %+v, want ok status", healthEnvelope)
 	}
 
-	signResp, err := client.Get("https://" + HostPortOrLoopback(server.APIAddr()) + types.PathV1Sign)
+	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathV1Sign)
 	if err != nil {
 		t.Fatalf("GET /v1/sign error = %v", err)
 	}

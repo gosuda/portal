@@ -4,10 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +18,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -52,25 +51,21 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 
 	reverseToken := strings.TrimSpace(cfg.ReverseToken)
 	if reverseToken == "" {
-		reverseToken = randomToken()
+		reverseToken = utils.RandomID("tok_")
 	}
 
-	baseURL, err := url.Parse(strings.TrimSpace(relayURL))
+	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return nil, err
+	}
+
+	baseURL, err := url.Parse(normalizedRelayURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse relay url: %w", err)
 	}
-	if !strings.EqualFold(baseURL.Scheme, "https") {
-		return nil, fmt.Errorf("relay url must use https: %q", relayURL)
-	}
-	if baseURL.Host == "" {
-		return nil, fmt.Errorf("relay url host is empty: %q", relayURL)
-	}
-	baseURL.Path = strings.TrimRight(baseURL.Path, "/")
-	baseURL.RawQuery = ""
-	baseURL.Fragment = ""
 
 	rootCAPEM := append([]byte(nil), cfg.RootCAPEM...)
-	if len(rootCAPEM) == 0 && isLocalRelayHost(baseURL.Hostname()) {
+	if len(rootCAPEM) == 0 && utils.IsLocalRelayHost(baseURL.Hostname()) {
 		bootstrapParent := ctx
 		if bootstrapParent == nil {
 			bootstrapParent = context.Background()
@@ -90,14 +85,8 @@ func newApiClient(ctx context.Context, relayURL string, cfg ListenerConfig) (*ap
 		return nil, err
 	}
 
-	dialTimeout := cfg.DialTimeout
-	if dialTimeout <= 0 {
-		dialTimeout = defaultDialTimeout
-	}
-	requestTimeout := cfg.RequestTimeout
-	if requestTimeout <= 0 {
-		requestTimeout = defaultRequestTimeout
-	}
+	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
+	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
 	baseTLS := &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -188,7 +177,7 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 		Config:    a.rawTLSConfig.Clone(),
 	}
 
-	conn, err := dialer.DialContext(ctx, "tcp", ensurePort(a.baseURL.Host))
+	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(a.baseURL.Host))
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +211,7 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		apiErr := decodeAPIResponseError(resp)
+		apiErr := utils.DecodeAPIRequestError(resp)
 		_ = conn.Close()
 		return nil, apiErr
 	}
@@ -253,22 +242,12 @@ func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any
 	}
 	defer resp.Body.Close()
 
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	envelope, err := utils.DecodeAPIEnvelope[json.RawMessage](resp.Body)
+	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
-		if envelope.Error == nil {
-			return &types.APIRequestError{
-				StatusCode: resp.StatusCode,
-				Message:    fmt.Sprintf("api request failed with status %d", resp.StatusCode),
-			}
-		}
-		return &types.APIRequestError{
-			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
-		}
+		return utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
 	}
 	if out == nil {
 		return nil
@@ -285,54 +264,6 @@ func buildRootCAs(rootCAPEM []byte) (*x509.CertPool, error) {
 		return nil, errors.New("failed to parse relay root ca")
 	}
 	return pool, nil
-}
-
-func decodeAPIResponseError(resp *http.Response) error {
-	if resp == nil {
-		return &types.APIRequestError{Message: "empty api response"}
-	}
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != nil {
-		return &types.APIRequestError{
-			StatusCode: resp.StatusCode,
-			Code:       envelope.Error.Code,
-			Message:    envelope.Error.Message,
-		}
-	}
-
-	return &types.APIRequestError{
-		StatusCode: resp.StatusCode,
-		Message:    strings.TrimSpace(string(body)),
-	}
-}
-
-func randomToken() string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err)
-	}
-	return "tok_" + hex.EncodeToString(buf)
-}
-
-func ensurePort(host string) string {
-	if _, _, err := net.SplitHostPort(host); err == nil {
-		return host
-	}
-	return net.JoinHostPort(host, "443")
-}
-
-func isLocalRelayHost(host string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
-	switch host {
-	case "", "localhost":
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return strings.HasSuffix(host, ".localhost")
 }
 
 func cloneMetadata(metadata types.LeaseMetadata) types.LeaseMetadata {

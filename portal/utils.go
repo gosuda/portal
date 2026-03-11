@@ -1,26 +1,58 @@
 package portal
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"io"
 	"net"
-	"net/url"
+	"net/http"
 	"strings"
-	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/utils"
 )
 
-func PortalRootHost(portalURL string) string {
-	u, err := url.Parse(strings.TrimSpace(portalURL))
-	if err != nil || u.Host == "" {
-		return ""
-	}
-	return normalizeHostname(u.Hostname())
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, defaultControlBodyLimit)
+	defer r.Body.Close()
+	return json.NewDecoder(r.Body).Decode(dst)
 }
 
-func normalizeHostname(host string) string {
-	host = strings.TrimSpace(strings.ToLower(host))
-	host = strings.TrimSuffix(host, ".")
-	return host
+func normalizeHostnames(hosts []string) []string {
+	seen := make(map[string]struct{}, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		host = utils.NormalizeHostname(host)
+		if host == "" {
+			continue
+		}
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		out = append(out, host)
+	}
+	return out
+}
+
+func tokenMatches(expected, actual string) bool {
+	if len(expected) == 0 || len(actual) == 0 {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
+}
+
+func validateAPITLS(apiTLS keyless.TLSMaterialConfig) error {
+	if len(apiTLS.CertPEM) == 0 {
+		return errors.New("api tls certificate is required")
+	}
+	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
+		return errors.New("api tls key or keyless signer is required")
+	}
+	return nil
 }
 
 func sanitizeLabel(name string) string {
@@ -58,35 +90,29 @@ func suggestHostname(name, rootHost string) string {
 	return label + "." + rootHost
 }
 
-func randomID(prefix string) string {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		panic(err)
-	}
-	return prefix + hex.EncodeToString(buf)
+func bridgeConns(left, right net.Conn) {
+	defer left.Close()
+	defer right.Close()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := io.Copy(right, left)
+		closeWrite(right)
+		return err
+	})
+	group.Go(func() error {
+		_, err := io.Copy(left, right)
+		closeWrite(left)
+		return err
+	})
+	_ = group.Wait()
 }
 
-func durationOrDefault(v, fallback time.Duration) time.Duration {
-	if v > 0 {
-		return v
+func closeWrite(conn net.Conn) {
+	type closeWriter interface {
+		CloseWrite() error
 	}
-	return fallback
-}
-
-func intOrDefault(v, fallback int) int {
-	if v > 0 {
-		return v
+	if cw, ok := conn.(closeWriter); ok {
+		_ = cw.CloseWrite()
 	}
-	return fallback
-}
-
-func HostPortOrLoopback(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if host == "" || host == "::" || host == "0.0.0.0" {
-		host = "127.0.0.1"
-	}
-	return net.JoinHostPort(host, port)
 }

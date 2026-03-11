@@ -15,6 +15,7 @@ import (
 
 	"github.com/gosuda/portal/v2/sdk"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 var (
@@ -54,9 +55,9 @@ func runDemo() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
 	defer stop()
 
-	exposure, err := sdk.Expose(ctx, sdk.SplitCSV(flagServerURLs), flagName, types.LeaseMetadata{
+	exposure, err := sdk.Expose(ctx, utils.SplitCSV(flagServerURLs), flagName, types.LeaseMetadata{
 		Description: flagDesc,
-		Tags:        sdk.SplitCSV(flagTags),
+		Tags:        utils.SplitCSV(flagTags),
 		Owner:       flagOwner,
 		Thumbnail:   flagThumbnail,
 		Hide:        flagHide,
@@ -69,7 +70,7 @@ func runDemo() error {
 		logger.Info().Msg("demo app running without relay")
 	}
 
-	flagAddr, err := sdk.NormalizeTargetAddr(flagAddr)
+	flagAddr, err := utils.NormalizeTargetAddr(flagAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --addr value %q: %w", flagAddr, err)
 	}

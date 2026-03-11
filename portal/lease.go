@@ -10,6 +10,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 type leaseRegistry struct {
@@ -89,7 +90,7 @@ func (r *leaseRegistry) Get(leaseID string) (*leaseRecord, bool) {
 }
 
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
-	host = normalizeHostname(host)
+	host = utils.NormalizeHostname(host)
 	if host == "" {
 		return nil, false
 	}
@@ -301,7 +302,7 @@ func newRouteTable() *routeTable {
 }
 
 func (t *routeTable) Set(host, leaseID string) {
-	host = normalizeHostname(host)
+	host = utils.NormalizeHostname(host)
 	if host == "" {
 		return
 	}
@@ -310,12 +311,12 @@ func (t *routeTable) Set(host, leaseID string) {
 
 func (t *routeTable) DeleteLease(hosts []string) {
 	for _, host := range hosts {
-		delete(t.exact, normalizeHostname(host))
+		delete(t.exact, utils.NormalizeHostname(host))
 	}
 }
 
 func (t *routeTable) LookupExact(host string) (string, bool) {
-	host = normalizeHostname(host)
+	host = utils.NormalizeHostname(host)
 	if host == "" {
 		return "", false
 	}
@@ -324,7 +325,7 @@ func (t *routeTable) LookupExact(host string) (string, bool) {
 }
 
 func (t *routeTable) Lookup(host string) (string, bool) {
-	host = normalizeHostname(host)
+	host = utils.NormalizeHostname(host)
 	if host == "" {
 		return "", false
 	}
@@ -333,14 +334,11 @@ func (t *routeTable) Lookup(host string) (string, bool) {
 		return leaseID, true
 	}
 
-	parts := stringsSplit(host, ".")
+	parts := strings.Split(host, ".")
 	if len(parts) < 3 {
 		return "", false
 	}
-	wildcard := "*." + stringsJoin(parts[1:], ".")
+	wildcard := "*." + strings.Join(parts[1:], ".")
 	leaseID, ok := t.exact[wildcard]
 	return leaseID, ok
 }
-
-func stringsSplit(s, sep string) []string           { return strings.Split(s, sep) }
-func stringsJoin(parts []string, sep string) string { return strings.Join(parts, sep) }

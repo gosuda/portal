@@ -17,6 +17,7 @@ import (
 
 	"github.com/gosuda/portal/v2/sdk"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 var (
@@ -62,9 +63,9 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	exposure, err := sdk.Expose(ctx, sdk.SplitCSV(flagRelayURLs), flagName, types.LeaseMetadata{
+	exposure, err := sdk.Expose(ctx, utils.SplitCSV(flagRelayURLs), flagName, types.LeaseMetadata{
 		Description: flagDesc,
-		Tags:        sdk.SplitCSV(flagTags),
+		Tags:        utils.SplitCSV(flagTags),
 		Owner:       flagOwner,
 		Thumbnail:   flagThumbnail,
 		Hide:        flagHide,

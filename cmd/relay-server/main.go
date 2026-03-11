@@ -9,6 +9,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -92,7 +94,7 @@ func main() {
 	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
 	flag.Parse()
 
-	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	cfg.Bootstraps = utils.SplitCSV(bootstrapsCSV)
 	if len(cfg.Bootstraps) == 0 {
 		cfg.Bootstraps = []string{cfg.PortalURL}
 	}

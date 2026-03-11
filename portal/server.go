@@ -16,6 +16,7 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -63,17 +64,17 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.SNIListenAddr == "" {
 		cfg.SNIListenAddr = ":443"
 	}
-	cfg.LeaseTTL = durationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
-	cfg.ClaimTimeout = durationOrDefault(cfg.ClaimTimeout, defaultClaimTimeout)
-	cfg.IdleKeepaliveInterval = durationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
-	cfg.ReadyQueueLimit = intOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
-	cfg.ClientHelloTimeout = durationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
+	cfg.LeaseTTL = utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
+	cfg.ClaimTimeout = utils.DurationOrDefault(cfg.ClaimTimeout, defaultClaimTimeout)
+	cfg.IdleKeepaliveInterval = utils.DurationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
+	cfg.ReadyQueueLimit = utils.IntOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
+	cfg.ClientHelloTimeout = utils.DurationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
 	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
 	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
-	rootHost := PortalRootHost(cfg.PortalURL)
+	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
@@ -212,7 +213,7 @@ func (s *Server) ListLeases() []LeaseSnapshot {
 
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
 	acmeCfg := s.cfg.ACME
-	if baseDomain := normalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.rootHost {
+	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.rootHost {
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.rootHost)
 	}
 	acmeCfg.BaseDomain = s.rootHost
@@ -261,7 +262,7 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	serverName := normalizeHostname(clientHello.ServerName)
+	serverName := utils.NormalizeHostname(clientHello.ServerName)
 	if serverName == "" {
 		_ = wrappedConn.Close()
 		return
@@ -301,7 +302,7 @@ func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
 		return
 	}
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	upstream, err := dialer.DialContext(ctx, "tcp", HostPortOrLoopback(s.apiListener.Addr().String()))
+	upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
 	if err != nil {
 		_ = conn.Close()
 		return
@@ -314,31 +315,4 @@ func (s *Server) watchContext(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
-}
-
-func bridgeConns(left, right net.Conn) {
-	defer left.Close()
-	defer right.Close()
-
-	var group errgroup.Group
-	group.Go(func() error {
-		_, err := io.Copy(right, left)
-		closeWrite(right)
-		return err
-	})
-	group.Go(func() error {
-		_, err := io.Copy(left, right)
-		closeWrite(left)
-		return err
-	})
-	_ = group.Wait()
-}
-
-func closeWrite(conn net.Conn) {
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if cw, ok := conn.(closeWriter); ok {
-		_ = cw.CloseWrite()
-	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 type ListenerConfig struct {
@@ -60,26 +61,11 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	}
 
 	listenerCtx, cancel := context.WithCancel(ctx)
-	readyTarget := cfg.ReadyTarget
-	if readyTarget <= 0 {
-		readyTarget = defaultReadyTarget
-	}
-	leaseTTL := cfg.LeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = defaultLeaseTTL
-	}
-	handshakeTimeout := cfg.HandshakeTimeout
-	if handshakeTimeout <= 0 {
-		handshakeTimeout = defaultHandshakeTimeout
-	}
-	renewBefore := cfg.RenewBefore
-	if renewBefore <= 0 {
-		renewBefore = defaultRenewBefore
-	}
-	retryWait := cfg.RetryWait
-	if retryWait <= 0 {
-		retryWait = defaultRetryWait
-	}
+	readyTarget := utils.IntOrDefault(cfg.ReadyTarget, defaultReadyTarget)
+	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
+	handshakeTimeout := utils.DurationOrDefault(cfg.HandshakeTimeout, defaultHandshakeTimeout)
+	renewBefore := utils.DurationOrDefault(cfg.RenewBefore, defaultRenewBefore)
+	retryWait := utils.DurationOrDefault(cfg.RetryWait, defaultRetryWait)
 
 	api, err := newApiClient(listenerCtx, relayURL, cfg)
 	if err != nil {
