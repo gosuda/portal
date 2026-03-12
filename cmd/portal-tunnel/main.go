@@ -21,14 +21,15 @@ import (
 )
 
 var (
-	flagRelayURLs string
-	flagHost      string
-	flagName      string
-	flagDesc      string
-	flagTags      string
-	flagThumbnail string
-	flagOwner     string
-	flagHide      bool
+	flagRelayURLs     string
+	flagHost          string
+	flagName          string
+	flagDesc          string
+	flagTags          string
+	flagThumbnail     string
+	flagOwner         string
+	flagHide          bool
+	flagDefaultRelays bool
 )
 
 func main() {
@@ -37,18 +38,15 @@ func main() {
 	logger := log.With().Str("component", "portal-tunnel").Logger()
 
 	defaultRelayURLs := os.Getenv("RELAYS")
-	if defaultRelayURLs == "" {
-		defaultRelayURLs = "https://localhost:4017"
-	}
-
-	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Portal relay server API URLs (comma-separated; scheme omitted defaults to https) [env: RELAYS]")
+	flag.StringVar(&flagRelayURLs, "relays", defaultRelayURLs, "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https; appended to registry.json defaults unless --default-relays=false is set) [env: RELAYS]")
+	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", true), "Include repository registry.json default relays [env: DEFAULT_RELAYS]")
 	flag.StringVar(&flagHost, "host", os.Getenv("APP_HOST"), "Target host to proxy to (host:port or URL) [env: APP_HOST]")
 	flag.StringVar(&flagName, "name", os.Getenv("APP_NAME"), "Public hostname prefix (single DNS label) [env: APP_NAME]")
 	flag.StringVar(&flagDesc, "description", os.Getenv("APP_DESCRIPTION"), "Service description metadata [env: APP_DESCRIPTION]")
 	flag.StringVar(&flagTags, "tags", os.Getenv("APP_TAGS"), "Service tags metadata (comma-separated) [env: APP_TAGS]")
 	flag.StringVar(&flagThumbnail, "thumbnail", os.Getenv("APP_THUMBNAIL"), "Service thumbnail URL metadata [env: APP_THUMBNAIL]")
 	flag.StringVar(&flagOwner, "owner", os.Getenv("APP_OWNER"), "Service owner metadata [env: APP_OWNER]")
-	flag.BoolVar(&flagHide, "hide", os.Getenv("APP_HIDE") == "true", "Hide service from discovery (metadata) [env: APP_HIDE]")
+	flag.BoolVar(&flagHide, "hide", utils.ParseBoolEnv("APP_HIDE", false), "Hide service from discovery (metadata) [env: APP_HIDE]")
 	flag.Parse()
 
 	if err := runTunnel(); err != nil {
@@ -63,7 +61,16 @@ func runTunnel() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	exposure, err := sdk.Expose(ctx, utils.SplitCSV(flagRelayURLs), flagName, types.LeaseMetadata{
+	relayURLs := utils.SplitCSV(flagRelayURLs)
+	if flagDefaultRelays {
+		relayURLs = sdk.WithDefaultRelayURLs(ctx, relayURLs...)
+	}
+	relayURLs, err := utils.NormalizeRelayURLs(relayURLs)
+	if err != nil {
+		return fmt.Errorf("resolve relay urls: %w", err)
+	}
+
+	exposure, err := sdk.Expose(ctx, relayURLs, flagName, types.LeaseMetadata{
 		Description: flagDesc,
 		Tags:        utils.SplitCSV(flagTags),
 		Owner:       flagOwner,

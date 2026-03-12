@@ -31,6 +31,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [host, setHost] = useState(defaultHost);
   const [name, setName] = useState(defaultName);
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
+  const [defaultRelays, setDefaultRelays] = useState(true);
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
@@ -98,6 +99,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
         `$env:APP_NAME=${quotePowerShellValue(nameVal)}`,
         `$env:RELAYS=${quotePowerShellValue(relayUrlVal)}`,
       ];
+      if (!defaultRelays) {
+        envAssignments.push("$env:DEFAULT_RELAYS='false'");
+      }
       if (normalizedThumbnailURL) {
         envAssignments.push(
           `$env:APP_THUMBNAIL=${quotePowerShellValue(normalizedThumbnailURL)}`
@@ -114,6 +118,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       `APP_NAME=${quoteShellValue(nameVal)}`,
       `RELAYS=${quoteShellValue(relayUrlVal)}`,
     ];
+    if (!defaultRelays) {
+      envAssignments.push(`DEFAULT_RELAYS=${quoteShellValue("false")}`);
+    }
     if (normalizedThumbnailURL) {
       envAssignments.push(
         `APP_THUMBNAIL=${quoteShellValue(normalizedThumbnailURL)}`
@@ -122,7 +129,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     return `curl ${curlFlags} ${quoteShellValue(
       tunnelScriptURL
     )} | ${envAssignments.join(" ")} sh`;
-  }, [currentOrigin, host, name, normalizedThumbnailURL, relayUrls, os]);
+  }, [currentOrigin, defaultRelays, host, name, normalizedThumbnailURL, relayUrls, os]);
 
   const handleCopy = async () => {
     try {
@@ -196,9 +203,20 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
 
           {/* Relay URLs Input */}
           <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              Relay URLs
-            </label>
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-sm font-medium text-foreground">
+                Relay URLs
+              </label>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={defaultRelays}
+                  onChange={(e) => setDefaultRelays(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                <span>Include default registry</span>
+              </label>
+            </div>
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-input bg-transparent p-2 min-h-10">
               {relayUrls.map((url) => (
                 <span
@@ -223,9 +241,9 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 onKeyDown={handleUrlKeyDown}
                 placeholder="Add relay URL..."
                 className="min-w-[140px] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              />
+                />
+              </div>
             </div>
-          </div>
 
           <div className="space-y-2">
             <label

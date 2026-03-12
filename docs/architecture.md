@@ -54,10 +54,12 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
+- `WithDefaultRelayURLs`: fetches the default Portal relay list from the repository-root `registry.json`, appends explicit relay inputs, and normalizes the combined list
+- Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
 - `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
 - `relayclient.go`: internal relay transport helper for control-plane requests and reverse session dialing
 - `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
-- Default app flow is `RelayURL -> NewListener -> PublicURL -> http.Server.Serve(listener)` or `RelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`
+- Default app flow is `WithDefaultRelayURLs -> NewListener -> PublicURL -> http.Server.Serve(listener)` or `WithDefaultRelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
 - `expose.go`: optional `RunHTTP` helper for serving one handler on both a local HTTP port and the relay listener
 - `Expose` keeps one listener per configured relay URL. Relay startup and reconnect failures are retried independently per relay, and successful relays remain available while failed relays keep retrying in the background
 - `Exposure.RelayURLs()` returns the configured normalized relay URLs, while `Exposure.PublicURLs()` returns only relays that are currently registered and ready

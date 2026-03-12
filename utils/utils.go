@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -261,6 +263,19 @@ func IntOrDefault(v, fallback int) int {
 		return v
 	}
 	return fallback
+}
+
+// ParseBoolEnv reads a boolean environment variable and falls back when unset or invalid.
+func ParseBoolEnv(name string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 // Random value helpers.
