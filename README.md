@@ -68,6 +68,10 @@ For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 | [nginx reverse proxy](docs/examples/nginx-proxy/) | Deploy Portal behind nginx with L4 SNI routing and TLS termination |
 | [nginx + multi-service](docs/examples/nginx-proxy-multi-service/) | Run Portal alongside other web services behind a single nginx instance |
 
+## Public Relay Registry
+
+If you operate a public Portal relay, open a Pull Request to add your relay URL to `registry.json`. Keeping the registry updated makes public relays easier for the community to discover.
+
 ## Contributing
 
 We welcome contributions from the community!
