@@ -6,13 +6,6 @@ import (
 	"time"
 )
 
-const (
-	HeaderReverseToken = "X-Portal-Token"
-	MarkerKeepalive    = byte(0x00)
-	MarkerTLSStart     = byte(0x02)
-	SDKProtocolVersion = "1"
-)
-
 type APIEnvelope[T any] struct {
 	Data  T         `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`

@@ -26,8 +26,8 @@ const (
 	defaultHandshakeTimeout    = 15 * time.Second
 	defaultLeaseTTL            = 30 * time.Second
 	defaultRenewBefore         = 30 * time.Second
-	defaultReadyTarget         = 1
-	defaultRetryWait           = 10 * time.Second
+	defaultReadyTarget         = 2
+	defaultRetryWait           = 3 * time.Second
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 

@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
@@ -103,8 +104,8 @@ func main() {
 	}
 
 	logger.Info().
+		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
-		Strs("bootstraps", cfg.Bootstraps).
 		Msg("configured relay server")
 
 	if err := runServer(cfg); err != nil {

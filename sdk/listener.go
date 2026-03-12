@@ -32,6 +32,13 @@ type ListenerConfig struct {
 	RetryWait        time.Duration
 }
 
+type listenerStatus string
+
+const (
+	listenerStatusInactive listenerStatus = "inactive"
+	listenerStatusReady    listenerStatus = "ready"
+)
+
 type Listener struct {
 	tlsCloser        io.Closer
 	tlsConfig        *tls.Config
@@ -45,6 +52,9 @@ type Listener struct {
 	cancel           context.CancelFunc
 	api              *apiClient
 	accepted         chan net.Conn
+	relayURL         string
+	startupStatus    listenerStatus
+	activeSessions   int
 	leaseID          string
 	hostname         string
 	metadata         types.LeaseMetadata
@@ -78,6 +88,8 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		cancel:           cancel,
 		api:              api,
 		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
+		relayURL:         api.baseURL.String(),
+		startupStatus:    listenerStatusInactive,
 		readyTarget:      readyTarget,
 		retryCount:       cfg.RetryCount,
 		retryWait:        retryWait,
@@ -102,7 +114,7 @@ func (l *Listener) runStartup(ctx context.Context) {
 			}
 			go l.runRenewLoop(ctx)
 			log.Info().
-				Str("component", "sdk-listener").
+				Str("relay_url", l.relayURL).
 				Str("lease_id", l.LeaseID()).
 				Str("hostname", l.Hostname()).
 				Msg("listener ready")
@@ -215,6 +227,9 @@ func (l *Listener) runSessionLoop(ctx context.Context) {
 			retries = 0
 		default:
 			retries++
+			if l.ActiveSessions() == 0 {
+				l.setStartupStatus(listenerStatusInactive)
+			}
 			if !l.retryOrClose(ctx, "reverse session connect", err, retries) {
 				return
 			}
@@ -266,6 +281,8 @@ func (l *Listener) runSession(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	l.sessionOpened()
+	defer l.sessionClosed()
 
 	var marker [1]byte
 	for {
@@ -394,10 +411,14 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 	}
 
 	logger := log.With().
-		Str("component", "sdk-listener").
+		Str("relay_url", l.relayURL).
 		Str("operation", operation).
 		Str("lease_id", l.LeaseID()).
 		Logger()
+
+	if operation == "lease registration" {
+		l.setStartupStatus(listenerStatusInactive)
+	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
 		if operation != "lease renewal" {
@@ -411,7 +432,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 	}
 
 	if operation != "lease renewal" {
-		logger.Warn().
+		logger.Debug().
 			Err(err).
 			Int("retry_attempt", retries).
 			Int("retry_count", l.retryCount).
@@ -447,4 +468,56 @@ func (l *Listener) drainAccepted() {
 			return
 		}
 	}
+}
+
+func (l *Listener) setStartupStatus(status listenerStatus) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.startupStatus = status
+	l.mu.Unlock()
+}
+
+func (l *Listener) StartupStatus() listenerStatus {
+	if l == nil {
+		return listenerStatusInactive
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.startupStatus
+}
+
+func (l *Listener) ActiveSessions() int {
+	if l == nil {
+		return 0
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.activeSessions
+}
+
+func (l *Listener) sessionOpened() {
+	if l == nil {
+		return
+	}
+
+	l.mu.Lock()
+	l.activeSessions++
+	l.startupStatus = listenerStatusReady
+	l.mu.Unlock()
+}
+
+func (l *Listener) sessionClosed() {
+	if l == nil {
+		return
+	}
+
+	l.mu.Lock()
+	if l.activeSessions > 0 {
+		l.activeSessions--
+	}
+	l.mu.Unlock()
 }
