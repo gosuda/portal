@@ -34,6 +34,7 @@ var (
 
 func main() {
 	zerolog.TimeFieldFormat = time.RFC3339
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "portal-tunnel").Logger()
 
@@ -86,6 +87,7 @@ func runTunnel() error {
 	defer exposure.Close()
 
 	logger.Info().
+		Str("release_version", types.ReleaseVersion).
 		Str("local", flagHost).
 		Msg("starting portal tunnel")
 

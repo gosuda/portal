@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -21,6 +22,7 @@ import (
 type Exposure struct {
 	listener net.Listener
 	relays   []exposureRelay
+	done     chan struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -37,7 +39,6 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	if len(relayURLs) == 0 {
 		return nil, nil
 	}
-
 	relays := make([]exposureRelay, 0, len(relayURLs))
 	cleanup := func() error {
 		var closeErr error
@@ -77,13 +78,15 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	exposure := &Exposure{
 		listener: merged,
 		relays:   relays,
+		done:     make(chan struct{}),
 	}
+	go exposure.monitorStartupCounts(ctx)
 
 	log.Info().
+		Str("release_version", types.ReleaseVersion).
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
-		Strs("public_urls", exposure.PublicURLs()).
-		Msg("exposure started")
+		Msgf("exposure relay started")
 
 	return exposure, nil
 }
@@ -97,8 +100,7 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	conn, err := e.listener.Accept()
 	if err != nil {
 		if !errors.Is(err, net.ErrClosed) {
-			logger := log.With().Str("component", "sdk-exposure").Logger()
-			logger.Warn().
+			log.Warn().
 				Err(err).
 				Str("local_addr", utils.AddrString(e.listener.Addr())).
 				Msg("exposure accept failed")
@@ -107,8 +109,7 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	}
 
 	connID := e.connSeq.Add(1)
-	logger := log.With().Str("component", "sdk-exposure").Logger()
-	logger.Info().
+	log.Info().
 		Uint64("conn_id", connID).
 		Str("local_addr", utils.AddrString(conn.LocalAddr())).
 		Str("remote_addr", utils.AddrString(conn.RemoteAddr())).
@@ -190,16 +191,18 @@ func (e *Exposure) Close() error {
 
 	var closeErr error
 	e.closeOnce.Do(func() {
+		if e.done != nil {
+			close(e.done)
+		}
 		if e.listener != nil {
 			closeErr = errors.Join(closeErr, e.listener.Close())
 		}
 
-		logger := log.With().Str("component", "sdk-exposure").Logger()
-		event := logger.Info().
+		event := log.Info().
 			Int("relay_count", len(e.relays)).
 			Strs("relays", e.RelayURLs())
 		if closeErr != nil {
-			event = logger.Warn().
+			event = log.Warn().
 				Err(closeErr).
 				Int("relay_count", len(e.relays)).
 				Strs("relays", e.RelayURLs())
@@ -315,6 +318,65 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	return errors.Join(serveErr, shutdownErr)
 }
 
+func (e *Exposure) monitorStartupCounts(ctx context.Context) {
+	if e == nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	prevStatuses := make(map[string]listenerStatus, len(e.relays))
+	firstRun := true
+
+	for {
+		readyCount, inactiveCount := 0, 0
+		activated := make([]string, 0)
+		deactivated := make([]string, 0)
+		for _, relay := range e.relays {
+			status := listenerStatusInactive
+			if relay.listener != nil {
+				status = relay.listener.StartupStatus()
+			}
+			if status == listenerStatusReady {
+				readyCount++
+			} else {
+				inactiveCount++
+			}
+
+			if prev, ok := prevStatuses[relay.relayURL]; ok && prev != status {
+				if status == listenerStatusReady {
+					activated = append(activated, relay.relayURL)
+				} else {
+					deactivated = append(deactivated, relay.relayURL)
+				}
+			}
+			prevStatuses[relay.relayURL] = status
+		}
+
+		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
+			event := log.Info().
+				Int("inactive", inactiveCount).
+				Int("ready", readyCount)
+			if len(activated) > 0 {
+				event = event.Strs("activated", activated)
+			}
+			if len(deactivated) > 0 {
+				event = event.Strs("deactivated", deactivated)
+			}
+			event.Msg("relay status")
+			firstRun = false
+		}
+
+		select {
+		case <-e.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 type exposureRelay struct {
 	relayURL string
 	listener *Listener
@@ -336,13 +398,12 @@ func (c *exposureConn) Close() error {
 			closeErr = nil
 		}
 
-		logger := log.With().Str("component", "sdk-exposure").Logger()
-		event := logger.Info().
+		event := log.Info().
 			Uint64("conn_id", c.id).
 			Str("local_addr", c.localAddr).
 			Str("remote_addr", c.remoteAddr)
 		if closeErr != nil {
-			event = logger.Warn().
+			event = log.Warn().
 				Err(closeErr).
 				Uint64("conn_id", c.id).
 				Str("local_addr", c.localAddr).
