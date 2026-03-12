@@ -17,14 +17,18 @@ func TestEnsureCertificateGeneratesLocalDevelopmentMaterial(t *testing.T) {
 		t.Fatalf("NewManager() error = %v", err)
 	}
 
-	certFile, keyFile, err := manager.EnsureCertificate(context.Background())
+	certPEM, keyPEM, err := manager.EnsureTLSMaterial(context.Background())
 	if err != nil {
-		t.Fatalf("EnsureCertificate() error = %v", err)
+		t.Fatalf("EnsureTLSMaterial() error = %v", err)
 	}
-	if certFile == "" || keyFile == "" {
-		t.Fatalf("EnsureCertificate() = %q, %q, want certificate paths", certFile, keyFile)
+	if len(certPEM) == 0 || len(keyPEM) == 0 {
+		t.Fatalf("EnsureTLSMaterial() returned empty PEM material")
 	}
 
+	certFile, _, err := manager.TLSFiles()
+	if err != nil {
+		t.Fatalf("TLSFiles() error = %v", err)
+	}
 	covered, err := certCoversDomains(certFile, []string{"localhost"})
 	if err != nil {
 		t.Fatalf("certCoversDomains() error = %v", err)

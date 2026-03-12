@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -24,11 +23,7 @@ type Signer struct {
 	keyID   string
 }
 
-func NewSigner(keyFile string) (*Signer, error) {
-	keyPEM, err := os.ReadFile(strings.TrimSpace(keyFile))
-	if err != nil {
-		return nil, fmt.Errorf("read keyless signing key: %w", err)
-	}
+func NewSigner(keyPEM []byte) (*Signer, error) {
 	signingKey, err := ksigner.ParsePrivateKeyPEM(keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parse keyless signing key: %w", err)

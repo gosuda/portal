@@ -33,6 +33,7 @@ esac
 
 BASE_URL="${BASE_URL:-%s}"
 RELAYS="${RELAYS:-$BASE_URL}"
+DEFAULT_RELAYS="${DEFAULT_RELAYS:-true}"
 BIN_URL="${BIN_URL:-$BASE_URL/tunnel/bin/$TUNNEL_OS-$TUNNEL_ARCH}"
 CHECKSUM_URL="${BIN_URL}.sha256"
 CURL_INSECURE_FLAG=""
@@ -76,6 +77,9 @@ fi
 chmod +x "$BIN_PATH"
 
 set -- "$BIN_PATH" --relays "$RELAYS" --host "${APP_HOST:-localhost:3000}"
+if [ "$DEFAULT_RELAYS" = "0" ] || [ "$DEFAULT_RELAYS" = "false" ]; then
+  set -- "$@" --default-relays=false
+fi
 [ -n "${APP_NAME:-}" ] && set -- "$@" --name "$APP_NAME"
 [ -n "${APP_DESCRIPTION:-}" ] && set -- "$@" --description "$APP_DESCRIPTION"
 [ -n "${APP_TAGS:-}" ] && set -- "$@" --tags "$APP_TAGS"
@@ -93,6 +97,7 @@ const tunnelPowerShellScriptTemplate = `$ErrorActionPreference = "Stop"
 
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
 $RelayUrls = if ($env:RELAYS) { $env:RELAYS } else { $BaseUrl }
+$DefaultRelays = if ($env:DEFAULT_RELAYS) { $env:DEFAULT_RELAYS } else { "true" }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -150,6 +155,9 @@ if ($ActualHash -ne $ExpectedHash) {
 }
 
 $ArgsList = @("--relays", $RelayUrls)
+if ($DefaultRelays.ToLowerInvariant() -eq "0" -or $DefaultRelays.ToLowerInvariant() -eq "false") {
+    $ArgsList += "--default-relays=false"
+}
 
 if ($env:APP_HOST) { $ArgsList += "--host", $env:APP_HOST } else { $ArgsList += "--host", "localhost:3000" }
 if ($env:APP_NAME) { $ArgsList += "--name", $env:APP_NAME }

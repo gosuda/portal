@@ -22,7 +22,7 @@ Descriptive docs under `docs/` should match current code paths.
 4. **Keep explicit root-domain fallback behavior through SNI no-route handling to the admin/API listener.**
    - Why: preserves the intended split between root-host control-plane traffic and tenant subdomain traffic.
 
-5. **All leases require `TLS=true`.** The register endpoint rejects `TLS=false`.
+5. **All leases are TLS-only.** The register endpoint does not accept a non-TLS mode.
    - Why: all tenant routes are expected to stay on the TLS passthrough path.
 
 ## TLS and Identity Invariants

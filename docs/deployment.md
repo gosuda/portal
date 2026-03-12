@@ -57,7 +57,7 @@ If you deploy on a non-apex host (for example, `PORTAL_URL=https://portal.exampl
 - `portal.example.com -> <server-ip>`
 - `*.portal.example.com -> <server-ip>`
 
-Portal derives public lease hostnames from the normalized `PORTAL_URL` host.
+Portal's relay DNS and certificates cover the normalized `PORTAL_URL` host and its wildcard, and public lease hostnames are published as `<name>.<root host>`.
 Requests to the exact root host are not served by the wildcard route; they fall back to the admin/API listener.
 
 #### Create Cloudflare API token

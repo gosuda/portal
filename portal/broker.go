@@ -14,29 +14,18 @@ import (
 )
 
 var (
-	errLeaseDropped = errors.New("lease dropped")
-	errLeaseStopped = errors.New("lease stopped")
+	errBrokerClosed = errors.New("lease broker closed")
 	errBrokerFull   = errors.New("broker ready queue full")
-	errNoSessions   = errors.New("no reverse sessions available")
-)
-
-type brokerState int
-
-const (
-	brokerStateActive brokerState = iota
-	brokerStateDropped
-	brokerStateStopped
 )
 
 type leaseBroker struct {
-	notify        chan struct{}
-	leaseID       string
-	ready         []*reverseSession
-	idleInterval  time.Duration
-	readyLimit    int
-	totalSessions int
-	state         brokerState
-	mu            sync.Mutex
+	notify       chan struct{}
+	leaseID      string
+	ready        []*reverseSession
+	idleInterval time.Duration
+	readyLimit   int
+	closedErr    error
+	mu           sync.Mutex
 }
 
 func newLeaseBroker(leaseID string, idleInterval time.Duration, readyLimit int) *leaseBroker {
@@ -54,23 +43,22 @@ func (b *leaseBroker) Offer(session *reverseSession) error {
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	switch b.state {
-	case brokerStateDropped:
-		return errLeaseDropped
-	case brokerStateStopped:
-		return errLeaseStopped
+	if b.closedErr != nil {
+		err := b.closedErr
+		b.mu.Unlock()
+		return err
 	}
 
 	if b.readyLimit > 0 && len(b.ready) >= b.readyLimit {
+		b.mu.Unlock()
 		return errBrokerFull
 	}
 
 	session.StartIdle()
 	b.ready = append(b.ready, session)
-	b.totalSessions++
 	b.signalLocked()
+	b.mu.Unlock()
+
 	go b.watchSession(session)
 	return nil
 }
@@ -78,13 +66,10 @@ func (b *leaseBroker) Offer(session *reverseSession) error {
 func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
 	for {
 		b.mu.Lock()
-		switch b.state {
-		case brokerStateDropped:
+		if b.closedErr != nil {
+			err := b.closedErr
 			b.mu.Unlock()
-			return nil, errLeaseDropped
-		case brokerStateStopped:
-			b.mu.Unlock()
-			return nil, errLeaseStopped
+			return nil, err
 		}
 
 		if len(b.ready) > 0 {
@@ -101,10 +86,6 @@ func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
 			}
 			return session, nil
 		}
-		if b.totalSessions == 0 {
-			b.mu.Unlock()
-			return nil, errNoSessions
-		}
 		b.mu.Unlock()
 
 		select {
@@ -115,34 +96,13 @@ func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
 	}
 }
 
-func (b *leaseBroker) Drop() {
-	b.transition(brokerStateDropped)
-}
-
-func (b *leaseBroker) Reset() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.state == brokerStateDropped {
-		b.state = brokerStateActive
-		b.signalLocked()
-	}
-}
-
-func (b *leaseBroker) Stop() {
-	b.transition(brokerStateStopped)
-}
-
-func (b *leaseBroker) ReadyCount() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.ready)
-}
-
-func (b *leaseBroker) transition(state brokerState) {
+func (b *leaseBroker) Close() {
 	b.mu.Lock()
 	sessions := b.ready
 	b.ready = nil
-	b.state = state
+	if b.closedErr == nil {
+		b.closedErr = errBrokerClosed
+	}
 	b.signalLocked()
 	b.mu.Unlock()
 
@@ -151,25 +111,33 @@ func (b *leaseBroker) transition(state brokerState) {
 	}
 }
 
-func (b *leaseBroker) watchSession(session *reverseSession) {
-	<-session.Done()
+func (b *leaseBroker) ReadyCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return len(b.ready)
+}
+
+func (b *leaseBroker) watchSession(session *reverseSession) {
+	<-session.Done()
+
+	var readyCount int
+
+	b.mu.Lock()
 	for i := range b.ready {
 		if b.ready[i] == session {
 			b.ready = append(b.ready[:i], b.ready[i+1:]...)
 			break
 		}
 	}
-	b.totalSessions--
+	readyCount = len(b.ready)
 	log.Info().
 		Str("component", "relay-server").
 		Str("lease_id", b.leaseID).
 		Str("remote_addr", session.RemoteAddr()).
-		Int("ready", len(b.ready)).
-		Int("total_sessions", b.totalSessions).
+		Int("ready", readyCount).
 		Msg("sdk reverse disconnected")
 	b.signalLocked()
+	b.mu.Unlock()
 }
 
 func (b *leaseBroker) signalLocked() {
@@ -182,8 +150,7 @@ func (b *leaseBroker) signalLocked() {
 type reverseSessionState int
 
 const (
-	reverseSessionAdmitted reverseSessionState = iota
-	reverseSessionIdle
+	reverseSessionIdle reverseSessionState = iota
 	reverseSessionClaimed
 	reverseSessionClosed
 )
@@ -203,7 +170,7 @@ func newReverseSession(conn net.Conn, idleInterval time.Duration) *reverseSessio
 	return &reverseSession{
 		conn:         conn,
 		idleInterval: idleInterval,
-		state:        reverseSessionAdmitted,
+		state:        reverseSessionIdle,
 		done:         make(chan struct{}),
 	}
 }
@@ -234,11 +201,10 @@ func (s *reverseSession) IsClosed() bool {
 
 func (s *reverseSession) StartIdle() {
 	s.mu.Lock()
-	if s.state != reverseSessionAdmitted {
+	if s.state != reverseSessionIdle || s.keepaliveStop != nil {
 		s.mu.Unlock()
 		return
 	}
-	s.state = reverseSessionIdle
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	s.keepaliveStop = stop

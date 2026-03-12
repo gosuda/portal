@@ -54,31 +54,36 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `Client`: validates one or more relay URLs and owns per-relay HTTP client and raw TLS dial config
-- `Listener`: registers one lease per relay, maintains per-entry `readyTarget` reverse sessions, renews lease TTLs, and yields accepted tenant TLS connections through one aggregate listener surface
-- Default app flow is `RelayURLs -> NewClient -> Listen -> PublicURLs -> http.Server.Serve(listener)`
-- `helper.go`: optional `RunHTTPApp` helper for serving one handler on both a local HTTP port and the relay listener
+- `WithDefaultRelayURLs`: fetches the default Portal relay list from the repository-root `registry.json`, appends explicit relay inputs, and normalizes the combined list
+- Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
+- `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
+- `relayclient.go`: internal relay transport helper for control-plane requests and reverse session dialing
+- `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
+- Default app flow is `WithDefaultRelayURLs -> NewListener -> PublicURL -> http.Server.Serve(listener)` or `WithDefaultRelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
+- `expose.go`: optional `RunHTTP` helper for serving one handler on both a local HTTP port and the relay listener
+- `Expose` keeps one listener per configured relay URL. Relay startup and reconnect failures are retried independently per relay, and successful relays remain available while failed relays keep retrying in the background
+- `Exposure.RelayURLs()` returns the configured normalized relay URLs, while `Exposure.PublicURLs()` returns only relays that are currently registered and ready
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
 
 ### Tunnel (`cmd/portal-tunnel`)
 
-- Creates one SDK client, registers one lease per relay through the SDK, and consumes one aggregate listener
+- Creates one SDK listener per relay through the SDK and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
 - Proxies raw TCP to a local `--host`
 - Returns an HTTP 503 response when the local target is unavailable
 
 ## Transport Model
 
-### Raw reverse transport (`TLS=true` only)
+### Raw reverse transport (TLS only)
 
 1. SDK/tunnel registers one lease per relay with `POST /sdk/register`.
 2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?lease_id=...`.
 3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease broker ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A browser connects to the relay SNI listener.
-6. Relay extracts SNI from ClientHello, resolves a lease, and claims one ready reverse session.
-7. Relay writes `0x02` to activate that session.
+6. Relay extracts SNI from ClientHello, resolves a lease, and waits up to `ClaimTimeout` for one reverse session from that lease broker.
+7. Relay writes `0x02` to activate the claimed session.
 8. SDK/tunnel receives `0x02`, starts tenant TLS locally using the relay-backed keyless signer, and the relay bridges raw encrypted bytes end-to-end.
 
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
@@ -92,11 +97,10 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - Caller provides:
   - `name`
   - `reverse_token`
-  - `tls=true`
-  - optional `hostnames`
   - optional `metadata`
-  - optional `ttl_seconds`
-- If no hostname is supplied, relay derives one from `name + root host`
+  - optional `ttl`
+- `name` must be a valid single DNS label and relay publishes the lease at `<name>.<root host>`
+- Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
 ### 2. Reverse Connect
@@ -114,7 +118,6 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - `POST /sdk/renew`
 - Requires `lease_id` + `reverse_token`
 - Extends lease TTL
-- Resets a previously dropped broker back to active
 
 ### 4. Unregister
 
@@ -134,7 +137,7 @@ Notes:
 
 - Wildcards are one level only.
 - The exact root host is never served by the wildcard route.
-- For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, public lease hosts become `<lease>.portal.example.com`.
+- For non-apex `PORTAL_URL` values such as `https://portal.example.com:8443/admin`, a lease named `demo` is published at `demo.portal.example.com`.
 
 ## Admin and Frontend Surface
 

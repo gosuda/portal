@@ -9,6 +9,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -53,7 +55,7 @@ func main() {
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
-	trustProxyHeaders := parseBoolEnv("TRUST_PROXY_HEADERS")
+	trustProxyHeaders := utils.ParseBoolEnv("TRUST_PROXY_HEADERS", false)
 	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
 	keylessDir := trimmedEnv("KEYLESS_DIR")
 	if keylessDir == "" {
@@ -92,7 +94,7 @@ func main() {
 	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
 	flag.Parse()
 
-	cfg.Bootstraps = parseURLs(bootstrapsCSV)
+	cfg.Bootstraps = utils.SplitCSV(bootstrapsCSV)
 	if len(cfg.Bootstraps) == 0 {
 		cfg.Bootstraps = []string{cfg.PortalURL}
 	}
@@ -112,11 +114,6 @@ func main() {
 
 func trimmedEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
-}
-
-func parseBoolEnv(name string) bool {
-	raw := trimmedEnv(name)
-	return strings.EqualFold(raw, "true") || raw == "1"
 }
 
 func parsePortNumber(raw string, fallback int) int {
