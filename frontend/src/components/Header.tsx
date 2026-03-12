@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
+import { getReleaseVersion } from "@/lib/releaseVersion";
 import clsx from "clsx";
 
 interface HeaderProps {
@@ -18,6 +19,7 @@ interface HeaderProps {
 
 export function Header({ title = "PORTAL", isAdmin, onLogout }: HeaderProps) {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const releaseVersion = getReleaseVersion();
 
   useEffect(() => {
     // Check localStorage for saved theme
@@ -61,9 +63,16 @@ export function Header({ title = "PORTAL", isAdmin, onLogout }: HeaderProps) {
             ></path>
           </svg>
         </div>
-        <h2 className="text-foreground text-lg font-bold leading-tight tracking-[0.3em]">
-          {title}
-        </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-foreground text-lg font-bold leading-tight tracking-[0.3em]">
+            {title}
+          </h2>
+          {releaseVersion && (
+            <span className="rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-text-muted">
+              {releaseVersion}
+            </span>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-1 sm:gap-3">
         <a

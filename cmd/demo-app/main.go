@@ -59,7 +59,7 @@ func runDemo() error {
 
 	relayURLs := utils.SplitCSV(flagRelayURLs)
 	if flagDefaultRelays {
-		relayURLs = sdk.WithDefaultRelayURLs(ctx, relayURLs...)
+		relayURLs = sdk.WithDefaultRelayURLs(ctx, "", relayURLs...)
 	}
 	relayURLs, err := utils.NormalizeRelayURLs(relayURLs)
 	if err != nil {

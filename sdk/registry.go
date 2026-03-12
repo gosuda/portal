@@ -5,19 +5,21 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
-const PortalRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal/main/registry.json"
-
 // WithDefaultRelayURLs fetches the default Portal relay registry and appends
 // any explicit relay inputs before normalization.
-func WithDefaultRelayURLs(ctx context.Context, explicit ...string) []string {
+func WithDefaultRelayURLs(ctx context.Context, registryURL string, explicit ...string) []string {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if registryURL == "" {
+		registryURL = types.PortalRelayRegistryURL
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, PortalRelayRegistryURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, registryURL, nil)
 	if err != nil {
 		return explicit
 	}

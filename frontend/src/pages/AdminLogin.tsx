@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { KeyRound, ShieldCheck } from "lucide-react";
+import { getReleaseVersion } from "@/lib/releaseVersion";
 import { useAuth } from "@/hooks/useAuth";
 
 export function AdminLogin() {
@@ -17,6 +18,7 @@ export function AdminLogin() {
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const releaseVersion = getReleaseVersion();
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -81,9 +83,16 @@ export function AdminLogin() {
                     ></path>
                   </svg>
                 </div>
-                <h2 className="text-foreground text-lg font-bold leading-tight tracking-[0.3em]">
-                  PORTAL ADMIN
-                </h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-foreground text-lg font-bold leading-tight tracking-[0.3em]">
+                    PORTAL ADMIN
+                  </h2>
+                  {releaseVersion && (
+                    <span className="rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-text-muted">
+                      {releaseVersion}
+                    </span>
+                  )}
+                </div>
               </div>
             </header>
 
