@@ -59,8 +59,9 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 		}
 
 		listener, err := client.Listen(ctx, ListenRequest{
-			Name:     name,
-			Metadata: metadata,
+			Name:      name,
+			Metadata:  metadata,
+			Transport: types.TransportBoth,
 		})
 		if err != nil {
 			client.Close()
@@ -219,6 +220,38 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 	})
 	return closeErr
+}
+
+// AttachUDP creates UDPListeners for each relay that has a UDP address,
+// reusing the existing lease credentials. The returned listeners only run the
+// QUIC supervisor — the TCP Listener already handles lease renewal.
+func (e *Exposure) AttachUDP(ctx context.Context) ([]*UDPListener, error) {
+	if e == nil || len(e.relays) == 0 {
+		return nil, nil
+	}
+
+	var listeners []*UDPListener
+	for _, relay := range e.relays {
+		udpAddr := relay.listener.UDPAddr()
+		if udpAddr == "" {
+			continue
+		}
+		ul, err := relay.client.AttachUDP(
+			ctx,
+			relay.listener.LeaseID(),
+			relay.listener.ReverseToken(),
+			udpAddr,
+			relay.listener.QUICAddr(),
+		)
+		if err != nil {
+			for _, l := range listeners {
+				_ = l.Close()
+			}
+			return nil, fmt.Errorf("attach udp %q: %w", relay.relayURL, err)
+		}
+		listeners = append(listeners, ul)
+	}
+	return listeners, nil
 }
 
 // RunHTTP serves one handler on relayListener and, when localAddr is set, on

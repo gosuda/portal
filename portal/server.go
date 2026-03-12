@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
@@ -31,6 +32,7 @@ type ServerConfig struct {
 	PortalURL             string
 	APIListenAddr         string
 	SNIListenAddr         string
+	QUICListenAddr        string
 	RootHost              string
 	RootFallbackAddr      string
 	APITLS                keyless.TLSMaterialConfig
@@ -40,22 +42,28 @@ type ServerConfig struct {
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
 	TrustProxyHeaders     bool
+	UDPPortMin            int
+	UDPPortMax            int
 }
 
 type Server struct {
-	sniListener  net.Listener
-	apiTLSClose  io.Closer
-	apiListener  net.Listener
-	apiServer    *http.Server
-	ctxDone      <-chan struct{}
-	baseContext  func() context.Context
-	cancel       context.CancelFunc
-	group        *errgroup.Group
-	routes       *routeTable
-	leases       map[string]*leaseRecord
-	cfg          ServerConfig
-	mu           sync.RWMutex
-	shutdownOnce sync.Once
+	sniListener        net.Listener
+	apiTLSClose        io.Closer
+	apiListener        net.Listener
+	apiServer          *http.Server
+	quicTunnel         *quicTunnelListener
+	quicSNIConn        net.PacketConn
+	ctxDone            <-chan struct{}
+	baseContext         func() context.Context
+	cancel             context.CancelFunc
+	group              *errgroup.Group
+	routes             *routeTable
+	leases             map[string]*leaseRecord
+	ports              *portAllocator
+	udpRelays          map[string]*udpRelay
+	cfg                ServerConfig
+	mu                 sync.RWMutex
+	shutdownOnce       sync.Once
 }
 
 type leaseRecord struct {
@@ -63,12 +71,15 @@ type leaseRecord struct {
 	FirstSeenAt  time.Time
 	LastSeenAt   time.Time
 	Broker       *leaseBroker
+	QUICBroker   *quicBroker
 	ID           string
 	Name         string
 	ReverseToken string
 	ClientIP     string
+	Transport    string
 	Hostnames    []string
 	Metadata     types.LeaseMetadata
+	UDPPort      int
 }
 
 type LeaseSnapshot struct {
@@ -78,9 +89,11 @@ type LeaseSnapshot struct {
 	ID          string
 	Name        string
 	ClientIP    string
+	Transport   string
 	Hostnames   []string
 	Metadata    types.LeaseMetadata
 	Ready       int
+	UDPPort     int
 	IsApproved  bool
 	IsBanned    bool
 	IsDenied    bool
@@ -114,11 +127,18 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if len(cfg.APITLS.KeyPEM) == 0 && cfg.APITLS.Keyless == nil {
 		return nil, errors.New("api tls key or keyless signer is required")
 	}
+	cfg.UDPPortMin = intOrDefault(cfg.UDPPortMin, defaultUDPPortMin)
+	cfg.UDPPortMax = intOrDefault(cfg.UDPPortMax, defaultUDPPortMax)
+	if cfg.QUICListenAddr == "" {
+		cfg.QUICListenAddr = cfg.APIListenAddr
+	}
 
 	return &Server{
-		cfg:    cfg,
-		routes: newRouteTable(),
-		leases: make(map[string]*leaseRecord),
+		cfg:       cfg,
+		routes:    newRouteTable(),
+		leases:    make(map[string]*leaseRecord),
+		ports:     newPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax),
+		udpRelays: make(map[string]*udpRelay),
 	}, nil
 }
 
@@ -170,6 +190,17 @@ func (s *Server) Start(ctx context.Context) error {
 	group.Go(s.runSNIListener)
 	group.Go(s.runLeaseJanitor)
 	group.Go(s.watchContext)
+
+	// QUIC tunnel listener for UDP transport reverse sessions.
+	if err := s.startQUICTunnelListener(serverCtx); err != nil {
+		log.Warn().Err(err).Msg("quic tunnel listener disabled")
+	}
+
+	// QUIC SNI router on :443/udp for public QUIC client routing.
+	if err := s.startQUICSNIRouter(); err != nil {
+		log.Warn().Err(err).Msg("quic sni router disabled")
+	}
+
 	return nil
 }
 
@@ -190,9 +221,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.mu.Lock()
 		for _, lease := range s.leases {
 			lease.Broker.Stop()
+			if lease.QUICBroker != nil {
+				lease.QUICBroker.Stop()
+			}
+		}
+		for _, relay := range s.udpRelays {
+			relay.Stop()
 		}
 		s.mu.Unlock()
 
+		if s.quicTunnel != nil {
+			_ = s.quicTunnel.close()
+		}
+		if s.quicSNIConn != nil {
+			_ = s.quicSNIConn.Close()
+		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				shutdownErr = err
@@ -222,6 +265,13 @@ func (s *Server) SNIAddr() string {
 		return ""
 	}
 	return s.sniListener.Addr().String()
+}
+
+func (s *Server) QUICAddr() string {
+	if s.quicTunnel == nil || s.quicTunnel.listener == nil {
+		return ""
+	}
+	return s.quicTunnel.listener.Addr().String()
 }
 
 func (s *Server) GetLease(leaseID string) (LeaseSnapshot, bool) {
@@ -307,9 +357,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errIPBanned) {
 			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
 		}
+		if errors.Is(err, errPortExhausted) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted
+		}
 		writeAPIError(w, status, code, err.Error())
 		return
 	}
+
+	// Start UDP relay outside the lock if the lease needs one.
+	if resp.UDPAddr != "" {
+		s.startUDPRelay(resp.LeaseID)
+	}
+
 	writeAPIData(w, http.StatusCreated, resp)
 }
 
@@ -478,6 +537,26 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		ttl = time.Duration(req.TTLSeconds) * time.Second
 	}
 
+	transport := strings.TrimSpace(strings.ToLower(req.Transport))
+	if transport == "" {
+		transport = types.TransportTCP
+	}
+	switch transport {
+	case types.TransportTCP, types.TransportUDP, types.TransportBoth:
+	default:
+		return types.RegisterResponse{}, fmt.Errorf("unsupported transport: %s", transport)
+	}
+
+	needsUDP := transport == types.TransportUDP || transport == types.TransportBoth
+	var udpPort int
+	if needsUDP {
+		var portErr error
+		udpPort, portErr = s.ports.Allocate()
+		if portErr != nil {
+			return types.RegisterResponse{}, fmt.Errorf("allocate udp port: %w", portErr)
+		}
+	}
+
 	leaseID := randomID("lease_")
 	now := time.Now()
 	expiresAt := now.Add(ttl)
@@ -491,7 +570,13 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		FirstSeenAt:  now,
 		LastSeenAt:   now,
 		ClientIP:     clientIP,
+		Transport:    transport,
+		UDPPort:      udpPort,
 		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+	}
+
+	if needsUDP {
+		record.QUICBroker = newQUICBroker(leaseID)
 	}
 
 	s.leases[leaseID] = record
@@ -502,13 +587,25 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		s.cfg.Policy.IPFilter().RegisterLeaseIP(leaseID, clientIP)
 	}
 
-	return types.RegisterResponse{
+	// Start UDP relay for leases that need it (done outside lock in a goroutine-safe way).
+	if needsUDP {
+		relay := newUDPRelay(leaseID, udpPort, record.QUICBroker)
+		s.udpRelays[leaseID] = relay
+	}
+
+	resp := types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostnames:  append([]string(nil), hostnames...),
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
 		ConnectURL: s.connectURL(),
-	}, nil
+		Transport:  transport,
+	}
+	if needsUDP {
+		resp.UDPAddr = fmt.Sprintf("%s:%d", s.cfg.RootHost, udpPort)
+		resp.QUICAddr = s.quicPublicAddr()
+	}
+	return resp, nil
 }
 
 func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
@@ -552,12 +649,23 @@ func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 		s.mu.Unlock()
 		return errUnauthorized
 	}
+	relay := s.udpRelays[record.ID]
+	delete(s.udpRelays, record.ID)
 	delete(s.leases, record.ID)
 	s.mu.Unlock()
 
 	s.routes.DeleteLease(record.Hostnames)
 	s.cfg.Policy.ForgetLease(record.ID)
 	record.Broker.Drop()
+	if record.QUICBroker != nil {
+		record.QUICBroker.Stop()
+	}
+	if relay != nil {
+		relay.Stop()
+	}
+	if record.UDPPort > 0 {
+		s.ports.Release(record.UDPPort)
+	}
 	return nil
 }
 
@@ -711,6 +819,12 @@ func (s *Server) cleanupExpiredLeases() {
 		s.routes.DeleteLease(lease.Hostnames)
 		s.cfg.Policy.ForgetLease(lease.ID)
 		lease.Broker.Drop()
+		if lease.QUICBroker != nil {
+			lease.QUICBroker.Stop()
+		}
+		if lease.UDPPort > 0 {
+			s.ports.Release(lease.UDPPort)
+		}
 	}
 }
 
@@ -730,6 +844,14 @@ func (s *Server) connectURL() string {
 		return "https://" + HostPortOrLoopback(s.apiListener.Addr().String()) + types.PathSDKConnect
 	}
 	return base + types.PathSDKConnect
+}
+
+func (s *Server) quicPublicAddr() string {
+	_, port, err := net.SplitHostPort(s.cfg.QUICListenAddr)
+	if err != nil {
+		port = "4017"
+	}
+	return net.JoinHostPort(s.cfg.RootHost, port)
 }
 
 func (s *Server) wrapAPIHandler(base http.Handler) http.Handler {
@@ -853,12 +975,14 @@ func (s *Server) snapshotForLease(record *leaseRecord) LeaseSnapshot {
 		ID:          record.ID,
 		Name:        record.Name,
 		ClientIP:    clientIP,
+		Transport:   record.Transport,
 		Hostnames:   append([]string(nil), record.Hostnames...),
 		Metadata:    record.Metadata,
 		ExpiresAt:   record.ExpiresAt,
 		FirstSeenAt: record.FirstSeenAt,
 		LastSeenAt:  record.LastSeenAt,
 		Ready:       record.Broker.ReadyCount(),
+		UDPPort:     record.UDPPort,
 		IsApproved:  runtime.EffectiveApproval(record.ID),
 		IsBanned:    runtime.IsLeaseBanned(record.ID),
 		IsDenied:    runtime.IsLeaseDenied(record.ID),
@@ -900,4 +1024,75 @@ func (s *Server) touchLease(leaseID, clientIP string) {
 	if record != nil && strings.TrimSpace(clientIP) != "" {
 		s.cfg.Policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
 	}
+}
+
+func (s *Server) startQUICTunnelListener(ctx context.Context) error {
+	tlsCert, err := tls.X509KeyPair(s.cfg.APITLS.CertPEM, s.cfg.APITLS.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("parse quic tls keypair: %w", err)
+	}
+
+	tlsConf := &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"portal-tunnel"},
+		MinVersion:   tls.VersionTLS13,
+	}
+
+	quicConf := &quic.Config{
+		EnableDatagrams:    true,
+		KeepAlivePeriod:    15 * time.Second,
+		MaxIdleTimeout:     60 * time.Second,
+		MaxIncomingStreams:  16,
+	}
+
+	listener, err := quic.ListenAddr(s.cfg.QUICListenAddr, tlsConf, quicConf)
+	if err != nil {
+		return fmt.Errorf("listen quic: %w", err)
+	}
+
+	tunnel := newQUICTunnelListener(listener, s)
+	s.quicTunnel = tunnel
+	s.group.Go(tunnel.run)
+
+	log.Info().
+		Str("component", "relay-server").
+		Str("quic_addr", listener.Addr().String()).
+		Msg("quic tunnel listener started")
+
+	return nil
+}
+
+// startUDPRelay starts a previously created UDP relay. Called after lock is released.
+func (s *Server) startUDPRelay(leaseID string) {
+	s.mu.RLock()
+	relay, ok := s.udpRelays[leaseID]
+	s.mu.RUnlock()
+	if !ok || relay == nil {
+		return
+	}
+	if err := relay.Start(s.context()); err != nil {
+		log.Error().
+			Err(err).
+			Str("component", "relay-server").
+			Str("lease_id", leaseID).
+			Msg("failed to start udp relay")
+	}
+}
+
+func (s *Server) startQUICSNIRouter() error {
+	conn, err := net.ListenPacket("udp", s.cfg.SNIListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen quic sni udp: %w", err)
+	}
+
+	router := newQUICSNIRouter(conn, s)
+	s.quicSNIConn = conn
+	s.group.Go(router.run)
+
+	log.Info().
+		Str("component", "relay-server").
+		Str("quic_sni_addr", conn.LocalAddr().String()).
+		Msg("quic sni router started")
+
+	return nil
 }

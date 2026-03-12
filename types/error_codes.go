@@ -20,4 +20,6 @@ const (
 	APIErrorCodeMethodNotAllowed    = "method_not_allowed"
 	APIErrorCodeSessionCreateFailed = "session_create_failed"
 	APIErrorCodeUnauthorized        = "unauthorized"
+	APIErrorCodeUDPPortExhausted    = "udp_port_exhausted"
+	APIErrorCodeTransportMismatch   = "transport_mismatch"
 )

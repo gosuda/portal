@@ -26,5 +26,6 @@ const (
 	PathSDKRegister   = "/sdk/register"
 	PathSDKRenew      = "/sdk/renew"
 	PathSDKUnregister = "/sdk/unregister"
-	PathSDKConnect    = "/sdk/connect"
+	PathSDKConnect     = "/sdk/connect"
+	PathSDKQUICConnect = "/sdk/quic-connect"
 )

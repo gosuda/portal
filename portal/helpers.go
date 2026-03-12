@@ -17,6 +17,11 @@ const (
 	defaultClientHelloWait   = 2 * time.Second
 	defaultControlBodyLimit  = 4 << 20
 	defaultSessionWriteLimit = 5 * time.Second
+
+	defaultUDPPortMin        = 29000
+	defaultUDPPortMax        = 29999
+	defaultUDPSessionTimeout = 30 * time.Second
+	defaultMaxDatagramSize   = 1350
 )
 
 func PortalRootHost(portalURL string) string {

@@ -14,6 +14,8 @@ import (
 const (
 	defaultAPIPort    = 4017
 	defaultSNIPort    = 443
+	defaultUDPPortMin = 29000
+	defaultUDPPortMax = 29999
 	defaultPortalURL  = "https://localhost:4017"
 	defaultKeylessDir = "./.portal-certs"
 )
@@ -23,6 +25,8 @@ type relayServerConfig struct {
 	Bootstraps         []string
 	APIPort            int
 	SNIPort            int
+	UDPPortMin         int
+	UDPPortMax         int
 	AdminSecretKey     string
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
@@ -52,6 +56,8 @@ func main() {
 	}
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
+	udpPortMin := parsePortNumber(os.Getenv("UDP_PORT_MIN"), defaultUDPPortMin)
+	udpPortMax := parsePortNumber(os.Getenv("UDP_PORT_MAX"), defaultUDPPortMax)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
 	trustProxyHeaders := parseBoolEnv("TRUST_PROXY_HEADERS")
 	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
@@ -77,6 +83,8 @@ func main() {
 	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
+	flag.IntVar(&cfg.UDPPortMin, "udp-port-min", udpPortMin, "Minimum UDP port for lease allocation (env: UDP_PORT_MIN)")
+	flag.IntVar(&cfg.UDPPortMax, "udp-port-max", udpPortMax, "Maximum UDP port for lease allocation (env: UDP_PORT_MAX)")
 
 	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
 	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies (env: TRUST_PROXY_HEADERS)")

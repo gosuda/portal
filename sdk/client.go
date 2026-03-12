@@ -208,6 +208,11 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 	}
 	acceptedCap := max(readyTarget*2, 1)
 
+	transport := strings.TrimSpace(strings.ToLower(req.Transport))
+	if transport == "" {
+		transport = types.TransportTCP
+	}
+
 	registerReq := types.RegisterRequest{
 		Name:         req.Name,
 		Hostnames:    req.Hostnames,
@@ -215,6 +220,7 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		ReverseToken: reverseToken,
 		TLS:          true,
 		TTLSeconds:   int(leaseTTL / time.Second),
+		Transport:    transport,
 	}
 
 	var registerResp types.RegisterResponse
@@ -239,6 +245,8 @@ func (c *Client) Listen(ctx context.Context, req ListenRequest) (*Listener, erro
 		hostnames:    registerResp.Hostnames,
 		metadata:     registerResp.Metadata,
 		reverseToken: reverseToken,
+		udpAddr:      registerResp.UDPAddr,
+		quicAddr:     registerResp.QUICAddr,
 		leaseTTL:     leaseTTL,
 		readyTarget:  readyTarget,
 		tlsConfig:    tlsConf,

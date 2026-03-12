@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -69,10 +70,15 @@ func runServer(cfg relayServerConfig) error {
 		logger.Warn().Err(loadErr).Msg("load admin settings")
 	}
 
+	quicListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
+
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:         cfg.PortalURL,
 		APIListenAddr:     apiListenAddr,
 		SNIListenAddr:     sniListenAddr,
+		QUICListenAddr:    quicListenAddr,
+		UDPPortMin:        cfg.UDPPortMin,
+		UDPPortMax:        cfg.UDPPortMax,
 		RootHost:          rootHost,
 		RootFallbackAddr:  portal.HostPortOrLoopback(apiListenAddr),
 		Policy:            adminHandler.Runtime(),
@@ -102,13 +108,25 @@ func runServer(cfg relayServerConfig) error {
 	acmeManager.Start(ctx)
 	defer acmeManager.Stop()
 
-	logger.Info().
+	logEvent := logger.Info().
 		Str("api_addr", portal.HostPortOrLoopback(server.APIAddr())).
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
-		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1").
-		Msg("relay server started")
+		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
+	if quicAddr := server.QUICAddr(); quicAddr != "" {
+		logEvent = logEvent.Str("quic_addr", quicAddr)
+	}
+	logEvent.Msg("relay server started")
+
+	// Force-exit if graceful shutdown does not complete within 15 seconds.
+	go func() {
+		<-ctx.Done()
+		time.AfterFunc(15*time.Second, func() {
+			logger.Warn().Msg("graceful shutdown timed out, forcing exit")
+			os.Exit(1)
+		})
+	}()
 
 	return server.Wait()
 }

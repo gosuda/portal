@@ -8,7 +8,7 @@ You need:
 
 - A public domain (example: `example.com`)
 - A public Linux server with a static public IP
-- Open inbound ports: `443/tcp`, `4017/tcp`
+- Open inbound ports: `443/tcp`, `4017/tcp`, `4017/udp`, `29000-29999/udp` (UDP range for QUIC/UDP leases)
 - Docker and Docker Compose
 - A DNS provider account for ACME DNS-01 automation with a supported provider (`cloudflare` or `route53`)
 
@@ -110,7 +110,18 @@ Equivalent relay flags:
 - `/sdk/renew` and `/sdk/unregister` require `lease_id` + `reverse_token`.
 - `/sdk/connect` is hijacked into a long-lived reverse TCP session after validation.
 
-### 3.2 Certificates and DNS Maintenance
+### 3.2 UDP/QUIC Transport
+
+Portal automatically starts a QUIC tunnel listener on `API_PORT/udp` (default `:4017/udp`) and allocates raw UDP ports from the `UDP_PORT_MIN`–`UDP_PORT_MAX` range (default `29000`–`29999`) for UDP leases. The tunnel CLI starts both TCP and UDP transports by default; if the relay does not support UDP, the tunnel falls back to TCP-only.
+
+| Variable | Default | Description |
+|---|---|---|
+| `UDP_PORT_MIN` | `29000` | Start of the UDP port allocation range |
+| `UDP_PORT_MAX` | `29999` | End of the UDP port allocation range |
+
+> **Docker note:** Use `network_mode: host` for the portal container to avoid Docker iptables port-mapping overhead. Docker creates one iptables rule per mapped port, so large UDP ranges cause very slow container start/stop. Host networking bypasses this entirely and allows dynamic UDP port allocation. See the nginx-proxy examples for the recommended setup.
+
+### 3.3 Certificates and DNS Maintenance
 
 - Relay certificates live in `KEYLESS_DIR`:
   - `fullchain.pem`
@@ -252,13 +263,17 @@ sudo journalctl -u portal-watcher --since today
 
 Required inbound ports:
 
-- `443/tcp`
-- `4017/tcp`
+- `443/tcp` — SNI router (tenant TLS passthrough)
+- `4017/tcp` — Admin/API listener
+- `4017/udp` — QUIC tunnel listener (tunnel ↔ relay)
+- `29000-29999/udp` — Raw UDP lease ports (client ↔ relay, adjust to match `UDP_PORT_MAX`)
 
 UFW example:
 
 ```bash
 sudo ufw allow 443/tcp
 sudo ufw allow 4017/tcp
+sudo ufw allow 4017/udp
+sudo ufw allow 29000:29999/udp
 sudo ufw status
 ```

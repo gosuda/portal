@@ -10,6 +10,13 @@ const (
 	HeaderReverseToken = "X-Portal-Token"
 	MarkerKeepalive    = byte(0x00)
 	MarkerTLSStart     = byte(0x02)
+	MarkerQUICReady    = byte(0x03)
+)
+
+const (
+	TransportTCP  = "tcp"
+	TransportUDP  = "udp"
+	TransportBoth = "both"
 )
 
 type APIEnvelope[T any] struct {
@@ -74,6 +81,7 @@ type RegisterRequest struct {
 	Metadata     LeaseMetadata `json:"metadata"`
 	TTLSeconds   int           `json:"ttl_seconds,omitempty"`
 	TLS          bool          `json:"tls"`
+	Transport    string        `json:"transport,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -82,6 +90,9 @@ type RegisterResponse struct {
 	ConnectURL string        `json:"connect_url"`
 	Hostnames  []string      `json:"hostnames"`
 	Metadata   LeaseMetadata `json:"metadata"`
+	UDPAddr    string        `json:"udp_addr,omitempty"`
+	QUICAddr   string        `json:"quic_addr,omitempty"`
+	Transport  string        `json:"transport,omitempty"`
 }
 
 type RenewRequest struct {

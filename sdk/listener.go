@@ -19,6 +19,7 @@ import (
 type ListenRequest struct {
 	Name         string
 	ReverseToken string
+	Transport    string
 	Hostnames    []string
 	Metadata     types.LeaseMetadata
 	ReadyTarget  int
@@ -37,6 +38,8 @@ type Listener struct {
 	name         string
 	leaseID      string
 	reverseToken string
+	udpAddr      string
+	quicAddr     string
 	hostnames    []string
 	metadata     types.LeaseMetadata
 	readyTarget  int
@@ -89,6 +92,18 @@ func (l *Listener) LeaseID() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.leaseID
+}
+
+func (l *Listener) ReverseToken() string {
+	return l.reverseToken
+}
+
+func (l *Listener) UDPAddr() string {
+	return l.udpAddr
+}
+
+func (l *Listener) QUICAddr() string {
+	return l.quicAddr
 }
 
 func (l *Listener) Hostnames() []string {

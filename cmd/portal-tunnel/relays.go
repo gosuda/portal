@@ -132,3 +132,118 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 	_, err := conn.Write([]byte(response))
 	return err
 }
+
+// proxyUDPRelayConnections receives datagrams from the relay via the UDPListener
+// and forwards them to the local UDP service, relaying responses back.
+func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener, localAddr string) error {
+	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
+
+	targetAddr, err := sdk.NormalizeTargetAddr(localAddr)
+	if err != nil {
+		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
+	}
+
+	resolvedAddr, err := net.ResolveUDPAddr("udp", targetAddr)
+	if err != nil {
+		return fmt.Errorf("resolve udp addr %q: %w", targetAddr, err)
+	}
+
+	// Per-flow local UDP connections: flowID → *net.UDPConn
+	type flowEntry struct {
+		conn     *net.UDPConn
+		lastSeen time.Time
+	}
+	var mu sync.Mutex
+	flows := make(map[uint32]*flowEntry)
+
+	// Cleanup idle flow connections.
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				mu.Lock()
+				now := time.Now()
+				for id, f := range flows {
+					if now.Sub(f.lastSeen) > 30*time.Second {
+						_ = f.conn.Close()
+						delete(flows, id)
+					}
+				}
+				mu.Unlock()
+			}
+		}
+	}()
+
+	// getOrCreateFlow returns (or creates) a local UDP conn for a flow.
+	getOrCreateFlow := func(flowID uint32) (*net.UDPConn, error) {
+		mu.Lock()
+		if f, ok := flows[flowID]; ok {
+			f.lastSeen = time.Now()
+			mu.Unlock()
+			return f.conn, nil
+		}
+		mu.Unlock()
+
+		localConn, err := net.DialUDP("udp", nil, resolvedAddr)
+		if err != nil {
+			return nil, err
+		}
+
+		mu.Lock()
+		// Double-check after acquiring lock.
+		if f, ok := flows[flowID]; ok {
+			mu.Unlock()
+			_ = localConn.Close()
+			f.lastSeen = time.Now()
+			return f.conn, nil
+		}
+		flows[flowID] = &flowEntry{conn: localConn, lastSeen: time.Now()}
+		mu.Unlock()
+
+		// Start reverse read loop: local service → relay.
+		go func() {
+			buf := make([]byte, 65535)
+			for {
+				n, err := localConn.Read(buf)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					logger.Debug().Err(err).Uint32("flow_id", flowID).Msg("local read ended")
+					return
+				}
+				if sendErr := udpListener.SendDatagram(flowID, buf[:n]); sendErr != nil {
+					logger.Debug().Err(sendErr).Uint32("flow_id", flowID).Msg("send datagram to relay failed")
+					return
+				}
+			}
+		}()
+
+		return localConn, nil
+	}
+
+	// Main loop: relay → local service.
+	for {
+		dg, err := udpListener.AcceptDatagram()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("accept datagram: %w", err)
+		}
+
+		localConn, err := getOrCreateFlow(dg.FlowID)
+		if err != nil {
+			logger.Warn().Err(err).Uint32("flow_id", dg.FlowID).Msg("dial local udp failed")
+			continue
+		}
+
+		if _, err := localConn.Write(dg.Payload); err != nil {
+			logger.Debug().Err(err).Uint32("flow_id", dg.FlowID).Msg("write to local udp failed")
+		}
+	}
+}
