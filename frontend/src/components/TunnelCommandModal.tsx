@@ -17,7 +17,7 @@ interface TunnelCommandModalProps {
 }
 
 export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
-  const defaultHost = "localhost:3000";
+  const defaultHost = "3000";
 
   // Get current host URL dynamically
   const currentOrigin = useMemo(() => {
@@ -157,7 +157,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[550px] rounded-sm max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[510px] rounded-sm max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
