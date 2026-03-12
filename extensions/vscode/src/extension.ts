@@ -123,20 +123,34 @@ interface TunnelCommandOptions {
 
 function buildCommand(opts: TunnelCommandOptions): string {
   const { host, name, relayList, relayUrl, thumbnail, isLocal } = opts;
-  const tunnelScript = `${relayUrl}/tunnel`;
-  const thumbEnv = thumbnail ? ` APP_THUMBNAIL=${thumbnail}` : "";
+  const target = os.platform() === "win32" ? "windows" : "unix";
+  const installShellUrl = `${relayUrl}/install.sh`;
+  const installPowerShellUrl = `${relayUrl}/install.ps1`;
+  const exposeArgs: string[] = [];
+
+  if (name.trim()) {
+    exposeArgs.push(`--name ${formatToken(name.trim(), target)}`);
+  }
+  exposeArgs.push(`--relays ${formatToken(relayList, target)}`);
+  if (thumbnail.trim()) {
+    exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
+  }
+
+  const exposeCommand = `portal expose ${[...exposeArgs, formatToken(host, target)].join(" ")}`;
 
   if (os.platform() === "win32") {
-    const thumbEnvWin = thumbnail ? ` $env:APP_THUMBNAIL="${thumbnail}";` : "";
-    return (
-      `$ProgressPreference = 'SilentlyContinue'; ` +
-      `$env:APP_HOST="${host}"; $env:APP_NAME="${name}"; $env:RELAYS="${relayList}";${thumbEnvWin} ` +
-      `irm ${tunnelScript}?os=windows | iex`
-    );
+    return [
+      `$ProgressPreference = 'SilentlyContinue'`,
+      `irm ${formatToken(installPowerShellUrl, target)} | iex`,
+      exposeCommand,
+    ].join("\n");
   }
 
   const curlFlags = isLocal ? "-kfsSL" : "-fsSL";
-  return `curl ${curlFlags} ${tunnelScript} | APP_HOST=${host} APP_NAME=${name}${thumbEnv} RELAYS="${relayList}" sh`;
+  return [
+    `curl ${curlFlags} ${formatToken(installShellUrl, target)} | bash`,
+    exposeCommand,
+  ].join("\n");
 }
 
 function createTunnelTerminal(): vscode.Terminal {
@@ -158,4 +172,19 @@ function isLocalhost(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function quoteShellValue(value: string): string {
+  return "'" + value.replace(/'/g, `'\"'\"'`) + "'";
+}
+
+function quotePowerShellValue(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function formatToken(value: string, target: "unix" | "windows"): string {
+  if (/^[A-Za-z0-9:/.=_,-]+$/.test(value)) {
+    return value;
+  }
+  return target === "windows" ? quotePowerShellValue(value) : quoteShellValue(value);
 }

@@ -9,7 +9,7 @@ It does not terminate tenant TLS.
 
 ## App (Service Publisher)
 
-A backend service connected to Portal through `portal-tunnel` or the native Go SDK.
+A backend service connected to Portal through the `portal` CLI (`cmd/portal-tunnel`) or the native Go SDK.
 An app publishes one or more leases and serves traffic from a local process.
 
 ## Client (Service Consumer)

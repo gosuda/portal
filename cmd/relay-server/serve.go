@@ -99,10 +99,13 @@ func newAPIMux(frontend *Frontend, adminHandler *admin.Handler, cfg relayServerC
 
 	mux.HandleFunc(types.PathAdmin, adminHandler.HandleRequest)
 	mux.HandleFunc(types.PathAdminPrefix, adminHandler.HandleRequest)
-	mux.HandleFunc(types.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelScript(w, r, cfg.PortalURL)
+	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, cfg.PortalURL, false)
 	})
-	mux.HandleFunc(types.PathTunnelBinPrefix, serveTunnelBinary)
+	mux.HandleFunc(types.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, cfg.PortalURL, true)
+	})
+	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 
 	return mux
 }

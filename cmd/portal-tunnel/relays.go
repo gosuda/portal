@@ -60,7 +60,7 @@ func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) 
 
 	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
 	if err != nil {
-		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
+		return fmt.Errorf("invalid target %q: %w", localAddr, err)
 	}
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}

@@ -19,8 +19,11 @@ export const API_PATHS = {
     connect: "/sdk/connect",
   },
   healthz: "/healthz",
+  install: {
+    shell: "/install.sh",
+    powershell: "/install.ps1",
+  },
   appPrefix: "/app/",
-  tunnel: "/tunnel",
 } as const;
 
 export const ROUTE_PATHS = {

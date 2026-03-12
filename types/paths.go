@@ -18,8 +18,9 @@ const (
 	PathAdminSettings     = "/admin/settings"
 	PathAdminApproval     = "/admin/settings/approval-mode"
 	PathAdminIPsPrefix    = "/admin/ips/"
-	PathTunnel            = "/tunnel"
-	PathTunnelBinPrefix   = "/tunnel/bin/"
+	PathInstallShell      = "/install.sh"
+	PathInstallPowerShell = "/install.ps1"
+	PathInstallBinPrefix  = "/install/bin/"
 
 	PathSDKPrefix     = "/sdk/"
 	PathSDKDomain     = "/sdk/domain"

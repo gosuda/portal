@@ -122,6 +122,8 @@ Relay server exposes:
 
 - `/` - React frontend with SSR bootstrap payload
 - `/app/` - Static frontend assets
+- `/install.sh` - Unix installer for the `portal` CLI
+- `/install.ps1` - PowerShell installer for the `portal` CLI
 - `/healthz` - Health endpoint
 - `/admin/*` - Admin API/control endpoints used by server management UI
 - `/sdk/*` - SDK/control endpoints (`/sdk/connect` opens the raw TCP reverse channel used by the relay)

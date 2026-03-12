@@ -18,7 +18,6 @@ interface TunnelCommandModalProps {
 
 export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const defaultHost = "localhost:3000";
-  const defaultName = "your-app-name";
 
   // Get current host URL dynamically
   const currentOrigin = useMemo(() => {
@@ -28,8 +27,8 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     return "https://localhost:4017";
   }, []);
 
-  const [host, setHost] = useState(defaultHost);
-  const [name, setName] = useState(defaultName);
+  const [target, setTarget] = useState(defaultHost);
+  const [name, setName] = useState("");
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
   const [defaultRelays, setDefaultRelays] = useState(true);
   const [urlInput, setUrlInput] = useState("");
@@ -83,53 +82,61 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
 
   // Generate the tunnel command
   const command = useMemo(() => {
-    const hostVal = host.trim() === "" ? defaultHost : host.trim();
-    const nameVal = name.trim() === "" ? defaultName : name.trim();
+    const targetVal = target.trim() === "" ? defaultHost : target.trim();
+    const nameVal = name.trim();
     const relayUrlVal =
       relayUrls.length > 0 ? relayUrls.join(",") : currentOrigin;
-    const tunnelScriptURL = new URL(API_PATHS.tunnel, currentOrigin).toString();
+    const installScriptURL = new URL(
+      API_PATHS.install.shell,
+      currentOrigin
+    ).toString();
+    const installPowerShellURL = new URL(
+      API_PATHS.install.powershell,
+      currentOrigin
+    ).toString();
     const localhostRelay = isLocalRelayOrigin(currentOrigin);
+    const installerDefaultsMatch =
+      defaultRelays &&
+      relayUrls.length === 1 &&
+      relayUrls[0] === currentOrigin;
 
-    if (os === "windows") {
-      const windowsScriptURL = new URL(tunnelScriptURL);
-      windowsScriptURL.searchParams.set("os", "windows");
-      const envAssignments = [
-        "$ProgressPreference = 'SilentlyContinue'",
-        `$env:APP_HOST=${quotePowerShellValue(hostVal)}`,
-        `$env:APP_NAME=${quotePowerShellValue(nameVal)}`,
-        `$env:RELAYS=${quotePowerShellValue(relayUrlVal)}`,
-      ];
-      if (!defaultRelays) {
-        envAssignments.push("$env:DEFAULT_RELAYS='false'");
-      }
-      if (normalizedThumbnailURL) {
-        envAssignments.push(
-          `$env:APP_THUMBNAIL=${quotePowerShellValue(normalizedThumbnailURL)}`
-        );
-      }
-      return `${envAssignments.join("; ")}; irm ${quotePowerShellValue(
-        windowsScriptURL.toString()
-      )} | iex`;
+    const exposeArgs: string[] = [];
+
+    if (nameVal !== "") {
+      exposeArgs.push(`--name ${formatToken(nameVal, os)}`);
     }
-
-    const curlFlags = localhostRelay ? "-kfsSL" : "-fsSL";
-    const envAssignments = [
-      `APP_HOST=${quoteShellValue(hostVal)}`,
-      `APP_NAME=${quoteShellValue(nameVal)}`,
-      `RELAYS=${quoteShellValue(relayUrlVal)}`,
-    ];
+    if (!installerDefaultsMatch) {
+      exposeArgs.push(`--relays ${formatToken(relayUrlVal, os)}`);
+    }
     if (!defaultRelays) {
-      envAssignments.push(`DEFAULT_RELAYS=${quoteShellValue("false")}`);
+      exposeArgs.push("--default-relays=false");
     }
     if (normalizedThumbnailURL) {
-      envAssignments.push(
-        `APP_THUMBNAIL=${quoteShellValue(normalizedThumbnailURL)}`
-      );
+      exposeArgs.push(`--thumbnail ${formatToken(normalizedThumbnailURL, os)}`);
     }
-    return `curl ${curlFlags} ${quoteShellValue(
-      tunnelScriptURL
-    )} | ${envAssignments.join(" ")} sh`;
-  }, [currentOrigin, defaultRelays, host, name, normalizedThumbnailURL, relayUrls, os]);
+
+    if (os === "windows") {
+      return [
+        `$ProgressPreference = 'SilentlyContinue'`,
+        `irm ${formatToken(installPowerShellURL, os)} | iex`,
+        `portal expose ${[...exposeArgs, formatToken(targetVal, os)].join(" ")}`,
+      ].join("\n");
+    }
+
+    const curlFlags = localhostRelay ? "-ksSL" : "-sSL";
+    return [
+      `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
+      `portal expose ${[...exposeArgs, formatToken(targetVal, os)].join(" ")}`,
+    ].join("\n");
+  }, [
+    currentOrigin,
+    defaultRelays,
+    name,
+    normalizedThumbnailURL,
+    os,
+    relayUrls,
+    target,
+  ]);
 
   const handleCopy = async () => {
     try {
@@ -150,7 +157,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[500px] rounded-sm max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[550px] rounded-sm max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
@@ -162,22 +169,18 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           {/* Host Input */}
           <div className="space-y-2">
             <label
-              htmlFor="host"
+              htmlFor="target"
               className="text-sm font-medium text-foreground"
             >
               Host
             </label>
-            <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_HOST=</span>
-              <Input
-                id="host"
-                type="text"
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
-                placeholder={defaultHost}
-                className="rounded-l-none"
-              />
-            </div>
+            <Input
+              id="target"
+              type="text"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder={defaultHost}
+            />
           </div>
 
           {/* Name Input */}
@@ -188,17 +191,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
             >
               Service Name
             </label>
-            <div className="flex items-center rounded-md bg-border">
-              <span className="px-3 text-sm text-text-muted">APP_NAME=</span>
-              <Input
-                id="name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={defaultName}
-                className="rounded-l-none"
-              />
-            </div>
+            <Input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="auto-generated when empty"
+            />
           </div>
 
           {/* Relay URLs Input */}
@@ -325,6 +324,10 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 )}
               </button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              After installation, run <code>portal list</code> to inspect the
+              configured public relays.
+            </p>
           </div>
         </div>
       </DialogContent>
@@ -353,6 +356,13 @@ function quoteShellValue(value: string): string {
 
 function quotePowerShellValue(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
+}
+
+function formatToken(value: string, os: "unix" | "windows"): string {
+  if (/^[A-Za-z0-9:/.=_-]+$/.test(value)) {
+    return value;
+  }
+  return os === "windows" ? quotePowerShellValue(value) : quoteShellValue(value);
 }
 
 function normalizeAbsoluteHTTPURL(raw: string): string {
