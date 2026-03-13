@@ -1,11 +1,24 @@
 import * as vscode from "vscode";
-import * as os from "os";
+
+import {
+  buildCommand,
+  defaultRelayRegistryURL,
+  isLocalhost,
+  validateRelayUrl,
+} from "./command";
 
 let tunnelTerminal: vscode.Terminal | undefined;
+const defaultTunnelHost = "localhost:3000";
+
+interface RelaySelection {
+  relayUrls: string[];
+  installRelayUrl: string;
+}
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("portal.startTunnel", startTunnel),
+    vscode.commands.registerCommand("portal.startTunnelAdvanced", startTunnelAdvanced),
     vscode.commands.registerCommand("portal.stopTunnel", stopTunnel),
     vscode.window.onDidCloseTerminal((t) => {
       if (t === tunnelTerminal) {
@@ -23,23 +36,51 @@ async function startTunnel() {
   const host = await promptHost();
   if (!host) { return; }
 
-  const name = await promptName();
-  if (!name) { return; }
+  const relaySelection = await resolveRelaySelection(false);
+  if (!relaySelection) { return; }
 
-  const relayUrls = await promptRelayUrls();
-  if (!relayUrls) { return; }
+  runTunnelCommand({
+    host,
+    name: "",
+    relaySelection,
+    thumbnail: "",
+  });
+}
+
+async function startTunnelAdvanced() {
+  const host = await promptHost();
+  if (!host) { return; }
+
+  const name = await promptName();
+  if (name === undefined) { return; }
+
+  const relaySelection = await resolveRelaySelection(true);
+  if (!relaySelection) { return; }
 
   const thumbnail = await promptThumbnail();
   if (thumbnail === undefined) { return; }
 
-  const relayUrl = relayUrls[0];
-  const command = buildCommand({
+  runTunnelCommand({
     host,
     name,
-    relayList: relayUrls.join(","),
-    relayUrl,
+    relaySelection,
     thumbnail,
-    isLocal: isLocalhost(relayUrl),
+  });
+}
+
+function runTunnelCommand(args: {
+  host: string;
+  name: string;
+  relaySelection: RelaySelection;
+  thumbnail: string;
+}) {
+  const command = buildCommand({
+    host: args.host,
+    name: args.name,
+    relayList: args.relaySelection.relayUrls.join(","),
+    relayUrl: args.relaySelection.installRelayUrl,
+    thumbnail: args.thumbnail,
+    isLocal: isLocalhost(args.relaySelection.installRelayUrl),
   });
 
   if (tunnelTerminal) {
@@ -62,7 +103,7 @@ function stopTunnel() {
 
 async function promptHost(): Promise<string | undefined> {
   const config = vscode.workspace.getConfiguration("portal");
-  const defaultHost = config.get<string>("defaultHost") ?? "localhost:3000";
+  const defaultHost = config.get<string>("defaultHost") ?? defaultTunnelHost;
   return vscode.window.showInputBox({
     title: "Portal: Local Host",
     prompt: "Hostname or IP:Port where your service is running",
@@ -73,29 +114,74 @@ async function promptHost(): Promise<string | undefined> {
 
 async function promptName(): Promise<string | undefined> {
   const config = vscode.workspace.getConfiguration("portal");
-  const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name ?? "my-app";
-  const defaultName = config.get<string>("defaultName") || workspaceName;
+  const defaultName = config.get<string>("defaultName") ?? "";
   return vscode.window.showInputBox({
     title: "Portal: Service Name",
-    prompt: "Unique identifier for your tunnel",
+    prompt: "Optional public hostname prefix. Leave empty to let the CLI auto-generate one.",
     value: defaultName,
-    validateInput: (v) => (v.trim() ? undefined : "Required"),
   });
 }
 
-async function promptRelayUrls(): Promise<string[] | undefined> {
+async function resolveRelaySelection(interactive: boolean): Promise<RelaySelection | undefined> {
   const config = vscode.workspace.getConfiguration("portal");
   const saved = config.get<string[]>("relayUrls") ?? [];
-  if (saved.length > 0) { return saved; }
+  if (saved.length > 0) {
+    const invalid = saved.find((url) => validateRelayUrl(url) !== undefined);
+    if (invalid) {
+      vscode.window.showErrorMessage("portal.relayUrls must contain only valid https:// relay URLs.");
+      return undefined;
+    }
+    const relayUrls = saved.map((url) => url.trim());
+    return {
+      relayUrls,
+      installRelayUrl: relayUrls[0],
+    };
+  }
+
+  if (!interactive) {
+    return {
+      relayUrls: [],
+      installRelayUrl: "",
+    };
+  }
+
+  const choice = await vscode.window.showQuickPick([
+    {
+      label: "Use default public registry",
+      description: defaultRelayRegistryURL,
+    },
+    {
+      label: "Enter relay URL",
+      description: "Install from a specific https:// relay",
+    },
+  ], {
+    title: "Portal: Relay Source",
+    placeHolder: "Choose a public registry or a specific relay URL",
+  });
+  if (!choice) {
+    return undefined;
+  }
+  if (choice.label === "Use default public registry") {
+    vscode.window.showInformationMessage(`Portal will use the default public registry: ${defaultRelayRegistryURL}`);
+    return {
+      relayUrls: [],
+      installRelayUrl: "",
+    };
+  }
 
   const input = await vscode.window.showInputBox({
     title: "Portal: Relay URL",
     prompt: "Relay server URL (e.g. https://my-relay.example.com)",
-    validateInput: (v) => {
-      try { new URL(v.trim()); return undefined; } catch { return "Enter a valid URL"; }
-    },
+    validateInput: validateRelayUrl,
   });
-  return input ? [input.trim()] : undefined;
+  if (!input) {
+    return undefined;
+  }
+  const relayUrl = input.trim();
+  return {
+    relayUrls: [relayUrl],
+    installRelayUrl: relayUrl,
+  };
 }
 
 async function promptThumbnail(): Promise<string | undefined> {
@@ -108,83 +194,16 @@ async function promptThumbnail(): Promise<string | undefined> {
       try { new URL(v.trim()); return undefined; } catch { return "Enter a valid URL or leave empty"; }
     },
   });
-  // undefined = user pressed Escape, "" = user skipped
   return result;
 }
 
-interface TunnelCommandOptions {
-  host: string;
-  name: string;
-  relayList: string;
-  relayUrl: string;
-  thumbnail: string;
-  isLocal: boolean;
-}
-
-function buildCommand(opts: TunnelCommandOptions): string {
-  const { host, name, relayList, relayUrl, thumbnail, isLocal } = opts;
-  const target = os.platform() === "win32" ? "windows" : "unix";
-  const installShellUrl = `${relayUrl}/install.sh`;
-  const installPowerShellUrl = `${relayUrl}/install.ps1`;
-  const exposeArgs: string[] = [];
-
-  if (name.trim()) {
-    exposeArgs.push(`--name ${formatToken(name.trim(), target)}`);
-  }
-  exposeArgs.push(`--relays ${formatToken(relayList, target)}`);
-  if (thumbnail.trim()) {
-    exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
-  }
-
-  const exposeCommand = `portal expose ${[...exposeArgs, formatToken(host, target)].join(" ")}`;
-
-  if (os.platform() === "win32") {
-    return [
-      `$ProgressPreference = 'SilentlyContinue'`,
-      `irm ${formatToken(installPowerShellUrl, target)} | iex`,
-      exposeCommand,
-    ].join("\n");
-  }
-
-  const curlFlags = isLocal ? "-kfsSL" : "-fsSL";
-  return [
-    `curl ${curlFlags} ${formatToken(installShellUrl, target)} | bash`,
-    exposeCommand,
-  ].join("\n");
-}
-
 function createTunnelTerminal(): vscode.Terminal {
-  if (os.platform() !== "win32") {
+  if (process.platform !== "win32") {
     return vscode.window.createTerminal("Portal Tunnel");
   }
 
-  // Use PowerShell on Windows for non-PowerShell terminal profiles (Git Bash, WSL, etc.).
   return vscode.window.createTerminal({
     name: "Portal Tunnel",
     shellPath: "powershell.exe",
   });
-}
-
-function isLocalhost(url: string): boolean {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".localhost");
-  } catch {
-    return false;
-  }
-}
-
-function quoteShellValue(value: string): string {
-  return "'" + value.replace(/'/g, `'\"'\"'`) + "'";
-}
-
-function quotePowerShellValue(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function formatToken(value: string, target: "unix" | "windows"): string {
-  if (/^[A-Za-z0-9:/.=_,-]+$/.test(value)) {
-    return value;
-  }
-  return target === "windows" ? quotePowerShellValue(value) : quoteShellValue(value);
 }

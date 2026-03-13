@@ -1,26 +1,28 @@
-# Portal — VSCode Extension
+# Portal VSCode Extension
 
-Expose your local service to the internet via a [Portal](https://github.com/gosuda/portal) relay tunnel, directly from VSCode — no terminal copy-paste needed.
+Expose your local service to the internet via a [Portal](https://github.com/gosuda/portal) relay tunnel, directly from VSCode.
 
 ## Features
 
-- **Portal: Start Tunnel** — prompts for host, service name, relay URL, and optional thumbnail, then runs the tunnel command in the integrated terminal
-- **Portal: Stop Tunnel** — stops the active tunnel terminal
-- Persisted settings for relay URLs, default host, and default service name
-- Auto-detects OS (macOS/Linux uses `curl`, Windows uses PowerShell)
+- `Portal: Start Tunnel` prompts only for the local host:port, then starts the tunnel with configured relay URLs or the default public registry
+- `Portal: Start Tunnel (Advanced)` prompts for host, optional service name, relay source, and optional thumbnail
+- `Portal: Stop Tunnel` stops the active tunnel terminal
+- Persisted settings for relay URLs, default local host, and default service name
+- Uses the installed Portal binary path after running the installer, so first-run install + expose works in one terminal
+- When no relay URL is configured, the extension can use the public registry at `https://raw.githubusercontent.com/gosuda/portal/main/registry.json`
 
 ## Requirements
 
-- A running [Portal relay server](https://github.com/gosuda/portal) (self-hosted or public)
+- A running [Portal relay server](https://github.com/gosuda/portal) with an `https://` URL
 - `curl` on macOS/Linux, PowerShell on Windows
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `portal.relayUrls` | `[]` | Relay server URLs. If empty, prompted on each start. |
-| `portal.defaultHost` | `localhost:3000` | Default local host:port to expose. |
-| `portal.defaultName` | `""` | Default tunnel service name. Falls back to workspace folder name. |
+| `portal.relayUrls` | `[]` | Relay server URLs (`https://` only). If empty, the extension uses `https://raw.githubusercontent.com/gosuda/portal/main/registry.json`. |
+| `portal.defaultHost` | `"localhost:3000"` | Default local host:port shown by `Portal: Start Tunnel`. |
+| `portal.defaultName` | `""` | Default tunnel service name suggestion. If empty, the advanced prompt starts blank. |
 
 Example `settings.json`:
 
@@ -35,24 +37,38 @@ Example `settings.json`:
 ## Usage
 
 1. Open Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
-2. Run **Portal: Start Tunnel**
-3. Fill in the prompts (host, name, relay URL, thumbnail URL — all pre-filled from settings)
-4. Tunnel starts in the integrated terminal and prints the public URL
+2. Run `Portal: Start Tunnel`
+3. Enter the local host:port you want to expose
+4. The tunnel starts in the integrated terminal
 
-To stop: run **Portal: Stop Tunnel** or close the `Portal Tunnel` terminal.
+Use `Portal: Start Tunnel (Advanced)` when you need a different host, custom relay selection, or a thumbnail URL.
+
+To stop, run `Portal: Stop Tunnel` or close the `Portal Tunnel` terminal.
 
 ## Development
 
 ```bash
 git clone https://github.com/gosuda/portal
-cd portal/extensions/vscode/portal
-pnpm install
+cd portal/extensions/vscode
+corepack pnpm install --frozen-lockfile
 ```
 
 Open the folder in VSCode, then press `F5` to launch the Extension Development Host.
 
+To test the extension locally:
+
+1. Open `extensions/vscode` in VSCode.
+2. Press `F5` and choose `Run Extension`.
+3. In the new Extension Development Host window, run `Portal: Start Tunnel` or `Portal: Start Tunnel (Advanced)` from the Command Palette.
+
+If you want Linux behavior from WSL, open the folder with `Remote - WSL` first so the extension host runs in WSL instead of Windows.
+
 ## Release Notes
 
-### 0.0.1
+### 0.0.2
 
-Initial release — Start/Stop Tunnel commands with thumbnail support.
+- Enforce `https://` relay URLs
+- Prompt only for the local host in `Portal: Start Tunnel`
+- Add `Portal: Start Tunnel (Advanced)` for host, name, relay, and thumbnail overrides
+- Allow empty service names so the CLI can auto-generate them
+- Use the installed Portal binary path after installer execution
