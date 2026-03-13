@@ -13,6 +13,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/portal/admin"
+	"github.com/gosuda/portal/v2/types"
 )
 
 type readDirFileFS interface {
@@ -162,6 +163,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
 		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
+		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
 	return replacer.Replace(htmlContent)
 }

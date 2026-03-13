@@ -60,10 +60,7 @@ func BuildLeaseRows(serv *portal.Server, includeAdmin bool, portalURL string) []
 		}
 
 		metadataJSON, _ := json.Marshal(snapshot.Metadata)
-		host := ""
-		if len(snapshot.Hostnames) > 0 {
-			host = snapshot.Hostnames[0]
-		}
+		host := snapshot.Hostname
 
 		rows = append(rows, LeaseRow{
 			TTL:          formatDuration(time.Until(snapshot.ExpiresAt)),

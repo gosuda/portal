@@ -9,7 +9,7 @@ It does not terminate tenant TLS.
 
 ## App (Service Publisher)
 
-A backend service connected to Portal through `portal-tunnel` or the native Go SDK.
+A backend service connected to Portal through the `portal` CLI (`cmd/portal-tunnel`) or the native Go SDK.
 An app publishes one or more leases and serves traffic from a local process.
 
 ## Client (Service Consumer)
@@ -39,7 +39,7 @@ Each lease has an ID, display name, hostnames, metadata, expiry, reverse token, 
 
 ## Lease Name
 
-The human-readable identifier used to derive a hostname (for example, `myapp` -> `myapp.example.com`) when no explicit hostname is supplied.
+The canonical single DNS label for a lease. Portal publishes the lease at `<name>.<root host>` and also uses the same value for admin/UI display.
 
 ## Lease Broker
 

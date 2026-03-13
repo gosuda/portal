@@ -303,7 +303,7 @@ func (l *quicTunnelListener) handleConnection(conn *quic.Conn) {
 	// Confirm registration to the tunnel.
 	_, _ = stream.Write([]byte(`{"ok":true}`))
 
-	l.server.touchLease(lease.ID, conn.RemoteAddr().String())
+	l.server.registry.Touch(lease.ID, conn.RemoteAddr().String(), time.Now())
 
 	log.Info().
 		Str("component", "quic-tunnel-listener").

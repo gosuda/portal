@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/sdk"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 func proxyRelayConnections(ctx context.Context, relayListener net.Listener, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
@@ -58,9 +59,9 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	targetAddr, err := sdk.NormalizeTargetAddr(localAddr)
+	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
 	if err != nil {
-		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
+		return fmt.Errorf("invalid target %q: %w", localAddr, err)
 	}
 
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
@@ -138,7 +139,7 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener, localAddr string) error {
 	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
 
-	targetAddr, err := sdk.NormalizeTargetAddr(localAddr)
+	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
 	if err != nil {
 		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
 	}

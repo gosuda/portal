@@ -13,10 +13,17 @@ import (
 	"time"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioCloser, error) {
-	parsed, err := url.Parse(strings.TrimSpace(relayURL))
+	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	parsed, err := url.Parse(normalizedRelayURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse relay url: %w", err)
 	}
@@ -25,7 +32,7 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 		return nil, nil, errors.New("relay hostname is required")
 	}
 
-	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), relayURL, serverName)
+	certPEM, rootCAPEM, err := ResolveMaterials(context.Background(), normalizedRelayURL, serverName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("prepare keyless materials: %w", err)
 	}
@@ -41,7 +48,7 @@ func BuildClientTLSConfig(relayURL string, domains []string) (*tls.Config, ioClo
 	}
 
 	remoteSigner, err := keylesstls.NewRemoteSigner(keylesstls.RemoteSignerConfig{
-		Endpoint:   relayURL,
+		Endpoint:   normalizedRelayURL,
 		ServerName: serverName,
 		KeyID:      RelayKeyID,
 		RootCAPEM:  rootCAPEM,
@@ -152,7 +159,7 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 	tlsConn := tls.Client(rawConn, &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		ServerName:         serverName,
-		InsecureSkipVerify: isLocalhost(host),
+		InsecureSkipVerify: utils.IsLocalRelayHost(host),
 		NextProtos:         []string{"http/1.1"},
 	})
 	defer tlsConn.Close()
@@ -173,16 +180,4 @@ func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName str
 		})...)
 	}
 	return chainPEM, nil
-}
-
-func isLocalhost(host string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
-	switch host {
-	case "", "localhost":
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return strings.HasSuffix(host, ".localhost")
 }

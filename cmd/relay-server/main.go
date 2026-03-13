@@ -9,6 +9,9 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -22,7 +25,6 @@ const (
 
 type relayServerConfig struct {
 	PortalURL          string
-	Bootstraps         []string
 	APIPort            int
 	SNIPort            int
 	UDPPortMin         int
@@ -50,16 +52,12 @@ func main() {
 	if portalURL == "" {
 		portalURL = defaultPortalURL
 	}
-	bootstrapsCSV := trimmedEnv("BOOTSTRAP_URIS")
-	if bootstrapsCSV == "" {
-		bootstrapsCSV = portalURL
-	}
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	udpPortMin := parsePortNumber(os.Getenv("UDP_PORT_MIN"), defaultUDPPortMin)
 	udpPortMax := parsePortNumber(os.Getenv("UDP_PORT_MAX"), defaultUDPPortMax)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
-	trustProxyHeaders := parseBoolEnv("TRUST_PROXY_HEADERS")
+	trustProxyHeaders := utils.ParseBoolEnv("TRUST_PROXY_HEADERS", false)
 	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
 	keylessDir := trimmedEnv("KEYLESS_DIR")
 	if keylessDir == "" {
@@ -80,7 +78,6 @@ func main() {
 	awsHostedZoneID := trimmedEnv("AWS_HOSTED_ZONE_ID")
 
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
-	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
 	flag.IntVar(&cfg.UDPPortMin, "udp-port-min", udpPortMin, "Minimum UDP port for lease allocation (env: UDP_PORT_MIN)")
@@ -100,17 +97,9 @@ func main() {
 	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
 	flag.Parse()
 
-	cfg.Bootstraps = parseURLs(bootstrapsCSV)
-	if len(cfg.Bootstraps) == 0 {
-		cfg.Bootstraps = []string{cfg.PortalURL}
-	}
-	if cfg.PortalURL == "" {
-		cfg.PortalURL = cfg.Bootstraps[0]
-	}
-
 	logger.Info().
+		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
-		Strs("bootstraps", cfg.Bootstraps).
 		Msg("configured relay server")
 
 	if err := runServer(cfg); err != nil {
@@ -120,11 +109,6 @@ func main() {
 
 func trimmedEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
-}
-
-func parseBoolEnv(name string) bool {
-	raw := trimmedEnv(name)
-	return strings.EqualFold(raw, "true") || raw == "1"
 }
 
 func parsePortNumber(raw string, fallback int) int {

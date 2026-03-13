@@ -7,10 +7,7 @@ import (
 )
 
 const (
-	HeaderReverseToken = "X-Portal-Token"
-	MarkerKeepalive    = byte(0x00)
-	MarkerTLSStart     = byte(0x02)
-	MarkerQUICReady    = byte(0x03)
+	MarkerQUICReady = byte(0x03)
 )
 
 const (
@@ -74,12 +71,21 @@ type LeaseMetadata struct {
 	Hide        bool     `json:"hide,omitempty"`
 }
 
+func (m LeaseMetadata) Copy() LeaseMetadata {
+	return LeaseMetadata{
+		Description: m.Description,
+		Owner:       m.Owner,
+		Thumbnail:   m.Thumbnail,
+		Tags:        append([]string(nil), m.Tags...),
+		Hide:        m.Hide,
+	}
+}
+
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
-	Hostnames    []string      `json:"hostnames,omitempty"`
 	Metadata     LeaseMetadata `json:"metadata"`
-	TTLSeconds   int           `json:"ttl_seconds,omitempty"`
+	TTL          int           `json:"ttl,omitempty"`
 	TLS          bool          `json:"tls"`
 	Transport    string        `json:"transport,omitempty"`
 }
@@ -88,7 +94,7 @@ type RegisterResponse struct {
 	ExpiresAt  time.Time     `json:"expires_at"`
 	LeaseID    string        `json:"lease_id"`
 	ConnectURL string        `json:"connect_url"`
-	Hostnames  []string      `json:"hostnames"`
+	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
 	UDPAddr    string        `json:"udp_addr,omitempty"`
 	QUICAddr   string        `json:"quic_addr,omitempty"`
@@ -98,7 +104,7 @@ type RegisterResponse struct {
 type RenewRequest struct {
 	LeaseID      string `json:"lease_id"`
 	ReverseToken string `json:"reverse_token"`
-	TTLSeconds   int    `json:"ttl_seconds,omitempty"`
+	TTL          int    `json:"ttl,omitempty"`
 }
 
 type RenewResponse struct {
@@ -112,8 +118,7 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	RootHost          string `json:"root_host"`
-	SuggestedHostname string `json:"suggested_hostname"`
+	Version string `json:"version"`
 }
 
 type AdminLoginRequest struct {

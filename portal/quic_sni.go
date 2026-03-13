@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"golang.org/x/crypto/hkdf"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 // QUIC v1 constants (RFC 9001).
@@ -473,12 +475,12 @@ func (r *quicSNIRouter) handlePacket(packet []byte, srcAddr net.Addr) {
 			return // drop non-Initial or unparseable packets from unknown sources
 		}
 
-		serverName := normalizeHostname(sni)
-		var ok bool
-		leaseID, ok = r.server.routes.Lookup(serverName)
-		if !ok {
+		serverName := utils.NormalizeHostname(sni)
+		record, ok := r.server.registry.Lookup(serverName)
+		if !ok || record == nil {
 			return // no route
 		}
+		leaseID = record.ID
 
 		r.mu.Lock()
 		r.connTable[key] = leaseID
@@ -486,11 +488,9 @@ func (r *quicSNIRouter) handlePacket(packet []byte, srcAddr net.Addr) {
 	}
 
 	// Forward packet to the tunnel via QUIC DATAGRAM.
-	r.server.mu.RLock()
-	record := r.server.leases[leaseID]
-	r.server.mu.RUnlock()
+	record, ok := r.server.registry.Get(leaseID)
 
-	if record == nil || record.QUICBroker == nil || !record.QUICBroker.HasConnection() {
+	if !ok || record == nil || record.QUICBroker == nil || !record.QUICBroker.HasConnection() {
 		return
 	}
 

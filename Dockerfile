@@ -39,7 +39,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=go-builder /src/bin/relay-server /usr/bin/relay-server
 
 ENV PORTAL_URL=https://localhost:4017
-ENV BOOTSTRAP_URIS=https://localhost:4017
 ENV ADMIN_SECRET_KEY=
 ENV SNI_PORT=:443
 ENV KEYLESS_DIR=

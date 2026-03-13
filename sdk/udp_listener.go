@@ -3,11 +3,9 @@ package sdk
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -16,23 +14,36 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
+
+// UDPListenerConfig configures a standalone UDP listener that registers its own lease.
+type UDPListenerConfig struct {
+	Name           string
+	ReverseToken   string
+	Metadata       types.LeaseMetadata
+	Transport      string // "udp" or "both", defaults to "udp"
+	LeaseTTL       time.Duration
+	RootCAPEM      []byte
+	DialTimeout    time.Duration
+	RequestTimeout time.Duration
+}
 
 // UDPListener manages a QUIC connection to the relay for a UDP-transport lease.
 // It receives DATAGRAM frames from the relay and delivers decoded datagrams via
 // the AcceptDatagram method.
 type UDPListener struct {
-	client       *Client
-	baseContext  func() context.Context
-	ctxDone      <-chan struct{}
-	cancel       context.CancelFunc
+	api         *apiClient
+	baseContext func() context.Context
+	ctxDone     <-chan struct{}
+	cancel      context.CancelFunc
 
 	name         string
 	leaseID      string
 	reverseToken string
 	udpAddr      string
 	quicAddr     string
-	hostnames    []string
+	hostname     string
 	metadata     types.LeaseMetadata
 	leaseTTL     time.Duration
 
@@ -89,16 +100,16 @@ func (l *UDPListener) LeaseID() string {
 	return l.leaseID
 }
 
-// Hostnames returns the hostnames registered for this lease.
-func (l *UDPListener) Hostnames() []string {
+// Hostname returns the hostname registered for this lease.
+func (l *UDPListener) Hostname() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.hostnames
+	return l.hostname
 }
 
 // Close tears down the QUIC connection. If this listener owns the lease
-// (created via ListenUDP), it also unregisters the lease. Attached listeners
-// (created via AttachUDP) leave lease lifecycle to the TCP Listener.
+// (created via NewUDPListener), it also unregisters the lease. Attached listeners
+// (created via Listener.AttachUDP) leave lease lifecycle to the TCP Listener.
 func (l *UDPListener) Close() error {
 	var closeErr error
 	l.closeOnce.Do(func() {
@@ -113,13 +124,122 @@ func (l *UDPListener) Close() error {
 			_ = conn.CloseWithError(0, "listener closed")
 		}
 
-		if l.ownsLease {
+		if l.ownsLease && l.api != nil && leaseID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			closeErr = l.client.unregisterLease(ctx, leaseID, l.reverseToken)
+			closeErr = l.api.unregisterLease(ctx, leaseID)
 		}
 	})
 	return closeErr
+}
+
+// NewUDPListener registers a UDP-transport lease and returns a UDPListener.
+func NewUDPListener(ctx context.Context, relayURL string, cfg UDPListenerConfig) (*UDPListener, error) {
+	if strings.TrimSpace(cfg.Name) == "" {
+		return nil, errors.New("listener name is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	reverseToken := strings.TrimSpace(cfg.ReverseToken)
+	if reverseToken == "" {
+		reverseToken = utils.RandomID("tok_")
+	}
+	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
+
+	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	if transport == "" {
+		transport = types.TransportUDP
+	}
+
+	api, err := newApiClient(relayURL, ListenerConfig{
+		Name:           cfg.Name,
+		ReverseToken:   reverseToken,
+		Metadata:       cfg.Metadata,
+		RootCAPEM:      cfg.RootCAPEM,
+		DialTimeout:    cfg.DialTimeout,
+		RequestTimeout: cfg.RequestTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := api.ensureReady(ctx); err != nil {
+		api.close()
+		return nil, err
+	}
+
+	registerResp, err := api.registerLeaseWithTransport(ctx, leaseTTL, transport)
+	if err != nil {
+		api.close()
+		return nil, err
+	}
+
+	listenerCtx, cancel := context.WithCancel(ctx)
+	listener := &UDPListener{
+		api:          api,
+		baseContext:  func() context.Context { return listenerCtx },
+		ctxDone:      listenerCtx.Done(),
+		cancel:       cancel,
+		name:         strings.TrimSpace(cfg.Name),
+		leaseID:      registerResp.LeaseID,
+		reverseToken: reverseToken,
+		udpAddr:      registerResp.UDPAddr,
+		quicAddr:     registerResp.QUICAddr,
+		hostname:     registerResp.Hostname,
+		metadata:     registerResp.Metadata,
+		leaseTTL:     leaseTTL,
+		datagrams:    make(chan UDPDatagram, 256),
+		done:         make(chan struct{}),
+		ownsLease:    true,
+	}
+
+	go listener.runSupervisor()
+	go listener.runRenewLoop()
+
+	return listener, nil
+}
+
+// AttachUDP creates a UDPListener that connects to an existing Listener's
+// QUIC broker without registering a new lease or running a renew loop.
+// The caller (the TCP Listener) owns the lease lifecycle.
+// The Listener must have been registered with transport "udp" or "both".
+func (l *Listener) AttachUDP(ctx context.Context) (*UDPListener, error) {
+	l.mu.Lock()
+	leaseID := l.leaseID
+	api := l.api
+	udpAddr := l.udpAddr
+	quicAddr := l.quicAddr
+	l.mu.Unlock()
+
+	if leaseID == "" {
+		return nil, errors.New("lease not registered yet")
+	}
+	if api == nil {
+		return nil, errors.New("api client not available")
+	}
+	if udpAddr == "" && quicAddr == "" {
+		return nil, errors.New("lease does not have UDP transport enabled")
+	}
+
+	listenerCtx, cancel := context.WithCancel(ctx)
+	udpL := &UDPListener{
+		api:          api,
+		baseContext:  func() context.Context { return listenerCtx },
+		ctxDone:      listenerCtx.Done(),
+		cancel:       cancel,
+		leaseID:      leaseID,
+		reverseToken: api.reverseToken,
+		udpAddr:      udpAddr,
+		quicAddr:     quicAddr,
+		datagrams:    make(chan UDPDatagram, 256),
+		done:         make(chan struct{}),
+		ownsLease:    false,
+	}
+
+	go udpL.runSupervisor()
+	return udpL, nil
 }
 
 func (l *UDPListener) runSupervisor() {
@@ -130,14 +250,14 @@ func (l *UDPListener) runSupervisor() {
 		default:
 		}
 
-		conn, err := l.client.openQUICSession(l.context(), l.quicAddr, l.leaseID, l.reverseToken)
+		conn, err := l.api.openQUICSession(l.context(), l.quicAddr, l.leaseID, l.reverseToken)
 		if err != nil {
 			log.Warn().
 				Err(err).
 				Str("component", "sdk-udp-listener").
 				Str("lease_id", l.leaseID).
 				Msg("quic session open failed, retrying")
-			sleepOrDone(l.context(), 2*time.Second)
+			utils.SleepOrDone(l.context(), 2*time.Second)
 			continue
 		}
 
@@ -162,7 +282,7 @@ func (l *UDPListener) runSupervisor() {
 		if l.isClosed() {
 			return
 		}
-		sleepOrDone(l.context(), time.Second)
+		utils.SleepOrDone(l.context(), time.Second)
 	}
 }
 
@@ -208,7 +328,7 @@ func (l *UDPListener) runRenewLoop() {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(l.context(), 10*time.Second)
-			err := l.client.renewLease(ctx, l.leaseID, l.reverseToken, l.leaseTTL)
+			err := l.api.renewLease(ctx, l.leaseID, l.leaseTTL)
 			cancel()
 			if err != nil {
 				log.Warn().
@@ -266,159 +386,4 @@ func decodeDatagram(data []byte) (datagramFrame, error) {
 		FlowID:  uint32(flowID),
 		Payload: data[n:],
 	}, nil
-}
-
-// quicControlResponse is read from the relay after sending the control message.
-type quicControlResponse struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
-}
-
-// openQUICSession opens a QUIC connection to the relay for datagram transport.
-// quicAddr is the relay's QUIC listen address (host:port). If empty, falls back
-// to the relay base URL host.
-func (c *Client) openQUICSession(ctx context.Context, quicAddr, leaseID, reverseToken string) (*quic.Conn, error) {
-	tlsConf := c.rawTLSConfig.Clone()
-	tlsConf.NextProtos = []string{"portal-tunnel"}
-
-	quicConf := &quic.Config{
-		EnableDatagrams: true,
-		KeepAlivePeriod: 15 * time.Second,
-		MaxIdleTimeout:  60 * time.Second,
-	}
-
-	dialAddr := ensurePort(c.baseURL.Host)
-	if quicAddr != "" {
-		dialAddr = quicAddr
-	}
-
-	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
-	if err != nil {
-		return nil, fmt.Errorf("quic dial: %w", err)
-	}
-
-	stream, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		_ = conn.CloseWithError(1, "stream open failed")
-		return nil, fmt.Errorf("open control stream: %w", err)
-	}
-
-	controlMsg, _ := json.Marshal(map[string]string{
-		"lease_id":      leaseID,
-		"reverse_token": reverseToken,
-	})
-	if _, err := stream.Write(controlMsg); err != nil {
-		_ = conn.CloseWithError(1, "control write failed")
-		return nil, fmt.Errorf("write control: %w", err)
-	}
-
-	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
-	buf := make([]byte, 4096)
-	n, err := stream.Read(buf)
-	if err != nil {
-		_ = conn.CloseWithError(1, "control read failed")
-		return nil, fmt.Errorf("read control response: %w", err)
-	}
-
-	var resp quicControlResponse
-	if err := json.Unmarshal(buf[:n], &resp); err != nil {
-		_ = conn.CloseWithError(1, "invalid response")
-		return nil, fmt.Errorf("decode control response: %w", err)
-	}
-	if !resp.OK {
-		_ = conn.CloseWithError(1, resp.Error)
-		return nil, fmt.Errorf("quic connect rejected: %s", resp.Error)
-	}
-
-	return conn, nil
-}
-
-// AttachUDP creates a UDPListener that connects to an existing lease's QUIC
-// broker without registering a new lease or running a renew loop. The caller
-// (typically a TCP Listener) owns the lease lifecycle.
-func (c *Client) AttachUDP(ctx context.Context, leaseID, reverseToken, udpAddr, quicAddr string) (*UDPListener, error) {
-	if leaseID == "" {
-		return nil, errors.New("lease id is required for AttachUDP")
-	}
-
-	listenerCtx, cancel := context.WithCancel(ctx)
-	listener := &UDPListener{
-		client:       c,
-		baseContext:  func() context.Context { return listenerCtx },
-		ctxDone:      listenerCtx.Done(),
-		cancel:       cancel,
-		leaseID:      leaseID,
-		reverseToken: reverseToken,
-		udpAddr:      udpAddr,
-		quicAddr:     quicAddr,
-		datagrams:    make(chan UDPDatagram, 256),
-		done:         make(chan struct{}),
-		ownsLease:    false,
-	}
-
-	go listener.runSupervisor()
-	return listener, nil
-}
-
-// ListenUDP registers a UDP-transport lease and returns a UDPListener.
-func (c *Client) ListenUDP(ctx context.Context, req ListenRequest) (*UDPListener, error) {
-	if strings.TrimSpace(req.Name) == "" {
-		return nil, errors.New("listener name is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	reverseToken := strings.TrimSpace(req.ReverseToken)
-	if reverseToken == "" {
-		reverseToken = randomToken()
-	}
-	leaseTTL := req.LeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = c.leaseTTL
-	}
-
-	transport := strings.TrimSpace(strings.ToLower(req.Transport))
-	if transport == "" {
-		transport = types.TransportUDP
-	}
-
-	registerReq := types.RegisterRequest{
-		Name:         req.Name,
-		Hostnames:    req.Hostnames,
-		Metadata:     req.Metadata,
-		ReverseToken: reverseToken,
-		TLS:          true,
-		TTLSeconds:   int(leaseTTL / time.Second),
-		Transport:    transport,
-	}
-
-	var registerResp types.RegisterResponse
-	if err := c.doJSON(ctx, http.MethodPost, types.PathSDKRegister, registerReq, &registerResp); err != nil {
-		return nil, err
-	}
-
-	listenerCtx, cancel := context.WithCancel(ctx)
-	listener := &UDPListener{
-		client:       c,
-		baseContext:  func() context.Context { return listenerCtx },
-		ctxDone:      listenerCtx.Done(),
-		cancel:       cancel,
-		name:         strings.TrimSpace(req.Name),
-		leaseID:      registerResp.LeaseID,
-		reverseToken: reverseToken,
-		udpAddr:      registerResp.UDPAddr,
-		quicAddr:     registerResp.QUICAddr,
-		hostnames:    registerResp.Hostnames,
-		metadata:     registerResp.Metadata,
-		leaseTTL:     leaseTTL,
-		datagrams:    make(chan UDPDatagram, 256),
-		done:         make(chan struct{}),
-		ownsLease:    true,
-	}
-
-	go listener.runSupervisor()
-	go listener.runRenewLoop()
-
-	return listener, nil
 }

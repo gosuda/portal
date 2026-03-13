@@ -1,21 +1,29 @@
 {
-  "name": "portal",
+  "name": "portal-tunnel",
+  "publisher": "gosuda",
   "displayName": "Portal",
   "description": "Expose local services to the internet via Portal relay tunnels",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "engines": {
     "vscode": "^1.109.0"
   },
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "portal.startTunnel",
         "title": "Start Tunnel",
+        "category": "Portal"
+      },
+      {
+        "command": "portal.startTunnelAdvanced",
+        "title": "Start Tunnel (Advanced)",
         "category": "Portal"
       },
       {
@@ -31,31 +39,31 @@
           "type": "array",
           "items": { "type": "string" },
           "default": [],
-          "description": "Relay server URLs (e.g. https://my-relay.example.com). Leave empty to be prompted each time."
+          "description": "Relay server URLs (https only, e.g. https://my-relay.example.com). Leave empty to use the public registry at https://raw.githubusercontent.com/gosuda/portal/main/registry.json."
         },
         "portal.defaultHost": {
           "type": "string",
           "default": "localhost:3000",
-          "description": "Default host:port of the local service to expose."
+          "description": "Default local host:port suggested when starting a tunnel."
         },
         "portal.defaultName": {
           "type": "string",
           "default": "",
-          "description": "Default tunnel service name. Leave empty to use the workspace folder name."
+          "description": "Default tunnel service name suggestion. Leave empty to start with a blank prompt."
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "pnpm run package",
-    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vscode-test"

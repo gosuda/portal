@@ -6,21 +6,23 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
-// Exposure owns the lifecycle of one or more relay listeners plus their
-// clients and accepts traffic from all of them through one net.Listener.
+// Exposure owns the lifecycle of one or more relay listeners and accepts
+// traffic from all of them through one net.Listener.
 type Exposure struct {
 	listener net.Listener
 	relays   []exposureRelay
+	done     chan struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -30,14 +32,13 @@ type Exposure struct {
 // merged listener for accepting traffic from all of them. Empty relay input
 // returns nil, nil so callers can fall back to local-only serving.
 func Expose(ctx context.Context, relayUrls []string, name string, metadata types.LeaseMetadata) (*Exposure, error) {
-	relayURLs, err := NormalizeRelayURLs(relayUrls)
+	relayURLs, err := utils.NormalizeRelayURLs(relayUrls)
 	if err != nil {
 		return nil, err
 	}
 	if len(relayURLs) == 0 {
 		return nil, nil
 	}
-
 	relays := make([]exposureRelay, 0, len(relayURLs))
 	cleanup := func() error {
 		var closeErr error
@@ -45,34 +46,22 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 			if relay.listener != nil {
 				closeErr = errors.Join(closeErr, relay.listener.Close())
 			}
-			if relay.client != nil {
-				relay.client.Close()
-			}
 		}
 		return closeErr
 	}
 
 	for _, relayURL := range relayURLs {
-		client, err := NewClient(relayURL)
-		if err != nil {
-			return nil, errors.Join(fmt.Errorf("new client %q: %w", relayURL, err), cleanup())
-		}
-
-		listener, err := client.Listen(ctx, ListenRequest{
-			Name:      name,
-			Metadata:  metadata,
-			Transport: types.TransportBoth,
+		listener, err := NewListener(ctx, relayURL, ListenerConfig{
+			Name:     name,
+			Metadata: metadata,
 		})
 		if err != nil {
-			client.Close()
 			return nil, errors.Join(fmt.Errorf("listen %q: %w", relayURL, err), cleanup())
 		}
 
 		relays = append(relays, exposureRelay{
-			relayURL:   relayURL,
-			publicURLs: append([]string(nil), listener.PublicURLs()...),
-			client:     client,
-			listener:   listener,
+			relayURL: relayURL,
+			listener: listener,
 		})
 	}
 
@@ -89,14 +78,15 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	exposure := &Exposure{
 		listener: merged,
 		relays:   relays,
+		done:     make(chan struct{}),
 	}
+	go exposure.monitorStartupCounts(ctx)
 
-	logger := log.With().Str("component", "sdk-exposure").Logger()
-	logger.Info().
+	log.Info().
+		Str("release_version", types.ReleaseVersion).
 		Int("relay_count", len(exposure.relays)).
 		Strs("relays", exposure.RelayURLs()).
-		Strs("public_urls", exposure.PublicURLs()).
-		Msg("exposure ready")
+		Msgf("exposure relay started")
 
 	return exposure, nil
 }
@@ -110,28 +100,26 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	conn, err := e.listener.Accept()
 	if err != nil {
 		if !errors.Is(err, net.ErrClosed) {
-			logger := log.With().Str("component", "sdk-exposure").Logger()
-			logger.Warn().
+			log.Warn().
 				Err(err).
-				Str("local_addr", exposureAddrString(e.listener.Addr())).
+				Str("local_addr", utils.AddrString(e.listener.Addr())).
 				Msg("exposure accept failed")
 		}
 		return nil, err
 	}
 
 	connID := e.connSeq.Add(1)
-	logger := log.With().Str("component", "sdk-exposure").Logger()
-	logger.Info().
+	log.Info().
 		Uint64("conn_id", connID).
-		Str("local_addr", exposureAddrString(conn.LocalAddr())).
-		Str("remote_addr", exposureAddrString(conn.RemoteAddr())).
+		Str("local_addr", utils.AddrString(conn.LocalAddr())).
+		Str("remote_addr", utils.AddrString(conn.RemoteAddr())).
 		Msg("exposure connection accepted")
 
 	return &exposureConn{
 		Conn:       conn,
 		id:         connID,
-		localAddr:  exposureAddrString(conn.LocalAddr()),
-		remoteAddr: exposureAddrString(conn.RemoteAddr()),
+		localAddr:  utils.AddrString(conn.LocalAddr()),
+		remoteAddr: utils.AddrString(conn.RemoteAddr()),
 	}, nil
 }
 
@@ -165,13 +153,18 @@ func (e *Exposure) PublicURLs() []string {
 	out := make([]string, 0, len(e.relays))
 	seen := make(map[string]struct{})
 	for _, relay := range e.relays {
-		for _, rawURL := range relay.publicURLs {
-			if _, ok := seen[rawURL]; ok {
-				continue
-			}
-			seen[rawURL] = struct{}{}
-			out = append(out, rawURL)
+		if relay.listener == nil {
+			continue
 		}
+		rawURL := relay.listener.PublicURL()
+		if rawURL == "" {
+			continue
+		}
+		if _, ok := seen[rawURL]; ok {
+			continue
+		}
+		seen[rawURL] = struct{}{}
+		out = append(out, rawURL)
 	}
 	if len(out) == 0 {
 		return nil
@@ -190,7 +183,29 @@ func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr 
 	return RunHTTP(ctx, relayListener, handler, localAddr)
 }
 
-// Close closes the merged listener and all underlying SDK clients.
+// AttachUDP creates UDPListeners for each underlying relay listener that has
+// UDP transport enabled. Listeners without UDP support are silently skipped.
+func (e *Exposure) AttachUDP(ctx context.Context) ([]*UDPListener, error) {
+	if e == nil || len(e.relays) == 0 {
+		return nil, nil
+	}
+
+	var out []*UDPListener
+	for _, relay := range e.relays {
+		if relay.listener == nil {
+			continue
+		}
+		udpL, err := relay.listener.AttachUDP(ctx)
+		if err != nil {
+			// Skip relays that don't support UDP.
+			continue
+		}
+		out = append(out, udpL)
+	}
+	return out, nil
+}
+
+// Close closes the merged listener and all underlying relay listeners.
 func (e *Exposure) Close() error {
 	if e == nil {
 		return nil
@@ -198,21 +213,18 @@ func (e *Exposure) Close() error {
 
 	var closeErr error
 	e.closeOnce.Do(func() {
+		if e.done != nil {
+			close(e.done)
+		}
 		if e.listener != nil {
 			closeErr = errors.Join(closeErr, e.listener.Close())
 		}
-		for _, relay := range e.relays {
-			if relay.client != nil {
-				relay.client.Close()
-			}
-		}
 
-		logger := log.With().Str("component", "sdk-exposure").Logger()
-		event := logger.Info().
+		event := log.Info().
 			Int("relay_count", len(e.relays)).
 			Strs("relays", e.RelayURLs())
 		if closeErr != nil {
-			event = logger.Warn().
+			event = log.Warn().
 				Err(closeErr).
 				Int("relay_count", len(e.relays)).
 				Strs("relays", e.RelayURLs())
@@ -220,38 +232,6 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 	})
 	return closeErr
-}
-
-// AttachUDP creates UDPListeners for each relay that has a UDP address,
-// reusing the existing lease credentials. The returned listeners only run the
-// QUIC supervisor — the TCP Listener already handles lease renewal.
-func (e *Exposure) AttachUDP(ctx context.Context) ([]*UDPListener, error) {
-	if e == nil || len(e.relays) == 0 {
-		return nil, nil
-	}
-
-	var listeners []*UDPListener
-	for _, relay := range e.relays {
-		udpAddr := relay.listener.UDPAddr()
-		if udpAddr == "" {
-			continue
-		}
-		ul, err := relay.client.AttachUDP(
-			ctx,
-			relay.listener.LeaseID(),
-			relay.listener.ReverseToken(),
-			udpAddr,
-			relay.listener.QUICAddr(),
-		)
-		if err != nil {
-			for _, l := range listeners {
-				_ = l.Close()
-			}
-			return nil, fmt.Errorf("attach udp %q: %w", relay.relayURL, err)
-		}
-		listeners = append(listeners, ul)
-	}
-	return listeners, nil
 }
 
 // RunHTTP serves one handler on relayListener and, when localAddr is set, on
@@ -360,11 +340,68 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	return errors.Join(serveErr, shutdownErr)
 }
 
+func (e *Exposure) monitorStartupCounts(ctx context.Context) {
+	if e == nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	prevStatuses := make(map[string]listenerStatus, len(e.relays))
+	firstRun := true
+
+	for {
+		readyCount, inactiveCount := 0, 0
+		activated := make([]string, 0)
+		deactivated := make([]string, 0)
+		for _, relay := range e.relays {
+			status := listenerStatusInactive
+			if relay.listener != nil {
+				status = relay.listener.StartupStatus()
+			}
+			if status == listenerStatusReady {
+				readyCount++
+			} else {
+				inactiveCount++
+			}
+
+			if prev, ok := prevStatuses[relay.relayURL]; ok && prev != status {
+				if status == listenerStatusReady {
+					activated = append(activated, relay.relayURL)
+				} else {
+					deactivated = append(deactivated, relay.relayURL)
+				}
+			}
+			prevStatuses[relay.relayURL] = status
+		}
+
+		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
+			event := log.Info().
+				Int("inactive", inactiveCount).
+				Int("ready", readyCount)
+			if len(activated) > 0 {
+				event = event.Strs("activated", activated)
+			}
+			if len(deactivated) > 0 {
+				event = event.Strs("deactivated", deactivated)
+			}
+			event.Msg("relay status")
+			firstRun = false
+		}
+
+		select {
+		case <-e.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 type exposureRelay struct {
-	relayURL   string
-	publicURLs []string
-	client     *Client
-	listener   *Listener
+	relayURL string
+	listener *Listener
 }
 
 type exposureConn struct {
@@ -383,13 +420,12 @@ func (c *exposureConn) Close() error {
 			closeErr = nil
 		}
 
-		logger := log.With().Str("component", "sdk-exposure").Logger()
-		event := logger.Info().
+		event := log.Info().
 			Uint64("conn_id", c.id).
 			Str("local_addr", c.localAddr).
 			Str("remote_addr", c.remoteAddr)
 		if closeErr != nil {
-			event = logger.Warn().
+			event = log.Warn().
 				Err(closeErr).
 				Uint64("conn_id", c.id).
 				Str("local_addr", c.localAddr).
@@ -398,13 +434,6 @@ func (c *exposureConn) Close() error {
 		event.Msg("exposure connection closed")
 	})
 	return closeErr
-}
-
-func exposureAddrString(addr net.Addr) string {
-	if addr == nil {
-		return ""
-	}
-	return addr.String()
 }
 
 // mergeListeners fans in multiple listeners into one net.Listener. It keeps
@@ -427,7 +456,6 @@ func mergeListeners(listeners ...net.Listener) (net.Listener, error) {
 		merged.listeners = append(merged.listeners, listener)
 	}
 
-	merged.addr = merged.buildAddr()
 	merged.active = len(merged.listeners)
 	for _, listener := range merged.listeners {
 		source := listener
@@ -440,7 +468,6 @@ type mergedListener struct {
 	listeners []net.Listener
 	accepted  chan net.Conn
 	closed    chan struct{}
-	addr      net.Addr
 
 	closeOnce   sync.Once
 	mu          sync.Mutex
@@ -480,10 +507,6 @@ func (l *mergedListener) Close() error {
 }
 
 func (l *mergedListener) Addr() net.Addr {
-	return l.addr
-}
-
-func (l *mergedListener) buildAddr() net.Addr {
 	if len(l.listeners) == 1 {
 		return l.listeners[0].Addr()
 	}
@@ -555,128 +578,4 @@ func (l *mergedListener) terminalErrorOr(fallback error) error {
 		return fallback
 	}
 	return l.terminalErr
-}
-
-// SplitCSV splits a comma-separated string, trimming whitespace and dropping
-// empty entries.
-func SplitCSV(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
-// NormalizeRelayURLs splits, normalizes, and de-duplicates relay URLs while
-// preserving input order. Empty inputs return nil, nil.
-func NormalizeRelayURLs(inputs []string) ([]string, error) {
-	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-
-	for _, input := range inputs {
-		for _, part := range SplitCSV(input) {
-			normalized, err := NormalizeRelayURL(part)
-			if err != nil {
-				return nil, err
-			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
-			out = append(out, normalized)
-		}
-	}
-
-	if len(out) == 0 {
-		return nil, nil
-	}
-	return out, nil
-}
-
-// NormalizeRelayURL accepts host[:port] or https URLs and returns the canonical
-// relay base URL used by the SDK.
-func NormalizeRelayURL(raw string) (string, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", errors.New("relay url is empty")
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + strings.TrimPrefix(trimmed, "//")
-	}
-
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("parse relay url %q: %w", raw, err)
-	}
-	if parsed.Host == "" && parsed.Path != "" && !strings.Contains(parsed.Path, "/") {
-		parsed, err = url.Parse("https://" + strings.TrimSpace(parsed.Path))
-		if err != nil {
-			return "", fmt.Errorf("parse relay url %q: %w", raw, err)
-		}
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("relay url host is empty: %q", raw)
-	}
-	if !strings.EqualFold(parsed.Scheme, "https") {
-		return "", fmt.Errorf("relay url must use https: %q", raw)
-	}
-
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	parsed.Path = strings.TrimRight(parsed.Path, "/")
-	if strings.HasSuffix(strings.ToLower(parsed.Path), "/relay") {
-		parsed.Path = strings.TrimSuffix(parsed.Path, "/relay")
-	}
-	return parsed.String(), nil
-}
-
-// NormalizeTargetAddr accepts host[:port] or http/https URLs and returns a
-// canonical host:port target address for local dialing.
-func NormalizeTargetAddr(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", errors.New("target address is required")
-	}
-
-	if strings.Contains(raw, "://") {
-		targetURL, err := url.Parse(raw)
-		if err != nil {
-			return "", fmt.Errorf("parse target url: %w", err)
-		}
-		if !strings.EqualFold(targetURL.Scheme, "http") && !strings.EqualFold(targetURL.Scheme, "https") {
-			return "", fmt.Errorf("unsupported target url scheme %q", targetURL.Scheme)
-		}
-		if targetURL.Host == "" {
-			return "", errors.New("target url host is empty")
-		}
-		if targetURL.Path != "" && targetURL.Path != "/" {
-			return "", errors.New("target url path is not supported")
-		}
-		if targetURL.RawQuery != "" {
-			return "", errors.New("target url query is not supported")
-		}
-		if targetURL.Fragment != "" {
-			return "", errors.New("target url fragment is not supported")
-		}
-		raw = targetURL.Host
-	}
-
-	if _, _, err := net.SplitHostPort(raw); err == nil {
-		return raw, nil
-	}
-	if strings.Count(raw, ":") == 0 {
-		return net.JoinHostPort(raw, "80"), nil
-	}
-	if ip := net.ParseIP(raw); ip != nil {
-		return net.JoinHostPort(raw, "80"), nil
-	}
-	return "", fmt.Errorf("invalid target address %q", raw)
 }
