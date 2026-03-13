@@ -27,6 +27,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     return "https://localhost:4017";
   }, []);
 
+  const [open, setOpen] = useState(false);
   const [target, setTarget] = useState(defaultHost);
   const [name, setName] = useState("");
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
@@ -95,17 +96,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
       currentOrigin
     ).toString();
     const localhostRelay = isLocalRelayOrigin(currentOrigin);
-    const installerDefaultsMatch =
-      defaultRelays &&
-      relayUrls.length === 1 &&
-      relayUrls[0] === currentOrigin;
 
     const exposeArgs: string[] = [];
 
     if (nameVal !== "") {
       exposeArgs.push(`--name ${formatToken(nameVal, os)}`);
     }
-    if (!installerDefaultsMatch) {
+    if (relayUrls.length > 0) {
       exposeArgs.push(`--relays ${formatToken(relayUrlVal, os)}`);
     }
     if (!defaultRelays) {
@@ -148,8 +145,23 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     }
   };
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      return;
+    }
+    setTarget(defaultHost);
+    setName("");
+    setRelayUrls([currentOrigin]);
+    setDefaultRelays(true);
+    setUrlInput("");
+    setCopied(false);
+    setOs("unix");
+    setThumbnailURL("");
+  };
+
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         {trigger || (
           <Button className="cursor-pointer">
@@ -157,7 +169,7 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[510px] rounded-sm max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] rounded-sm max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Terminal className="w-5 h-5" />
