@@ -31,8 +31,6 @@ Unlike other tunneling services, Portal is self-hosted and permissionless. You c
 - **Relay**: A server that routes public requests to the right connected app.
 - **Tunnel**: A CLI agent that proxies your local app through the relay.
 
-For details, see [docs/glossary.md](docs/glossary.md).
-
 ## Quick Start
 
 ### Run Portal Relay

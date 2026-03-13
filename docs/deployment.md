@@ -1,128 +1,28 @@
 # Portal Relay Deployment Guide
 
-This guide covers production deployment of Portal Relay on a public domain.
+This guide covers deploying Portal Relay on a public domain with Docker Compose.
 
 ## 1. Prerequisites
 
 You need:
 
-- A public domain (example: `example.com`)
-- A public Linux server with a static public IP
-- Open inbound ports: `443/tcp`, `4017/tcp`
+- A public domain
+- A Linux server with a public IPv4 address, inbound 443/tcp, 4017/tcp
 - Docker and Docker Compose
-- A DNS provider account for ACME DNS-01 automation with a supported provider (`cloudflare` or `route53`)
+- `cloudflare` or `route53` credentials for ACME DNS-01
 
-## 2. DNS Provider Setup
+## 2. DNS Provider and `.env` Setup
 
-### 2.1 Choose ACME DNS provider
+`PORTAL_URL` sets the relay root host. Portal automatically manages the `A` records and certificates for that host and its wildcard.
 
-Set `ACME_DNS_PROVIDER` to one of the currently supported values:
+### 2.1 Cloudflare
 
-- `ACME_DNS_PROVIDER=cloudflare`, or
-- `ACME_DNS_PROVIDER=route53`
-
-Both providers keep root and wildcard A records synchronized to the relay public IPv4 and use DNS-01 for certificate issuance.
-
-### 2.2 Cloudflare setup (`ACME_DNS_PROVIDER=cloudflare`)
-
-#### Add domain to Cloudflare
-
-1. Cloudflare Dashboard -> `Websites` -> `Add a Site`
-2. Enter your domain (`example.com`)
-3. Complete onboarding and apply Cloudflare nameservers at your registrar
-4. Wait until zone status is `Active`
-
-#### Create DNS records
-
-Cloudflare Dashboard -> `DNS` -> `Records`:
-
-- Record 1 (root host)
-  - Type: `A`
-  - Name: `@`
-  - Content: `<server-ip>`
-  - Proxy status: `DNS only`
-- Record 2 (wildcard)
-  - Type: `A`
-  - Name: `*`
-  - Content: `<server-ip>`
-  - Proxy status: `DNS only`
-
-Expected records:
-
-- `example.com -> <server-ip>`
-- `*.example.com -> <server-ip>`
-
-If you deploy on a non-apex host (for example, `PORTAL_URL=https://portal.example.com:8443`), create host-scoped records instead:
-
-- `portal.example.com -> <server-ip>`
-- `*.portal.example.com -> <server-ip>`
-
-Portal's relay DNS and certificates cover the normalized `PORTAL_URL` host and its wildcard, and public lease hostnames are published as `<name>.<root host>`.
-Requests to the exact root host are not served by the wildcard route; they fall back to the admin/API listener.
-
-#### Create Cloudflare API token
-
-Cloudflare Dashboard -> `My Profile` -> `API Tokens` -> `Create Token`.
-
-Grant:
-
-- `Zone:Read`
-- `DNS:Edit`
-
-Scope:
-
-- Zone resources limited to your target zone (for example, `example.com`)
-
-Save this token for `CLOUDFLARE_TOKEN`.
-
-### 2.3 Route53 setup (`ACME_DNS_PROVIDER=route53`)
-
-Create or select a public hosted zone that covers your `PORTAL_URL` root host and provide Route53 write permissions through either static AWS credentials or ambient AWS credentials (for example, an instance role).
-
-Static credential environment variables:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- Optional `AWS_SESSION_TOKEN` for temporary credentials
-- `AWS_REGION` (for example, `us-east-1`)
-
-Optional:
-
-- `AWS_HOSTED_ZONE_ID` (when omitted, relay selects a matching public hosted zone by domain suffix)
-
-Equivalent relay flags:
-
-- `--aws-access-key-id`
-- `--aws-secret-access-key`
-- `--aws-session-token`
-- `--aws-region`
-- `--aws-hosted-zone-id`
-
-## 3. Relay Runtime Behavior
-
-### 3.1 Control Plane and Reverse Sessions
-
-- `/sdk/register` creates a lease and stores the caller-provided reverse token.
-- `/sdk/connect` requires:
-  - `lease_id` query parameter
-  - `X-Portal-Token` header
-  - HTTP/1.1
-- `/sdk/renew` and `/sdk/unregister` require `lease_id` + `reverse_token`.
-- `/sdk/connect` is hijacked into a long-lived reverse TCP session after validation.
-
-### 3.2 Certificates and DNS Maintenance
-
-- Relay certificates live in `KEYLESS_DIR`:
-  - `fullchain.pem`
-  - `privatekey.pem`
-- On non-localhost deployments, ACME DNS-01 uses the configured supported DNS provider to:
-  - ensure root and wildcard A records point to the current public IP
-  - provision the relay certificate
-  - keep DNS and certificate state refreshed over time
-
-## 4. Run Relay Server
-
-### 4.1 Create `.env` at repository root
+1. Add your domain to Cloudflare and wait until the zone is `Active`.
+2. Create an API token with:
+   - `Zone:Read`
+   - `DNS:Edit`
+   - scope limited to the target zone
+3. Create `.env`:
 
 ```bash
 PORTAL_URL=https://example.com
@@ -134,121 +34,45 @@ ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
 
-Route53 example:
+### 2.2 Route53
+
+1. Create or select a public hosted zone for the `PORTAL_URL` host.
+2. Prepare AWS credentials with Route53 access.
+3. Optional: set `AWS_HOSTED_ZONE_ID` to pin Portal to one hosted zone explicitly.
+4. Create `.env`:
 
 ```bash
+PORTAL_URL=https://example.com
+BOOTSTRAP_URIS=https://example.com
+SNI_PORT=443
+ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs
 ACME_DNS_PROVIDER=route53
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
 AWS_SESSION_TOKEN=...
 AWS_REGION=us-east-1
-# Optional override
 AWS_HOSTED_ZONE_ID=Z1234567890ABC
 ```
 
-For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).
-`PORTAL_URL` path/query segments are ignored for route derivation; only the host component is used.
-
-If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
+## 3. Start the Relay
 
 ```bash
-TRUST_PROXY_HEADERS=true
-```
-
-By default, forwarded headers are accepted from private, loopback, and link-local proxy source ranges.
-If your proxy source addresses are public or you want a stricter allowlist, also set `TRUSTED_PROXY_CIDRS`.
-
-### 4.2 Start Relay
-
-```bash
-docker compose up
-```
-
-## 5. Auto-Update
-
-Automatically redeploy when a new `ghcr.io/gosuda/portal:latest` image is pushed.
-
-### 5.1 Deploy script
-
-Create `deploy_portal.sh` in your project directory:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-
-docker compose pull
 docker compose up -d
-docker image prune -f
 ```
 
-### 5.2 Watcher script
+Then open the relay root host in a browser or check `/healthz` once DNS and certificate provisioning are ready.
 
-The repository includes `watch_and_deploy.sh`, which polls the remote image digest and runs the deploy script on change.
+### 3.1 Advanced
 
-Environment variables:
+Use the example folders under `examples/` as the source of truth for deployment layouts and automation:
 
-| Variable | Default | Description |
-|---|---|---|
-| `INTERVAL` | `60` | Poll interval in seconds |
-| `DEPLOY_SCRIPT` | `deploy_portal.sh` | Path to deploy script |
-| `DIGEST_FILE` | `.portal_image_digest` | File storing the last known digest |
+- Single-service nginx reverse proxy and deployment automation: [examples/nginx-proxy](examples/nginx-proxy)
+- Multi-service nginx reverse proxy: [examples/nginx-proxy-multi-service](examples/nginx-proxy-multi-service)
 
-### 5.3 Register as systemd service
+## 4. Basic Troubleshooting
 
-Set `WorkingDirectory` and `ExecStart` to the directory where `watch_and_deploy.sh` and `deploy_portal.sh` are located:
-
-```bash
-sudo tee /etc/systemd/system/portal-watcher.service << 'EOF'
-[Unit]
-Description=Portal Docker Image Watcher
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=simple
-User=opc
-# Set to the directory containing watch_and_deploy.sh and deploy_portal.sh
-WorkingDirectory=<path-to-project>
-ExecStart=/bin/bash <path-to-project>/watch_and_deploy.sh
-Restart=always
-RestartSec=10
-Environment=INTERVAL=60
-Environment=DEPLOY_SCRIPT=deploy_portal.sh
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now portal-watcher
-```
-
-Adjust `User` to match your environment. Ensure the user belongs to the `docker` group:
-
-```bash
-sudo usermod -aG docker opc
-```
-
-### 5.4 Verify and monitor
-
-```bash
-# Service status
-sudo systemctl status portal-watcher
-
-# Live logs
-sudo journalctl -u portal-watcher -f
-
-# Today's logs only
-sudo journalctl -u portal-watcher --since today
-```
-
-## 6. Troubleshooting
-
-### 6.1 Ports blocked
+### 4.1 Firewall
 
 Required inbound ports:
 
@@ -262,3 +86,22 @@ sudo ufw allow 443/tcp
 sudo ufw allow 4017/tcp
 sudo ufw status
 ```
+
+### 4.2 DNS and Certificate Checks
+
+- Make sure `PORTAL_URL` matches the host and hosted zone you expect Portal to manage.
+- Make sure the configured Cloudflare token or AWS credentials can update DNS for that host.
+- For Cloudflare, make sure the target zone is `Active`.
+- If certificate issuance is still in progress, watch `docker compose logs -f` until ACME completes.
+
+### 4.3 Non-Apex and Proxy Setups
+
+- For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value such as `https://portal.example.com:8443`.
+- `KEYLESS_DIR` stores the relay certificate material as `fullchain.pem` and `privatekey.pem`.
+- If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use forwarded client addresses, set:
+
+```bash
+TRUST_PROXY_HEADERS=true
+```
+
+- If your trusted proxy source addresses are public or you want a stricter allowlist, also set `TRUSTED_PROXY_CIDRS`.
