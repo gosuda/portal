@@ -7,7 +7,7 @@ This guide covers deploying Portal Relay on a public domain with Docker Compose.
 You need:
 
 - A public domain
-- A Linux server with a public IPv4 address, inbound 443/tcp, 4017/tcp
+- A Linux server with a public IPv4 address (inbound 443, 4017 port)
 - Docker and Docker Compose
 - `cloudflare` or `route53` credentials for ACME DNS-01
 
@@ -70,7 +70,7 @@ Use the example folders under `examples/` as the source of truth for deployment 
 - Single-service nginx reverse proxy and deployment automation: [examples/nginx-proxy](examples/nginx-proxy)
 - Multi-service nginx reverse proxy: [examples/nginx-proxy-multi-service](examples/nginx-proxy-multi-service)
 
-## 4. Basic Troubleshooting
+## 4. Troubleshooting
 
 ### 4.1 Firewall
 
