@@ -11,7 +11,7 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-const installShellScriptTemplate = `#!/usr/bin/env sh
+const installShellScriptTemplatePrefix = `#!/usr/bin/env sh
 set -eu
 
 OS="$(uname -s)"
@@ -34,7 +34,10 @@ case "$ARCH" in
     ;;
 esac
 
-BASE_URL="${BASE_URL:-%s}"
+BASE_URL="${BASE_URL:-}"
+if [ -z "$BASE_URL" ]; then
+  BASE_URL=%s
+fi
 BIN_URL="${BIN_URL:-$BASE_URL/install/bin/$PORTAL_OS-$PORTAL_ARCH}"
 CHECKSUM_URL="${BIN_URL}.sha256"
 CURL_INSECURE_FLAG=""
@@ -111,7 +114,9 @@ write_config() {
   CONFIG_PATH="$CONFIG_DIR/config.json"
   mkdir -p "$CONFIG_DIR"
   cat > "$CONFIG_PATH" <<'EOF'
-%s
+`
+
+const installShellScriptTemplateSuffix = `
 EOF
   printf '%%s\n' "$CONFIG_PATH"
 }
@@ -140,8 +145,8 @@ echo "Next step:" >&2
 echo "  portal expose 3000" >&2
 `
 
-const installPowerShellTemplate = `$ErrorActionPreference = "Stop"
-$BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
+const installPowerShellTemplatePrefix = `$ErrorActionPreference = "Stop"
+$BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { %s }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 $WorkDir = $null
@@ -191,7 +196,9 @@ try {
     New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
     $ConfigPath = Join-Path $ConfigDir "config.json"
     $ConfigPayload = @'
-%s
+`
+
+const installPowerShellTemplateSuffix = `
 '@
     $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($ConfigPath, $ConfigPayload, $Utf8NoBom)
@@ -293,11 +300,11 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 		return
 	}
 
-	script := fmt.Sprintf(installShellScriptTemplate, portalURL, string(configPayload))
+	script := buildInstallShellScript(portalURL, configPayload)
 	contentType := "text/x-shellscript"
 	filename := "install.sh"
 	if isWindows {
-		script = fmt.Sprintf(installPowerShellTemplate, portalURL, string(configPayload))
+		script = buildInstallPowerShellScript(portalURL, configPayload)
 		contentType = "text/plain; charset=utf-8"
 		filename = "install.ps1"
 	}
@@ -307,4 +314,28 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 	if r.Method == http.MethodGet {
 		_, _ = w.Write([]byte(script))
 	}
+}
+
+func buildInstallShellScript(portalURL string, configPayload []byte) string {
+	var script strings.Builder
+	fmt.Fprintf(&script, installShellScriptTemplatePrefix, shellSingleQuoted(portalURL))
+	script.Write(configPayload)
+	script.WriteString(installShellScriptTemplateSuffix)
+	return script.String()
+}
+
+func buildInstallPowerShellScript(portalURL string, configPayload []byte) string {
+	var script strings.Builder
+	fmt.Fprintf(&script, installPowerShellTemplatePrefix, powerShellSingleQuoted(portalURL))
+	script.Write(configPayload)
+	script.WriteString(installPowerShellTemplateSuffix)
+	return script.String()
+}
+
+func shellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func powerShellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }

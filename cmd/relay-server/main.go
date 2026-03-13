@@ -23,7 +23,6 @@ const (
 
 type relayServerConfig struct {
 	PortalURL          string
-	Bootstraps         []string
 	APIPort            int
 	SNIPort            int
 	AdminSecretKey     string
@@ -49,10 +48,6 @@ func main() {
 	if portalURL == "" {
 		portalURL = defaultPortalURL
 	}
-	bootstrapsCSV := trimmedEnv("BOOTSTRAP_URIS")
-	if bootstrapsCSV == "" {
-		bootstrapsCSV = portalURL
-	}
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
@@ -77,7 +72,6 @@ func main() {
 	awsHostedZoneID := trimmedEnv("AWS_HOSTED_ZONE_ID")
 
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
-	flag.StringVar(&bootstrapsCSV, "bootstraps", bootstrapsCSV, "bootstrap URIs, comma-separated (env: BOOTSTRAP_URIS)")
 	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
 
@@ -94,14 +88,6 @@ func main() {
 	flag.StringVar(&cfg.AWSRegion, "aws-region", awsRegion, "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset (env: AWS_REGION or AWS_DEFAULT_REGION)")
 	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
 	flag.Parse()
-
-	cfg.Bootstraps = utils.SplitCSV(bootstrapsCSV)
-	if len(cfg.Bootstraps) == 0 {
-		cfg.Bootstraps = []string{cfg.PortalURL}
-	}
-	if cfg.PortalURL == "" {
-		cfg.PortalURL = cfg.Bootstraps[0]
-	}
 
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).

@@ -24,9 +24,6 @@ func runServer(cfg relayServerConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if len(cfg.Bootstraps) > 0 && cfg.PortalURL == "" {
-		cfg.PortalURL = cfg.Bootstraps[0]
-	}
 	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)

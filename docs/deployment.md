@@ -26,7 +26,6 @@ You need:
 
 ```bash
 PORTAL_URL=https://example.com
-BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs
@@ -43,7 +42,6 @@ CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 
 ```bash
 PORTAL_URL=https://example.com
-BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs
@@ -96,7 +94,7 @@ sudo ufw status
 
 ### 4.3 Non-Apex and Proxy Setups
 
-- For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value such as `https://portal.example.com:8443`.
+- For non-apex deployments, set `PORTAL_URL` to the non-apex host value such as `https://portal.example.com:8443`.
 - `KEYLESS_DIR` stores the relay certificate material as `fullchain.pem` and `privatekey.pem`.
 - If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use forwarded client addresses, set:
 
