@@ -163,8 +163,8 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if got := listener.Hostname(); got != "127.0.0.1" {
 		t.Fatalf("Hostname() = %q, want %q", got, "127.0.0.1")
 	}
-	if got := listener.PublicURL(); got != "https://127.0.0.1" {
-		t.Fatalf("PublicURL() = %q, want %q", got, "https://127.0.0.1")
+	if got := listener.PublicURL(); got != server.URL {
+		t.Fatalf("PublicURL() = %q, want %q", got, server.URL)
 	}
 	if got := listener.Metadata(); got.Owner != "alice" {
 		t.Fatalf("Metadata().Owner = %q, want %q", got.Owner, "alice")
