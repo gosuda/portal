@@ -24,9 +24,6 @@ func runServer(cfg relayServerConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if len(cfg.Bootstraps) > 0 && cfg.PortalURL == "" {
-		cfg.PortalURL = cfg.Bootstraps[0]
-	}
 	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
 	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
@@ -99,10 +96,13 @@ func newAPIMux(frontend *Frontend, adminHandler *admin.Handler, cfg relayServerC
 
 	mux.HandleFunc(types.PathAdmin, adminHandler.HandleRequest)
 	mux.HandleFunc(types.PathAdminPrefix, adminHandler.HandleRequest)
-	mux.HandleFunc(types.PathTunnel, func(w http.ResponseWriter, r *http.Request) {
-		serveTunnelScript(w, r, cfg.PortalURL)
+	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, cfg.PortalURL, false)
 	})
-	mux.HandleFunc(types.PathTunnelBinPrefix, serveTunnelBinary)
+	mux.HandleFunc(types.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, cfg.PortalURL, true)
+	})
+	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 
 	return mux
 }

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,11 +115,12 @@ func (l *Listener) runStartup(ctx context.Context) {
 				go l.runSessionLoop(ctx)
 			}
 			go l.runRenewLoop(ctx)
+			publicURL := l.PublicURL()
 			log.Info().
 				Str("relay_url", l.relayURL).
 				Str("lease_id", l.LeaseID()).
-				Str("hostname", l.Hostname()).
-				Msg("listener ready")
+				Str("public_url", publicURL).
+				Msg("service is available at this URL")
 			return
 		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
 			return
@@ -203,12 +206,27 @@ func (l *Listener) Metadata() types.LeaseMetadata {
 func (l *Listener) PublicURL() string {
 	l.mu.Lock()
 	hostname := l.hostname
+	relayURL := l.relayURL
 	l.mu.Unlock()
 
 	if hostname == "" {
 		return ""
 	}
-	return "https://" + hostname
+
+	parsed, err := url.Parse(relayURL)
+	if err != nil || strings.TrimSpace(parsed.Scheme) == "" {
+		return "https://" + hostname
+	}
+
+	host := hostname
+	if port := strings.TrimSpace(parsed.Port()); port != "" {
+		host = net.JoinHostPort(hostname, port)
+	}
+
+	return (&url.URL{
+		Scheme: parsed.Scheme,
+		Host:   host,
+	}).String()
 }
 
 func (l *Listener) runSessionLoop(ctx context.Context) {

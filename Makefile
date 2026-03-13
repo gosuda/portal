@@ -66,7 +66,7 @@ build-frontend:
 	@cd frontend && npm i && npm run build
 	@echo "[frontend] build complete"
 
-# Build portal-tunnel binaries for distribution
+# Build portal-tunnel binaries for installer distribution
 build-tunnel:
 	@echo "[tunnel] building portal-tunnel binaries..."
 	@mkdir -p cmd/relay-server/dist/tunnel
@@ -74,7 +74,7 @@ build-tunnel:
 		for GOARCH in amd64 arm64; do \
 			EXT=""; \
 			if [ "$${GOOS}" = "windows" ]; then EXT=".exe"; fi; \
-			OUT="cmd/relay-server/dist/tunnel/portal-tunnel-$${GOOS}-$${GOARCH}$${EXT}"; \
+			OUT="cmd/relay-server/dist/tunnel/portal-$${GOOS}-$${GOARCH}$${EXT}"; \
 			echo " - $${OUT}"; \
 			CGO_ENABLED=0 GOOS=$${GOOS} GOARCH=$${GOARCH} go build -trimpath -ldflags "-s -w" -o "$${OUT}" ./cmd/portal-tunnel; \
 		done; \

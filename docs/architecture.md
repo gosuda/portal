@@ -40,7 +40,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - SNI listener on `--sni-port` (default `:443`)
 - Public frontend routes under `/`, `/app`, `/assets/*`
 - Minimal admin surface at `/admin` and `/admin/leases`
-- Tunnel bootstrap routes at `/tunnel` and `/tunnel/bin/*`
+- Tunnel bootstrap routes at `/install.sh`, `/install.ps1`, and `/install/bin/*`
 - Keyless signer endpoint at `/v1/sign`
 
 ### Relay Core (`portal/`)
@@ -68,9 +68,10 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### Tunnel (`cmd/portal-tunnel`)
 
+- Builds the `portal` CLI and exposes subcommands such as `portal expose` and `portal list`
 - Creates one SDK listener per relay through the SDK and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
-- Proxies raw TCP to a local `--host`
+- Proxies raw TCP to a local target passed to `portal expose`
 - Returns an HTTP 503 response when the local target is unavailable
 
 ## Transport Model
@@ -149,8 +150,9 @@ Current relay-served public routes:
 - `/assets/*`
 - `/admin`
 - `/admin/leases`
-- `/tunnel`
-- `/tunnel/bin/*`
+- `/install.sh`
+- `/install.ps1`
+- `/install/bin/*`
 - `/healthz`
 - `/v1/sign`
 - `/sdk/*`
@@ -167,7 +169,7 @@ Cross-package public contract lives in:
   - lease metadata
   - reverse marker/header constants
 - `types/paths.go`
-  - shared `/sdk/*`, admin, health, tunnel, and signer paths
+  - shared `/sdk/*`, admin, health, install, and signer paths
 
 Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 

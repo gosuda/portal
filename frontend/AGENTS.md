@@ -22,8 +22,8 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
    Vite plugin `rename-index` (`vite.config.ts`) performs this post-build. Go backend serves `portal.html`, not `index.html`. The rename is skipped when `VITEST` is set.
    - Why: any tooling or script assuming `index.html` post-build will fail.
 
-5. **OG metadata placeholders must match between HTML and Go.**
-   `index.html` (renamed to `portal.html`) contains `[%OG_TITLE%]`, `[%OG_DESCRIPTION%]`, `[%OG_IMAGE_URL%]`. Server-side substitution happens in `cmd/relay-server/frontend.go`.
+5. **HTML metadata placeholders must match between HTML and Go.**
+   `index.html` (renamed to `portal.html`) contains `[%OG_TITLE%]`, `[%OG_DESCRIPTION%]`, `[%OG_IMAGE_URL%]`, `[%RELEASE_VERSION%]`. Server-side substitution happens in `cmd/relay-server/frontend.go`.
    - Why: renaming a placeholder in one place without the other leaves raw placeholder strings in production HTML.
 
 6. **Frontend admin action helpers currently outpace the Go runtime.**

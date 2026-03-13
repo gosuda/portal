@@ -57,7 +57,7 @@ Descriptive docs under `docs/` should match current code paths.
 
 1. **All JSON control-plane responses use the `APIEnvelope` wrapper:** `{ ok: bool, data?: any, error?: { code, message } }` (defined in `types/api.go`).
    - Write responses through `writeAPIData()`, `writeAPIOK()`, or `writeAPIError()`.
-   - Admin HTML pages, tunnel script/binary responses, and other non-JSON endpoints are exceptions.
+   - Admin HTML pages, install script/binary responses, and other non-JSON endpoints are exceptions.
 
 ## Shared Types Package
 
@@ -66,7 +66,7 @@ Descriptive docs under `docs/` should match current code paths.
    - Not allowed: relay runtime state, broker/session state, server config, SDK lifecycle state, generic helpers.
 
 2. **Shared control-plane and public route constants that cross package boundaries belong in `types/paths.go`.**
-   - Examples: `/sdk/*`, `/v1/sign`, `/healthz`, `/admin`, `/admin/leases`, `/tunnel`.
+   - Examples: `/sdk/*`, `/v1/sign`, `/healthz`, `/admin`, `/admin/leases`, `/install.sh`, `/install.ps1`, `/install/bin/*`.
 
 3. **Relay-local frontend asset paths stay local to `cmd/relay-server`.**
    - Why: filenames like `favicon.svg` or `portal.jpg` are frontend serving details, not cross-package API contract.
@@ -79,8 +79,8 @@ Descriptive docs under `docs/` should match current code paths.
 1. **CI verification commands:** `make vet`, `make lint`, `make test`, `make vuln`.
    - `make tidy` is a local maintenance step, not part of CI.
 
-2. **`make build-server` does not build the frontend first.**
-   - Why: `cmd/relay-server/dist/*` is embed input; build the frontend explicitly before packaging the relay binary.
+2. **`make build-server` does not build the frontend or installer binaries first.**
+   - Why: `cmd/relay-server/dist/*` is embed input; build the frontend and CLI artifacts explicitly before packaging the relay binary.
 
 3. **ACME management supports only `cloudflare` and `route53`, and keeps both root and wildcard DNS A records in sync for non-localhost deployments.**
    - Certificates and keys live under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.

@@ -30,7 +30,10 @@ describe("API_PATHS contract alignment", () => {
     );
   });
 
-  it("keeps tunnel installer endpoint aligned", () => {
-    expect(API_PATHS.tunnel).toBe("/tunnel");
+  it("keeps install script endpoints aligned", () => {
+    expect(API_PATHS.install).toEqual({
+      shell: "/install.sh",
+      powershell: "/install.ps1",
+    });
   });
 });
