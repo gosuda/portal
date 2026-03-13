@@ -92,18 +92,6 @@ pick_install_path() {
     fi
   fi
 
-  OLD_IFS="$IFS"
-  IFS=':'
-  for DIR in $PATH; do
-    [ -n "$DIR" ] || continue
-    if [ -d "$DIR" ] && [ -w "$DIR" ]; then
-      IFS="$OLD_IFS"
-      printf '%%s\n' "$DIR/portal"
-      return 0
-    fi
-  done
-  IFS="$OLD_IFS"
-
   if [ -n "${HOME:-}" ]; then
     for DIR in "$HOME/.local/bin" "$HOME/bin"; do
       mkdir -p "$DIR" 2>/dev/null || true
@@ -129,7 +117,7 @@ EOF
 }
 
 INSTALL_PATH="$(pick_install_path)" || {
-  echo "No writable install directory found. Create a writable PATH entry or install manually." >&2
+  echo "No writable install directory found. Ensure an existing portal install is writable or create \$HOME/.local/bin or \$HOME/bin." >&2
   exit 1
 }
 
@@ -152,14 +140,11 @@ echo "Next step:" >&2
 echo "  portal expose 3000" >&2
 `
 
-const installPowerShellTemplatePrefix = `$ErrorActionPreference = "Stop"
+const installPowerShellTemplate = `$ErrorActionPreference = "Stop"
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { "%s" }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 $WorkDir = $null
-`
-
-const installPowerShellTemplateSuffix = `
 try {
     $Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($Arch -eq "ARM64") {
@@ -280,22 +265,14 @@ func serveInstallBinary(w http.ResponseWriter, r *http.Request) {
 }
 
 func installBinaryBySlug(slug string) ([]byte, string, bool) {
-	filename := installBinaryName(slug)
+	filename := "portal-" + slug
+	if strings.HasPrefix(slug, "windows-") {
+		filename += ".exe"
+	}
 	if data, err := embeddedDistFS.ReadFile("dist/tunnel/" + filename); err == nil {
 		return data, filename, true
 	}
 	return nil, "", false
-}
-
-func installBinaryName(slug string) string {
-	if strings.HasPrefix(slug, "windows-") {
-		return "portal-" + slug + ".exe"
-	}
-	return "portal-" + slug
-}
-
-type installerConfig struct {
-	Relays []string `json:"relays"`
 }
 
 func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string, isWindows bool) {
@@ -305,6 +282,9 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 		return
 	}
 
+	type installerConfig struct {
+		Relays []string `json:"relays"`
+	}
 	configPayload, err := json.Marshal(installerConfig{
 		Relays: []string{strings.TrimSpace(portalURL)},
 	})
@@ -317,11 +297,7 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 	contentType := "text/x-shellscript"
 	filename := "install.sh"
 	if isWindows {
-		script = fmt.Sprintf(
-			installPowerShellTemplatePrefix+installPowerShellTemplateSuffix,
-			portalURL,
-			string(configPayload),
-		)
+		script = fmt.Sprintf(installPowerShellTemplate, portalURL, string(configPayload))
 		contentType = "text/plain; charset=utf-8"
 		filename = "install.ps1"
 	}

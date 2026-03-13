@@ -69,15 +69,16 @@ func runExposeCommand(args []string) error {
 	fs := flag.NewFlagSet("expose", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	var relayCSV string
-	var target string
-	var name string
-	var desc string
-	var tags string
-	var thumbnail string
-	var owner string
-	var hide bool
-
+	var (
+		relayCSV  string
+		target    string
+		name      string
+		desc      string
+		tags      string
+		thumbnail string
+		owner     string
+		hide      bool
+	)
 	fs.StringVar(&relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&defaultRelays, "default-relays", defaultRelays, "Include public registry relays")
 	fs.StringVar(&name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
@@ -90,8 +91,7 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(fs.Output())
 	}
 
-	parseArgs := moveFirstPositionalToEnd(args)
-	if err := fs.Parse(parseArgs); err != nil {
+	if err := fs.Parse(args); err != nil {
 		printExposeUsage(os.Stderr)
 		return err
 	}
@@ -103,10 +103,20 @@ func runExposeCommand(args []string) error {
 		target = positionals[0]
 	}
 
-	target, err = normalizeExposeTarget(target)
-	if err != nil {
+	target = strings.TrimSpace(target)
+	if target == "" {
 		printExposeUsage(os.Stderr)
-		return err
+		return errors.New("target is required")
+	}
+	if _, err := strconv.Atoi(target); err == nil {
+		target = net.JoinHostPort("127.0.0.1", target)
+	} else {
+		targetAddr, err := utils.NormalizeTargetAddr(target)
+		if err != nil {
+			printExposeUsage(os.Stderr)
+			return fmt.Errorf("invalid target %q: %w", target, err)
+		}
+		target = targetAddr
 	}
 
 	if strings.TrimSpace(name) == "" {
@@ -278,35 +288,6 @@ func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, 
 		return relayURLs, nil
 	}
 	return utils.NormalizeRelayURLs(inputs)
-}
-
-func moveFirstPositionalToEnd(args []string) []string {
-	if len(args) == 0 {
-		return nil
-	}
-	first := strings.TrimSpace(args[0])
-	if first == "" || strings.HasPrefix(first, "-") {
-		return append([]string(nil), args...)
-	}
-	normalized := append([]string(nil), args[1:]...)
-	return append(normalized, first)
-}
-
-func normalizeExposeTarget(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", errors.New("target is required")
-	}
-
-	if _, err := strconv.Atoi(raw); err == nil {
-		return net.JoinHostPort("127.0.0.1", raw), nil
-	}
-
-	targetAddr, err := utils.NormalizeTargetAddr(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid target %q: %w", raw, err)
-	}
-	return targetAddr, nil
 }
 
 func defaultExposeName(target, clientID string) (string, error) {
