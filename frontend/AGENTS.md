@@ -5,13 +5,13 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
 ## Frontend-Backend Contracts (Manually Synced)
 
 1. **SSR data shape is a 3-way contract.**
-   Go `leaseRow` (`cmd/relay-server/frontend.go`) -> TS `ServerData` (`src/hooks/useSSRData.ts`) -> `<script id="__SSR_DATA__">` injection (`cmd/relay-server/frontend.go`).
+   Go `types.LeaseRow` (`../types/api.go`) + row builder (`../portal/admin/rows.go`) -> TS `ServerData` (`src/hooks/useSSRData.ts`) -> `<script id="__SSR_DATA__">` injection (`cmd/relay-server/frontend.go`).
    - Why: no shared schema or codegen. Field drift silently breaks SSR hydration. The script tag ID `__SSR_DATA__` is hardcoded in all three locations.
 
 2. **API path constants require dual maintenance.**
    Go definitions live in `types/paths.go`; TS duplicates live in `src/lib/apiPaths.ts`.
    - Why: no codegen. A path mismatch produces same-origin 404s.
-   - Current Go runtime only serves `/admin` and `/admin/leases` on the admin surface. Extra TS admin paths need matching backend work or they will 404.
+   - Current Go runtime serves `/admin` and `/admin/snapshot` for admin reads; `/admin/leases/*`, `/admin/settings/approval-mode`, and related auth/IP routes are action surfaces. Extra TS admin paths still need backend work or they will 404.
 
 3. **API envelope shape must match across Go and TS.**
    All JSON control-plane responses use `{ ok, data?, error?: { code, message } }`.
@@ -26,9 +26,9 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
    `index.html` (renamed to `portal.html`) contains `[%OG_TITLE%]`, `[%OG_DESCRIPTION%]`, `[%OG_IMAGE_URL%]`, `[%RELEASE_VERSION%]`. Server-side substitution happens in `cmd/relay-server/frontend.go`.
    - Why: renaming a placeholder in one place without the other leaves raw placeholder strings in production HTML.
 
-6. **Frontend admin action helpers currently outpace the Go runtime.**
-   `src/lib/apiPaths.ts` still contains action routes such as `/admin/leases/{id}/{action}` and `/admin/settings/*`.
-   - Why: do not assume those routes exist in the current Go relay unless you implement the backend in the same change.
+6. **Admin state reads are aggregated through `/admin/snapshot`.**
+   `src/hooks/useAdmin.ts` expects one payload carrying `leases`, `banned_leases`, and `approval_mode`.
+   - Why: splitting those reads across multiple endpoints reintroduces extra request coordination and drift in the admin bootstrap path.
 
 ## Frontend Conventions
 

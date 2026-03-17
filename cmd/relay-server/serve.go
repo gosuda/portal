@@ -49,7 +49,7 @@ func runServer(cfg relayServerConfig) error {
 	}
 
 	frontend := NewFrontend(cfg.PortalURL)
-	adminHandler := admin.NewHandler(cfg.PortalURL, cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
+	adminHandler := admin.NewHandler(cfg.AdminSecretKey, "admin_settings.json", cfg.TrustProxyHeaders, func(w http.ResponseWriter, r *http.Request, appPath string) {
 		frontend.ServeAppStatic(w, r, appPath)
 	})
 	frontend.Bind(server)

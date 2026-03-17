@@ -82,18 +82,12 @@ describe("useAdmin", () => {
     vi.clearAllMocks();
 
     mockGet.mockImplementation(async (path: string) => {
-      if (path === API_PATHS.admin.leases) {
-        return [buildLease("peer-a")] as never;
-      }
-      if (path === API_PATHS.admin.bannedLeases) {
-        return [
-          "peer-a",
-          "peer-a",
-          "peer-b",
-        ] as never;
-      }
-      if (path === API_PATHS.admin.approvalMode) {
-        return { approval_mode: "not-a-mode" } as never;
+      if (path === API_PATHS.admin.snapshot) {
+        return {
+          leases: [buildLease("peer-a")],
+          banned_leases: ["peer-a", "peer-a", "peer-b"],
+          approval_mode: "not-a-mode",
+        } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -115,14 +109,8 @@ describe("useAdmin", () => {
 
   it("surfaces fetchData API errors", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === API_PATHS.admin.leases) {
+      if (path === API_PATHS.admin.snapshot) {
         throw new APIClientError("failed to load leases", 500, "server_error");
-      }
-      if (path === API_PATHS.admin.bannedLeases) {
-        return [] as never;
-      }
-      if (path === API_PATHS.admin.approvalMode) {
-        return { approval_mode: "manual" } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });

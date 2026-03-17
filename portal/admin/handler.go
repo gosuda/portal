@@ -20,16 +20,16 @@ type Handler struct {
 	server         *portal.Server
 	settings       *stateStore
 	serveAppStatic func(http.ResponseWriter, *http.Request, string)
-	buildLeaseRows func(*portal.Server, bool) []LeaseRow
+	buildLeaseRows func(*portal.Server, bool) []types.LeaseRow
 	trustProxy     bool
 }
 
-func NewHandler(portalURL, secret, settingsPath string, trustProxy bool, serveAppStatic func(http.ResponseWriter, *http.Request, string)) *Handler {
+func NewHandler(secret, settingsPath string, trustProxy bool, serveAppStatic func(http.ResponseWriter, *http.Request, string)) *Handler {
 	h := &Handler{
 		auth:     policy.NewAuthenticator(strings.TrimSpace(secret)),
 		settings: newStateStore(settingsPath),
-		buildLeaseRows: func(serv *portal.Server, includeAdmin bool) []LeaseRow {
-			return BuildLeaseRows(serv, includeAdmin, portalURL)
+		buildLeaseRows: func(serv *portal.Server, includeAdmin bool) []types.LeaseRow {
+			return BuildLeaseRows(serv, includeAdmin)
 		},
 		trustProxy: trustProxy,
 	}
@@ -88,12 +88,8 @@ func (h *Handler) HandleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch path {
-	case types.PathAdminLeases:
-		h.handleLeases(w, r)
-	case types.PathAdminBanned:
-		h.handleBannedLeases(w, r)
-	case types.PathAdminSettings:
-		h.handleSettings(w, r)
+	case types.PathAdminSnapshot:
+		h.handleSnapshot(w, r)
 	case types.PathAdminApproval:
 		h.handleApprovalMode(w, r)
 	default:
@@ -193,32 +189,17 @@ func (h *Handler) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *Handler) handleLeases(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
 	}
-	utils.WriteAPIData(w, http.StatusOK, h.buildLeaseRows(h.server, true))
-}
 
-func (h *Handler) handleBannedLeases(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
-		return
-	}
-	utils.WriteAPIData(w, http.StatusOK, h.policyRuntime().BannedLeases())
-}
-
-func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
-		return
-	}
 	approver := h.policyRuntime().Approver()
-	utils.WriteAPIData(w, http.StatusOK, types.AdminSettingsResponse{
-		ApprovalMode:   string(approver.Mode()),
-		ApprovedLeases: approver.ApprovedLeases(),
-		DeniedLeases:   approver.DeniedLeases(),
+	utils.WriteAPIData(w, http.StatusOK, types.AdminSnapshotResponse{
+		ApprovalMode: string(approver.Mode()),
+		BannedLeases: h.policyRuntime().BannedLeases(),
+		Leases:       h.buildLeaseRows(h.server, true),
 	})
 }
 
@@ -226,8 +207,6 @@ func (h *Handler) handleApprovalMode(w http.ResponseWriter, r *http.Request) {
 	runtime := h.policyRuntime()
 	approver := runtime.Approver()
 	switch r.Method {
-	case http.MethodGet:
-		utils.WriteAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{ApprovalMode: string(approver.Mode())})
 	case http.MethodPost:
 		var req types.AdminApprovalModeRequest
 		if err := decodeJSON(w, r, &req); err != nil {

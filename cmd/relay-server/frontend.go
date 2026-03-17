@@ -135,7 +135,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 }
 
 func (f *Frontend) injectServerData(htmlContent string) string {
-	rows := admin.BuildLeaseRows(f.server, false, f.portalURL)
+	rows := admin.BuildLeaseRows(f.server, false)
 	jsonData, err := json.Marshal(rows)
 	if err != nil {
 		jsonData = []byte("[]")

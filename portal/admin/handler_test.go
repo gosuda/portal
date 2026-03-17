@@ -16,7 +16,7 @@ import (
 func TestLoginAndProtectedActions(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler("https://portal.example.com", "secret-key", filepath.Join(t.TempDir(), "admin_settings.json"), false, func(w http.ResponseWriter, _ *http.Request, _ string) {
+	handler := NewHandler("secret-key", filepath.Join(t.TempDir(), "admin_settings.json"), false, func(w http.ResponseWriter, _ *http.Request, _ string) {
 		w.WriteHeader(http.StatusOK)
 	})
 	server, err := portal.NewServer(portal.ServerConfig{PortalURL: "https://portal.example.com"})
@@ -50,6 +50,58 @@ func TestLoginAndProtectedActions(t *testing.T) {
 	authStatus := decodeEnvelope[types.AdminAuthStatusResponse](t, authRecorder)
 	if !authStatus.Authenticated || !authStatus.AuthEnabled {
 		t.Fatalf("auth status = %+v, want authenticated + auth enabled", authStatus)
+	}
+
+	snapshotRecorder := httptest.NewRecorder()
+	snapshotRequest := httptest.NewRequest(http.MethodGet, types.PathAdminSnapshot, nil)
+	snapshotRequest.RemoteAddr = "127.0.0.1:1234"
+	snapshotRequest.AddCookie(cookies[0])
+	handler.HandleRequest(snapshotRecorder, snapshotRequest)
+	if snapshotRecorder.Code != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want %d", snapshotRecorder.Code, http.StatusOK)
+	}
+	snapshot := decodeEnvelope[types.AdminSnapshotResponse](t, snapshotRecorder)
+	if snapshot.ApprovalMode != string(policy.ModeAuto) {
+		t.Fatalf("snapshot approval mode = %q, want %q", snapshot.ApprovalMode, policy.ModeAuto)
+	}
+	if len(snapshot.Leases) != 0 {
+		t.Fatalf("snapshot leases len = %d, want 0", len(snapshot.Leases))
+	}
+
+	legacyLeasesRecorder := httptest.NewRecorder()
+	legacyLeasesRequest := httptest.NewRequest(http.MethodGet, types.PathAdminLeases, nil)
+	legacyLeasesRequest.RemoteAddr = "127.0.0.1:1234"
+	legacyLeasesRequest.AddCookie(cookies[0])
+	handler.HandleRequest(legacyLeasesRecorder, legacyLeasesRequest)
+	if legacyLeasesRecorder.Code != http.StatusNotFound {
+		t.Fatalf("legacy leases status = %d, want %d", legacyLeasesRecorder.Code, http.StatusNotFound)
+	}
+
+	legacyBannedRecorder := httptest.NewRecorder()
+	legacyBannedRequest := httptest.NewRequest(http.MethodGet, "/admin/leases/banned", nil)
+	legacyBannedRequest.RemoteAddr = "127.0.0.1:1234"
+	legacyBannedRequest.AddCookie(cookies[0])
+	handler.HandleRequest(legacyBannedRecorder, legacyBannedRequest)
+	if legacyBannedRecorder.Code != http.StatusNotFound {
+		t.Fatalf("legacy banned status = %d, want %d", legacyBannedRecorder.Code, http.StatusNotFound)
+	}
+
+	legacySettingsRecorder := httptest.NewRecorder()
+	legacySettingsRequest := httptest.NewRequest(http.MethodGet, "/admin/settings", nil)
+	legacySettingsRequest.RemoteAddr = "127.0.0.1:1234"
+	legacySettingsRequest.AddCookie(cookies[0])
+	handler.HandleRequest(legacySettingsRecorder, legacySettingsRequest)
+	if legacySettingsRecorder.Code != http.StatusNotFound {
+		t.Fatalf("legacy settings status = %d, want %d", legacySettingsRecorder.Code, http.StatusNotFound)
+	}
+
+	legacyApprovalGetRecorder := httptest.NewRecorder()
+	legacyApprovalGetRequest := httptest.NewRequest(http.MethodGet, types.PathAdminApproval, nil)
+	legacyApprovalGetRequest.RemoteAddr = "127.0.0.1:1234"
+	legacyApprovalGetRequest.AddCookie(cookies[0])
+	handler.HandleRequest(legacyApprovalGetRecorder, legacyApprovalGetRequest)
+	if legacyApprovalGetRecorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("legacy approval GET status = %d, want %d", legacyApprovalGetRecorder.Code, http.StatusMethodNotAllowed)
 	}
 
 	approvalRecorder := httptest.NewRecorder()

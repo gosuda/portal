@@ -7,39 +7,19 @@ import (
 	"time"
 
 	"github.com/gosuda/portal/v2/portal"
+	"github.com/gosuda/portal/v2/types"
 )
 
 const staleLeaseHideWindow = 3 * time.Minute
 
-type LeaseRow struct {
-	TTL          string
-	Metadata     string
-	Kind         string
-	IP           string
-	DNS          string
-	LastSeen     string
-	LastSeenISO  string
-	FirstSeenISO string
-	Name         string
-	Peer         string
-	Link         string
-	BPS          int64
-	Hide         bool
-	StaleRed     bool
-	IsApproved   bool
-	IsDenied     bool
-	Connected    bool
-	IsIPBanned   bool
-}
-
-func BuildLeaseRows(serv *portal.Server, includeAdmin bool, portalURL string) []LeaseRow {
+func BuildLeaseRows(serv *portal.Server, includeAdmin bool) []types.LeaseRow {
 	if serv == nil {
 		return nil
 	}
 
 	now := time.Now()
 	snapshots := serv.ListLeases()
-	rows := make([]LeaseRow, 0, len(snapshots))
+	rows := make([]types.LeaseRow, 0, len(snapshots))
 	for _, snapshot := range snapshots {
 		if now.After(snapshot.ExpiresAt) {
 			continue
@@ -62,7 +42,7 @@ func BuildLeaseRows(serv *portal.Server, includeAdmin bool, portalURL string) []
 		metadataJSON, _ := json.Marshal(snapshot.Metadata)
 		host := snapshot.Hostname
 
-		rows = append(rows, LeaseRow{
+		rows = append(rows, types.LeaseRow{
 			TTL:          formatDuration(time.Until(snapshot.ExpiresAt)),
 			Metadata:     string(metadataJSON),
 			Kind:         "https",

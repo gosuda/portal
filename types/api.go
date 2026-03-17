@@ -71,6 +71,29 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 	}
 }
 
+// LeaseRow is the shared lease-list contract used by the relay SSR bootstrap
+// payload and the admin lease API.
+type LeaseRow struct {
+	TTL          string
+	Metadata     string
+	Kind         string
+	IP           string
+	DNS          string
+	LastSeen     string
+	LastSeenISO  string
+	FirstSeenISO string
+	Name         string
+	Peer         string
+	Link         string
+	BPS          int64
+	Hide         bool
+	StaleRed     bool
+	IsApproved   bool
+	IsDenied     bool
+	Connected    bool
+	IsIPBanned   bool
+}
+
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
@@ -121,16 +144,16 @@ type AdminAuthStatusResponse struct {
 	AuthEnabled   bool `json:"auth_enabled"`
 }
 
+type AdminSnapshotResponse struct {
+	ApprovalMode string     `json:"approval_mode"`
+	BannedLeases []string   `json:"banned_leases,omitempty"`
+	Leases       []LeaseRow `json:"leases,omitempty"`
+}
+
 type AdminApprovalModeRequest struct {
 	Mode string `json:"mode"`
 }
 
 type AdminApprovalModeResponse struct {
 	ApprovalMode string `json:"approval_mode"`
-}
-
-type AdminSettingsResponse struct {
-	ApprovalMode   string   `json:"approval_mode"`
-	ApprovedLeases []string `json:"approved_leases,omitempty"`
-	DeniedLeases   []string `json:"denied_leases,omitempty"`
 }

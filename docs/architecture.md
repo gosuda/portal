@@ -39,7 +39,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Admin/API TLS listener on `--api-port` (default `:4017`)
 - SNI listener on `--sni-port` (default `:443`)
 - Public frontend routes under `/`, `/app`, `/assets/*`
-- Minimal admin surface at `/admin` and `/admin/leases`
+- Minimal admin surface at `/admin`, `/admin/snapshot`, and admin action/auth routes under `/admin/*`
 - Tunnel bootstrap routes at `/install.sh`, `/install.ps1`, and `/install/bin/*`
 - Keyless signer endpoint at `/v1/sign`
 
@@ -149,7 +149,8 @@ Current relay-served public routes:
 - `/app/*`
 - `/assets/*`
 - `/admin`
-- `/admin/leases`
+- `/admin/snapshot`
+- `/admin/leases/*`
 - `/install.sh`
 - `/install.ps1`
 - `/install/bin/*`
@@ -157,7 +158,7 @@ Current relay-served public routes:
 - `/v1/sign`
 - `/sdk/*`
 
-The admin surface is intentionally small in the current Go runtime: an HTML index plus a JSON lease list.
+The admin surface is intentionally small in the current Go runtime: an HTML index, one JSON snapshot endpoint, and a small set of admin action/auth routes.
 
 ## Shared Contract Surface
 

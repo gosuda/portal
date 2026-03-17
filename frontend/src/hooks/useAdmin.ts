@@ -15,13 +15,17 @@ export type ApprovalMode = "auto" | "manual";
 
 type LeaseAction = "approve" | "deny" | "ban";
 
-type SettingsResponse = {
+type ApprovalModeResponse = {
   approval_mode?: ApprovalMode;
 };
 
-interface LeaseActionResult {
+type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
-}
+  banned_leases?: string[];
+  leases?: ServerData[];
+};
+
+type LeaseActionResult = ApprovalModeResponse;
 
 export interface AdminServer extends BaseServer {
   peerId: string;
@@ -123,20 +127,16 @@ interface AdminSnapshot {
 }
 
 async function loadAdminSnapshot(): Promise<AdminSnapshot> {
-  const [leasesData, bannedData, settings] = await Promise.all([
-    apiClient.get<ServerData[]>(API_PATHS.admin.leases),
-    apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
-    apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode),
-  ]);
-
-  const normalizedBans = (Array.isArray(bannedData) ? bannedData : []).filter(
+  const snapshot = await apiClient.get<AdminSnapshotResponse>(API_PATHS.admin.snapshot);
+  const normalizedLeases = Array.isArray(snapshot?.leases) ? snapshot.leases : [];
+  const normalizedBans = (Array.isArray(snapshot?.banned_leases) ? snapshot.banned_leases : []).filter(
     (leaseID): leaseID is string => typeof leaseID === "string"
   );
 
   return {
-    serverData: Array.isArray(leasesData) ? leasesData : [],
+    serverData: normalizedLeases,
     bannedLeases: dedupeStrings(normalizedBans),
-    approvalMode: normalizeApprovalMode(settings?.approval_mode),
+    approvalMode: normalizeApprovalMode(snapshot?.approval_mode),
   };
 }
 
@@ -278,7 +278,7 @@ export function useAdmin() {
 
   const handleApprovalModeChange = async (mode: ApprovalMode) => {
     await runAdminAction(async () => {
-      const response = await apiClient.post<SettingsResponse>(
+      const response = await apiClient.post<ApprovalModeResponse>(
         API_PATHS.admin.approvalMode,
         { mode }
       );
