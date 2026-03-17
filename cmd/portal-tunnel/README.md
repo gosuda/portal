@@ -34,7 +34,7 @@ portal expose --name myapp \
 
 - `<target>` accepts a bare port like `3000`, a `host:port`, or an `http(s)://host:port` URL.
 - Bare ports resolve to `127.0.0.1:<port>`.
-- `--name` is optional. When omitted, the CLI generates a stable local name suffix from its config.
+- `--name` is optional. When omitted, the CLI generates a name derived from its local seed and target port.
 - `--relays` overrides installed default relays for that run.
 - `--default-relays=false` disables the public registry list for that run.
 
