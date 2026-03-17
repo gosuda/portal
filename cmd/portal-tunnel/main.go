@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,8 +24,6 @@ import (
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
-
-const shortClientIDSuffixLen = 6
 
 func main() {
 	zerolog.TimeFieldFormat = time.RFC3339
@@ -290,29 +289,53 @@ func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, 
 	return utils.NormalizeRelayURLs(inputs)
 }
 
+var exposeNameOpeners = []string{
+	"arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
+	"fancy", "fizzy", "flashy", "fuzzy", "gentle", "glitter", "golden", "happy",
+	"hyper", "jazzy", "jolly", "lively", "lucky", "magic", "mellow", "minty",
+	"misty", "moonlit", "mystic", "neon", "nova", "peppy", "pixel", "playful",
+	"poppy", "rapid", "rocket", "rowdy", "snappy", "snazzy", "sparkly", "spicy",
+	"sprightly", "starry", "sunny", "swift", "tangy", "tidy", "toasty", "turbo",
+	"velvet", "vivid", "wavy", "whimsy", "wild", "wonky", "zany", "zesty",
+}
+
+var exposeNameCenters = []string{
+	"alpaca", "badger", "banjo", "beacon", "biscuit", "capybara", "comet", "cricket",
+	"dragon", "falcon", "feather", "fjord", "fox", "gadget", "gecko", "gizmo",
+	"harbor", "heron", "iguana", "jelly", "koala", "lemur", "mango", "narwhal",
+	"nebula", "noodle", "octopus", "otter", "panda", "pepper", "phoenix", "pickle",
+	"puffin", "quokka", "radar", "ranger", "rocket", "scooter", "seahorse", "skylark",
+	"sprocket", "starling", "sunbeam", "taco", "thimble", "tiger", "toucan", "triton",
+	"walrus", "widget", "willow", "wombat", "yeti", "zeppelin", "zigzag", "zinnia",
+}
+
+var exposeNameClosers = []string{
+	"arcade", "beacon", "boogie", "bounce", "burst", "cascade", "chorus", "dash",
+	"disco", "drift", "echo", "fiesta", "flare", "flash", "flight", "flip",
+	"glow", "groove", "jam", "jive", "launch", "loop", "march", "orbit",
+	"parade", "party", "pulse", "quest", "rally", "riot", "ripple", "rodeo",
+	"roll", "rush", "serenade", "shuffle", "signal", "sketch", "spark", "sprint",
+	"starlight", "stride", "sway", "swoop", "twirl", "uplift", "vibe", "voyage",
+	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
+}
+
 func defaultExposeName(target, clientID string) (string, error) {
-	trimmed := strings.TrimSpace(clientID)
-	if trimmed == "" {
-		trimmed = "relay"
+	seed := strings.TrimSpace(clientID)
+	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
+		seed = cut
 	}
-	if cut, ok := strings.CutPrefix(trimmed, "cli_"); ok {
-		trimmed = cut
-	}
-	if len(trimmed) > shortClientIDSuffixLen {
-		trimmed = trimmed[:shortClientIDSuffixLen]
-	}
-	if trimmed == "" {
-		trimmed = "relay"
+	if seed == "" {
+		seed = "portal"
 	}
 
-	port := "app"
-	if _, rawPort, err := net.SplitHostPort(target); err == nil {
-		if rawPort != "" {
-			port = rawPort
-		}
-	}
+	sum := sha256.Sum256([]byte(seed + "|" + strings.TrimSpace(target)))
+	label := strings.Join([]string{
+		exposeNameOpeners[int(sum[0])%len(exposeNameOpeners)],
+		exposeNameCenters[int(sum[1])%len(exposeNameCenters)],
+		exposeNameClosers[int(sum[2])%len(exposeNameClosers)],
+	}, "-")
 
-	return utils.NormalizeDNSLabel("app-" + port + "-" + trimmed)
+	return utils.NormalizeDNSLabel(label)
 }
 
 func printRootUsage(w io.Writer) {

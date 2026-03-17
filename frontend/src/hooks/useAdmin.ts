@@ -15,13 +15,16 @@ export type ApprovalMode = "auto" | "manual";
 
 type LeaseAction = "approve" | "deny" | "ban";
 
-type SettingsResponse = {
+type ApprovalModeResponse = {
   approval_mode?: ApprovalMode;
 };
 
-interface LeaseActionResult {
+type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
-}
+  leases?: ServerData[];
+};
+
+type LeaseActionResult = ApprovalModeResponse;
 
 export interface AdminServer extends BaseServer {
   peerId: string;
@@ -70,29 +73,29 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
 
 function toAdminServer(
   row: ServerData,
-  index: number,
-  bannedLeases: Set<string>
+  index: number
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.Metadata);
+  const hostname = row.Hostname || "";
 
   return {
     id: index + 1,
-    name: row.Name || row.DNS || "(unnamed)",
+    name: row.Name || hostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
     thumbnail: metadata.thumbnail,
     owner: metadata.owner,
-    online: row.Connected,
-    dns: row.DNS || "",
-    link: row.Link,
-    lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
-    firstSeen: row.FirstSeenISO || undefined,
-    peerId: row.Peer,
-    isBanned: bannedLeases.has(row.Peer),
+    online: (row.Ready || 0) > 0,
+    dns: hostname,
+    link: hostname ? `https://${hostname}/` : "",
+    lastUpdated: row.LastSeenAt || undefined,
+    firstSeen: row.FirstSeenAt || undefined,
+    peerId: row.ID,
+    isBanned: row.IsBanned || false,
     bps: row.BPS || 0,
     isApproved: row.IsApproved || false,
     isDenied: row.IsDenied || false,
-    ip: row.IP || "",
+    ip: row.ClientIP || "",
     isIPBanned: row.IsIPBanned || false,
   };
 }
@@ -118,31 +121,21 @@ function dedupeStrings(values: string[]): string[] {
 
 interface AdminSnapshot {
   serverData: ServerData[];
-  bannedLeases: string[];
   approvalMode: ApprovalMode;
 }
 
 async function loadAdminSnapshot(): Promise<AdminSnapshot> {
-  const [leasesData, bannedData, settings] = await Promise.all([
-    apiClient.get<ServerData[]>(API_PATHS.admin.leases),
-    apiClient.get<string[]>(API_PATHS.admin.bannedLeases),
-    apiClient.get<SettingsResponse>(API_PATHS.admin.approvalMode),
-  ]);
-
-  const normalizedBans = (Array.isArray(bannedData) ? bannedData : []).filter(
-    (leaseID): leaseID is string => typeof leaseID === "string"
-  );
+  const snapshot = await apiClient.get<AdminSnapshotResponse>(API_PATHS.admin.snapshot);
+  const normalizedLeases = Array.isArray(snapshot?.leases) ? snapshot.leases : [];
 
   return {
-    serverData: Array.isArray(leasesData) ? leasesData : [],
-    bannedLeases: dedupeStrings(normalizedBans),
-    approvalMode: normalizeApprovalMode(settings?.approval_mode),
+    serverData: normalizedLeases,
+    approvalMode: normalizeApprovalMode(snapshot?.approval_mode),
   };
 }
 
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
-  const [bannedLeases, setBannedLeases] = useState<string[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -151,20 +144,16 @@ export function useAdmin() {
 
   const applySnapshot = (snapshot: AdminSnapshot) => {
     setServerData(snapshot.serverData);
-    setBannedLeases(snapshot.bannedLeases);
     setApprovalMode(snapshot.approvalMode);
   };
 
   const fetchData = async () => {
     setError("");
-    setLoading(true);
 
     try {
       applySnapshot(await loadAdminSnapshot());
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -197,16 +186,9 @@ export function useAdmin() {
     };
   }, []);
 
-  const bannedLeaseSet = useMemo(
-    () => new Set(bannedLeases),
-    [bannedLeases]
-  );
-
   const servers: AdminServer[] = useMemo(() => {
-    return serverData.map((row, index) =>
-      toAdminServer(row, index, bannedLeaseSet)
-    );
-  }, [serverData, bannedLeaseSet]);
+    return serverData.map((row, index) => toAdminServer(row, index));
+  }, [serverData]);
 
   const additionalFilter = (server: AdminServer) => {
     switch (banFilter) {
@@ -258,27 +240,47 @@ export function useAdmin() {
   const handleBanStatus = (peerId: string, isBan: boolean) =>
     runAdminAction(() => updateLeaseAction(peerId, "ban", isBan));
 
-  const handleBPSChange = (peerId: string, bps: number) =>
-    runAdminAction(async () => {
-      if (!peerId) {
-        throw new Error("Missing lease ID");
-      }
-      const encodedLeaseID = encodeLeaseID(peerId);
-      const normalizedBPS = Math.trunc(bps);
-      if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-        await apiClient.delete<LeaseActionResult>(
-          adminLeasePath(encodedLeaseID, "bps")
+  const handleBPSChange = async (peerId: string, bps: number) => {
+    if (!peerId) {
+      throw new Error("Missing lease ID");
+    }
+
+    const encodedLeaseID = encodeLeaseID(peerId);
+    const normalizedBPS = Math.max(0, Math.trunc(bps));
+    const previousBPS = serverData.find((row) => row.ID === peerId)?.BPS ?? 0;
+
+    setServerData((prev) =>
+      prev.map((row) =>
+        row.ID === peerId ? { ...row, BPS: normalizedBPS } : row
+      )
+    );
+
+    try {
+      await runAdminAction(async () => {
+        if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
+          await apiClient.delete<LeaseActionResult>(
+            adminLeasePath(encodedLeaseID, "bps")
+          );
+          return;
+        }
+        await apiClient.post<LeaseActionResult>(
+          adminLeasePath(encodedLeaseID, "bps"),
+          { bps: normalizedBPS }
         );
-        return;
-      }
-      await apiClient.post<LeaseActionResult>(adminLeasePath(encodedLeaseID, "bps"), {
-        bps: normalizedBPS,
       });
-    });
+    } catch (err) {
+      setServerData((prev) =>
+        prev.map((row) =>
+          row.ID === peerId ? { ...row, BPS: previousBPS } : row
+        )
+      );
+      throw err;
+    }
+  };
 
   const handleApprovalModeChange = async (mode: ApprovalMode) => {
     await runAdminAction(async () => {
-      const response = await apiClient.post<SettingsResponse>(
+      const response = await apiClient.post<ApprovalModeResponse>(
         API_PATHS.admin.approvalMode,
         { mode }
       );
@@ -344,7 +346,6 @@ export function useAdmin() {
 
   return {
     serverData,
-    bannedLeases,
     servers,
     ...listState,
     banFilter,

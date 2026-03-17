@@ -6,6 +6,11 @@ import { useAdmin } from "@/hooks/useAdmin";
 import { API_PATHS, adminLeasePath, encodeLeaseID } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 
+type DeferredAdminSnapshot = {
+  leases: ServerData[];
+  approval_mode: "auto" | "manual";
+};
+
 vi.mock("@/hooks/useList", () => ({
   useList: vi.fn(() => ({
     searchQuery: "",
@@ -40,29 +45,25 @@ vi.mock("@/lib/apiClient", async () => {
 
 function buildLease(peer: string): ServerData {
   return {
-    Peer: peer,
+    ExpiresAt: "2026-03-03T01:00:00Z",
+    FirstSeenAt: "2026-03-02T00:00:00Z",
+    LastSeenAt: "2026-03-03T00:00:00Z",
+    ID: peer,
     Name: "relay-1",
-    Kind: "relay",
-    Connected: true,
-    DNS: "relay.example.com",
-    LastSeen: "2026-03-03T00:00:00Z",
-    LastSeenISO: "2026-03-03T00:00:00Z",
-    FirstSeenISO: "2026-03-02T00:00:00Z",
-    TTL: "1h",
-    Link: "https://relay.example.com",
-    StaleRed: false,
-    Hide: false,
-    Metadata: JSON.stringify({
+    BPS: 1024,
+    ClientIP: "203.0.113.10",
+    Hostname: "relay.example.com",
+    Metadata: {
       description: "relay",
       tags: ["core"],
       thumbnail: "",
       owner: "ops",
       hide: false,
-    }),
-    BPS: 1024,
+    },
+    Ready: 1,
     IsApproved: true,
+    IsBanned: peer === "peer-a",
     IsDenied: false,
-    IP: "203.0.113.10",
     IsIPBanned: false,
   };
 }
@@ -82,18 +83,11 @@ describe("useAdmin", () => {
     vi.clearAllMocks();
 
     mockGet.mockImplementation(async (path: string) => {
-      if (path === API_PATHS.admin.leases) {
-        return [buildLease("peer-a")] as never;
-      }
-      if (path === API_PATHS.admin.bannedLeases) {
-        return [
-          "peer-a",
-          "peer-a",
-          "peer-b",
-        ] as never;
-      }
-      if (path === API_PATHS.admin.approvalMode) {
-        return { approval_mode: "not-a-mode" } as never;
+      if (path === API_PATHS.admin.snapshot) {
+        return {
+          leases: [buildLease("peer-a")],
+          approval_mode: "not-a-mode",
+        } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -109,20 +103,15 @@ describe("useAdmin", () => {
 
     expect(result.current.error).toBe("");
     expect(result.current.approvalMode).toBe("auto");
-    expect(result.current.bannedLeases).toEqual(["peer-a", "peer-b"]);
     expect(result.current.servers[0]?.peerId).toBe("peer-a");
+    expect(result.current.servers[0]?.isBanned).toBe(true);
+    expect(result.current.servers[0]?.bps).toBe(1024);
   });
 
   it("surfaces fetchData API errors", async () => {
     mockGet.mockImplementation(async (path: string) => {
-      if (path === API_PATHS.admin.leases) {
+      if (path === API_PATHS.admin.snapshot) {
         throw new APIClientError("failed to load leases", 500, "server_error");
-      }
-      if (path === API_PATHS.admin.bannedLeases) {
-        return [] as never;
-      }
-      if (path === API_PATHS.admin.approvalMode) {
-        return { approval_mode: "manual" } as never;
       }
       throw new Error(`Unexpected GET path: ${path}`);
     });
@@ -182,6 +171,60 @@ describe("useAdmin", () => {
     expect(calledPaths).toContain(
       adminLeasePath(encodeLeaseID(plainLeaseID), "approve"),
     );
+  });
+
+  it("posts bps updates to the lease action route", async () => {
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    await act(async () => {
+      await result.current.handleBPSChange("peer-a", 4096);
+    });
+
+    expect(mockPost).toHaveBeenCalledWith(
+      adminLeasePath(encodeLeaseID("peer-a"), "bps"),
+      { bps: 4096 },
+    );
+  });
+
+  it("keeps loading false while refreshing bps in the background", async () => {
+    let getCalls = 0;
+    let resolveRefresh:
+      | ((value: DeferredAdminSnapshot | PromiseLike<DeferredAdminSnapshot>) => void)
+      | undefined;
+
+    mockGet.mockImplementation((path: string) => {
+      if (path !== API_PATHS.admin.snapshot) {
+        throw new Error(`Unexpected GET path: ${path}`);
+      }
+      getCalls++;
+      if (getCalls === 1) {
+        return Promise.resolve({
+          leases: [buildLease("peer-a")],
+          approval_mode: "auto",
+        } as never);
+      }
+      return new Promise<DeferredAdminSnapshot>((resolve) => {
+        resolveRefresh = resolve;
+      }) as never;
+    });
+
+    const { result } = renderHook(() => useAdmin());
+    await waitForLoaded(result);
+
+    let pending: Promise<void> | undefined;
+    await act(async () => {
+      pending = result.current.handleBPSChange("peer-a", 2048);
+      await Promise.resolve();
+      expect(result.current.loading).toBe(false);
+      resolveRefresh?.({
+        leases: [{ ...buildLease("peer-a"), BPS: 2048 }],
+        approval_mode: "auto",
+      });
+      await pending;
+    });
+
+    expect(result.current.servers[0]?.bps).toBe(2048);
   });
 
   it("bulk deny posts deduped lease IDs to action routes", async () => {

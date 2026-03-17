@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal"
+	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -97,6 +102,60 @@ func main() {
 	if err := runServer(cfg); err != nil {
 		logger.Fatal().Err(err).Msg("execute root command")
 	}
+}
+
+func runServer(cfg relayServerConfig) error {
+	logger := log.With().Str("component", "relay-server").Logger()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	rootHost := utils.PortalRootHost(cfg.PortalURL)
+	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
+	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
+	trustedProxyCIDRs, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
+	server, err := portal.NewServer(portal.ServerConfig{
+		PortalURL: cfg.PortalURL,
+		ACME: acme.Config{
+			KeyDir:             cfg.KeylessDir,
+			DNSProvider:        cfg.ACMEDNSProvider,
+			CloudflareToken:    cfg.CloudflareToken,
+			AWSAccessKeyID:     cfg.AWSAccessKeyID,
+			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
+			AWSSessionToken:    cfg.AWSSessionToken,
+			AWSRegion:          cfg.AWSRegion,
+			AWSHostedZoneID:    cfg.AWSHostedZoneID,
+		},
+		APIListenAddr:     apiListenAddr,
+		SNIListenAddr:     sniListenAddr,
+		TrustedProxyCIDRs: trustedProxyCIDRs,
+		TrustProxyHeaders: cfg.TrustProxyHeaders,
+	})
+	if err != nil {
+		return fmt.Errorf("create relay server: %w", err)
+	}
+
+	frontend, err := NewFrontend(cfg.PortalURL, server, cfg.AdminSecretKey, trustedProxyCIDRs, cfg.TrustProxyHeaders)
+	if err != nil {
+		return fmt.Errorf("create frontend: %w", err)
+	}
+
+	if err := server.Start(ctx, frontend.Handler()); err != nil {
+		return fmt.Errorf("start relay server: %w", err)
+	}
+
+	logger.Info().
+		Str("api_addr", utils.HostPortOrLoopback(server.APIAddr())).
+		Str("sni_addr", server.SNIAddr()).
+		Str("root_host", rootHost).
+		Str("acme_dns_provider", cfg.ACMEDNSProvider).
+		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1").
+		Msg("relay server started")
+
+	return server.Wait()
 }
 
 func trimmedEnv(name string) string {

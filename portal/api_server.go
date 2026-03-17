@@ -105,8 +105,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := s.clientIPFromRequest(r)
-	if s.isClientIPBanned(clientIP) {
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
@@ -139,8 +139,8 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := s.clientIPFromRequest(r)
-	if s.isClientIPBanned(clientIP) {
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
@@ -209,8 +209,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
 	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
-	clientIP := s.clientIPFromRequest(r)
-	if s.isClientIPBanned(clientIP) {
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
 	}
@@ -220,7 +220,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
 	}
-	if !s.registry.IsRoutable(lease) {
+	if !s.registry.policy.IsLeaseRoutable(lease.ID) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
 	}
@@ -281,7 +281,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if strings.TrimSpace(req.ReverseToken) == "" {
 		return types.RegisterResponse{}, errors.New("reverse token is required")
 	}
-	if s.isClientIPBanned(clientIP) {
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		return types.RegisterResponse{}, errIPBanned
 	}
 	hostname, err := utils.LeaseHostname(name, s.rootHost)
@@ -298,15 +298,17 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 	record := &leaseRecord{
-		ID:           leaseID,
-		Name:         name,
-		Hostname:     hostname,
-		Metadata:     req.Metadata,
+		Lease: types.Lease{
+			ID:          leaseID,
+			Name:        name,
+			Hostname:    hostname,
+			Metadata:    req.Metadata,
+			ExpiresAt:   expiresAt,
+			FirstSeenAt: now,
+			LastSeenAt:  now,
+			ClientIP:    clientIP,
+		},
 		ReverseToken: req.ReverseToken,
-		ExpiresAt:    expiresAt,
-		FirstSeenAt:  now,
-		LastSeenAt:   now,
-		ClientIP:     clientIP,
 		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
 	}
 
@@ -319,12 +321,12 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
-		ConnectURL: s.connectURL(),
+		ConnectURL: strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect,
 	}, nil
 }
 
 func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
-	if s.isClientIPBanned(clientIP) {
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		return types.RenewResponse{}, errIPBanned
 	}
 
@@ -369,22 +371,6 @@ func (s *Server) runAPIServer() error {
 		return nil
 	}
 	return err
-}
-
-func (s *Server) connectURL() string {
-	base := strings.TrimRight(s.cfg.PortalURL, "/")
-	return base + types.PathSDKConnect
-}
-
-func (s *Server) clientIPFromRequest(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	return policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders)
-}
-
-func (s *Server) isClientIPBanned(clientIP string) bool {
-	return s.registry.IsClientIPBanned(clientIP)
 }
 
 func newKeylessSignerHandler(apiTLS keyless.TLSMaterialConfig) (http.Handler, error) {

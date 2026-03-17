@@ -7,6 +7,7 @@ import (
 
 type Runtime struct {
 	approver     *Approver
+	bpsManager   *BPSManager
 	ipFilter     *IPFilter
 	bannedLeases map[string]struct{}
 	mu           sync.RWMutex
@@ -15,6 +16,7 @@ type Runtime struct {
 func NewRuntime() *Runtime {
 	return &Runtime{
 		approver:     NewApprover(),
+		bpsManager:   NewBPSManager(),
 		ipFilter:     NewIPFilter(),
 		bannedLeases: make(map[string]struct{}),
 	}
@@ -32,6 +34,13 @@ func (r *Runtime) IPFilter() *IPFilter {
 		return nil
 	}
 	return r.ipFilter
+}
+
+func (r *Runtime) BPSManager() *BPSManager {
+	if r == nil {
+		return nil
+	}
+	return r.bpsManager
 }
 
 func (r *Runtime) BanLease(leaseID string) {
@@ -80,6 +89,25 @@ func (r *Runtime) BannedLeases() []string {
 	return out
 }
 
+func (r *Runtime) SetBannedLeases(leaseIDs []string) {
+	if r == nil {
+		return
+	}
+
+	bannedLeases := make(map[string]struct{}, len(leaseIDs))
+	for _, leaseID := range leaseIDs {
+		leaseID = strings.TrimSpace(leaseID)
+		if leaseID == "" {
+			continue
+		}
+		bannedLeases[leaseID] = struct{}{}
+	}
+
+	r.mu.Lock()
+	r.bannedLeases = bannedLeases
+	r.mu.Unlock()
+}
+
 func (r *Runtime) EffectiveApproval(leaseID string) bool {
 	if r == nil || r.approver == nil {
 		return true
@@ -108,8 +136,13 @@ func (r *Runtime) IsLeaseRoutable(leaseID string) bool {
 }
 
 func (r *Runtime) ForgetLease(leaseID string) {
-	if r == nil || r.ipFilter == nil {
+	if r == nil {
 		return
 	}
-	r.ipFilter.RemoveLeaseIP(leaseID)
+	if r.ipFilter != nil {
+		r.ipFilter.RemoveLeaseIP(leaseID)
+	}
+	if r.bpsManager != nil {
+		r.bpsManager.DeleteLeaseBPS(leaseID)
+	}
 }

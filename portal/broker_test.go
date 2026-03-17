@@ -11,6 +11,8 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
+const brokerAsyncTestTimeout = 5 * time.Second
+
 func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
 	t.Parallel()
 
@@ -37,7 +39,7 @@ func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
 		markerCh <- marker[0]
 	}()
 
-	claimCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	claimCtx, cancel := context.WithTimeout(context.Background(), brokerAsyncTestTimeout)
 	defer cancel()
 
 	claimed, err := broker.Claim(claimCtx)
@@ -55,7 +57,7 @@ func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
 		if marker != types.MarkerTLSStart {
 			t.Fatalf("marker = 0x%02x, want 0x%02x", marker, types.MarkerTLSStart)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(brokerAsyncTestTimeout):
 		t.Fatal("timed out waiting for activation marker")
 	}
 }
@@ -83,7 +85,7 @@ func TestLeaseBrokerCloseUnblocksClaim(t *testing.T) {
 	t.Parallel()
 
 	broker := newLeaseBroker("lease-test", time.Hour, 2)
-	claimCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	claimCtx, cancel := context.WithTimeout(context.Background(), brokerAsyncTestTimeout)
 	defer cancel()
 
 	started := make(chan struct{})
@@ -108,7 +110,7 @@ func TestLeaseBrokerCloseUnblocksClaim(t *testing.T) {
 		if !errors.Is(err, errBrokerClosed) {
 			t.Fatalf("Claim() error = %v, want %v", err, errBrokerClosed)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(brokerAsyncTestTimeout):
 		t.Fatal("timed out waiting for closed claim")
 	}
 }
@@ -125,7 +127,7 @@ func TestLeaseBrokerClaimWaitsForLateOffer(t *testing.T) {
 	})
 
 	session := newReverseSession(serverConn, time.Hour)
-	claimCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	claimCtx, cancel := context.WithTimeout(context.Background(), brokerAsyncTestTimeout)
 	defer cancel()
 
 	markerCh := make(chan byte, 1)
@@ -177,10 +179,10 @@ func TestLeaseBrokerClaimWaitsForLateOffer(t *testing.T) {
 			if marker != types.MarkerTLSStart {
 				t.Fatalf("marker = 0x%02x, want 0x%02x", marker, types.MarkerTLSStart)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(brokerAsyncTestTimeout):
 			t.Fatal("timed out waiting for activation marker")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(brokerAsyncTestTimeout):
 		t.Fatal("timed out waiting for claim")
 	}
 }

@@ -85,7 +85,8 @@ The relay HTTPS listener (default `:4017`) serving:
 
 - `/sdk/*`
 - `/admin`
-- `/admin/leases`
+- `/admin/snapshot`
+- `/admin/leases/*`
 - `/healthz`
 - `/v1/sign`
 - frontend root/app routes through root-host fallback
