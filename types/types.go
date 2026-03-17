@@ -1,7 +1,7 @@
 package types
 
 const (
-	ReleaseVersion         = "v2.0.5"
+	ReleaseVersion         = "v2.0.6"
 	SDKProtocolVersion     = "1"
 	PortalRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal/main/registry.json"
 
