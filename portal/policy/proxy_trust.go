@@ -68,19 +68,6 @@ func ExtractClientIP(r *http.Request, trustProxyHeaders bool, trustedProxyCIDRs 
 	return strings.TrimSpace(host)
 }
 
-func IsSecureForwardedRequest(r *http.Request, trustProxyHeaders bool, trustedProxyCIDRs []*net.IPNet) bool {
-	if r == nil {
-		return false
-	}
-	if r.TLS != nil {
-		return true
-	}
-	if !trustProxyHeaders || !IsTrustedProxyRemoteAddr(r.RemoteAddr, trustedProxyCIDRs) {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
-}
-
 func parseRemoteAddrIP(remoteAddr string) net.IP {
 	remoteAddr = strings.TrimSpace(remoteAddr)
 	if remoteAddr == "" {

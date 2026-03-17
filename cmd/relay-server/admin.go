@@ -159,7 +159,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			Value:    "",
 			Path:     types.PathAdmin,
 			HttpOnly: true,
-			Secure:   policy.IsSecureForwardedRequest(r, f.trustProxy, f.trustedCIDRs),
+			Secure:   true,
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   -1,
 		})
@@ -355,7 +355,7 @@ func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     types.PathAdmin,
 		HttpOnly: true,
-		Secure:   policy.IsSecureForwardedRequest(r, f.trustProxy, f.trustedCIDRs),
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   86400,
 	})
