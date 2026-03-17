@@ -248,7 +248,25 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				}
 				writeOK()
 			case "bps":
-				utils.WriteAPIError(w, http.StatusNotImplemented, types.APIErrorCodeFeatureUnavailable, "bps control is not enabled in this build")
+				switch r.Method {
+				case http.MethodPost:
+					var req types.AdminBPSRequest
+					if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
+						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+						return
+					}
+					if req.BPS <= 0 {
+						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
+						return
+					}
+					runtime.BPSManager().SetLeaseBPS(leaseID, req.BPS)
+				case http.MethodDelete:
+					runtime.BPSManager().DeleteLeaseBPS(leaseID)
+				default:
+					methodNotAllowed()
+					return
+				}
+				writeOK()
 			case "approve":
 				approver := runtime.Approver()
 				switch r.Method {
@@ -371,11 +389,12 @@ func saveAdminState(runtime *policy.Runtime) {
 }
 
 type persistedAdminState struct {
-	ApprovalMode   string   `json:"approval_mode"`
-	ApprovedLeases []string `json:"approved_leases,omitempty"`
-	DeniedLeases   []string `json:"denied_leases,omitempty"`
-	BannedLeases   []string `json:"banned_leases,omitempty"`
-	BannedIPs      []string `json:"banned_ips,omitempty"`
+	ApprovalMode   string           `json:"approval_mode"`
+	ApprovedLeases []string         `json:"approved_leases,omitempty"`
+	DeniedLeases   []string         `json:"denied_leases,omitempty"`
+	BannedLeases   []string         `json:"banned_leases,omitempty"`
+	BannedIPs      []string         `json:"banned_ips,omitempty"`
+	LeaseBPS       map[string]int64 `json:"lease_bps,omitempty"`
 }
 
 func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
@@ -386,6 +405,7 @@ func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
 		DeniedLeases:   approver.DeniedLeases(),
 		BannedLeases:   runtime.BannedLeases(),
 		BannedIPs:      runtime.IPFilter().BannedIPs(),
+		LeaseBPS:       runtime.BPSManager().LeaseBPSLimits(),
 	}
 }
 
@@ -401,6 +421,7 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.Approver().SetDecisions(s.ApprovedLeases, s.DeniedLeases)
 	runtime.SetBannedLeases(s.BannedLeases)
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
+	runtime.BPSManager().SetLeaseBPSLimits(s.LeaseBPS)
 	return nil
 }
 

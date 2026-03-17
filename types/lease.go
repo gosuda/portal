@@ -26,6 +26,7 @@ type Lease struct {
 	LastSeenAt  time.Time
 	ID          string
 	Name        string
+	BPS         int64
 	ClientIP    string
 	Hostname    string
 	Metadata    LeaseMetadata

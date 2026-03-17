@@ -14,6 +14,7 @@ export interface ServerData {
   LastSeenAt: string;
   ID: string;
   Name: string;
+  BPS?: number;
   ClientIP: string;
   Hostname: string;
   Metadata: unknown;

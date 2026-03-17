@@ -113,3 +113,7 @@ type AdminApprovalModeRequest struct {
 type AdminApprovalModeResponse struct {
 	ApprovalMode string `json:"approval_mode"`
 }
+
+type AdminBPSRequest struct {
+	BPS int64 `json:"bps"`
+}

@@ -188,7 +188,7 @@ export function ServerCard({
   };
 
   const formatStepLabel = (value: number): string => {
-    if (value === 0) return "∞";
+    if (value === 0) return "unl";
     if (value >= 1000000) return `${value / 1000000}M`;
     if (value >= 1000) return `${value / 1000}K`;
     return value.toString();

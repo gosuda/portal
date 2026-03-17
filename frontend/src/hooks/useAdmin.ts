@@ -92,7 +92,7 @@ function toAdminServer(
     firstSeen: row.FirstSeenAt || undefined,
     peerId: row.ID,
     isBanned: row.IsBanned || false,
-    bps: 0,
+    bps: row.BPS || 0,
     isApproved: row.IsApproved || false,
     isDenied: row.IsDenied || false,
     ip: row.ClientIP || "",
@@ -149,14 +149,11 @@ export function useAdmin() {
 
   const fetchData = async () => {
     setError("");
-    setLoading(true);
 
     try {
       applySnapshot(await loadAdminSnapshot());
     } catch (err: unknown) {
       setError(toAdminErrorMessage(err, "Failed to load admin data"));
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -243,23 +240,43 @@ export function useAdmin() {
   const handleBanStatus = (peerId: string, isBan: boolean) =>
     runAdminAction(() => updateLeaseAction(peerId, "ban", isBan));
 
-  const handleBPSChange = (peerId: string, bps: number) =>
-    runAdminAction(async () => {
-      if (!peerId) {
-        throw new Error("Missing lease ID");
-      }
-      const encodedLeaseID = encodeLeaseID(peerId);
-      const normalizedBPS = Math.trunc(bps);
-      if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
-        await apiClient.delete<LeaseActionResult>(
-          adminLeasePath(encodedLeaseID, "bps")
+  const handleBPSChange = async (peerId: string, bps: number) => {
+    if (!peerId) {
+      throw new Error("Missing lease ID");
+    }
+
+    const encodedLeaseID = encodeLeaseID(peerId);
+    const normalizedBPS = Math.max(0, Math.trunc(bps));
+    const previousBPS = serverData.find((row) => row.ID === peerId)?.BPS ?? 0;
+
+    setServerData((prev) =>
+      prev.map((row) =>
+        row.ID === peerId ? { ...row, BPS: normalizedBPS } : row
+      )
+    );
+
+    try {
+      await runAdminAction(async () => {
+        if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
+          await apiClient.delete<LeaseActionResult>(
+            adminLeasePath(encodedLeaseID, "bps")
+          );
+          return;
+        }
+        await apiClient.post<LeaseActionResult>(
+          adminLeasePath(encodedLeaseID, "bps"),
+          { bps: normalizedBPS }
         );
-        return;
-      }
-      await apiClient.post<LeaseActionResult>(adminLeasePath(encodedLeaseID, "bps"), {
-        bps: normalizedBPS,
       });
-    });
+    } catch (err) {
+      setServerData((prev) =>
+        prev.map((row) =>
+          row.ID === peerId ? { ...row, BPS: previousBPS } : row
+        )
+      );
+      throw err;
+    }
+  };
 
   const handleApprovalModeChange = async (mode: ApprovalMode) => {
     await runAdminAction(async () => {

@@ -212,6 +212,7 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	snapshot := record.Lease
 	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
+	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)
 	snapshot.Ready = record.Broker.ReadyCount()
 	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
 	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)
