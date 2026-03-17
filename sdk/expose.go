@@ -21,7 +21,7 @@ import (
 // traffic from all of them through one net.Listener.
 type Exposure struct {
 	listener net.Listener
-	relays   []exposureRelay
+	listeners []*Listener
 	done     chan struct{}
 
 	closeOnce sync.Once
@@ -39,12 +39,12 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	if len(relayURLs) == 0 {
 		return nil, nil
 	}
-	relays := make([]exposureRelay, 0, len(relayURLs))
+	listeners := make([]*Listener, 0, len(relayURLs))
 	cleanup := func() error {
 		var closeErr error
-		for _, relay := range relays {
-			if relay.listener != nil {
-				closeErr = errors.Join(closeErr, relay.listener.Close())
+		for _, listener := range listeners {
+			if listener != nil {
+				closeErr = errors.Join(closeErr, listener.Close())
 			}
 		}
 		return closeErr
@@ -59,32 +59,29 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 			return nil, errors.Join(fmt.Errorf("listen %q: %w", relayURL, err), cleanup())
 		}
 
-		relays = append(relays, exposureRelay{
-			relayURL: relayURL,
-			listener: listener,
-		})
+		listeners = append(listeners, listener)
 	}
 
-	listeners := make([]net.Listener, 0, len(relays))
-	for _, relay := range relays {
-		listeners = append(listeners, relay.listener)
+	mergedListeners := make([]net.Listener, 0, len(listeners))
+	for _, listener := range listeners {
+		mergedListeners = append(mergedListeners, listener)
 	}
 
-	merged, err := mergeListeners(listeners...)
+	merged, err := mergeListeners(mergedListeners...)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("merge listeners: %w", err), cleanup())
 	}
 
 	exposure := &Exposure{
 		listener: merged,
-		relays:   relays,
+		listeners: listeners,
 		done:     make(chan struct{}),
 	}
 	go exposure.monitorStartupCounts(ctx)
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
-		Int("relay_count", len(exposure.relays)).
+		Int("relay_count", len(exposure.listeners)).
 		Strs("relays", exposure.RelayURLs()).
 		Msgf("exposure relay started")
 
@@ -133,30 +130,33 @@ func (e *Exposure) Addr() net.Addr {
 
 // RelayURLs returns the normalized relay URLs backing the exposure.
 func (e *Exposure) RelayURLs() []string {
-	if e == nil || len(e.relays) == 0 {
+	if e == nil || len(e.listeners) == 0 {
 		return nil
 	}
 
-	out := make([]string, 0, len(e.relays))
-	for _, relay := range e.relays {
-		out = append(out, relay.relayURL)
+	out := make([]string, 0, len(e.listeners))
+	for _, listener := range e.listeners {
+		if listener == nil {
+			continue
+		}
+		out = append(out, listener.relayURL)
 	}
 	return out
 }
 
 // PublicURLs returns the de-duplicated public URLs exposed by the exposure.
 func (e *Exposure) PublicURLs() []string {
-	if e == nil || len(e.relays) == 0 {
+	if e == nil || len(e.listeners) == 0 {
 		return nil
 	}
 
-	out := make([]string, 0, len(e.relays))
+	out := make([]string, 0, len(e.listeners))
 	seen := make(map[string]struct{})
-	for _, relay := range e.relays {
-		if relay.listener == nil {
+	for _, listener := range e.listeners {
+		if listener == nil {
 			continue
 		}
-		rawURL := relay.listener.PublicURL()
+		rawURL := listener.PublicURL()
 		if rawURL == "" {
 			continue
 		}
@@ -199,12 +199,12 @@ func (e *Exposure) Close() error {
 		}
 
 		event := log.Info().
-			Int("relay_count", len(e.relays)).
+			Int("relay_count", len(e.listeners)).
 			Strs("relays", e.RelayURLs())
 		if closeErr != nil {
 			event = log.Warn().
 				Err(closeErr).
-				Int("relay_count", len(e.relays)).
+				Int("relay_count", len(e.listeners)).
 				Strs("relays", e.RelayURLs())
 		}
 		event.Msg("exposure closed")
@@ -325,17 +325,17 @@ func (e *Exposure) monitorStartupCounts(ctx context.Context) {
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
-	prevStatuses := make(map[string]listenerStatus, len(e.relays))
+	prevStatuses := make(map[string]listenerStatus, len(e.listeners))
 	firstRun := true
 
 	for {
 		readyCount, inactiveCount := 0, 0
 		activated := make([]string, 0)
 		deactivated := make([]string, 0)
-		for _, relay := range e.relays {
+		for _, listener := range e.listeners {
 			status := listenerStatusInactive
-			if relay.listener != nil {
-				status = relay.listener.StartupStatus()
+			if listener != nil {
+				status = listener.StartupStatus()
 			}
 			if status == listenerStatusReady {
 				readyCount++
@@ -343,14 +343,17 @@ func (e *Exposure) monitorStartupCounts(ctx context.Context) {
 				inactiveCount++
 			}
 
-			if prev, ok := prevStatuses[relay.relayURL]; ok && prev != status {
+			if listener == nil {
+				continue
+			}
+			if prev, ok := prevStatuses[listener.relayURL]; ok && prev != status {
 				if status == listenerStatusReady {
-					activated = append(activated, relay.relayURL)
+					activated = append(activated, listener.relayURL)
 				} else {
-					deactivated = append(deactivated, relay.relayURL)
+					deactivated = append(deactivated, listener.relayURL)
 				}
 			}
-			prevStatuses[relay.relayURL] = status
+			prevStatuses[listener.relayURL] = status
 		}
 
 		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
@@ -375,11 +378,6 @@ func (e *Exposure) monitorStartupCounts(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
-}
-
-type exposureRelay struct {
-	relayURL string
-	listener *Listener
 }
 
 type exposureConn struct {
