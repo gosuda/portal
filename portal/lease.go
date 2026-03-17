@@ -17,6 +17,7 @@ type leaseRegistry struct {
 	routes    *routeTable
 	leaseByID map[string]*leaseRecord
 	policy    *policy.Runtime
+	onExpired func(*leaseRecord) // called for each expired lease during cleanup
 	mu        sync.RWMutex
 }
 
@@ -206,12 +207,8 @@ func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRec
 
 func (r *leaseRegistry) cleanupExpired(now time.Time) {
 	for _, lease := range r.removeExpired(now) {
-		lease.Broker.Close()
-		if lease.QUICBroker != nil {
-			lease.QUICBroker.Stop()
-		}
-		if lease.UDPRelay != nil {
-			lease.UDPRelay.Stop()
+		if r.onExpired != nil {
+			r.onExpired(lease)
 		}
 	}
 }

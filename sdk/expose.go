@@ -31,7 +31,7 @@ type Exposure struct {
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // merged listener for accepting traffic from all of them. Empty relay input
 // returns nil, nil so callers can fall back to local-only serving.
-func Expose(ctx context.Context, relayUrls []string, name string, metadata types.LeaseMetadata) (*Exposure, error) {
+func Expose(ctx context.Context, relayUrls []string, name string, transport string, metadata types.LeaseMetadata) (*Exposure, error) {
 	relayURLs, err := utils.NormalizeRelayURLs(relayUrls)
 	if err != nil {
 		return nil, err
@@ -52,8 +52,9 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 
 	for _, relayURL := range relayURLs {
 		listener, err := NewListener(ctx, relayURL, ListenerConfig{
-			Name:     name,
-			Metadata: metadata,
+			Name:      name,
+			Transport: transport,
+			Metadata:  metadata,
 		})
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("listen %q: %w", relayURL, err), cleanup())
@@ -190,17 +191,55 @@ func (e *Exposure) AttachUDP(ctx context.Context) ([]*UDPListener, error) {
 		return nil, nil
 	}
 
-	var out []*UDPListener
+	// Attach concurrently so a slow/failing relay does not block the rest.
+	// Return collected results as soon as timeout fires or all complete.
+	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	results := make(chan *UDPListener, len(e.relays))
+
+	count := 0
 	for _, relay := range e.relays {
 		if relay.listener == nil {
 			continue
 		}
-		udpL, err := relay.listener.AttachUDP(ctx)
-		if err != nil {
-			// Skip relays that don't support UDP.
-			continue
+		count++
+		go func(l *Listener) {
+			udpL, err := l.AttachUDP(waitCtx)
+			if err != nil {
+				results <- nil
+				return
+			}
+			results <- udpL
+		}(relay.listener)
+	}
+
+	var out []*UDPListener
+	var graceTimer *time.Timer
+	defer func() {
+		if graceTimer != nil {
+			graceTimer.Stop()
 		}
-		out = append(out, udpL)
+	}()
+	var grace <-chan time.Time
+	collected := 0
+	for collected < count {
+		select {
+		case l := <-results:
+			collected++
+			if l != nil {
+				out = append(out, l)
+				if graceTimer == nil {
+					// After first success, give 3 more seconds for remaining relays.
+					graceTimer = time.NewTimer(3 * time.Second)
+					grace = graceTimer.C
+				}
+			}
+		case <-grace:
+			return out, nil
+		case <-waitCtx.Done():
+			return out, nil
+		}
 	}
 	return out, nil
 }

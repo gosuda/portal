@@ -347,7 +347,7 @@ func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
 }
 
 func TestExposeNoRelayInputs(t *testing.T) {
-	exposure, err := Expose(context.Background(), nil, "demo", types.LeaseMetadata{})
+	exposure, err := Expose(context.Background(), nil, "demo", types.TransportBoth, types.LeaseMetadata{})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}

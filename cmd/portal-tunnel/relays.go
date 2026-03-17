@@ -228,6 +228,7 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 	}
 
 	// Main loop: relay → local service.
+	logger.Info().Str("target", targetAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
 		dg, err := udpListener.AcceptDatagram()
 		if err != nil {
@@ -237,6 +238,12 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 			return fmt.Errorf("accept datagram: %w", err)
 		}
 
+		logger.Debug().
+			Uint32("flow_id", dg.FlowID).
+			Int("bytes", len(dg.Payload)).
+			Str("target", targetAddr).
+			Msg("datagram received from relay, forwarding to local")
+
 		localConn, err := getOrCreateFlow(dg.FlowID)
 		if err != nil {
 			logger.Warn().Err(err).Uint32("flow_id", dg.FlowID).Msg("dial local udp failed")
@@ -244,7 +251,7 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		}
 
 		if _, err := localConn.Write(dg.Payload); err != nil {
-			logger.Debug().Err(err).Uint32("flow_id", dg.FlowID).Msg("write to local udp failed")
+			logger.Warn().Err(err).Uint32("flow_id", dg.FlowID).Msg("write to local udp failed")
 		}
 	}
 }

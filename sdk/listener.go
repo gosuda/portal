@@ -65,8 +65,10 @@ type Listener struct {
 	quicAddr         string
 	metadata         types.LeaseMetadata
 
-	closeOnce sync.Once
-	mu        sync.Mutex
+	registered   chan struct{} // closed after first successful registration
+	closeOnce    sync.Once
+	registerOnce sync.Once
+	mu           sync.Mutex
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -96,6 +98,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		cancel:           cancel,
 		api:              api,
 		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
+		registered:       make(chan struct{}),
 		relayURL:         api.baseURL.String(),
 		transport:        transport,
 		startupStatus:    listenerStatusInactive,
@@ -381,13 +384,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 
-	var resp types.RegisterResponse
-	var err error
-	if l.transport != "" {
-		resp, err = l.api.registerLeaseWithTransport(ctx, l.leaseTTL, l.transport)
-	} else {
-		resp, err = l.api.registerLease(ctx, l.leaseTTL)
-	}
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.transport)
 	if err != nil {
 		return err
 	}
@@ -424,7 +421,20 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	if oldCloser != nil {
 		_ = oldCloser.Close()
 	}
+	l.registerOnce.Do(func() { close(l.registered) })
 	return nil
+}
+
+// WaitRegistered blocks until the first successful lease registration or context cancellation.
+func (l *Listener) WaitRegistered(ctx context.Context) error {
+	select {
+	case <-l.registered:
+		return nil
+	case <-l.doneCh:
+		return net.ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (l *Listener) reregister(ctx context.Context) error {

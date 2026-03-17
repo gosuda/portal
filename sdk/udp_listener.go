@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -85,7 +84,7 @@ func (l *UDPListener) SendDatagram(flowID uint32, payload []byte) error {
 	if conn == nil {
 		return errors.New("quic connection not established")
 	}
-	return conn.SendDatagram(encodeDatagram(flowID, payload))
+	return conn.SendDatagram(types.EncodeDatagram(flowID, payload))
 }
 
 // UDPAddr returns the public UDP address allocated by the relay.
@@ -170,7 +169,7 @@ func NewUDPListener(ctx context.Context, relayURL string, cfg UDPListenerConfig)
 		return nil, err
 	}
 
-	registerResp, err := api.registerLeaseWithTransport(ctx, leaseTTL, transport)
+	registerResp, err := api.registerLease(ctx, leaseTTL, transport)
 	if err != nil {
 		api.close()
 		return nil, err
@@ -206,6 +205,11 @@ func NewUDPListener(ctx context.Context, relayURL string, cfg UDPListenerConfig)
 // The caller (the TCP Listener) owns the lease lifecycle.
 // The Listener must have been registered with transport "udp" or "both".
 func (l *Listener) AttachUDP(ctx context.Context) (*UDPListener, error) {
+	// Wait for lease registration to complete before reading UDP addresses.
+	if err := l.WaitRegistered(ctx); err != nil {
+		return nil, fmt.Errorf("wait for registration: %w", err)
+	}
+
 	l.mu.Lock()
 	leaseID := l.leaseID
 	api := l.api
@@ -223,7 +227,10 @@ func (l *Listener) AttachUDP(ctx context.Context) (*UDPListener, error) {
 		return nil, errors.New("lease does not have UDP transport enabled")
 	}
 
-	listenerCtx, cancel := context.WithCancel(ctx)
+	// Use context.Background — the caller's ctx may be a short-lived timeout
+	// context (e.g. the 15-second waitCtx from Exposure.AttachUDP). The
+	// UDPListener's lifecycle is managed by Close(), not context cancellation.
+	listenerCtx, cancel := context.WithCancel(context.Background())
 	udpL := &UDPListener{
 		api:          api,
 		baseContext:  func() context.Context { return listenerCtx },
@@ -300,7 +307,7 @@ func (l *UDPListener) receiveLoop(conn *quic.Conn) {
 			return
 		}
 
-		frame, err := decodeDatagram(data)
+		frame, err := types.DecodeDatagram(data)
 		if err != nil {
 			continue
 		}
@@ -362,28 +369,3 @@ func (l *UDPListener) isClosed() bool {
 	}
 }
 
-// datagramFrame mirrors portal.datagramFrame for SDK-side decode/encode.
-type datagramFrame struct {
-	FlowID  uint32
-	Payload []byte
-}
-
-func encodeDatagram(flowID uint32, payload []byte) []byte {
-	var buf [binary.MaxVarintLen32]byte
-	n := binary.PutUvarint(buf[:], uint64(flowID))
-	out := make([]byte, n+len(payload))
-	copy(out, buf[:n])
-	copy(out[n:], payload)
-	return out
-}
-
-func decodeDatagram(data []byte) (datagramFrame, error) {
-	flowID, n := binary.Uvarint(data)
-	if n <= 0 {
-		return datagramFrame{}, fmt.Errorf("datagram too small to decode")
-	}
-	return datagramFrame{
-		FlowID:  uint32(flowID),
-		Payload: data[n:],
-	}, nil
-}

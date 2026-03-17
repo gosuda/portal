@@ -90,13 +90,14 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, transport string) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
+		Transport:    transport,
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -292,20 +293,6 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 		return c.reader.Read(p)
 	}
 	return c.Conn.Read(p)
-}
-
-func (a *apiClient) registerLeaseWithTransport(ctx context.Context, ttl time.Duration, transport string) (types.RegisterResponse, error) {
-	var resp types.RegisterResponse
-	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
-		Name:         a.name,
-		Metadata:     a.metadata.Copy(),
-		ReverseToken: a.reverseToken,
-		TTL:          int(ttl / time.Second),
-		Transport:    transport,
-	}, &resp); err != nil {
-		return types.RegisterResponse{}, err
-	}
-	return resp, nil
 }
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.

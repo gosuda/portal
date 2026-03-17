@@ -32,10 +32,8 @@ const (
 	defaultControlBodyLimit  = 4 << 20
 	defaultSessionWriteLimit = 5 * time.Second
 
-	defaultUDPPortMin        = 29000
-	defaultUDPPortMax        = 29999
-	defaultUDPSessionTimeout = 30 * time.Second
-	defaultMaxDatagramSize   = 1350
+	defaultUDPPortMin = 29000
+	defaultUDPPortMax = 29999
 )
 
 type ServerConfig struct {
@@ -99,12 +97,22 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg.QUICListenAddr = cfg.APIListenAddr
 	}
 
-	return &Server{
+	registry := newLeaseRegistry(policy.NewRuntime())
+	ports := newPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
+
+	s := &Server{
 		cfg:      cfg,
 		rootHost: rootHost,
-		registry: newLeaseRegistry(policy.NewRuntime()),
-		ports:    newPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax),
-	}, nil
+		registry: registry,
+		ports:    ports,
+	}
+
+	// Tear down all lease resources when leases expire via TTL janitor.
+	registry.onExpired = func(record *leaseRecord) {
+		s.closeLease(record)
+	}
+
+	return s, nil
 }
 
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
@@ -182,16 +190,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		for _, lease := range s.registry.CloseAll() {
-			lease.Broker.Close()
-			if lease.QUICBroker != nil {
-				lease.QUICBroker.Stop()
-			}
-			if lease.UDPRelay != nil {
-				lease.UDPRelay.Stop()
-			}
-			if lease.UDPPort > 0 && s.ports != nil {
-				s.ports.Release(lease.UDPPort)
-			}
+			s.closeLease(lease)
 		}
 
 		if s.quicTunnel != nil {
@@ -469,6 +468,20 @@ func (s *Server) startUDPRelay(ctx context.Context, leaseID string, relay *udpRe
 			Str("component", "relay-server").
 			Str("lease_id", leaseID).
 			Msg("failed to start udp relay")
+	}
+}
+
+// closeLease tears down all resources associated with a single lease record.
+func (s *Server) closeLease(record *leaseRecord) {
+	record.Broker.Close()
+	if record.QUICBroker != nil {
+		record.QUICBroker.Stop()
+	}
+	if record.UDPRelay != nil {
+		record.UDPRelay.Stop()
+	}
+	if record.UDPPort > 0 && s.ports != nil {
+		s.ports.Release(record.UDPPort)
 	}
 }
 

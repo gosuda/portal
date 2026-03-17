@@ -2,7 +2,6 @@ package portal
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net"
@@ -11,40 +10,14 @@ import (
 
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal/v2/types"
 )
 
 var (
 	errQUICNoConnection  = errors.New("no quic connection registered")
 	errQUICAlreadyClosed = errors.New("quic broker closed")
-	errDatagramTooSmall  = errors.New("datagram too small to decode")
 )
-
-// datagramFrame is the wire format for QUIC DATAGRAM payloads.
-// Layout: [flowID varint][payload bytes]
-type datagramFrame struct {
-	FlowID  uint32
-	Payload []byte
-}
-
-func encodeDatagram(flowID uint32, payload []byte) []byte {
-	var buf [binary.MaxVarintLen32]byte
-	n := binary.PutUvarint(buf[:], uint64(flowID))
-	out := make([]byte, n+len(payload))
-	copy(out, buf[:n])
-	copy(out[n:], payload)
-	return out
-}
-
-func decodeDatagram(data []byte) (datagramFrame, error) {
-	flowID, n := binary.Uvarint(data)
-	if n <= 0 {
-		return datagramFrame{}, errDatagramTooSmall
-	}
-	return datagramFrame{
-		FlowID:  uint32(flowID),
-		Payload: data[n:],
-	}, nil
-}
 
 // quicBroker manages a single QUIC connection from a tunnel for one lease.
 // All UDP traffic for the lease is multiplexed over DATAGRAM frames on this
@@ -57,7 +30,7 @@ type quicBroker struct {
 	addrIndex map[string]uint32       // "ip:port" → flowID
 	nextFlow  uint32
 
-	incoming chan datagramFrame // frames received from tunnel
+	incoming chan types.DatagramFrame // frames received from tunnel
 	done     chan struct{}
 
 	mu        sync.Mutex
@@ -71,7 +44,7 @@ func newQUICBroker(leaseID string) *quicBroker {
 		flowTable: make(map[uint32]*net.UDPAddr),
 		addrIndex: make(map[string]uint32),
 		nextFlow:  1,
-		incoming:  make(chan datagramFrame, 256),
+		incoming:  make(chan types.DatagramFrame, 256),
 		done:      make(chan struct{}),
 	}
 }
@@ -113,11 +86,11 @@ func (b *quicBroker) SendDatagram(flowID uint32, payload []byte) error {
 	if conn == nil {
 		return errQUICNoConnection
 	}
-	return conn.SendDatagram(encodeDatagram(flowID, payload))
+	return conn.SendDatagram(types.EncodeDatagram(flowID, payload))
 }
 
 // Incoming returns the channel that delivers datagrams received from the tunnel.
-func (b *quicBroker) Incoming() <-chan datagramFrame {
+func (b *quicBroker) Incoming() <-chan types.DatagramFrame {
 	return b.incoming
 }
 
@@ -189,7 +162,7 @@ func (b *quicBroker) receiveLoop(conn *quic.Conn) {
 			return
 		}
 
-		frame, err := decodeDatagram(data)
+		frame, err := types.DecodeDatagram(data)
 		if err != nil {
 			continue
 		}

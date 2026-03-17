@@ -87,6 +87,9 @@ func runExposeCommand(args []string) error {
 	fs.StringVar(&thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	fs.StringVar(&owner, "owner", "", "Service owner metadata")
 	fs.BoolVar(&hide, "hide", false, "Hide service from discovery")
+
+	var transport string
+	fs.StringVar(&transport, "transport", types.TransportBoth, "Transport mode: tcp, udp, or both (default: both)")
 	fs.Usage = func() {
 		printExposeUsage(fs.Output())
 	}
@@ -154,6 +157,7 @@ func runExposeCommand(args []string) error {
 		relayURLs,
 		target,
 		name,
+		transport,
 		types.LeaseMetadata{
 			Description: desc,
 			Tags:        utils.SplitCSV(tags),
@@ -219,11 +223,12 @@ func runTunnel(
 	relayURLs []string,
 	target string,
 	name string,
+	transport string,
 	metadata types.LeaseMetadata,
 ) error {
 	logger := log.With().Str("component", "portal").Logger()
 
-	exposure, err := sdk.Expose(ctx, relayURLs, name, metadata)
+	exposure, err := sdk.Expose(ctx, relayURLs, name, transport, metadata)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to start relays: %w", name, err)
 	}
@@ -233,7 +238,9 @@ func runTunnel(
 	defer exposure.Close()
 
 	// UDP is best-effort — attach to existing lease, log and continue if it fails.
-	go runUDPBestEffort(ctx, exposure, target)
+	if transport == types.TransportUDP || transport == types.TransportBoth {
+		go runUDPBestEffort(ctx, exposure, target)
+	}
 
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).

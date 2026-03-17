@@ -10,6 +10,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	defaultUDPSessionTimeout = 30 * time.Second
+	defaultMaxDatagramSize   = 1350
+)
+
 // udpSession tracks one client endpoint sending to a per-lease UDP listener.
 type udpSession struct {
 	FlowID   uint32
@@ -105,6 +110,11 @@ func (r *udpRelay) readLoop(ctx context.Context) {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
+			log.Warn().
+				Str("component", "udp-relay").
+				Str("lease_id", r.leaseID).
+				Err(err).
+				Msg("readLoop exiting: unexpected read error")
 			return
 		}
 
@@ -113,7 +123,13 @@ func (r *udpRelay) readLoop(ctx context.Context) {
 		copy(payload, buf[:n])
 
 		if err := r.broker.SendDatagram(flowID, payload); err != nil {
-			// Tunnel not connected yet — drop silently.
+			log.Warn().
+				Str("component", "udp-relay").
+				Str("lease_id", r.leaseID).
+				Err(err).
+				Uint32("flow_id", flowID).
+				Int("bytes", n).
+				Msg("send datagram to tunnel failed, dropping packet")
 			continue
 		}
 	}
@@ -128,6 +144,11 @@ func (r *udpRelay) writeLoop(ctx context.Context) {
 		case frame := <-r.broker.Incoming():
 			addr, ok := r.broker.LookupFlowAddr(frame.FlowID)
 			if !ok {
+				log.Debug().
+					Str("component", "udp-relay").
+					Str("lease_id", r.leaseID).
+					Uint32("flow_id", frame.FlowID).
+					Msg("write loop: unknown flow id, dropping")
 				continue
 			}
 			_, _ = r.conn.WriteToUDP(frame.Payload, addr)

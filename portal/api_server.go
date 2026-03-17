@@ -321,7 +321,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		if s.ports == nil {
 			return types.RegisterResponse{}, errors.New("udp port allocation not available")
 		}
-		udpPort, portErr := s.ports.Allocate()
+		udpPort, portErr := s.ports.Allocate(name)
 		if portErr != nil {
 			return types.RegisterResponse{}, fmt.Errorf("allocate udp port: %w", portErr)
 		}
@@ -382,16 +382,7 @@ func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 	if err != nil {
 		return err
 	}
-	record.Broker.Close()
-	if record.QUICBroker != nil {
-		record.QUICBroker.Stop()
-	}
-	if record.UDPRelay != nil {
-		record.UDPRelay.Stop()
-	}
-	if record.UDPPort > 0 && s.ports != nil {
-		s.ports.Release(record.UDPPort)
-	}
+	s.closeLease(record)
 	return nil
 }
 

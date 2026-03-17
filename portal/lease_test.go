@@ -139,6 +139,9 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 	t.Parallel()
 
 	registry := newLeaseRegistry(policy.NewRuntime())
+	registry.onExpired = func(r *leaseRecord) {
+		r.Broker.Close()
+	}
 	record := &leaseRecord{
 		ID:           "lease_expired",
 		Hostname:     "expired.example.com",
