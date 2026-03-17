@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"maps"
 	"strings"
 	"sync"
 )
@@ -64,9 +65,7 @@ func (m *BPSManager) LeaseBPSLimits() map[string]int64 {
 	defer m.mu.RUnlock()
 
 	out := make(map[string]int64, len(m.leaseBPS))
-	for leaseID, bps := range m.leaseBPS {
-		out[leaseID] = bps
-	}
+	maps.Copy(out, m.leaseBPS)
 	return out
 }
 

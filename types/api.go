@@ -102,8 +102,8 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode string          `json:"approval_mode"`
-	Leases       []Lease         `json:"leases,omitempty"`
+	ApprovalMode string  `json:"approval_mode"`
+	Leases       []Lease `json:"leases,omitempty"`
 }
 
 type AdminApprovalModeRequest struct {
