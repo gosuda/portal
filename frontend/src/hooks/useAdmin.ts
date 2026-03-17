@@ -21,7 +21,6 @@ type ApprovalModeResponse = {
 
 type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
-  banned_leases?: string[];
   leases?: ServerData[];
 };
 
@@ -74,29 +73,29 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
 
 function toAdminServer(
   row: ServerData,
-  index: number,
-  bannedLeases: Set<string>
+  index: number
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.Metadata);
+  const hostname = row.Hostname || "";
 
   return {
     id: index + 1,
-    name: row.Name || row.DNS || "(unnamed)",
+    name: row.Name || hostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
     thumbnail: metadata.thumbnail,
     owner: metadata.owner,
-    online: row.Connected,
-    dns: row.DNS || "",
-    link: row.Link,
-    lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
-    firstSeen: row.FirstSeenISO || undefined,
-    peerId: row.Peer,
-    isBanned: bannedLeases.has(row.Peer),
-    bps: row.BPS || 0,
+    online: (row.Ready || 0) > 0,
+    dns: hostname,
+    link: hostname ? `https://${hostname}/` : "",
+    lastUpdated: row.LastSeenAt || undefined,
+    firstSeen: row.FirstSeenAt || undefined,
+    peerId: row.ID,
+    isBanned: row.IsBanned || false,
+    bps: 0,
     isApproved: row.IsApproved || false,
     isDenied: row.IsDenied || false,
-    ip: row.IP || "",
+    ip: row.ClientIP || "",
     isIPBanned: row.IsIPBanned || false,
   };
 }
@@ -122,27 +121,21 @@ function dedupeStrings(values: string[]): string[] {
 
 interface AdminSnapshot {
   serverData: ServerData[];
-  bannedLeases: string[];
   approvalMode: ApprovalMode;
 }
 
 async function loadAdminSnapshot(): Promise<AdminSnapshot> {
   const snapshot = await apiClient.get<AdminSnapshotResponse>(API_PATHS.admin.snapshot);
   const normalizedLeases = Array.isArray(snapshot?.leases) ? snapshot.leases : [];
-  const normalizedBans = (Array.isArray(snapshot?.banned_leases) ? snapshot.banned_leases : []).filter(
-    (leaseID): leaseID is string => typeof leaseID === "string"
-  );
 
   return {
     serverData: normalizedLeases,
-    bannedLeases: dedupeStrings(normalizedBans),
     approvalMode: normalizeApprovalMode(snapshot?.approval_mode),
   };
 }
 
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
-  const [bannedLeases, setBannedLeases] = useState<string[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -151,7 +144,6 @@ export function useAdmin() {
 
   const applySnapshot = (snapshot: AdminSnapshot) => {
     setServerData(snapshot.serverData);
-    setBannedLeases(snapshot.bannedLeases);
     setApprovalMode(snapshot.approvalMode);
   };
 
@@ -197,16 +189,9 @@ export function useAdmin() {
     };
   }, []);
 
-  const bannedLeaseSet = useMemo(
-    () => new Set(bannedLeases),
-    [bannedLeases]
-  );
-
   const servers: AdminServer[] = useMemo(() => {
-    return serverData.map((row, index) =>
-      toAdminServer(row, index, bannedLeaseSet)
-    );
-  }, [serverData, bannedLeaseSet]);
+    return serverData.map((row, index) => toAdminServer(row, index));
+  }, [serverData]);
 
   const additionalFilter = (server: AdminServer) => {
     switch (banFilter) {
@@ -344,7 +329,6 @@ export function useAdmin() {
 
   return {
     serverData,
-    bannedLeases,
     servers,
     ...listState,
     banFilter,

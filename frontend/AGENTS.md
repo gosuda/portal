@@ -4,8 +4,8 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
 
 ## Frontend-Backend Contracts (Manually Synced)
 
-1. **SSR data shape is a 3-way contract.**
-   Go `types.LeaseRow` (`../types/api.go`) + row builder (`../portal/admin/rows.go`) -> TS `ServerData` (`src/hooks/useSSRData.ts`) -> `<script id="__SSR_DATA__">` injection (`cmd/relay-server/frontend.go`).
+1. **SSR data shape is a 4-way contract.**
+   Go lease contracts (`../types/lease.go`) + portal snapshot producer (`../portal/lease.go`) + relay-server frontend filtering/injection (`../cmd/relay-server/frontend.go`) -> TS `ServerData` (`src/hooks/useSSRData.ts`).
    - Why: no shared schema or codegen. Field drift silently breaks SSR hydration. The script tag ID `__SSR_DATA__` is hardcoded in all three locations.
 
 2. **API path constants require dual maintenance.**
@@ -27,7 +27,7 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
    - Why: renaming a placeholder in one place without the other leaves raw placeholder strings in production HTML.
 
 6. **Admin state reads are aggregated through `/admin/snapshot`.**
-   `src/hooks/useAdmin.ts` expects one payload carrying `leases`, `banned_leases`, and `approval_mode`.
+   `src/hooks/useAdmin.ts` expects one payload carrying `leases` and `approval_mode`.
    - Why: splitting those reads across multiple endpoints reintroduces extra request coordination and drift in the admin bootstrap path.
 
 ## Frontend Conventions

@@ -2,7 +2,6 @@ package types
 
 const (
 	APIErrorCodeAuthDisabled        = "auth_disabled"
-	APIErrorCodeAuthLocked          = "auth_locked"
 	APIErrorCodeFeatureUnavailable  = "feature_unavailable"
 	APIErrorCodeHijackFailed        = "hijack_failed"
 	APIErrorCodeHijackUnsupported   = "hijack_unsupported"

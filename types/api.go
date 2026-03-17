@@ -53,47 +53,6 @@ func (e *APIRequestError) Is(target error) bool {
 	return true
 }
 
-type LeaseMetadata struct {
-	Description string   `json:"description,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
-	Thumbnail   string   `json:"thumbnail,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Hide        bool     `json:"hide,omitempty"`
-}
-
-func (m LeaseMetadata) Copy() LeaseMetadata {
-	return LeaseMetadata{
-		Description: m.Description,
-		Owner:       m.Owner,
-		Thumbnail:   m.Thumbnail,
-		Tags:        append([]string(nil), m.Tags...),
-		Hide:        m.Hide,
-	}
-}
-
-// LeaseRow is the shared lease-list contract used by the relay SSR bootstrap
-// payload and the admin lease API.
-type LeaseRow struct {
-	TTL          string
-	Metadata     string
-	Kind         string
-	IP           string
-	DNS          string
-	LastSeen     string
-	LastSeenISO  string
-	FirstSeenISO string
-	Name         string
-	Peer         string
-	Link         string
-	BPS          int64
-	Hide         bool
-	StaleRed     bool
-	IsApproved   bool
-	IsDenied     bool
-	Connected    bool
-	IsIPBanned   bool
-}
-
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
@@ -134,9 +93,7 @@ type AdminLoginRequest struct {
 }
 
 type AdminLoginResponse struct {
-	Success          bool `json:"success,omitempty"`
-	Locked           bool `json:"locked,omitempty"`
-	RemainingSeconds int  `json:"remaining_seconds,omitempty"`
+	Success bool `json:"success,omitempty"`
 }
 
 type AdminAuthStatusResponse struct {
@@ -145,9 +102,8 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode string     `json:"approval_mode"`
-	BannedLeases []string   `json:"banned_leases,omitempty"`
-	Leases       []LeaseRow `json:"leases,omitempty"`
+	ApprovalMode string          `json:"approval_mode"`
+	Leases       []Lease         `json:"leases,omitempty"`
 }
 
 type AdminApprovalModeRequest struct {

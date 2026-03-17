@@ -80,6 +80,25 @@ func (r *Runtime) BannedLeases() []string {
 	return out
 }
 
+func (r *Runtime) SetBannedLeases(leaseIDs []string) {
+	if r == nil {
+		return
+	}
+
+	bannedLeases := make(map[string]struct{}, len(leaseIDs))
+	for _, leaseID := range leaseIDs {
+		leaseID = strings.TrimSpace(leaseID)
+		if leaseID == "" {
+			continue
+		}
+		bannedLeases[leaseID] = struct{}{}
+	}
+
+	r.mu.Lock()
+	r.bannedLeases = bannedLeases
+	r.mu.Unlock()
+}
+
 func (r *Runtime) EffectiveApproval(leaseID string) bool {
 	if r == nil || r.approver == nil {
 		return true

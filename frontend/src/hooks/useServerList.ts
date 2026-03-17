@@ -12,19 +12,20 @@ export type ClientServer = BaseServer;
 function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
   return ssrData.map((row, index) => {
     const metadata = parseLeaseMetadata(row.Metadata);
+    const hostname = row.Hostname || "";
 
     return {
       id: index + 1,
-      name: row.Name || row.DNS || "(unnamed)",
+      name: row.Name || hostname || "(unnamed)",
       description: metadata.description || "",
       tags: metadata.tags,
       thumbnail: metadata.thumbnail || "",
       owner: metadata.owner || "",
-      online: row.Connected,
-      dns: row.DNS || "",
-      link: row.Link,
-      lastUpdated: row.LastSeenISO || row.LastSeen || undefined,
-      firstSeen: row.FirstSeenISO || undefined,
+      online: (row.Ready || 0) > 0,
+      dns: hostname,
+      link: hostname ? `https://${hostname}/` : "",
+      lastUpdated: row.LastSeenAt || undefined,
+      firstSeen: row.FirstSeenAt || undefined,
     };
   });
 }

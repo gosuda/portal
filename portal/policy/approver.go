@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -101,4 +102,34 @@ func (a *Approver) DeniedLeases() []string {
 		out = append(out, leaseID)
 	}
 	return out
+}
+
+func (a *Approver) SetDecisions(approvedLeases, deniedLeases []string) {
+	if a == nil {
+		return
+	}
+
+	approved := make(map[string]struct{}, len(approvedLeases))
+	for _, leaseID := range approvedLeases {
+		leaseID = strings.TrimSpace(leaseID)
+		if leaseID == "" {
+			continue
+		}
+		approved[leaseID] = struct{}{}
+	}
+
+	denied := make(map[string]struct{}, len(deniedLeases))
+	for _, leaseID := range deniedLeases {
+		leaseID = strings.TrimSpace(leaseID)
+		if leaseID == "" {
+			continue
+		}
+		delete(approved, leaseID)
+		denied[leaseID] = struct{}{}
+	}
+
+	a.mu.Lock()
+	a.approvedLeases = approved
+	a.deniedLeases = denied
+	a.mu.Unlock()
 }

@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -31,6 +33,29 @@ func SplitCSV(raw string) []string {
 		}
 	}
 	return out
+}
+
+func ParseCIDRs(raw string) ([]*net.IPNet, error) {
+	parts := SplitCSV(raw)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+
+	cidrs := make([]*net.IPNet, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		_, network, err := net.ParseCIDR(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cidr %q: %w", part, err)
+		}
+		key := network.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		cidrs = append(cidrs, network)
+	}
+	return cidrs, nil
 }
 
 func NormalizeDNSLabel(raw string) (string, error) {
@@ -141,6 +166,70 @@ func LeaseHostname(name, rootHost string) (string, error) {
 	return label + "." + rootHost, nil
 }
 
+func FormatDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d > time.Hour {
+		return fmt.Sprintf("%.0fh", d.Hours())
+	}
+	if d > time.Minute {
+		return fmt.Sprintf("%.0fm", d.Minutes())
+	}
+	return fmt.Sprintf("%.0fs", d.Seconds())
+}
+
+func FormatLastSeen(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	if d >= time.Hour {
+		hours := int(d / time.Hour)
+		minutes := int((d % time.Hour) / time.Minute)
+		if minutes > 0 {
+			return fmt.Sprintf("%dh %dm", hours, minutes)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	if d >= time.Minute {
+		minutes := int(d / time.Minute)
+		seconds := int((d % time.Minute) / time.Second)
+		if seconds > 0 {
+			return fmt.Sprintf("%dm %ds", minutes, seconds)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
+}
+
+func FormatISOTime(ts time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+	return ts.UTC().Format(time.RFC3339)
+}
+
+func LeaseLink(host string) string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return ""
+	}
+	return "https://" + host + "/"
+}
+
+func DecodeBase64URLString(encoded string) (string, error) {
+	decoded, err := base64.URLEncoding.DecodeString(encoded)
+	if err == nil {
+		return string(decoded), nil
+	}
+
+	decoded, err = base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
 // Network and transport helpers.
 func NormalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
@@ -218,6 +307,14 @@ func AddrString(addr net.Addr) string {
 		return ""
 	}
 	return addr.String()
+}
+
+func RandomHex(size int) (string, error) {
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Security and TLS helpers.

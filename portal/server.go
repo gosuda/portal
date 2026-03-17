@@ -16,6 +16,7 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
@@ -34,7 +35,7 @@ type ServerConfig struct {
 	ACME                  acme.Config
 	APIListenAddr         string
 	SNIListenAddr         string
-	TrustedProxyCIDRs     string
+	TrustedProxyCIDRs     []*net.IPNet
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
@@ -69,20 +70,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	cfg.IdleKeepaliveInterval = utils.DurationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
 	cfg.ReadyQueueLimit = utils.IntOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
 	cfg.ClientHelloTimeout = utils.DurationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
-	trustedProxyCIDRs, err := policy.ParseTrustedProxyCIDRs(cfg.TrustedProxyCIDRs)
-	if err != nil {
-		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
-	}
-	policy.SetTrustedProxyCIDRs(trustedProxyCIDRs)
 	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
-
 	return &Server{
 		cfg:      cfg,
 		rootHost: rootHost,
-		registry: newLeaseRegistry(policy.NewRuntime()),
+		registry: newLeaseRegistry(nil),
 	}, nil
 }
 
@@ -177,7 +172,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) PolicyRuntime() *policy.Runtime {
-	return s.registry.PolicyRuntime()
+	if s == nil || s.registry == nil {
+		return nil
+	}
+	return s.registry.policy
 }
 
 func (s *Server) APIAddr() string {
@@ -194,21 +192,19 @@ func (s *Server) SNIAddr() string {
 	return s.sniListener.Addr().String()
 }
 
-func (s *Server) GetLease(leaseID string) (LeaseSnapshot, bool) {
-	record, ok := s.registry.Get(leaseID)
-	if !ok {
-		return LeaseSnapshot{}, false
-	}
-	return s.registry.Snapshot(record), true
-}
+func (s *Server) LeaseSnapshots() []types.Lease {
+	s.registry.mu.RLock()
+	defer s.registry.mu.RUnlock()
 
-func (s *Server) ListLeases() []LeaseSnapshot {
-	records := s.registry.List()
-	out := make([]LeaseSnapshot, 0, len(records))
-	for _, record := range records {
-		out = append(out, s.registry.Snapshot(record))
+	records := make([]*leaseRecord, 0, len(s.registry.leaseByID))
+	for _, record := range s.registry.leaseByID {
+		records = append(records, record)
 	}
-	return out
+	snapshots := make([]types.Lease, 0, len(records))
+	for _, record := range records {
+		snapshots = append(snapshots, s.registry.Snapshot(record))
+	}
+	return snapshots
 }
 
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
@@ -288,7 +284,7 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		_ = wrappedConn.Close()
 		return
 	}
-	if !s.registry.IsRoutable(record) {
+	if !s.registry.policy.IsLeaseRoutable(record.ID) {
 		_ = wrappedConn.Close()
 		return
 	}

@@ -40,29 +40,24 @@ vi.mock("@/lib/apiClient", async () => {
 
 function buildLease(peer: string): ServerData {
   return {
-    Peer: peer,
+    ExpiresAt: "2026-03-03T01:00:00Z",
+    FirstSeenAt: "2026-03-02T00:00:00Z",
+    LastSeenAt: "2026-03-03T00:00:00Z",
+    ID: peer,
     Name: "relay-1",
-    Kind: "relay",
-    Connected: true,
-    DNS: "relay.example.com",
-    LastSeen: "2026-03-03T00:00:00Z",
-    LastSeenISO: "2026-03-03T00:00:00Z",
-    FirstSeenISO: "2026-03-02T00:00:00Z",
-    TTL: "1h",
-    Link: "https://relay.example.com",
-    StaleRed: false,
-    Hide: false,
-    Metadata: JSON.stringify({
+    ClientIP: "203.0.113.10",
+    Hostname: "relay.example.com",
+    Metadata: {
       description: "relay",
       tags: ["core"],
       thumbnail: "",
       owner: "ops",
       hide: false,
-    }),
-    BPS: 1024,
+    },
+    Ready: 1,
     IsApproved: true,
+    IsBanned: peer === "peer-a",
     IsDenied: false,
-    IP: "203.0.113.10",
     IsIPBanned: false,
   };
 }
@@ -85,7 +80,6 @@ describe("useAdmin", () => {
       if (path === API_PATHS.admin.snapshot) {
         return {
           leases: [buildLease("peer-a")],
-          banned_leases: ["peer-a", "peer-a", "peer-b"],
           approval_mode: "not-a-mode",
         } as never;
       }
@@ -103,8 +97,8 @@ describe("useAdmin", () => {
 
     expect(result.current.error).toBe("");
     expect(result.current.approvalMode).toBe("auto");
-    expect(result.current.bannedLeases).toEqual(["peer-a", "peer-b"]);
     expect(result.current.servers[0]?.peerId).toBe("peer-a");
+    expect(result.current.servers[0]?.isBanned).toBe(true);
   });
 
   it("surfaces fetchData API errors", async () => {

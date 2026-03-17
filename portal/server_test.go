@@ -97,21 +97,6 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 	}
 }
 
-func TestNewServerRejectsInvalidTrustedProxyCIDRs(t *testing.T) {
-	t.Parallel()
-
-	_, err := NewServer(ServerConfig{
-		PortalURL:         "https://portal.example.com",
-		TrustedProxyCIDRs: "not-a-cidr",
-	})
-	if err == nil {
-		t.Fatal("NewServer() error = nil, want invalid trusted proxy cidr error")
-	}
-	if !strings.Contains(err.Error(), "parse trusted proxy cidrs") {
-		t.Fatalf("NewServer() error = %v, want trusted proxy parse error", err)
-	}
-}
-
 func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
@@ -135,15 +120,16 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("registerLease() hostname = %q, want %q", resp.Hostname, wantHostname)
 	}
 
-	snapshot, ok := server.GetLease(resp.LeaseID)
+	record, ok := server.registry.Get(resp.LeaseID)
 	if !ok {
-		t.Fatal("GetLease() = false, want registered lease")
+		t.Fatal("registry.Get() = false, want registered lease")
 	}
+	snapshot := server.registry.Snapshot(record)
 	if snapshot.Name != "demo-app" {
-		t.Fatalf("GetLease().Name = %q, want %q", snapshot.Name, "demo-app")
+		t.Fatalf("Snapshot().Name = %q, want %q", snapshot.Name, "demo-app")
 	}
 	if snapshot.Hostname != wantHostname {
-		t.Fatalf("GetLease().Hostname = %q, want %q", snapshot.Hostname, wantHostname)
+		t.Fatalf("Snapshot().Hostname = %q, want %q", snapshot.Hostname, wantHostname)
 	}
 }
 

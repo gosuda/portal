@@ -10,8 +10,6 @@ export function AdminLogin() {
     isAuthenticated,
     isLoading,
     authEnabled,
-    isLocked,
-    remainingSeconds,
     login,
   } = useAuth();
 
@@ -38,7 +36,7 @@ export function AdminLogin() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!key.trim() || isLocked || submitting) return;
+    if (!key.trim() || submitting) return;
 
     setSubmitting(true);
     setError("");
@@ -130,7 +128,7 @@ export function AdminLogin() {
                         placeholder="Enter your secret key"
                         value={key}
                         onChange={(e) => setKey(e.target.value)}
-                        disabled={isLocked || submitting || !authEnabled}
+                        disabled={submitting || !authEnabled}
                         autoFocus
                         className="h-12 w-full rounded-lg border-none bg-secondary pl-10 pr-4 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
                       />
@@ -144,28 +142,14 @@ export function AdminLogin() {
                     </div>
                   )}
 
-                  {/* Lock Message */}
-                  {isLocked && (
-                    <div className="text-amber-500 text-sm text-center bg-amber-500/10 p-3 rounded-md">
-                      Too many failed attempts. Please wait {remainingSeconds}{" "}
-                      seconds.
-                    </div>
-                  )}
-
                   {/* Submit Button */}
                   <button
                     type="submit"
-                    disabled={
-                      !key.trim() || isLocked || submitting || !authEnabled
-                    }
+                    disabled={!key.trim() || submitting || !authEnabled}
                     className="flex h-12 w-full cursor-pointer items-center justify-center overflow-hidden rounded-lg bg-primary text-base font-bold text-white transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <span className="truncate">
-                      {submitting
-                        ? "Authenticating..."
-                        : isLocked
-                        ? `Wait ${remainingSeconds}s`
-                        : "Login"}
+                      {submitting ? "Authenticating..." : "Login"}
                     </span>
                   </button>
                 </form>

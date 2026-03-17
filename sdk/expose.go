@@ -20,9 +20,9 @@ import (
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
-	listener net.Listener
+	listener  net.Listener
 	listeners []*Listener
-	done     chan struct{}
+	done      chan struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -73,9 +73,9 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	}
 
 	exposure := &Exposure{
-		listener: merged,
+		listener:  merged,
 		listeners: listeners,
-		done:     make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 	go exposure.monitorStartupCounts(ctx)
 
