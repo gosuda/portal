@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/types"
 )
 
 func TestLeaseRegistryLifecycle(t *testing.T) {
@@ -15,10 +16,12 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	runtime := policy.NewRuntime()
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		ID:           "lease_1",
-		Hostname:     "demo.example.com",
+		Lease: types.Lease{
+			ID:        "lease_1",
+			Hostname:  "demo.example.com",
+			ExpiresAt: time.Now().Add(30 * time.Second),
+		},
 		ReverseToken: "tok_1",
-		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
 
 	if err := registry.Register(record); err != nil {
@@ -62,10 +65,12 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 
 	registry := newLeaseRegistry(policy.NewRuntime())
 	wildcardLease := &leaseRecord{
-		ID:           "lease_wildcard",
-		Hostname:     "*.example.com",
+		Lease: types.Lease{
+			ID:        "lease_wildcard",
+			Hostname:  "*.example.com",
+			ExpiresAt: time.Now().Add(30 * time.Second),
+		},
 		ReverseToken: "tok_wildcard",
-		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
 	if err := registry.Register(wildcardLease); err != nil {
 		t.Fatalf("Register(wildcard) error = %v", err)
@@ -79,10 +84,12 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	}
 
 	conflict := &leaseRecord{
-		ID:           "lease_conflict",
-		Hostname:     "*.example.com",
+		Lease: types.Lease{
+			ID:        "lease_conflict",
+			Hostname:  "*.example.com",
+			ExpiresAt: time.Now().Add(30 * time.Second),
+		},
 		ReverseToken: "tok_conflict",
-		ExpiresAt:    time.Now().Add(30 * time.Second),
 	}
 	err := registry.Register(conflict)
 	if !errors.Is(err, errHostnameConflict) {
@@ -100,20 +107,22 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		ID:           "lease_policy",
-		Name:         "demo",
-		Hostname:     "demo.example.com",
+		Lease: types.Lease{
+			ID:        "lease_policy",
+			Name:      "demo",
+			Hostname:  "demo.example.com",
+			ExpiresAt: time.Now().Add(30 * time.Second),
+			ClientIP:  "203.0.113.20",
+		},
 		ReverseToken: "tok_policy",
-		ExpiresAt:    time.Now().Add(30 * time.Second),
-		ClientIP:     "203.0.113.20",
 		Broker:       newLeaseBroker("lease_policy", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	if registry.IsRoutable(record) {
-		t.Fatal("IsRoutable() = true, want false before approval")
+	if registry.policy.IsLeaseRoutable(record.ID) {
+		t.Fatal("policy.IsLeaseRoutable() = true, want false before approval")
 	}
 
 	snapshot := registry.Snapshot(record)
@@ -125,8 +134,8 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 	}
 
 	runtime.Approver().Approve(record.ID)
-	if !registry.IsRoutable(record) {
-		t.Fatal("IsRoutable() = false, want true after approval")
+	if !registry.policy.IsLeaseRoutable(record.ID) {
+		t.Fatal("policy.IsLeaseRoutable() = false, want true after approval")
 	}
 
 	snapshot = registry.Snapshot(record)
@@ -143,23 +152,27 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 		r.Broker.Close()
 	}
 	record := &leaseRecord{
-		ID:           "lease_expired",
-		Hostname:     "expired.example.com",
+		Lease: types.Lease{
+			ID:        "lease_expired",
+			Hostname:  "expired.example.com",
+			ExpiresAt: time.Now().Add(-time.Second),
+		},
 		ReverseToken: "tok_expired",
-		ExpiresAt:    time.Now().Add(-time.Second),
 		Broker:       newLeaseBroker("lease_expired", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	registry.cleanupExpired(time.Now())
+	for _, lease := range registry.removeExpired(time.Now()) {
+		lease.Broker.Close()
+	}
 
 	if _, ok := registry.Lookup("expired.example.com"); ok {
-		t.Fatal("Lookup() after cleanupExpired() = true, want false")
+		t.Fatal("Lookup() after removeExpired() = true, want false")
 	}
 	if _, err := record.Broker.Claim(context.Background()); !errors.Is(err, errBrokerClosed) {
-		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, errBrokerClosed)
+		t.Fatalf("Claim() after removeExpired() error = %v, want %v", err, errBrokerClosed)
 	}
 }
 

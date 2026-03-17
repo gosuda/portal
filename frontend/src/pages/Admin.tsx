@@ -10,6 +10,7 @@ export function Admin() {
   const { isAuthenticated, isLoading: authLoading, logout } = useAuth();
 
   const {
+    servers,
     filteredServers,
     availableTags,
     searchQuery,
@@ -28,6 +29,7 @@ export function Admin() {
     handleBanFilterChange,
     handleToggleFavorite,
     handleBanStatus,
+    handleBPSChange,
     handleApprovalModeChange,
     handleApproveStatus,
     handleDenyStatus,
@@ -57,8 +59,12 @@ export function Admin() {
     return null; // Will redirect
   }
 
-  if (loading) return <div className="p-8 text-foreground">Loading...</div>;
-  if (error) return <div className="p-8 text-red-500">Error: {error}</div>;
+  if (loading && servers.length === 0) {
+    return <div className="p-8 text-foreground">Loading...</div>;
+  }
+  if (error && servers.length === 0) {
+    return <div className="p-8 text-red-500">Error: {error}</div>;
+  }
 
   return (
     <SsgoiTransition id="admin">
@@ -82,6 +88,7 @@ export function Admin() {
         approvalMode={approvalMode}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
+        onBPSChange={handleBPSChange}
         onApprovalModeChange={handleApprovalModeChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}

@@ -31,14 +31,6 @@ func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-func WriteAPIErrorWithData(w http.ResponseWriter, status int, code, message string, data any) {
-	WriteAPIEnvelope(w, status, types.APIEnvelope[any]{
-		OK:    false,
-		Data:  data,
-		Error: &types.APIError{Code: code, Message: message},
-	})
-}
-
 func DecodeAPIEnvelope[T any](r io.Reader) (types.APIEnvelope[T], error) {
 	var envelope types.APIEnvelope[T]
 	if err := json.NewDecoder(r).Decode(&envelope); err != nil {

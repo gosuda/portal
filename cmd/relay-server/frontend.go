@@ -3,16 +3,18 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"html"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gosuda/portal/v2/portal"
-	"github.com/gosuda/portal/v2/portal/admin"
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -25,23 +27,71 @@ type readDirFileFS interface {
 var embeddedDistFS embed.FS
 
 type Frontend struct {
-	distFS    readDirFileFS
-	portalURL string
-	server    *portal.Server
+	distFS       readDirFileFS
+	portalURL    string
+	server       *portal.Server
+	auth         *adminAuth
+	trustProxy   bool
+	trustedCIDRs []*net.IPNet
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 }
 
-func NewFrontend(portalURL string) *Frontend {
-	return &Frontend{
-		distFS:    embeddedDistFS,
-		portalURL: strings.TrimSpace(portalURL),
+func NewFrontend(portalURL string, server *portal.Server, adminSecret string, trustedProxyCIDRs []*net.IPNet, trustProxy bool) (*Frontend, error) {
+	if server == nil {
+		return nil, errors.New("frontend requires portal server")
 	}
+	runtime := server.PolicyRuntime()
+	if runtime == nil {
+		return nil, errors.New("frontend requires policy runtime")
+	}
+	if err := loadAdminState(runtime); err != nil {
+		return nil, err
+	}
+
+	return &Frontend{
+		distFS:       embeddedDistFS,
+		portalURL:    strings.TrimSpace(portalURL),
+		server:       server,
+		auth:         newAdminAuth(adminSecret),
+		trustProxy:   trustProxy,
+		trustedCIDRs: trustedProxyCIDRs,
+	}, nil
 }
 
-func (f *Frontend) Bind(server *portal.Server) {
-	f.server = server
+func (f *Frontend) Handler() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
+		f.ServeAppStatic(w, r, "")
+	})
+	mux.HandleFunc(types.PathApp, func(w http.ResponseWriter, r *http.Request) {
+		f.ServeAppStatic(w, r, "")
+	})
+	mux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
+		f.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+	})
+	mux.HandleFunc(types.PathAssetsPrefix, func(w http.ResponseWriter, r *http.Request) {
+		f.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
+	})
+	for _, assetPath := range frontendRootAssetPaths() {
+		mux.HandleFunc(assetPath, func(w http.ResponseWriter, r *http.Request) {
+			f.ServeAsset(w, r, strings.TrimPrefix(assetPath, "/"), "")
+		})
+	}
+
+	mux.HandleFunc(types.PathAdmin, f.serveAdmin)
+	mux.HandleFunc(types.PathAdminPrefix, f.serveAdmin)
+	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, f.portalURL, false)
+	})
+	mux.HandleFunc(types.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
+		serveInstallScript(w, r, f.portalURL, true)
+	})
+	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
+
+	return mux
 }
 
 func (f *Frontend) ServeAsset(w http.ResponseWriter, r *http.Request, assetPath, contentType string) {
@@ -135,8 +185,11 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 }
 
 func (f *Frontend) injectServerData(htmlContent string) string {
-	rows := admin.BuildLeaseRows(f.server, false, f.portalURL)
-	jsonData, err := json.Marshal(rows)
+	var snapshots []types.Lease
+	if f.server != nil {
+		snapshots = f.publicLeaseSnapshots()
+	}
+	jsonData, err := json.Marshal(snapshots)
 	if err != nil {
 		jsonData = []byte("[]")
 	}
@@ -168,6 +221,56 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 	return replacer.Replace(htmlContent)
 }
 
+func (f *Frontend) adminLeaseSnapshots() []types.Lease {
+	snapshots := f.server.LeaseSnapshots()
+	if len(snapshots) == 0 {
+		return nil
+	}
+	now := time.Now()
+	filtered := make([]types.Lease, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if now.After(snapshot.ExpiresAt) {
+			continue
+		}
+		filtered = append(filtered, snapshot)
+	}
+	return filtered
+}
+
+func (f *Frontend) publicLeaseSnapshots() []types.Lease {
+	snapshots := f.server.LeaseSnapshots()
+	if len(snapshots) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	filtered := make([]types.Lease, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if now.After(snapshot.ExpiresAt) {
+			continue
+		}
+		since := time.Duration(0)
+		if !snapshot.LastSeenAt.IsZero() {
+			since = max(now.Sub(snapshot.LastSeenAt), 0)
+		}
+		if snapshot.IsBanned || snapshot.IsDenied || !snapshot.IsApproved || snapshot.Metadata.Hide {
+			continue
+		}
+		if snapshot.Ready == 0 && since >= 3*time.Minute {
+			continue
+		}
+
+		snapshot.ClientIP = ""
+		snapshot.BPS = 0
+		snapshot.IsApproved = false
+		snapshot.IsBanned = false
+		snapshot.IsDenied = false
+		snapshot.IsIPBanned = false
+		filtered = append(filtered, snapshot)
+	}
+	return filtered
+}
+
 func getContentType(ext string) string {
 	ext = strings.TrimSpace(ext)
 	if ext == "" {
@@ -194,5 +297,17 @@ func getContentType(ext string) string {
 		return "application/json; charset=utf-8"
 	default:
 		return ""
+	}
+}
+
+func frontendRootAssetPaths() []string {
+	return []string{
+		"/favicon.ico",
+		"/favicon.svg",
+		"/favicon-96x96.png",
+		"/apple-touch-icon.png",
+		"/web-app-manifest-192x192.png",
+		"/web-app-manifest-512x512.png",
+		"/portal.jpg",
 	}
 }

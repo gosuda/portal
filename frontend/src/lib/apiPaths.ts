@@ -1,13 +1,12 @@
 export const API_PATHS = {
   admin: {
     prefix: "/admin",
+    snapshot: "/admin/snapshot",
     login: "/admin/login",
     logout: "/admin/logout",
     authStatus: "/admin/auth/status",
     leases: "/admin/leases",
-    bannedLeases: "/admin/leases/banned",
     stats: "/admin/stats",
-    settings: "/admin/settings",
     approvalMode: "/admin/settings/approval-mode",
   },
   sdk: {

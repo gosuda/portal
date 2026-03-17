@@ -28,6 +28,26 @@ func TestNormalizeRelayURLs(t *testing.T) {
 	}
 }
 
+func TestParseCIDRs(t *testing.T) {
+	t.Parallel()
+
+	got, err := ParseCIDRs("10.0.0.0/8, 10.0.0.0/8, 192.168.0.0/16")
+	if err != nil {
+		t.Fatalf("ParseCIDRs() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ParseCIDRs() len = %d, want %d", len(got), 2)
+	}
+}
+
+func TestParseCIDRsRejectsInvalidValue(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseCIDRs("not-a-cidr"); err == nil {
+		t.Fatal("ParseCIDRs() error = nil, want invalid cidr error")
+	}
+}
+
 func TestNormalizeTargetAddr(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +84,71 @@ func TestLeaseHostname(t *testing.T) {
 	}
 }
 
+func TestFormatDuration(t *testing.T) {
+	t.Parallel()
+
+	if got := FormatDuration(90 * time.Second); got != "2m" {
+		t.Fatalf("FormatDuration() = %q, want %q", got, "2m")
+	}
+}
+
+func TestFormatLastSeen(t *testing.T) {
+	t.Parallel()
+
+	if got := FormatLastSeen(65 * time.Second); got != "1m 5s" {
+		t.Fatalf("FormatLastSeen() = %q, want %q", got, "1m 5s")
+	}
+}
+
+func TestFormatISOTime(t *testing.T) {
+	t.Parallel()
+
+	ts := time.Date(2026, time.March, 17, 9, 10, 11, 0, time.FixedZone("KST", 9*60*60))
+	if got := FormatISOTime(ts); got != "2026-03-17T00:10:11Z" {
+		t.Fatalf("FormatISOTime() = %q, want %q", got, "2026-03-17T00:10:11Z")
+	}
+}
+
+func TestLeaseLink(t *testing.T) {
+	t.Parallel()
+
+	if got := LeaseLink("demo.example.com"); got != "https://demo.example.com/" {
+		t.Fatalf("LeaseLink() = %q, want %q", got, "https://demo.example.com/")
+	}
+}
+
+func TestDecodeBase64URLString(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		encoded string
+		want    string
+	}{
+		{encoded: "bGVhc2UtMTIz", want: "lease-123"},
+		{encoded: "bGVhc2UtMTIzZA==", want: "lease-123d"},
+		{encoded: "bGVhc2UtMTIzZA", want: "lease-123d"},
+	}
+
+	for _, tc := range cases {
+		encoded, want := tc.encoded, tc.want
+		got, err := DecodeBase64URLString(encoded)
+		if err != nil {
+			t.Fatalf("DecodeBase64URLString(%q) error = %v", encoded, err)
+		}
+		if got != want {
+			t.Fatalf("DecodeBase64URLString(%q) = %q, want %q", encoded, got, want)
+		}
+	}
+}
+
+func TestDecodeBase64URLStringRejectsInvalidValue(t *testing.T) {
+	t.Parallel()
+
+	if _, err := DecodeBase64URLString("%%%"); err == nil {
+		t.Fatal("DecodeBase64URLString() error = nil, want invalid base64 error")
+	}
+}
+
 func TestRandomID(t *testing.T) {
 	t.Parallel()
 
@@ -73,6 +158,18 @@ func TestRandomID(t *testing.T) {
 	}
 	if len(got) != len("tok_")+16 {
 		t.Fatalf("RandomID() length = %d, want %d", len(got), len("tok_")+16)
+	}
+}
+
+func TestRandomHex(t *testing.T) {
+	t.Parallel()
+
+	got, err := RandomHex(16)
+	if err != nil {
+		t.Fatalf("RandomHex() error = %v", err)
+	}
+	if len(got) != 32 {
+		t.Fatalf("RandomHex() length = %d, want %d", len(got), 32)
 	}
 }
 

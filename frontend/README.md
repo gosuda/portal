@@ -58,7 +58,7 @@ frontend/
 1. Go backend injects lease data into `portal.html` using `<script id="__SSR_DATA__">`.
 2. Frontend reads it with `useSSRData()`.
 3. UI renders server list immediately without an initial fetch.
-4. Admin pages then call `/admin/*` endpoints through `apiClient` for stateful actions (approve, deny, ban, settings).
+4. Admin pages load state through `/admin/snapshot`, then call `/admin/*` action endpoints through `apiClient` for changes (approve, deny, ban, settings).
 
 ### List Filtering and Sort
 
@@ -132,8 +132,8 @@ Admin endpoints use a JSON envelope contract (`{ ok, data, error }`) and reject 
 
 Admin lease ID contract:
 
-- `/admin/leases` rows return plain lease IDs in `Peer`.
-- `/admin/leases/banned` returns plain lease IDs (`[]string`).
+- `/admin/snapshot` returns `leases`, `banned_leases`, and `approval_mode` in one envelope payload.
+- `leases` rows inside the snapshot return plain lease IDs in `Peer`.
 - Frontend only Base64URL-encodes lease IDs when constructing admin action routes (`/admin/leases/{encodedLeaseID}/{action}`).
 
 ### SDK-Related Runtime Contract

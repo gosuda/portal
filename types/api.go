@@ -63,24 +63,6 @@ func (e *APIRequestError) Is(target error) bool {
 	return true
 }
 
-type LeaseMetadata struct {
-	Description string   `json:"description,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
-	Thumbnail   string   `json:"thumbnail,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Hide        bool     `json:"hide,omitempty"`
-}
-
-func (m LeaseMetadata) Copy() LeaseMetadata {
-	return LeaseMetadata{
-		Description: m.Description,
-		Owner:       m.Owner,
-		Thumbnail:   m.Thumbnail,
-		Tags:        append([]string(nil), m.Tags...),
-		Hide:        m.Hide,
-	}
-}
-
 type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
@@ -126,14 +108,17 @@ type AdminLoginRequest struct {
 }
 
 type AdminLoginResponse struct {
-	Success          bool `json:"success,omitempty"`
-	Locked           bool `json:"locked,omitempty"`
-	RemainingSeconds int  `json:"remaining_seconds,omitempty"`
+	Success bool `json:"success,omitempty"`
 }
 
 type AdminAuthStatusResponse struct {
 	Authenticated bool `json:"authenticated"`
 	AuthEnabled   bool `json:"auth_enabled"`
+}
+
+type AdminSnapshotResponse struct {
+	ApprovalMode string  `json:"approval_mode"`
+	Leases       []Lease `json:"leases,omitempty"`
 }
 
 type AdminApprovalModeRequest struct {
@@ -144,8 +129,6 @@ type AdminApprovalModeResponse struct {
 	ApprovalMode string `json:"approval_mode"`
 }
 
-type AdminSettingsResponse struct {
-	ApprovalMode   string   `json:"approval_mode"`
-	ApprovedLeases []string `json:"approved_leases,omitempty"`
-	DeniedLeases   []string `json:"denied_leases,omitempty"`
+type AdminBPSRequest struct {
+	BPS int64 `json:"bps"`
 }

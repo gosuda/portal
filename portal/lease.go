@@ -32,13 +32,6 @@ func newLeaseRegistry(runtime *policy.Runtime) *leaseRegistry {
 	}
 }
 
-func (r *leaseRegistry) PolicyRuntime() *policy.Runtime {
-	if r == nil {
-		return nil
-	}
-	return r.policy
-}
-
 func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -69,17 +62,6 @@ func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) 
 			r.cleanupExpired(time.Now())
 		}
 	}
-}
-
-func (r *leaseRegistry) List() []*leaseRecord {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	out := make([]*leaseRecord, 0, len(r.leaseByID))
-	for _, record := range r.leaseByID {
-		out = append(out, record)
-	}
-	return out
 }
 
 func (r *leaseRegistry) Get(leaseID string) (*leaseRecord, bool) {
@@ -229,75 +211,29 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 	return expired
 }
 
-func (r *leaseRegistry) IsClientIPBanned(clientIP string) bool {
-	return r.policy.IPFilter().IsIPBanned(clientIP)
-}
-
-func (r *leaseRegistry) IsRoutable(record *leaseRecord) bool {
+func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	if record == nil {
-		return false
-	}
-	return r.policy.IsLeaseRoutable(record.ID)
-}
-
-func (r *leaseRegistry) Snapshot(record *leaseRecord) LeaseSnapshot {
-	if record == nil {
-		return LeaseSnapshot{}
+		return types.Lease{}
 	}
 
+	snapshot := record.Lease
+	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
-	return LeaseSnapshot{
-		ID:          record.ID,
-		Name:        record.Name,
-		ClientIP:    clientIP,
-		Hostname:    record.Hostname,
-		Transport:   record.Transport,
-		Metadata:    record.Metadata,
-		ExpiresAt:   record.ExpiresAt,
-		FirstSeenAt: record.FirstSeenAt,
-		LastSeenAt:  record.LastSeenAt,
-		Ready:       record.Broker.ReadyCount(),
-		UDPPort:     record.UDPPort,
-		IsApproved:  r.policy.EffectiveApproval(record.ID),
-		IsBanned:    r.policy.IsLeaseBanned(record.ID),
-		IsDenied:    r.policy.IsLeaseDenied(record.ID),
-		IsIPBanned:  r.policy.IPFilter().IsIPBanned(clientIP),
-	}
+	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)
+	snapshot.Ready = record.Broker.ReadyCount()
+	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
+	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)
+	snapshot.IsDenied = r.policy.IsLeaseDenied(record.ID)
+	snapshot.IsIPBanned = r.policy.IPFilter().IsIPBanned(clientIP)
+	return snapshot
 }
 
 type leaseRecord struct {
-	ExpiresAt    time.Time
-	FirstSeenAt  time.Time
-	LastSeenAt   time.Time
+	types.Lease
 	Broker       *leaseBroker
 	QUICBroker   *quicBroker
 	UDPRelay     *udpRelay
-	ID           string
-	Name         string
 	ReverseToken string
-	ClientIP     string
-	Hostname     string
-	Transport    string
-	Metadata     types.LeaseMetadata
-	UDPPort      int
-}
-
-type LeaseSnapshot struct {
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ID          string
-	Name        string
-	ClientIP    string
-	Hostname    string
-	Transport   string
-	Metadata    types.LeaseMetadata
-	Ready       int
-	UDPPort     int
-	IsApproved  bool
-	IsBanned    bool
-	IsDenied    bool
-	IsIPBanned  bool
 }
 
 type routeTable struct {
