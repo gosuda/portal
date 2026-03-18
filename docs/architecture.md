@@ -15,6 +15,50 @@ Client (Browser)
   -> Local service
 ```
 
+## Architecture Invariants
+
+### Transport and Routing
+
+- Raw TCP reverse-connect is the canonical stream transport.
+- Do not introduce websocket or legacy compatibility paths unless a new ADR supersedes ADR-0002.
+- Derive lease hostnames from the full normalized `PORTAL_URL` host, not from apex extraction.
+- Preserve explicit root-host fallback through SNI no-route handling to the admin/API listener.
+- All leases are TLS-only. Registration does not negotiate or preserve a non-TLS mode.
+
+### TLS and Identity
+
+- Relay terminates admin/API TLS on the root host and exposes `/v1/sign` for tenant-side keyless signing.
+- Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
+- SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
+- `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus reverse token.
+- `/sdk/register` requires the caller to supply the reverse token that later authorizes the lease lifecycle, but registration itself is not separately authenticated by that token.
+- Relay URLs must use `https://`.
+- HTTP/2 stays disabled on the admin/API TLS listener because `/sdk/connect` depends on HTTP/1.1 hijacking semantics.
+
+### Reverse Session Protocol
+
+- SNI wildcard matching is one level only. `*.parent.example.com` matches `foo.parent.example.com`, not deeper labels.
+- Reverse TCP marker bytes remain protocol state:
+  - `0x00` = idle keepalive
+  - `0x02` = TLS passthrough activation
+- `/sdk/connect` remains HTTP/1.1 only.
+
+### JSON and Shared Contract
+
+- All JSON control-plane responses use `APIEnvelope`: `{ ok, data?, error? }`.
+- JSON handlers should write responses through the shared API helpers.
+- `types/` is reserved for shared wire/public types and cross-package constants only.
+- Shared control-plane and public route constants belong in `types/paths.go`.
+- Relay-local frontend asset filenames stay local to `cmd/relay-server`.
+- Do not import `portal` from `cmd/*` or `sdk` just to reach shared DTOs or constants.
+
+### Operational Constraints
+
+- For non-localhost deployments, ACME management supports only `cloudflare` and `route53`.
+- Non-localhost ACME keeps both root and wildcard DNS A records in sync.
+- Relay certificate material lives under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.
+- Localhost uses the development certificate path instead of DNS-provider-managed ACME.
+
 ## Connection Model
 
 Portal has two distinct network roles:
@@ -100,6 +144,7 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
   - `reverse_token`
   - optional `metadata`
   - optional `ttl`
+- No non-TLS mode is accepted or negotiated
 - `name` must be a valid single DNS label and relay publishes the lease at `<name>.<root host>`
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
@@ -112,6 +157,7 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 - Relay validates:
   - lease exists and is not expired
   - reverse token matches the registered lease token
+- After claim, relay writes `0x02` before switching the session into tenant TLS passthrough
 - After hijack, the connection becomes a broker-managed reverse session
 
 ### 3. Renew
@@ -168,7 +214,9 @@ Cross-package public contract lives in:
   - API envelope
   - shared request/response DTOs
   - lease metadata
-  - reverse marker/header constants
+- `types/types.go`
+  - shared headers
+  - reverse marker constants
 - `types/paths.go`
   - shared `/sdk/*`, admin, health, install, and signer paths
 
