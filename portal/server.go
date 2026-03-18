@@ -19,7 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal/v2/portal/acme"
-	portaldatagram "github.com/gosuda/portal/v2/portal/datagram"
+	"github.com/gosuda/portal/v2/portal/datagram"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
@@ -42,7 +42,7 @@ const (
 )
 
 type quicSNIRoute struct {
-	flowMux  *portaldatagram.FlowMux
+	flowMux  *datagram.FlowMux
 	lastSeen time.Time
 }
 
@@ -74,7 +74,7 @@ type Server struct {
 	cancel        context.CancelFunc
 	group         *errgroup.Group
 	registry      *leaseRegistry
-	ports         *portaldatagram.PortAllocator
+	ports         *datagram.PortAllocator
 	cfg           ServerConfig
 	rootHost      string
 	shutdownOnce  sync.Once
@@ -105,7 +105,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	registry := newLeaseRegistry(policy.NewRuntime())
-	ports := portaldatagram.NewPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
+	ports := datagram.NewPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
 
 	s := &Server{
 		cfg:           cfg,
@@ -404,7 +404,7 @@ func (s *Server) resolveStreamBroker(serverName string) (*streamBroker, error) {
 	return streamBroker, nil
 }
 
-func (s *Server) resolveDatagramFlowMux(serverName string) (*portaldatagram.FlowMux, error) {
+func (s *Server) resolveDatagramFlowMux(serverName string) (*datagram.FlowMux, error) {
 	if serverName == s.rootHost {
 		return nil, errors.New("root host does not accept datagram routes")
 	}
@@ -609,18 +609,20 @@ func (s *Server) runQUICSNIRouter(conn net.PacketConn) error {
 
 func (s *Server) handleQUICSNIPacket(packet []byte, srcAddr net.Addr, now time.Time) {
 	cacheKey := srcAddr.String()
-	flowMux, ok := s.lookupQUICSNIRoute(cacheKey, now)
-	if !ok {
-		serverName, err := portaldatagram.ParseQUICInitialSNI(packet)
-		if err != nil || serverName == "" {
-			return
-		}
-
+	serverName, err := datagram.ParseQUICInitialSNI(packet)
+	var flowMux *datagram.FlowMux
+	if err == nil && serverName != "" {
 		flowMux, err = s.resolveDatagramFlowMux(utils.NormalizeHostname(serverName))
 		if err != nil || flowMux == nil {
 			return
 		}
 		s.storeQUICSNIRoute(cacheKey, flowMux, now)
+	} else {
+		var ok bool
+		flowMux, ok = s.lookupQUICSNIRoute(cacheKey, now)
+		if !ok {
+			return
+		}
 	}
 
 	udpAddr, ok := srcAddr.(*net.UDPAddr)
@@ -640,7 +642,7 @@ func (s *Server) handleQUICSNIPacket(packet []byte, srcAddr net.Addr, now time.T
 	}
 }
 
-func (s *Server) lookupQUICSNIRoute(key string, now time.Time) (*portaldatagram.FlowMux, bool) {
+func (s *Server) lookupQUICSNIRoute(key string, now time.Time) (*datagram.FlowMux, bool) {
 	s.quicSNIMu.Lock()
 	defer s.quicSNIMu.Unlock()
 
@@ -659,7 +661,7 @@ func (s *Server) lookupQUICSNIRoute(key string, now time.Time) (*portaldatagram.
 	return route.flowMux, true
 }
 
-func (s *Server) storeQUICSNIRoute(key string, flowMux *portaldatagram.FlowMux, now time.Time) {
+func (s *Server) storeQUICSNIRoute(key string, flowMux *datagram.FlowMux, now time.Time) {
 	s.quicSNIMu.Lock()
 	s.quicSNIRoutes[key] = quicSNIRoute{
 		flowMux:  flowMux,
@@ -685,7 +687,7 @@ func (s *Server) cleanupQUICSNIRoutes(now time.Time) {
 	}
 }
 
-func (s *Server) clearQUICSNIRoutesForFlowMux(flowMux *portaldatagram.FlowMux) {
+func (s *Server) clearQUICSNIRoutesForFlowMux(flowMux *datagram.FlowMux) {
 	if flowMux == nil {
 		return
 	}

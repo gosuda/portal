@@ -244,6 +244,9 @@ func runTunnel(
 	// UDP is best-effort — attach to existing lease, log and continue if it fails.
 	if capabilities.SupportsDatagram() && !capabilities.SupportsStream() {
 		runErr := runUDPBestEffort(ctx, exposure, target)
+		if errors.Is(runErr, context.Canceled) {
+			runErr = nil
+		}
 		closeErr := exposure.Close()
 		if runErr != nil && stop != nil {
 			stop()
