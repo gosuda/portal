@@ -226,6 +226,11 @@ func runTunnel(
 	metadata types.LeaseMetadata,
 ) error {
 	logger := log.With().Str("component", "portal").Logger()
+	capabilities, err := types.ParseLeaseCapabilities(transport)
+	if err != nil {
+		return err
+	}
+	transport = capabilities.Transport()
 
 	exposure, err := sdk.Expose(ctx, relayURLs, name, transport, metadata)
 	if err != nil {
@@ -237,8 +242,21 @@ func runTunnel(
 	defer exposure.Close()
 
 	// UDP is best-effort — attach to existing lease, log and continue if it fails.
-	if transport == types.TransportUDP || transport == types.TransportBoth {
-		go runUDPBestEffort(ctx, exposure, target)
+	if capabilities.SupportsDatagram() && !capabilities.SupportsStream() {
+		runErr := runUDPBestEffort(ctx, exposure, target)
+		closeErr := exposure.Close()
+		if runErr != nil && stop != nil {
+			stop()
+		}
+		return errors.Join(runErr, closeErr)
+	}
+
+	if capabilities.SupportsDatagram() {
+		go func() {
+			if err := runUDPBestEffort(ctx, exposure, target); err != nil && ctx.Err() == nil {
+				logger.Warn().Err(err).Msg("udp transport disabled")
+			}
+		}()
 	}
 
 	logger.Info().
@@ -288,39 +306,32 @@ func runTunnel(
 	return errors.Join(waitErr, closeErr)
 }
 
-// runUDPBestEffort attaches UDP listeners to the existing TCP exposure lease.
-// Failures are logged but do not bring down the tunnel.
-func runUDPBestEffort(ctx context.Context, exposure *sdk.Exposure, target string) {
+// runUDPBestEffort waits for the exposure datagram plane and proxies it to the
+// local UDP target.
+func runUDPBestEffort(ctx context.Context, exposure *sdk.Exposure, target string) error {
 	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
 
-	udpListeners, err := exposure.AttachUDP(ctx)
+	udpAddrs, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
-		logger.Warn().Err(err).Msg("udp transport disabled: attach failed")
-		return
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return ctx.Err()
+		}
+		return fmt.Errorf("wait for udp readiness: %w", err)
 	}
-	if len(udpListeners) == 0 {
-		logger.Info().Msg("udp transport: no UDP addresses from relay")
-		return
+	if len(udpAddrs) == 0 {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("relay did not expose any UDP listeners")
 	}
 
-	var wg sync.WaitGroup
-	for _, ul := range udpListeners {
-		wg.Add(1)
-		go func(l *sdk.UDPListener) {
-			defer wg.Done()
-			defer l.Close()
-
-			logger.Info().
-				Str("udp_addr", l.UDPAddr()).
-				Str("lease_id", l.LeaseID()).
-				Msg("UDP tunnel ready")
-
-			if err := proxyUDPRelayConnections(ctx, l, target); err != nil {
-				logger.Warn().Err(err).Msg("udp proxy ended")
-			}
-		}(ul)
+	for _, udpAddr := range udpAddrs {
+		logger.Info().
+			Str("udp_addr", udpAddr).
+			Msg("UDP tunnel ready")
 	}
-	wg.Wait()
+
+	return proxyExposureDatagrams(ctx, exposure, target)
 }
 
 func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, includeDefaultRelays bool) ([]string, error) {

@@ -18,7 +18,7 @@ var (
 	errBrokerFull   = errors.New("broker ready queue full")
 )
 
-type leaseBroker struct {
+type streamBroker struct {
 	notify       chan struct{}
 	leaseID      string
 	ready        []*reverseSession
@@ -28,8 +28,8 @@ type leaseBroker struct {
 	mu           sync.Mutex
 }
 
-func newLeaseBroker(leaseID string, idleInterval time.Duration, readyLimit int) *leaseBroker {
-	return &leaseBroker{
+func newStreamBroker(leaseID string, idleInterval time.Duration, readyLimit int) *streamBroker {
+	return &streamBroker{
 		leaseID:      leaseID,
 		idleInterval: idleInterval,
 		readyLimit:   readyLimit,
@@ -37,7 +37,7 @@ func newLeaseBroker(leaseID string, idleInterval time.Duration, readyLimit int) 
 	}
 }
 
-func (b *leaseBroker) Offer(session *reverseSession) error {
+func (b *streamBroker) Offer(session *reverseSession) error {
 	if session == nil {
 		return errors.New("reverse session is required")
 	}
@@ -63,7 +63,7 @@ func (b *leaseBroker) Offer(session *reverseSession) error {
 	return nil
 }
 
-func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
+func (b *streamBroker) Claim(ctx context.Context) (*reverseSession, error) {
 	for {
 		b.mu.Lock()
 		if b.closedErr != nil {
@@ -96,7 +96,7 @@ func (b *leaseBroker) Claim(ctx context.Context) (*reverseSession, error) {
 	}
 }
 
-func (b *leaseBroker) Close() {
+func (b *streamBroker) Close() {
 	b.mu.Lock()
 	sessions := b.ready
 	b.ready = nil
@@ -111,13 +111,13 @@ func (b *leaseBroker) Close() {
 	}
 }
 
-func (b *leaseBroker) ReadyCount() int {
+func (b *streamBroker) ReadyCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.ready)
 }
 
-func (b *leaseBroker) watchSession(session *reverseSession) {
+func (b *streamBroker) watchSession(session *reverseSession) {
 	<-session.Done()
 
 	var readyCount int
@@ -140,7 +140,7 @@ func (b *leaseBroker) watchSession(session *reverseSession) {
 	b.mu.Unlock()
 }
 
-func (b *leaseBroker) signalLocked() {
+func (b *streamBroker) signalLocked() {
 	select {
 	case b.notify <- struct{}{}:
 	default:

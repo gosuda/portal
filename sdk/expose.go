@@ -20,18 +20,43 @@ import (
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
-	listener  net.Listener
-	listeners []*Listener
-	done      chan struct{}
+	capabilities types.LeaseCapabilities
+	listener     net.Listener
+	listeners    []*Listener
+	datagrams    chan ExposureDatagram
+	done         chan struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
+}
+
+// ExposureDatagram represents one datagram received from any relay backing an
+// exposure. Reply sends a response back through the same relay flow.
+type ExposureDatagram struct {
+	FlowID   uint32
+	LeaseID  string
+	Payload  []byte
+	RelayURL string
+	UDPAddr  string
+
+	reply func([]byte) error
+}
+
+func (d ExposureDatagram) Reply(payload []byte) error {
+	if d.reply == nil {
+		return errors.New("reply path is unavailable")
+	}
+	return d.reply(payload)
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // merged listener for accepting traffic from all of them. Empty relay input
 // returns nil, nil so callers can fall back to local-only serving.
 func Expose(ctx context.Context, relayUrls []string, name string, transport string, metadata types.LeaseMetadata) (*Exposure, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	relayURLs, err := utils.NormalizeRelayURLs(relayUrls)
 	if err != nil {
 		return nil, err
@@ -39,6 +64,11 @@ func Expose(ctx context.Context, relayUrls []string, name string, transport stri
 	if len(relayURLs) == 0 {
 		return nil, nil
 	}
+	capabilities, err := types.ParseLeaseCapabilities(transport)
+	if err != nil {
+		return nil, err
+	}
+
 	listeners := make([]*Listener, 0, len(relayURLs))
 	cleanup := func() error {
 		var closeErr error
@@ -53,7 +83,7 @@ func Expose(ctx context.Context, relayUrls []string, name string, transport stri
 	for _, relayURL := range relayURLs {
 		listener, err := NewListener(ctx, relayURL, ListenerConfig{
 			Name:      name,
-			Transport: transport,
+			Transport: capabilities.Transport(),
 			Metadata:  metadata,
 		})
 		if err != nil {
@@ -63,22 +93,30 @@ func Expose(ctx context.Context, relayUrls []string, name string, transport stri
 		listeners = append(listeners, listener)
 	}
 
-	mergedListeners := make([]net.Listener, 0, len(listeners))
-	for _, listener := range listeners {
-		mergedListeners = append(mergedListeners, listener)
-	}
+	var merged net.Listener
+	if capabilities.SupportsStream() {
+		mergedListeners := make([]net.Listener, 0, len(listeners))
+		for _, listener := range listeners {
+			mergedListeners = append(mergedListeners, listener)
+		}
 
-	merged, err := mergeListeners(mergedListeners...)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("merge listeners: %w", err), cleanup())
+		merged, err = mergeListeners(mergedListeners...)
+		if err != nil {
+			return nil, errors.Join(fmt.Errorf("merge listeners: %w", err), cleanup())
+		}
 	}
 
 	exposure := &Exposure{
-		listener:  merged,
-		listeners: listeners,
-		done:      make(chan struct{}),
+		capabilities: capabilities,
+		listener:     merged,
+		listeners:    listeners,
+		datagrams:    make(chan ExposureDatagram, max(len(listeners)*32, 1)),
+		done:         make(chan struct{}),
 	}
 	go exposure.monitorStartupCounts(ctx)
+	if exposure.SupportsDatagram() {
+		exposure.attachDatagramPlanes(ctx)
+	}
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
@@ -129,6 +167,21 @@ func (e *Exposure) Addr() net.Addr {
 	return e.listener.Addr()
 }
 
+// AcceptDatagram returns datagrams from any relay datagram plane attached to
+// the exposure.
+func (e *Exposure) AcceptDatagram() (ExposureDatagram, error) {
+	if e == nil || !e.SupportsDatagram() {
+		return ExposureDatagram{}, net.ErrClosed
+	}
+
+	select {
+	case <-e.done:
+		return ExposureDatagram{}, net.ErrClosed
+	case dg := <-e.datagrams:
+		return dg, nil
+	}
+}
+
 // RelayURLs returns the normalized relay URLs backing the exposure.
 func (e *Exposure) RelayURLs() []string {
 	if e == nil || len(e.listeners) == 0 {
@@ -141,6 +194,38 @@ func (e *Exposure) RelayURLs() []string {
 			continue
 		}
 		out = append(out, listener.relayURL)
+	}
+	return out
+}
+
+// UDPAddrs returns the current public UDP addresses exposed by the datagram
+// plane, deduplicated across all backing relays.
+func (e *Exposure) UDPAddrs() []string {
+	if e == nil || len(e.listeners) == 0 || !e.SupportsDatagram() {
+		return nil
+	}
+
+	out := make([]string, 0, len(e.listeners))
+	seen := make(map[string]struct{})
+	for _, listener := range e.listeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.mu.Lock()
+		udpAddr := listener.udpAddr
+		listener.mu.Unlock()
+		if udpAddr == "" {
+			continue
+		}
+		if _, ok := seen[udpAddr]; ok {
+			continue
+		}
+		seen[udpAddr] = struct{}{}
+		out = append(out, udpAddr)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -178,70 +263,105 @@ func (e *Exposure) PublicURLs() []string {
 // local-only serving.
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
 	var relayListener net.Listener
-	if e != nil {
+	if e != nil && e.listener != nil {
 		relayListener = e
 	}
 	return RunHTTP(ctx, relayListener, handler, localAddr)
 }
 
-// AttachUDP creates UDPListeners for each underlying relay listener that has
-// UDP transport enabled. Listeners without UDP support are silently skipped.
-func (e *Exposure) AttachUDP(ctx context.Context) ([]*UDPListener, error) {
-	if e == nil || len(e.listeners) == 0 {
-		return nil, nil
+// WaitDatagramReady blocks until at least one backing relay has published a
+// public UDP address for this exposure.
+func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
+	if e == nil || !e.SupportsDatagram() {
+		return nil, errors.New("exposure does not have datagram transport enabled")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	// Attach concurrently so a slow/failing relay does not block the rest.
-	// Return collected results as soon as timeout fires or all complete.
-	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 
-	results := make(chan *UDPListener, len(e.listeners))
+	for {
+		if addrs := e.UDPAddrs(); len(addrs) > 0 {
+			return addrs, nil
+		}
 
-	count := 0
-	for _, relay := range e.listeners {
-		if relay == nil {
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Exposure) attachDatagramPlanes(ctx context.Context) {
+	for _, listener := range e.listeners {
+		if listener == nil {
 			continue
 		}
-		count++
-		go func(l *Listener) {
-			udpL, err := l.AttachUDP(waitCtx)
-			if err != nil {
-				results <- nil
-				return
-			}
-			results <- udpL
-		}(relay)
+
+		go e.attachDatagramPlane(ctx, listener)
+	}
+}
+
+func (e *Exposure) attachDatagramPlane(ctx context.Context, listener *Listener) {
+	err := listener.WaitDatagramReady(ctx)
+	if err != nil {
+		switch {
+		case e.closed():
+			return
+		case ctx != nil && ctx.Err() != nil:
+			return
+		case errors.Is(err, net.ErrClosed), errors.Is(err, context.Canceled):
+			return
+		default:
+			log.Warn().
+				Err(err).
+				Str("relay_url", listener.relayURL).
+				Msg("attach datagram plane failed")
+			return
+		}
 	}
 
-	var out []*UDPListener
-	var graceTimer *time.Timer
-	defer func() {
-		if graceTimer != nil {
-			graceTimer.Stop()
-		}
-	}()
-	var grace <-chan time.Time
-	collected := 0
-	for collected < count {
-		select {
-		case l := <-results:
-			collected++
-			if l != nil {
-				out = append(out, l)
-				if graceTimer == nil {
-					// After first success, give 3 more seconds for remaining relays.
-					graceTimer = time.NewTimer(3 * time.Second)
-					grace = graceTimer.C
-				}
+	e.forwardDatagrams(listener.relayURL, listener)
+}
+
+func (e *Exposure) forwardDatagrams(relayURL string, listener *Listener) {
+	for {
+		dg, err := listener.AcceptDatagram()
+		if err != nil {
+			if e.closed() || errors.Is(err, net.ErrClosed) {
+				return
 			}
-		case <-grace:
-			return out, nil
-		case <-waitCtx.Done():
-			return out, nil
+			log.Warn().
+				Err(err).
+				Str("relay_url", relayURL).
+				Str("lease_id", listener.LeaseID()).
+				Msg("datagram accept failed")
+			return
+		}
+
+		flowID := dg.FlowID
+		reply := func(payload []byte) error {
+			return listener.SendDatagram(flowID, payload)
+		}
+
+		select {
+		case <-e.done:
+			return
+		case e.datagrams <- ExposureDatagram{
+			FlowID:   flowID,
+			LeaseID:  listener.LeaseID(),
+			Payload:  append([]byte(nil), dg.Payload...),
+			RelayURL: relayURL,
+			UDPAddr:  listener.UDPAddr(),
+			reply:    reply,
+		}:
 		}
 	}
-	return out, nil
 }
 
 // Close closes the merged listener and all underlying relay listeners.
@@ -258,6 +378,11 @@ func (e *Exposure) Close() error {
 		if e.listener != nil {
 			closeErr = errors.Join(closeErr, e.listener.Close())
 		}
+		for _, listener := range e.listeners {
+			if listener != nil {
+				closeErr = errors.Join(closeErr, listener.Close())
+			}
+		}
 
 		event := log.Info().
 			Int("relay_count", len(e.listeners)).
@@ -271,6 +396,27 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 	})
 	return closeErr
+}
+
+func (e *Exposure) SupportsDatagram() bool {
+	return e != nil && e.capabilities.SupportsDatagram()
+}
+
+func (e *Exposure) SupportsStream() bool {
+	return e != nil && e.capabilities.SupportsStream()
+}
+
+func (e *Exposure) closed() bool {
+	if e == nil || e.done == nil {
+		return true
+	}
+
+	select {
+	case <-e.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // RunHTTP serves one handler on relayListener and, when localAddr is set, on

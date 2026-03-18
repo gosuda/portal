@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal/v2/portal/acme"
+	portaldatagram "github.com/gosuda/portal/v2/portal/datagram"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
@@ -32,10 +34,17 @@ const (
 	defaultClientHelloWait   = 2 * time.Second
 	defaultControlBodyLimit  = 4 << 20
 	defaultSessionWriteLimit = 5 * time.Second
+	defaultQUICSNIRouteIdle  = 30 * time.Second
+	defaultQUICSNICleanup    = 5 * time.Second
 
 	defaultUDPPortMin = 29000
 	defaultUDPPortMax = 29999
 )
+
+type quicSNIRoute struct {
+	flowMux  *portaldatagram.FlowMux
+	lastSeen time.Time
+}
 
 type ServerConfig struct {
 	PortalURL             string
@@ -55,20 +64,22 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	sniListener  net.Listener
-	apiListener  net.Listener
-	apiServer    *http.Server
-	apiTLSClose  io.Closer
-	acmeManager  *acme.Manager
-	quicTunnel   *quicTunnelListener
-	quicSNIConn  net.PacketConn
-	cancel       context.CancelFunc
-	group        *errgroup.Group
-	registry     *leaseRegistry
-	ports        *portAllocator
-	cfg          ServerConfig
-	rootHost     string
-	shutdownOnce sync.Once
+	sniListener   net.Listener
+	apiListener   net.Listener
+	apiServer     *http.Server
+	apiTLSClose   io.Closer
+	acmeManager   *acme.Manager
+	quicTunnel    *quic.Listener
+	quicSNI       net.PacketConn
+	cancel        context.CancelFunc
+	group         *errgroup.Group
+	registry      *leaseRegistry
+	ports         *portaldatagram.PortAllocator
+	cfg           ServerConfig
+	rootHost      string
+	shutdownOnce  sync.Once
+	quicSNIRoutes map[string]quicSNIRoute
+	quicSNIMu     sync.RWMutex
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -94,13 +105,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	registry := newLeaseRegistry(policy.NewRuntime())
-	ports := newPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
+	ports := portaldatagram.NewPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
 
 	s := &Server{
-		cfg:      cfg,
-		rootHost: rootHost,
-		registry: registry,
-		ports:    ports,
+		cfg:           cfg,
+		rootHost:      rootHost,
+		registry:      registry,
+		ports:         ports,
+		quicSNIRoutes: make(map[string]quicSNIRoute),
 	}
 
 	// Tear down all lease resources when leases expire via TTL janitor.
@@ -161,7 +173,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
 
-	if err := s.startQUICTunnelListener(serverCtx, apiTLS); err != nil {
+	if err := s.startQUICTunnelListener(apiTLS); err != nil {
 		log.Warn().Err(err).Msg("quic tunnel listener disabled")
 	}
 	if err := s.startQUICSNIRouter(); err != nil {
@@ -190,10 +202,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		if s.quicTunnel != nil {
-			_ = s.quicTunnel.close()
+			_ = s.quicTunnel.Close()
 		}
-		if s.quicSNIConn != nil {
-			_ = s.quicSNIConn.Close()
+		if s.quicSNI != nil {
+			_ = s.quicSNI.Close()
 		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -237,10 +249,10 @@ func (s *Server) SNIAddr() string {
 }
 
 func (s *Server) QUICAddr() string {
-	if s.quicTunnel == nil || s.quicTunnel.listener == nil {
+	if s.quicTunnel == nil {
 		return ""
 	}
-	return s.quicTunnel.listener.Addr().String()
+	return s.quicTunnel.Addr().String()
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
@@ -330,12 +342,8 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	record, ok := s.registry.Lookup(serverName)
-	if !ok || time.Now().After(record.ExpiresAt) {
-		_ = wrappedConn.Close()
-		return
-	}
-	if !s.registry.policy.IsLeaseRoutable(record.ID) {
+	broker, err := s.resolveStreamBroker(serverName)
+	if err != nil {
 		_ = wrappedConn.Close()
 		return
 	}
@@ -343,7 +351,7 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 	claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
 	defer cancel()
 
-	session, err := record.Broker.Claim(claimCtx)
+	session, err := broker.Claim(claimCtx)
 	if err != nil {
 		_ = wrappedConn.Close()
 		return
@@ -365,6 +373,59 @@ func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
 		return
 	}
 	BridgeConns(conn, upstream)
+}
+
+func (s *Server) lookupRoutableLease(serverName string) (*leaseRecord, error) {
+	record, ok := s.registry.Lookup(serverName)
+	if !ok || record == nil {
+		return nil, errors.New("no route")
+	}
+	if time.Now().After(record.ExpiresAt) {
+		return nil, errors.New("lease expired")
+	}
+	if !s.registry.policy.IsLeaseRoutable(record.ID) {
+		return nil, errors.New("not routable")
+	}
+	return record, nil
+}
+
+func (s *Server) resolveStreamBroker(serverName string) (*streamBroker, error) {
+	record, err := s.lookupRoutableLease(serverName)
+	if err != nil {
+		return nil, err
+	}
+	if !record.SupportsStream() {
+		return nil, errors.New("transport mismatch")
+	}
+	streamBroker := record.StreamBroker()
+	if streamBroker == nil {
+		return nil, errors.New("stream broker unavailable")
+	}
+	return streamBroker, nil
+}
+
+func (s *Server) resolveDatagramFlowMux(serverName string) (*portaldatagram.FlowMux, error) {
+	if serverName == s.rootHost {
+		return nil, errors.New("root host does not accept datagram routes")
+	}
+
+	record, err := s.lookupRoutableLease(serverName)
+	if err != nil {
+		return nil, err
+	}
+	if !record.SupportsDatagram() {
+		return nil, errors.New("transport mismatch")
+	}
+	flowMux := record.DatagramFlowMux()
+	if flowMux == nil {
+		return nil, errors.New("flow mux unavailable")
+	}
+	return flowMux, nil
+}
+
+type quicControlMessage struct {
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
 }
 
 func (s *Server) watchContext(ctx context.Context) error {
@@ -401,7 +462,7 @@ func closeWrite(conn net.Conn) {
 	}
 }
 
-func (s *Server) startQUICTunnelListener(ctx context.Context, apiTLS keyless.TLSMaterialConfig) error {
+func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error {
 	if len(apiTLS.KeyPEM) == 0 {
 		return fmt.Errorf("quic tunnel requires api tls key")
 	}
@@ -416,9 +477,9 @@ func (s *Server) startQUICTunnelListener(ctx context.Context, apiTLS keyless.TLS
 		MinVersion:   tls.VersionTLS13,
 	}
 	quicConf := &quic.Config{
-		EnableDatagrams:   true,
-		KeepAlivePeriod:   15 * time.Second,
-		MaxIdleTimeout:    60 * time.Second,
+		EnableDatagrams:    true,
+		KeepAlivePeriod:    15 * time.Second,
+		MaxIdleTimeout:     60 * time.Second,
 		MaxIncomingStreams: 16,
 	}
 
@@ -427,9 +488,8 @@ func (s *Server) startQUICTunnelListener(ctx context.Context, apiTLS keyless.TLS
 		return fmt.Errorf("listen quic: %w", err)
 	}
 
-	tunnel := newQUICTunnelListener(listener, s)
-	s.quicTunnel = tunnel
-	s.group.Go(tunnel.run)
+	s.quicTunnel = listener
+	s.group.Go(func() error { return s.runQUICTunnelListener(listener) })
 
 	log.Info().
 		Str("component", "relay-server").
@@ -439,14 +499,14 @@ func (s *Server) startQUICTunnelListener(ctx context.Context, apiTLS keyless.TLS
 }
 
 func (s *Server) startQUICSNIRouter() error {
-	conn, err := net.ListenPacket("udp", s.cfg.SNIListenAddr)
+	var listenConfig net.ListenConfig
+	conn, err := listenConfig.ListenPacket(context.Background(), "udp", s.cfg.SNIListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen quic sni udp: %w", err)
 	}
 
-	router := newQUICSNIRouter(conn, s)
-	s.quicSNIConn = conn
-	s.group.Go(router.run)
+	s.quicSNI = conn
+	s.group.Go(func() error { return s.runQUICSNIRouter(conn) })
 
 	log.Info().
 		Str("component", "relay-server").
@@ -455,31 +515,198 @@ func (s *Server) startQUICSNIRouter() error {
 	return nil
 }
 
-func (s *Server) startUDPRelay(ctx context.Context, leaseID string, relay *udpRelay) {
-	if relay == nil {
+func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
+	for {
+		conn, err := listener.Accept(context.Background())
+		if err != nil {
+			if errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go s.handleQUICTunnelConn(conn)
+	}
+}
+
+func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
+	stream, err := conn.AcceptStream(context.Background())
+	if err != nil {
+		_ = conn.CloseWithError(1, "stream accept failed")
 		return
 	}
-	if err := relay.Start(ctx); err != nil {
-		log.Error().
-			Err(err).
-			Str("component", "relay-server").
-			Str("lease_id", leaseID).
-			Msg("failed to start udp relay")
+
+	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var msg quicControlMessage
+	buf := make([]byte, 4096)
+	n, err := stream.Read(buf)
+	if err != nil {
+		_ = conn.CloseWithError(1, "control read failed")
+		return
+	}
+	if err := json.Unmarshal(buf[:n], &msg); err != nil {
+		_, _ = stream.Write([]byte(`{"ok":false,"error":"invalid_control_message"}`))
+		_ = conn.CloseWithError(1, "invalid control message")
+		return
+	}
+	_ = stream.SetReadDeadline(time.Time{})
+
+	lease, err := s.findLeaseByID(msg.LeaseID)
+	switch {
+	case err != nil:
+		_, _ = stream.Write([]byte(`{"ok":false,"error":"lease_not_found"}`))
+		_ = conn.CloseWithError(1, "lease not found")
+		return
+	case s.authorizeLeaseToken(lease, msg.ReverseToken) != nil:
+		_, _ = stream.Write([]byte(`{"ok":false,"error":"unauthorized"}`))
+		_ = conn.CloseWithError(1, "unauthorized")
+		return
+	}
+
+	flowMux := lease.DatagramFlowMux()
+	if flowMux == nil {
+		_, _ = stream.Write([]byte(`{"ok":false,"error":"transport_mismatch"}`))
+		_ = conn.CloseWithError(1, "transport mismatch")
+		return
+	}
+	if err := flowMux.Register(conn); err != nil {
+		_, _ = stream.Write([]byte(`{"ok":false,"error":"broker_closed"}`))
+		_ = conn.CloseWithError(1, "broker closed")
+		return
+	}
+
+	_, _ = stream.Write([]byte(`{"ok":true}`))
+	s.registry.Touch(lease.ID, conn.RemoteAddr().String(), time.Now())
+	log.Info().
+		Str("component", "quic-tunnel-listener").
+		Str("lease_id", lease.ID).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", conn.RemoteAddr().String()).
+		Msg("quic tunnel connected")
+}
+
+func (s *Server) runQUICSNIRouter(conn net.PacketConn) error {
+	buf := make([]byte, 65535)
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(defaultQUICSNICleanup))
+		n, addr, err := conn.ReadFrom(buf)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				s.cleanupQUICSNIRoutes(time.Now())
+				continue
+			}
+			return err
+		}
+
+		packet := make([]byte, n)
+		copy(packet, buf[:n])
+		s.handleQUICSNIPacket(packet, addr, time.Now())
+	}
+}
+
+func (s *Server) handleQUICSNIPacket(packet []byte, srcAddr net.Addr, now time.Time) {
+	cacheKey := srcAddr.String()
+	flowMux, ok := s.lookupQUICSNIRoute(cacheKey, now)
+	if !ok {
+		serverName, err := portaldatagram.ParseQUICInitialSNI(packet)
+		if err != nil || serverName == "" {
+			return
+		}
+
+		flowMux, err = s.resolveDatagramFlowMux(utils.NormalizeHostname(serverName))
+		if err != nil || flowMux == nil {
+			return
+		}
+		s.storeQUICSNIRoute(cacheKey, flowMux, now)
+	}
+
+	udpAddr, ok := srcAddr.(*net.UDPAddr)
+	if !ok {
+		return
+	}
+	if s.quicSNI == nil {
+		return
+	}
+
+	flowID := flowMux.TouchFlow("quic:"+cacheKey, func(payload []byte) error {
+		_, err := s.quicSNI.WriteTo(payload, udpAddr)
+		return err
+	})
+	if err := flowMux.SendDatagram(flowID, packet); err != nil {
+		s.deleteQUICSNIRoute(cacheKey)
+	}
+}
+
+func (s *Server) lookupQUICSNIRoute(key string, now time.Time) (*portaldatagram.FlowMux, bool) {
+	s.quicSNIMu.Lock()
+	defer s.quicSNIMu.Unlock()
+
+	route, ok := s.quicSNIRoutes[key]
+	if !ok || route.flowMux == nil {
+		delete(s.quicSNIRoutes, key)
+		return nil, false
+	}
+	if now.Sub(route.lastSeen) > defaultQUICSNIRouteIdle || !route.flowMux.HasConnection() {
+		delete(s.quicSNIRoutes, key)
+		return nil, false
+	}
+
+	route.lastSeen = now
+	s.quicSNIRoutes[key] = route
+	return route.flowMux, true
+}
+
+func (s *Server) storeQUICSNIRoute(key string, flowMux *portaldatagram.FlowMux, now time.Time) {
+	s.quicSNIMu.Lock()
+	s.quicSNIRoutes[key] = quicSNIRoute{
+		flowMux:  flowMux,
+		lastSeen: now,
+	}
+	s.quicSNIMu.Unlock()
+}
+
+func (s *Server) deleteQUICSNIRoute(key string) {
+	s.quicSNIMu.Lock()
+	delete(s.quicSNIRoutes, key)
+	s.quicSNIMu.Unlock()
+}
+
+func (s *Server) cleanupQUICSNIRoutes(now time.Time) {
+	s.quicSNIMu.Lock()
+	defer s.quicSNIMu.Unlock()
+
+	for key, route := range s.quicSNIRoutes {
+		if route.flowMux == nil || now.Sub(route.lastSeen) > defaultQUICSNIRouteIdle || !route.flowMux.HasConnection() {
+			delete(s.quicSNIRoutes, key)
+		}
+	}
+}
+
+func (s *Server) clearQUICSNIRoutesForFlowMux(flowMux *portaldatagram.FlowMux) {
+	if flowMux == nil {
+		return
+	}
+
+	s.quicSNIMu.Lock()
+	defer s.quicSNIMu.Unlock()
+
+	for key, route := range s.quicSNIRoutes {
+		if route.flowMux == flowMux {
+			delete(s.quicSNIRoutes, key)
+		}
 	}
 }
 
 // closeLease tears down all resources associated with a single lease record.
 func (s *Server) closeLease(record *leaseRecord) {
-	record.Broker.Close()
-	if record.QUICBroker != nil {
-		record.QUICBroker.Stop()
+	if record == nil || record.Runtime == nil {
+		return
 	}
-	if record.UDPRelay != nil {
-		record.UDPRelay.Stop()
-	}
-	if record.UDPPort > 0 && s.ports != nil {
-		s.ports.Release(record.UDPPort)
-	}
+	s.clearQUICSNIRoutesForFlowMux(record.DatagramFlowMux())
+	record.Runtime.Close(s.ports)
 }
 
 func (s *Server) quicPublicAddr() string {

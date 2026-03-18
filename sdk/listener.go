@@ -14,6 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/datagram"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
@@ -42,6 +43,12 @@ const (
 	listenerStatusReady    listenerStatus = "ready"
 )
 
+type datagramState struct {
+	leaseID      string
+	reverseToken string
+	quicAddr     string
+}
+
 type Listener struct {
 	tlsCloser        io.Closer
 	tlsConfig        *tls.Config
@@ -55,6 +62,7 @@ type Listener struct {
 	cancel           context.CancelFunc
 	api              *apiClient
 	accepted         chan net.Conn
+	capabilities     types.LeaseCapabilities
 	relayURL         string
 	transport        string
 	startupStatus    listenerStatus
@@ -64,6 +72,7 @@ type Listener struct {
 	udpAddr          string
 	quicAddr         string
 	metadata         types.LeaseMetadata
+	datagram         *datagram.Session
 
 	registered   chan struct{} // closed after first successful registration
 	closeOnce    sync.Once
@@ -91,13 +100,20 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		return nil, err
 	}
 
-	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
+	capabilities, err := types.ParseLeaseCapabilities(cfg.Transport)
+	if err != nil {
+		cancel()
+		api.close()
+		return nil, err
+	}
+	transport := capabilities.Transport()
 
 	l := &Listener{
 		doneCh:           listenerCtx.Done(),
 		cancel:           cancel,
 		api:              api,
 		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
+		capabilities:     capabilities,
 		registered:       make(chan struct{}),
 		relayURL:         api.baseURL.String(),
 		transport:        transport,
@@ -109,7 +125,19 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		renewBefore:      renewBefore,
 		handshakeTimeout: handshakeTimeout,
 	}
+	if capabilities.SupportsDatagram() {
+		l.datagram = datagram.NewSession(256, false, func(err error) {
+			log.Warn().
+				Err(err).
+				Str("component", "sdk-datagram-plane").
+				Str("lease_id", l.LeaseID()).
+				Msg("quic receive loop ended")
+		})
+	}
 
+	if l.datagram != nil {
+		go l.runDatagramLoop(listenerCtx)
+	}
 	go l.runStartup(listenerCtx)
 	return l, nil
 }
@@ -121,16 +149,22 @@ func (l *Listener) runStartup(ctx context.Context) {
 		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
-			for i := 0; i < l.readyTarget; i++ {
-				go l.runSessionLoop(ctx)
+			if l.SupportsStream() {
+				for i := 0; i < l.readyTarget; i++ {
+					go l.runSessionLoop(ctx)
+				}
+			} else {
+				l.setStartupStatus(listenerStatusReady)
 			}
 			go l.runRenewLoop(ctx)
 			publicURL := l.PublicURL()
-			log.Info().
+			event := log.Info().
 				Str("relay_url", l.relayURL).
-				Str("lease_id", l.LeaseID()).
-				Str("public_url", publicURL).
-				Msg("service is available at this URL")
+				Str("lease_id", l.LeaseID())
+			if publicURL != "" {
+				event = event.Str("public_url", publicURL)
+			}
+			event.Msg("relay listener registered")
 			return
 		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
 			return
@@ -144,6 +178,9 @@ func (l *Listener) runStartup(ctx context.Context) {
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
+	if !l.SupportsStream() {
+		return nil, net.ErrClosed
+	}
 	select {
 	case <-l.doneCh:
 		return nil, net.ErrClosed
@@ -162,6 +199,7 @@ func (l *Listener) Close() error {
 		l.mu.Lock()
 		leaseID := l.leaseID
 		tlsCloser := l.tlsCloser
+		datagram := l.datagram
 		api := l.api
 		l.leaseID = ""
 		l.hostname = ""
@@ -170,6 +208,9 @@ func (l *Listener) Close() error {
 		l.mu.Unlock()
 
 		l.drainAccepted()
+		if datagram != nil {
+			datagram.Stop("listener closed")
+		}
 
 		if api != nil && leaseID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -214,6 +255,10 @@ func (l *Listener) Metadata() types.LeaseMetadata {
 }
 
 func (l *Listener) PublicURL() string {
+	if !l.SupportsStream() {
+		return ""
+	}
+
 	l.mu.Lock()
 	hostname := l.hostname
 	relayURL := l.relayURL
@@ -261,6 +306,73 @@ func (l *Listener) runSessionLoop(ctx context.Context) {
 			if !l.retryOrClose(ctx, "reverse session connect", err, retries) {
 				return
 			}
+		}
+	}
+}
+
+func (l *Listener) runDatagramLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			l.datagram.Stop("listener context closed")
+			return
+		default:
+		}
+
+		state, ok := l.currentDatagramState()
+		if !ok {
+			if !utils.SleepOrDone(ctx, time.Second) {
+				l.datagram.Stop("listener context closed")
+				return
+			}
+			continue
+		}
+
+		conn, err := l.api.openQUICSession(ctx, state.quicAddr, state.leaseID, state.reverseToken)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("component", "sdk-datagram-plane").
+				Str("lease_id", state.leaseID).
+				Msg("quic session open failed, retrying")
+			if !utils.SleepOrDone(ctx, 2*time.Second) {
+				l.datagram.Stop("listener context closed")
+				return
+			}
+			continue
+		}
+
+		log.Info().
+			Str("component", "sdk-datagram-plane").
+			Str("lease_id", state.leaseID).
+			Str("remote_addr", conn.RemoteAddr().String()).
+			Msg("quic tunnel connected")
+
+		recvDone, err := l.datagram.Bind(conn)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Warn().
+				Err(err).
+				Str("component", "sdk-datagram-plane").
+				Str("lease_id", state.leaseID).
+				Msg("quic session bind failed")
+			if !utils.SleepOrDone(ctx, time.Second) {
+				return
+			}
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			l.datagram.Stop("listener context closed")
+			return
+		case <-recvDone:
+		}
+
+		if !utils.SleepOrDone(ctx, time.Second) {
+			return
 		}
 	}
 }
@@ -389,15 +501,23 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
-	if err != nil {
-		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
-		return err
+	var (
+		tlsConf   *tls.Config
+		tlsCloser io.Closer
+	)
+	if l.SupportsStream() {
+		tlsConf, tlsCloser, err = keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
+		if err != nil {
+			_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+			return err
+		}
 	}
 
 	if ctx.Err() != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
-		_ = tlsCloser.Close()
+		if tlsCloser != nil {
+			_ = tlsCloser.Close()
+		}
 		return ctx.Err()
 	}
 
@@ -405,10 +525,13 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	if ctx.Err() != nil {
 		l.mu.Unlock()
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
-		_ = tlsCloser.Close()
+		if tlsCloser != nil {
+			_ = tlsCloser.Close()
+		}
 		return ctx.Err()
 	}
 	oldCloser := l.tlsCloser
+	datagram := l.datagram
 	l.leaseID = resp.LeaseID
 	l.hostname = resp.Hostname
 	l.udpAddr = resp.UDPAddr
@@ -421,12 +544,78 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	if oldCloser != nil {
 		_ = oldCloser.Close()
 	}
+	if datagram != nil {
+		datagram.Clear("lease updated")
+	}
 	l.registerOnce.Do(func() { close(l.registered) })
 	return nil
 }
 
+func (l *Listener) SupportsDatagram() bool {
+	return l != nil && l.capabilities.SupportsDatagram()
+}
+
+func (l *Listener) SupportsStream() bool {
+	return l != nil && l.capabilities.SupportsStream()
+}
+
+func (l *Listener) AcceptDatagram() (types.DatagramFrame, error) {
+	if l == nil || !l.SupportsDatagram() || l.datagram == nil {
+		return types.DatagramFrame{}, net.ErrClosed
+	}
+
+	select {
+	case <-l.doneCh:
+		return types.DatagramFrame{}, net.ErrClosed
+	case dg := <-l.datagram.Incoming():
+		return dg, nil
+	}
+}
+
+func (l *Listener) SendDatagram(flowID uint32, payload []byte) error {
+	if l == nil || !l.SupportsDatagram() || l.datagram == nil {
+		return net.ErrClosed
+	}
+	return l.datagram.Send(flowID, payload)
+}
+
+func (l *Listener) UDPAddr() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.udpAddr
+}
+
+func (l *Listener) QUICAddr() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.quicAddr
+}
+
+func (l *Listener) currentDatagramState() (datagramState, bool) {
+	if l == nil || !l.SupportsDatagram() {
+		return datagramState{}, false
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.api == nil || l.leaseID == "" {
+		return datagramState{}, false
+	}
+
+	return datagramState{
+		leaseID:      l.leaseID,
+		reverseToken: l.api.reverseToken,
+		quicAddr:     l.quicAddr,
+	}, true
+}
+
 // WaitRegistered blocks until the first successful lease registration or context cancellation.
 func (l *Listener) WaitRegistered(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	select {
 	case <-l.registered:
 		return nil
@@ -435,6 +624,21 @@ func (l *Listener) WaitRegistered(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// WaitDatagramReady blocks until the listener has registered a datagram-capable
+// lease and the relay has assigned its UDP/QUIC endpoints.
+func (l *Listener) WaitDatagramReady(ctx context.Context) error {
+	if l == nil || !l.SupportsDatagram() {
+		return errors.New("lease does not have datagram transport enabled")
+	}
+	if err := l.WaitRegistered(ctx); err != nil {
+		return err
+	}
+	if l.UDPAddr() == "" && l.QUICAddr() == "" {
+		return errors.New("lease registration did not expose datagram addresses")
+	}
+	return nil
 }
 
 func (l *Listener) reregister(ctx context.Context) error {

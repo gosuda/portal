@@ -134,9 +134,9 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 	return err
 }
 
-// proxyUDPRelayConnections receives datagrams from the relay via the UDPListener
+// proxyExposureDatagrams receives datagrams from the exposure datagram plane
 // and forwards them to the local UDP service, relaying responses back.
-func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener, localAddr string) error {
+func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAddr string) error {
 	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
 
 	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
@@ -149,15 +149,20 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		return fmt.Errorf("resolve udp addr %q: %w", targetAddr, err)
 	}
 
-	// Per-flow local UDP connections: flowID → *net.UDPConn
+	type flowKey struct {
+		flowID   uint32
+		leaseID  string
+		relayURL string
+	}
 	type flowEntry struct {
 		conn     *net.UDPConn
 		lastSeen time.Time
+		reply    func([]byte) error
 	}
-	var mu sync.Mutex
-	flows := make(map[uint32]*flowEntry)
 
-	// Cleanup idle flow connections.
+	var mu sync.Mutex
+	flows := make(map[flowKey]*flowEntry)
+
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -168,10 +173,10 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 			case <-ticker.C:
 				mu.Lock()
 				now := time.Now()
-				for id, f := range flows {
+				for key, f := range flows {
 					if now.Sub(f.lastSeen) > 30*time.Second {
 						_ = f.conn.Close()
-						delete(flows, id)
+						delete(flows, key)
 					}
 				}
 				mu.Unlock()
@@ -179,11 +184,11 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		}
 	}()
 
-	// getOrCreateFlow returns (or creates) a local UDP conn for a flow.
-	getOrCreateFlow := func(flowID uint32) (*net.UDPConn, error) {
+	getOrCreateFlow := func(key flowKey, reply func([]byte) error) (*net.UDPConn, error) {
 		mu.Lock()
-		if f, ok := flows[flowID]; ok {
+		if f, ok := flows[key]; ok {
 			f.lastSeen = time.Now()
+			f.reply = reply
 			mu.Unlock()
 			return f.conn, nil
 		}
@@ -195,17 +200,16 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		}
 
 		mu.Lock()
-		// Double-check after acquiring lock.
-		if f, ok := flows[flowID]; ok {
+		if f, ok := flows[key]; ok {
 			mu.Unlock()
 			_ = localConn.Close()
 			f.lastSeen = time.Now()
+			f.reply = reply
 			return f.conn, nil
 		}
-		flows[flowID] = &flowEntry{conn: localConn, lastSeen: time.Now()}
+		flows[key] = &flowEntry{conn: localConn, lastSeen: time.Now(), reply: reply}
 		mu.Unlock()
 
-		// Start reverse read loop: local service → relay.
 		go func() {
 			buf := make([]byte, 65535)
 			for {
@@ -214,11 +218,33 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 					if ctx.Err() != nil {
 						return
 					}
-					logger.Debug().Err(err).Uint32("flow_id", flowID).Msg("local read ended")
+					logger.Debug().
+						Err(err).
+						Uint32("flow_id", key.flowID).
+						Str("lease_id", key.leaseID).
+						Str("relay_url", key.relayURL).
+						Msg("local read ended")
 					return
 				}
-				if sendErr := udpListener.SendDatagram(flowID, buf[:n]); sendErr != nil {
-					logger.Debug().Err(sendErr).Uint32("flow_id", flowID).Msg("send datagram to relay failed")
+
+				mu.Lock()
+				entry := flows[key]
+				if entry != nil {
+					entry.lastSeen = time.Now()
+				}
+				replyFn := func([]byte) error { return net.ErrClosed }
+				if entry != nil && entry.reply != nil {
+					replyFn = entry.reply
+				}
+				mu.Unlock()
+
+				if sendErr := replyFn(buf[:n]); sendErr != nil {
+					logger.Debug().
+						Err(sendErr).
+						Uint32("flow_id", key.flowID).
+						Str("lease_id", key.leaseID).
+						Str("relay_url", key.relayURL).
+						Msg("send datagram to relay failed")
 					return
 				}
 			}
@@ -227,13 +253,15 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		return localConn, nil
 	}
 
-	// Main loop: relay → local service.
 	logger.Info().Str("target", targetAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
-		dg, err := udpListener.AcceptDatagram()
+		dg, err := exposure.AcceptDatagram()
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
-				return nil
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, net.ErrClosed) {
+				break
 			}
 			return fmt.Errorf("accept datagram: %w", err)
 		}
@@ -241,17 +269,37 @@ func proxyUDPRelayConnections(ctx context.Context, udpListener *sdk.UDPListener,
 		logger.Debug().
 			Uint32("flow_id", dg.FlowID).
 			Int("bytes", len(dg.Payload)).
+			Str("lease_id", dg.LeaseID).
+			Str("relay_url", dg.RelayURL).
+			Str("udp_addr", dg.UDPAddr).
 			Str("target", targetAddr).
 			Msg("datagram received from relay, forwarding to local")
 
-		localConn, err := getOrCreateFlow(dg.FlowID)
+		key := flowKey{
+			flowID:   dg.FlowID,
+			leaseID:  dg.LeaseID,
+			relayURL: dg.RelayURL,
+		}
+		localConn, err := getOrCreateFlow(key, dg.Reply)
 		if err != nil {
-			logger.Warn().Err(err).Uint32("flow_id", dg.FlowID).Msg("dial local udp failed")
+			logger.Warn().
+				Err(err).
+				Uint32("flow_id", dg.FlowID).
+				Str("lease_id", dg.LeaseID).
+				Str("relay_url", dg.RelayURL).
+				Msg("dial local udp failed")
 			continue
 		}
 
 		if _, err := localConn.Write(dg.Payload); err != nil {
-			logger.Warn().Err(err).Uint32("flow_id", dg.FlowID).Msg("write to local udp failed")
+			logger.Warn().
+				Err(err).
+				Uint32("flow_id", dg.FlowID).
+				Str("lease_id", dg.LeaseID).
+				Str("relay_url", dg.RelayURL).
+				Msg("write to local udp failed")
 		}
 	}
+
+	return nil
 }

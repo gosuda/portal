@@ -22,7 +22,7 @@ func TestLeaseBrokerClaimActivatesTLSMarker(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	broker := newLeaseBroker("lease-test", time.Hour, 2)
+	broker := newStreamBroker("lease-test", time.Hour, 2)
 	session := newReverseSession(serverConn, time.Hour)
 	if err := broker.Offer(session); err != nil {
 		t.Fatalf("Offer() error = %v", err)
@@ -66,7 +66,7 @@ func TestLeaseBrokerCloseClosesIdleSessions(t *testing.T) {
 	t.Parallel()
 
 	serverConn, clientConn := net.Pipe()
-	broker := newLeaseBroker("lease-test", time.Hour, 2)
+	broker := newStreamBroker("lease-test", time.Hour, 2)
 	session := newReverseSession(serverConn, time.Hour)
 	if err := broker.Offer(session); err != nil {
 		t.Fatalf("Offer() error = %v", err)
@@ -84,7 +84,7 @@ func TestLeaseBrokerCloseClosesIdleSessions(t *testing.T) {
 func TestLeaseBrokerCloseUnblocksClaim(t *testing.T) {
 	t.Parallel()
 
-	broker := newLeaseBroker("lease-test", time.Hour, 2)
+	broker := newStreamBroker("lease-test", time.Hour, 2)
 	claimCtx, cancel := context.WithTimeout(context.Background(), brokerAsyncTestTimeout)
 	defer cancel()
 
@@ -118,7 +118,7 @@ func TestLeaseBrokerCloseUnblocksClaim(t *testing.T) {
 func TestLeaseBrokerClaimWaitsForLateOffer(t *testing.T) {
 	t.Parallel()
 
-	broker := newLeaseBroker("lease-test", time.Hour, 2)
+	broker := newStreamBroker("lease-test", time.Hour, 2)
 
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
@@ -190,7 +190,7 @@ func TestLeaseBrokerClaimWaitsForLateOffer(t *testing.T) {
 func TestLeaseBrokerClaimTimesOutWithoutSessions(t *testing.T) {
 	t.Parallel()
 
-	broker := newLeaseBroker("lease-test", time.Hour, 2)
+	broker := newStreamBroker("lease-test", time.Hour, 2)
 
 	claimCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

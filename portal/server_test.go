@@ -151,3 +151,49 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 		t.Fatal("registerLease() error = nil, want invalid name error")
 	}
 }
+
+func TestRegisterLeaseBuildsDatagramOnlyRuntime(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL: "https://portal.example.com",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp, err := server.registerLease(types.RegisterRequest{
+		Name:         "demo-udp",
+		ReverseToken: "tok_udp",
+		Transport:    types.TransportUDP,
+	}, "203.0.113.10")
+	if err != nil {
+		t.Fatalf("registerLease() error = %v", err)
+	}
+
+	record, ok := server.registry.Get(resp.LeaseID)
+	if !ok {
+		t.Fatal("registry.Get() = false, want registered lease")
+	}
+	if record.SupportsStream() {
+		t.Fatal("SupportsStream() = true, want false")
+	}
+	if !record.SupportsDatagram() {
+		t.Fatal("SupportsDatagram() = false, want true")
+	}
+	if record.StreamBroker() != nil {
+		t.Fatal("StreamBroker() != nil, want nil")
+	}
+	if record.DatagramFlowMux() == nil {
+		t.Fatal("DatagramFlowMux() = nil, want flow mux")
+	}
+	if got := record.UDPPort(); got == 0 {
+		t.Fatal("UDPPort() = 0, want allocated port")
+	}
+	if resp.UDPAddr == "" {
+		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
+	}
+	if resp.QUICAddr == "" {
+		t.Fatal("RegisterResponse.QUICAddr = empty, want quic address")
+	}
+}

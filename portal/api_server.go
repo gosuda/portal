@@ -1,7 +1,6 @@
 package portal
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/datagram"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/types"
@@ -127,6 +127,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errIPBanned) {
 			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
 		}
+		if errors.Is(err, datagram.ErrPortExhausted) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted
+		}
 		utils.WriteAPIError(w, status, code, err.Error())
 		return
 	}
@@ -229,6 +232,10 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, authErr.Error())
 		return
 	}
+	if !lease.SupportsStream() {
+		utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
+		return
+	}
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
@@ -252,7 +259,13 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	session := newReverseSession(conn, s.cfg.IdleKeepaliveInterval)
-	if err := lease.Broker.Offer(session); err != nil {
+	streamBroker := lease.StreamBroker()
+	if streamBroker == nil {
+		_ = session.Close()
+		return
+	}
+
+	if err := streamBroker.Offer(session); err != nil {
 		log.Warn().
 			Err(err).
 			Str("component", "relay-server").
@@ -270,7 +283,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Str("lease_id", lease.ID).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", session.RemoteAddr()).
-		Int("ready", lease.Broker.ReadyCount()).
+		Int("ready", streamBroker.ReadyCount()).
 		Msg("sdk reverse connected")
 }
 
@@ -295,14 +308,27 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		ttl = time.Duration(req.TTL) * time.Second
 	}
 
-	transport := strings.ToLower(strings.TrimSpace(req.Transport))
-	if transport == "" {
-		transport = types.TransportTCP
+	capabilities, err := types.ParseLeaseCapabilities(req.Transport)
+	if err != nil {
+		return types.RegisterResponse{}, err
 	}
+	transport := capabilities.Transport()
 
 	leaseID := utils.RandomID("lease_")
 	now := time.Now()
 	expiresAt := now.Add(ttl)
+	runtime, err := newLeaseRuntime(leaseRuntimeConfig{
+		Capabilities:  capabilities,
+		IdleInterval:  s.cfg.IdleKeepaliveInterval,
+		LeaseID:       leaseID,
+		LeaseName:     name,
+		PortAllocator: s.ports,
+		ReadyLimit:    s.cfg.ReadyQueueLimit,
+	})
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+
 	record := &leaseRecord{
 		Lease: types.Lease{
 			ID:          leaseID,
@@ -314,36 +340,20 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			LastSeenAt:  now,
 			ClientIP:    clientIP,
 			Transport:   transport,
+			UDPPort:     runtime.UDPPort(),
 		},
 		ReverseToken: req.ReverseToken,
-		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+		Runtime:      runtime,
 	}
 
-	if transport == types.TransportUDP || transport == types.TransportBoth {
-		if s.ports == nil {
-			return types.RegisterResponse{}, errors.New("udp port allocation not available")
-		}
-		udpPort, portErr := s.ports.Allocate(name)
-		if portErr != nil {
-			return types.RegisterResponse{}, fmt.Errorf("allocate udp port: %w", portErr)
-		}
-		record.UDPPort = udpPort
-		record.QUICBroker = newQUICBroker(leaseID)
-		record.UDPRelay = newUDPRelay(leaseID, udpPort, record.QUICBroker)
-	}
-
-	if err := s.registry.Register(record); err != nil {
-		if record.QUICBroker != nil {
-			record.QUICBroker.Stop()
-		}
-		if record.UDPPort > 0 && s.ports != nil {
-			s.ports.Release(record.UDPPort)
-		}
+	if err := runtime.Start(); err != nil {
+		runtime.Close(s.ports)
 		return types.RegisterResponse{}, err
 	}
 
-	if record.UDPRelay != nil {
-		go s.startUDPRelay(context.Background(), leaseID, record.UDPRelay)
+	if err := s.registry.Register(record); err != nil {
+		runtime.Close(s.ports)
+		return types.RegisterResponse{}, err
 	}
 
 	resp := types.RegisterResponse{
@@ -354,8 +364,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		ConnectURL: strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect,
 		Transport:  transport,
 	}
-	if record.UDPPort > 0 {
-		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.UDPPort)
+	if record.SupportsDatagram() {
+		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.UDPPort())
 		resp.QUICAddr = s.quicPublicAddr()
 	}
 

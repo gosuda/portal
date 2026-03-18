@@ -7,10 +7,6 @@ import (
 )
 
 const (
-	MarkerQUICReady = byte(0x03)
-)
-
-const (
 	TransportTCP  = "tcp"
 	TransportUDP  = "udp"
 	TransportBoth = "both"
