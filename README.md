@@ -25,6 +25,7 @@ Unlike other tunneling services, Portal is self-hosted and permissionless. You c
 - **End-to-end encryption**: Supports TLS passthrough with relay keyless certificates
 - **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
 - **One-Command Setup**: Expose any local app with a single command
+- **UDP Relay (Experimental)**: Supports raw UDP relay use cases, but the transport model and operational behavior may still change
 
 ## Components
 
