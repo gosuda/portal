@@ -1,8 +1,9 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ChangeEvent } from "react";
 import { Check, Copy, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
+  buildDefaultTunnelName,
   buildTunnelCommand,
   buildTunnelPreviewURL,
   normalizeAbsoluteHTTPURL,
@@ -57,12 +58,23 @@ export function TunnelCommandForm({
 
   const [target, setTarget] = useState(defaultHost);
   const [name, setName] = useState("");
+  const [isAutoName, setIsAutoName] = useState(true);
+  const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
   const [defaultRelays, setDefaultRelays] = useState(true);
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [thumbnailURL, setThumbnailURL] = useState("");
+  const resolvedNameSeed = useMemo(
+    () => `${nameSeed}:${nameShuffleKey}`,
+    [nameSeed, nameShuffleKey]
+  );
+  const generatedName = useMemo(
+    () => buildDefaultTunnelName(target, resolvedNameSeed),
+    [resolvedNameSeed, target]
+  );
+  const effectiveName = isAutoName ? generatedName : name;
 
   const normalizedThumbnailURL = useMemo(
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
@@ -82,7 +94,7 @@ export function TunnelCommandForm({
       buildTunnelCommand({
         currentOrigin,
         target,
-        name,
+        name: effectiveName,
         nameSeed,
         relayUrls: isHero ? [] : relayUrls,
         defaultRelays: isHero ? true : defaultRelays,
@@ -92,8 +104,8 @@ export function TunnelCommandForm({
     [
       currentOrigin,
       defaultRelays,
+      effectiveName,
       isHero,
-      name,
       nameSeed,
       normalizedThumbnailURL,
       os,
@@ -102,8 +114,8 @@ export function TunnelCommandForm({
     ]
   );
   const previewURL = useMemo(
-    () => buildTunnelPreviewURL(currentOrigin, name, target, nameSeed),
-    [currentOrigin, name, nameSeed, target]
+    () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
+    [currentOrigin, effectiveName, nameSeed, target]
   );
 
   useEffect(() => {
@@ -158,6 +170,30 @@ export function TunnelCommandForm({
     } catch (error) {
       console.error("Failed to copy tunnel command", error);
     }
+  };
+
+  const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const next = event.target.value;
+    if (next.trim() === "") {
+      setName("");
+      setIsAutoName(true);
+      return;
+    }
+
+    setName(next);
+    setIsAutoName(false);
+  };
+
+  const handleShuffleName = () => {
+    const next =
+      typeof window !== "undefined" &&
+      typeof window.crypto?.randomUUID === "function"
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+
+    setName("");
+    setIsAutoName(true);
+    setNameShuffleKey(next);
   };
 
   const commandSection = (
@@ -254,6 +290,14 @@ export function TunnelCommandForm({
       ? "border-white/8 bg-black/20 text-slate-100 placeholder:text-slate-500"
       : "border-border bg-white"
   );
+  const nameInputValue = isAutoName ? generatedName : name;
+  const shuffleButtonClass = cn(
+    "shrink-0 rounded-lg border px-3 text-xs font-semibold transition-colors",
+    isHero ? "h-10" : "h-12",
+    isTerminal
+      ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
+      : "border-border bg-white text-text-muted hover:text-foreground"
+  );
 
   return (
     <div className={cn("space-y-5", className)}>
@@ -278,16 +322,25 @@ export function TunnelCommandForm({
 
           <div className="space-y-1.5">
             <label htmlFor={`${inputId}-name`} className={heroFieldLabelClass}>
-              Name
+              Public Name
             </label>
-            <Input
-              id={`${inputId}-name`}
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="auto"
-              className={heroInputClass}
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id={`${inputId}-name`}
+                type="text"
+                value={nameInputValue}
+                onChange={handleNameChange}
+                className={cn(heroInputClass, "flex-1")}
+              />
+              <button
+                type="button"
+                onClick={handleShuffleName}
+                className={shuffleButtonClass}
+                aria-label="Shuffle public name"
+              >
+                🎲
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -327,19 +380,28 @@ export function TunnelCommandForm({
             >
               Service Name
             </label>
-            <Input
-              id={`${inputId}-name`}
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="auto-generated when empty"
-              className={cn(
-                "h-12 rounded-xl",
-                isTerminal
-                  ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-                  : "border-border bg-white"
-              )}
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id={`${inputId}-name`}
+                type="text"
+                value={nameInputValue}
+                onChange={handleNameChange}
+                className={cn(
+                  "h-12 flex-1 rounded-xl",
+                  isTerminal
+                    ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+                    : "border-border bg-white"
+                )}
+              />
+              <button
+                type="button"
+                onClick={handleShuffleName}
+                className={shuffleButtonClass}
+                aria-label="Shuffle public name"
+              >
+                🎲
+              </button>
+            </div>
           </div>
         </>
       )}

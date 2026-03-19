@@ -1,5 +1,8 @@
 import { API_PATHS } from "@/lib/apiPaths";
-import { resolveExposeName } from "../../../utils/exposeName";
+import {
+  buildDefaultExposeName,
+  resolveExposeName,
+} from "../../../utils/exposeName";
 
 export type TunnelCommandOS = "unix" | "windows";
 
@@ -15,6 +18,13 @@ export interface TunnelCommandOptions {
 }
 
 const DEFAULT_PREVIEW_HOST = "portal.run";
+
+export function buildDefaultTunnelName(
+  target: string,
+  nameSeed: string
+): string {
+  return buildDefaultExposeName(target, nameSeed);
+}
 
 export function buildTunnelCommand({
   currentOrigin,
