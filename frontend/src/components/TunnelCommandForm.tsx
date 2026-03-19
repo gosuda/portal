@@ -303,27 +303,26 @@ export function TunnelCommandForm({
       : tunnelStatus === "registered"
         ? "URL reserved"
         : "Waiting";
-  const tunnelStatusLabel =
-    tunnelStatus === "alive"
-      ? ""
-      : tunnelStatus === "registered"
-        ? "Tunnel registered on this relay"
-        : "";
+  const heroSectionLabelClass = cn(
+    "text-xs font-semibold uppercase tracking-[0.24em]",
+    isTerminal ? "text-slate-400" : "text-text-muted"
+  );
 
   const commandSection = (
     <div className={cn("space-y-2", isHero && "space-y-3")}>
-      <label
-        className={cn(
-          "text-sm font-medium",
-          isTerminal ? "text-slate-200" : "text-foreground"
-        )}
-      >
-        {isHero ? "Copy this command" : "Generated Command"}
-      </label>
-      {isHero && (
-        <p className="text-xs leading-5 text-slate-400 sm:text-sm">
-          Copy and paste it into your terminal to publish a public URL.
-        </p>
+      {isHero ? (
+        <label className={heroSectionLabelClass}>
+          Command
+        </label>
+      ) : (
+        <label
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          Generated Command
+        </label>
       )}
       <div className="relative">
         <pre
@@ -374,43 +373,38 @@ export function TunnelCommandForm({
       )}
 
       {isHero && (
-        <div
-          className={cn(
-            "space-y-2 rounded-xl border px-4 py-3",
-            isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
-          )}
-        >
-          <div
-            className={cn(
-              "flex items-center gap-2 text-sm font-semibold",
-              isTerminal ? "text-slate-200" : "text-foreground"
-            )}
-          >
-            <span className={cn("h-2 w-2 rounded-full", tunnelStatusTone)} aria-hidden="true" />
-            <span>{tunnelStatusHeadline}</span>
-          </div>
-          <a
-            href={previewURL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={cn(
-              "block overflow-x-auto whitespace-nowrap font-mono text-base font-medium underline-offset-4 hover:underline sm:text-lg",
-              isTerminal ? "text-green-status" : "text-primary"
-            )}
-          >
-            {previewURL}
-          </a>
-          {tunnelStatusLabel !== "" && (
+        <>
+          <div className="space-y-1.5 pt-1">
+            <p className={heroSectionLabelClass}>Public URL</p>
             <div
               className={cn(
-                "flex items-center gap-2 text-xs font-medium",
-                isTerminal ? "text-slate-300" : "text-text-muted"
+                "space-y-4 rounded-xl border px-4 py-3",
+                isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
               )}
             >
-              <span>{tunnelStatusLabel}</span>
+              <div
+                className={cn(
+                  "flex items-center gap-2 text-sm font-semibold",
+                  isTerminal ? "text-slate-200" : "text-foreground"
+                )}
+              >
+                <span className={cn("h-2 w-2 rounded-full", tunnelStatusTone)} aria-hidden="true" />
+                <span>{tunnelStatusHeadline}</span>
+              </div>
+              <a
+                href={previewURL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  "block overflow-x-auto whitespace-nowrap font-mono text-base font-medium underline-offset-4 hover:underline sm:text-lg",
+                  isTerminal ? "text-green-status" : "text-primary"
+                )}
+              >
+                {previewURL}
+              </a>
             </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -434,10 +428,18 @@ export function TunnelCommandForm({
       ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
       : "border-border bg-white text-text-muted hover:text-foreground"
   );
+  const optionSectionLabel = isHero ? (
+    <div className="pt-1">
+      <p className={heroSectionLabelClass}>
+        Option
+      </p>
+    </div>
+  ) : null;
 
   return (
     <div className={cn("space-y-5", className)}>
       {isHero && commandSection}
+      {optionSectionLabel}
 
       {isHero ? (
         <div className="grid gap-3 sm:grid-cols-2">

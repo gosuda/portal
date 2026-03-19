@@ -28,12 +28,12 @@ export function Header({
 
   return (
     <header className="flex flex-wrap items-center justify-between gap-4 px-1 py-2 sm:px-2">
-      <div className="flex items-center gap-4 text-foreground">
+      <div className="flex items-center gap-5 text-foreground">
         <div className="flex h-12 w-12 items-center justify-center">
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            width="26"
-            height="26"
+            width="27"
+            height="27"
             viewBox="0 0 906.26 1457.543"
           >
             <defs>
@@ -58,7 +58,7 @@ export function Header({
 
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-extrabold tracking-tight text-foreground">
+            <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
               {title}
             </h2>
             {releaseVersion && (
@@ -72,7 +72,7 @@ export function Header({
 
       <div className="flex flex-wrap items-center gap-3 sm:gap-4">
         {!isAdmin && (
-          <nav className="hidden items-center gap-5 text-sm font-medium text-text-muted md:flex">
+          <nav className="hidden items-center gap-6 text-[15px] font-medium text-text-muted md:flex">
             <a href="#live-servers" className="transition-colors hover:text-foreground">
               Live apps
             </a>
