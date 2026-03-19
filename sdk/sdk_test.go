@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -428,7 +429,7 @@ func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
 	}
 }
 
-func TestListenerWaitDatagramReadyPublishesRelayAddresses(t *testing.T) {
+func TestListenerPublishesUDPAddressAfterRegistration(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -470,11 +471,17 @@ func TestListenerWaitDatagramReadyPublishesRelayAddresses(t *testing.T) {
 	}
 	defer listener.Close()
 
-	if err := listener.WaitDatagramReady(context.Background()); err != nil {
-		t.Fatalf("WaitDatagramReady() error = %v", err)
+	if err := listener.WaitRegistered(context.Background()); err != nil {
+		t.Fatalf("WaitRegistered() error = %v", err)
 	}
 	if got := listener.UDPAddr(); got != "demo.example.com:29900" {
 		t.Fatalf("UDPAddr() = %q, want %q", got, "demo.example.com:29900")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := listener.WaitDatagramReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitDatagramReady() error = %v, want %v", err, context.DeadlineExceeded)
 	}
 }
 

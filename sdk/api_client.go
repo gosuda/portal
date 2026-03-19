@@ -161,7 +161,11 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 	if err := a.doJSONWithClient(ctx, httpClient, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
 		err = fmt.Errorf("check relay compatibility: %w", err)
 		var netErr net.Error
+		var apiErr *types.APIRequestError
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
+			return err
+		}
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 500 {
 			return err
 		}
 		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
@@ -261,6 +265,10 @@ func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Clien
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return utils.DecodeAPIRequestError(resp)
+	}
 
 	envelope, err := utils.DecodeAPIEnvelope[json.RawMessage](resp.Body)
 	if err != nil {
