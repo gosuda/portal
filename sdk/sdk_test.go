@@ -154,8 +154,8 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if registerReq.TTL != 42 {
 		t.Fatalf("register request TTL = %d, want 42", registerReq.TTL)
 	}
-	if registerReq.Transport != types.TransportTCP {
-		t.Fatalf("register request Transport = %q, want %q", registerReq.Transport, types.TransportTCP)
+	if registerReq.UDPEnabled {
+		t.Fatal("register request UDPEnabled = true, want false")
 	}
 	if registerReq.Name != "demo-app" {
 		t.Fatalf("register request Name = %q, want %q", registerReq.Name, "demo-app")
@@ -350,7 +350,7 @@ func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
 }
 
 func TestExposeNoRelayInputs(t *testing.T) {
-	exposure, err := Expose(context.Background(), nil, "demo", types.TransportBoth, types.LeaseMetadata{})
+	exposure, err := Expose(context.Background(), nil, "demo", false, types.LeaseMetadata{})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}
@@ -359,7 +359,7 @@ func TestExposeNoRelayInputs(t *testing.T) {
 	}
 }
 
-func TestNewListenerTransportUDPDoesNotOpenReverseSessions(t *testing.T) {
+func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
 	var connectCount atomic.Int32
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -374,18 +374,17 @@ func TestNewListenerTransportUDPDoesNotOpenReverseSessions(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   "lease-udp",
-					Hostname:  "demo.example.com",
-					UDPAddr:   "demo.example.com:29000",
-					QUICAddr:  "demo.example.com:4017",
-					Transport: types.TransportUDP,
+					LeaseID:    "lease-udp",
+					Hostname:   "demo.example.com",
+					UDPAddr:    "demo.example.com:29900",
+					UDPEnabled: true,
 				},
 			})
 		case types.PathSDKConnect:
 			connectCount.Add(1)
 			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
 				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "stream should be disabled"},
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
 			})
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
@@ -401,9 +400,9 @@ func TestNewListenerTransportUDPDoesNotOpenReverseSessions(t *testing.T) {
 	defer server.Close()
 
 	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:      "demo",
-		Transport: types.TransportUDP,
-		LeaseTTL:  100 * time.Millisecond,
+		Name:       "demo",
+		UDPEnabled: true,
+		LeaseTTL:   100 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewListener() error = %v", err)
@@ -415,17 +414,17 @@ func TestNewListenerTransportUDPDoesNotOpenReverseSessions(t *testing.T) {
 	})
 	time.Sleep(150 * time.Millisecond)
 
-	if connectCount.Load() != 0 {
-		t.Fatalf("connect count = %d, want 0", connectCount.Load())
+	if connectCount.Load() == 0 {
+		t.Fatal("connect count = 0, want reverse session attempts")
 	}
-	if got := listener.PublicURL(); got != "" {
-		t.Fatalf("PublicURL() = %q, want empty", got)
+	if got := listener.PublicURL(); got == "" {
+		t.Fatal("PublicURL() = empty, want public url")
 	}
 	if !listener.SupportsDatagram() {
 		t.Fatal("SupportsDatagram() = false, want true")
 	}
-	if listener.SupportsStream() {
-		t.Fatal("SupportsStream() = true, want false")
+	if !listener.SupportsStream() {
+		t.Fatal("SupportsStream() = false, want true")
 	}
 }
 
@@ -443,11 +442,10 @@ func TestListenerWaitDatagramReadyPublishesRelayAddresses(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:   "lease-udp",
-					Hostname:  "demo.example.com",
-					UDPAddr:   "demo.example.com:29000",
-					QUICAddr:  "demo.example.com:4017",
-					Transport: types.TransportUDP,
+					LeaseID:    "lease-udp",
+					Hostname:   "demo.example.com",
+					UDPAddr:    "demo.example.com:29900",
+					UDPEnabled: true,
 				},
 			})
 		case types.PathSDKRenew:
@@ -464,8 +462,8 @@ func TestListenerWaitDatagramReadyPublishesRelayAddresses(t *testing.T) {
 	defer server.Close()
 
 	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:      "demo",
-		Transport: types.TransportUDP,
+		Name:       "demo",
+		UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewListener() error = %v", err)
@@ -475,33 +473,8 @@ func TestListenerWaitDatagramReadyPublishesRelayAddresses(t *testing.T) {
 	if err := listener.WaitDatagramReady(context.Background()); err != nil {
 		t.Fatalf("WaitDatagramReady() error = %v", err)
 	}
-	if got := listener.UDPAddr(); got != "demo.example.com:29000" {
-		t.Fatalf("UDPAddr() = %q, want %q", got, "demo.example.com:29000")
-	}
-	if got := listener.QUICAddr(); got != "demo.example.com:4017" {
-		t.Fatalf("QUICAddr() = %q, want %q", got, "demo.example.com:4017")
-	}
-}
-
-func TestExposureDatagramReply(t *testing.T) {
-	called := false
-	dg := ExposureDatagram{
-		FlowID:  7,
-		Payload: []byte("hello"),
-		reply: func(payload []byte) error {
-			called = true
-			if string(payload) != "world" {
-				t.Fatalf("reply payload = %q, want %q", payload, "world")
-			}
-			return nil
-		},
-	}
-
-	if err := dg.Reply([]byte("world")); err != nil {
-		t.Fatalf("Reply() error = %v", err)
-	}
-	if !called {
-		t.Fatal("Reply() did not invoke reply function")
+	if got := listener.UDPAddr(); got != "demo.example.com:29900" {
+		t.Fatalf("UDPAddr() = %q, want %q", got, "demo.example.com:29900")
 	}
 }
 

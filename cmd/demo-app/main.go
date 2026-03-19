@@ -66,7 +66,7 @@ func runDemo() error {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
 
-	exposure, err := sdk.Expose(ctx, relayURLs, flagName, types.TransportTCP, types.LeaseMetadata{
+	exposure, err := sdk.Expose(ctx, relayURLs, flagName, false, types.LeaseMetadata{
 		Description: flagDesc,
 		Tags:        utils.SplitCSV(flagTags),
 		Owner:       flagOwner,

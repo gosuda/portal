@@ -29,7 +29,7 @@ type Lease struct {
 	BPS         int64
 	ClientIP    string
 	Hostname    string
-	Transport   string
+	UDPEnabled  bool
 	Metadata    LeaseMetadata
 	Ready       int
 	UDPPort     int

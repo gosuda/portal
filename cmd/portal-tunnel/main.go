@@ -71,12 +71,14 @@ func runExposeCommand(args []string) error {
 	var (
 		relayCSV  string
 		target    string
+		udpAddr   string
 		name      string
 		desc      string
 		tags      string
 		thumbnail string
 		owner     string
 		hide      bool
+		udp       bool
 	)
 	fs.StringVar(&relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&defaultRelays, "default-relays", defaultRelays, "Include public registry relays")
@@ -87,8 +89,8 @@ func runExposeCommand(args []string) error {
 	fs.StringVar(&owner, "owner", "", "Service owner metadata")
 	fs.BoolVar(&hide, "hide", false, "Hide service from discovery")
 
-	var transport string
-	fs.StringVar(&transport, "transport", types.TransportBoth, "Transport mode: tcp, udp, or both (default: both)")
+	fs.BoolVar(&udp, "udp", utils.ParseBoolEnv("UDP_ENABLED", false), "Enable public UDP relay in addition to the default TCP relay")
+	fs.StringVar(&udpAddr, "udp-addr", strings.TrimSpace(os.Getenv("UDP_ADDR")), "Local UDP target address for relayed datagrams (host:port or port only) when --udp is enabled")
 	fs.Usage = func() {
 		printExposeUsage(fs.Output())
 	}
@@ -119,6 +121,26 @@ func runExposeCommand(args []string) error {
 			return fmt.Errorf("invalid target %q: %w", target, err)
 		}
 		target = targetAddr
+	}
+	udpAddr = strings.TrimSpace(udpAddr)
+	switch {
+	case udp && udpAddr == "":
+		printExposeUsage(os.Stderr)
+		return errors.New("--udp-addr is required when --udp is enabled")
+	case !udp && udpAddr != "":
+		printExposeUsage(os.Stderr)
+		return errors.New("--udp-addr requires --udp")
+	case udpAddr != "":
+		if _, err := strconv.Atoi(udpAddr); err == nil {
+			udpAddr = net.JoinHostPort("127.0.0.1", udpAddr)
+		} else {
+			targetAddr, err := utils.NormalizeTargetAddr(udpAddr)
+			if err != nil {
+				printExposeUsage(os.Stderr)
+				return fmt.Errorf("invalid udp target %q: %w", udpAddr, err)
+			}
+			udpAddr = targetAddr
+		}
 	}
 
 	if strings.TrimSpace(name) == "" {
@@ -155,8 +177,9 @@ func runExposeCommand(args []string) error {
 		stop,
 		relayURLs,
 		target,
+		udpAddr,
 		name,
-		transport,
+		udp,
 		types.LeaseMetadata{
 			Description: desc,
 			Tags:        utils.SplitCSV(tags),
@@ -220,19 +243,14 @@ func runTunnel(
 	ctx context.Context,
 	stop func(),
 	relayURLs []string,
-	target string,
+	tcpTarget string,
+	udpTarget string,
 	name string,
-	transport string,
+	udpEnabled bool,
 	metadata types.LeaseMetadata,
 ) error {
 	logger := log.With().Str("component", "portal").Logger()
-	capabilities, err := types.ParseLeaseCapabilities(transport)
-	if err != nil {
-		return err
-	}
-	transport = capabilities.Transport()
-
-	exposure, err := sdk.Expose(ctx, relayURLs, name, transport, metadata)
+	exposure, err := sdk.Expose(ctx, relayURLs, name, udpEnabled, metadata)
 	if err != nil {
 		return fmt.Errorf("service %s: failed to start relays: %w", name, err)
 	}
@@ -241,33 +259,31 @@ func runTunnel(
 	}
 	defer exposure.Close()
 
-	// UDP is best-effort — attach to existing lease, log and continue if it fails.
-	if capabilities.SupportsDatagram() && !capabilities.SupportsStream() {
-		runErr := runUDPBestEffort(ctx, exposure, target)
-		if errors.Is(runErr, context.Canceled) {
-			runErr = nil
-		}
-		closeErr := exposure.Close()
-		if runErr != nil && stop != nil {
-			stop()
-		}
-		return errors.Join(runErr, closeErr)
-	}
-
-	if capabilities.SupportsDatagram() {
+	var udpErrCh chan error
+	if udpEnabled {
+		udpErrCh = make(chan error, 1)
 		go func() {
-			if err := runUDPBestEffort(ctx, exposure, target); err != nil && ctx.Err() == nil {
-				logger.Warn().Err(err).Msg("udp transport disabled")
+			if err := runUDPProxy(ctx, exposure, udpTarget); err != nil && ctx.Err() == nil {
+				udpErrCh <- err
+				if stop != nil {
+					stop()
+				}
 			}
 		}()
 	}
 
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).
-		Str("local", target).
+		Str("tcp_target", tcpTarget).
 		Str("service_name", name).
 		Strs("relays", exposure.RelayURLs()).
 		Msg("starting portal tunnel")
+	if udpEnabled {
+		logger.Info().
+			Str("udp_target", udpTarget).
+			Str("service_name", name).
+			Msg("udp relay enabled")
+	}
 
 	var connWG sync.WaitGroup
 	var connCount atomic.Int64
@@ -277,13 +293,23 @@ func runTunnel(
 		_ = exposure.Close()
 	}()
 
-	waitErr := proxyRelayConnections(ctx, exposure, target, &connWG, &connCount)
+	waitErr := proxyRelayConnections(ctx, exposure, tcpTarget, &connWG, &connCount)
 	if waitErr != nil && stop != nil {
 		stop()
+	}
+	var udpErr error
+	if udpErrCh != nil {
+		select {
+		case udpErr = <-udpErrCh:
+		default:
+		}
 	}
 	closeErr := exposure.Close()
 	if waitErr != nil {
 		logger.Error().Err(waitErr).Msg("relay supervisor exited with error")
+	}
+	if udpErr != nil {
+		logger.Error().Err(udpErr).Msg("udp proxy exited with error")
 	}
 	if closeErr != nil {
 		logger.Error().Err(closeErr).Msg("relay shutdown failed")
@@ -306,35 +332,7 @@ func runTunnel(
 	}
 
 	logger.Info().Msg("tunnel shutdown complete")
-	return errors.Join(waitErr, closeErr)
-}
-
-// runUDPBestEffort waits for the exposure datagram plane and proxies it to the
-// local UDP target.
-func runUDPBestEffort(ctx context.Context, exposure *sdk.Exposure, target string) error {
-	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
-
-	udpAddrs, err := exposure.WaitDatagramReady(ctx)
-	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-			return ctx.Err()
-		}
-		return fmt.Errorf("wait for udp readiness: %w", err)
-	}
-	if len(udpAddrs) == 0 {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return errors.New("relay did not expose any UDP listeners")
-	}
-
-	for _, udpAddr := range udpAddrs {
-		logger.Info().
-			Str("udp_addr", udpAddr).
-			Msg("UDP tunnel ready")
-	}
-
-	return proxyExposureDatagrams(ctx, exposure, target)
+	return errors.Join(waitErr, udpErr, closeErr)
 }
 
 func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, includeDefaultRelays bool) ([]string, error) {
@@ -405,6 +403,7 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "Examples:")
 	fmt.Fprintln(w, "  portal expose 3000")
 	fmt.Fprintln(w, "  portal expose --name my-app localhost:8080")
+	fmt.Fprintln(w, "  portal expose --udp --udp-addr 127.0.0.1:5353 3000")
 	fmt.Fprintln(w, "  portal list")
 }
 
@@ -415,6 +414,7 @@ func printExposeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Examples:")
 	fmt.Fprintln(w, "  portal expose 3000")
 	fmt.Fprintln(w, "  portal expose --name my-app localhost:8080")
+	fmt.Fprintln(w, "  portal expose --udp --udp-addr 127.0.0.1:5353 3000")
 	fmt.Fprintln(w, "  portal expose --relays https://portal.example.com --default-relays=false 3000")
 }
 

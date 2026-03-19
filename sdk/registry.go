@@ -12,9 +12,6 @@ import (
 // WithDefaultRelayURLs fetches the default Portal relay registry and appends
 // any explicit relay inputs before normalization.
 func WithDefaultRelayURLs(ctx context.Context, registryURL string, explicit ...string) []string {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if registryURL == "" {
 		registryURL = types.PortalRelayRegistryURL
 	}

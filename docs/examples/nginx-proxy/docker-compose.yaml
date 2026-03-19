@@ -6,7 +6,7 @@
 #     ├─ portal.example.com    → 127.0.0.1:8443 (nginx L7, TLS termination) → 127.0.0.1:4017
 #     └─ *.portal.example.com  → 127.0.0.1:4443 (portal SNI, raw TCP passthrough)
 #   portal:4017/udp  (QUIC tunnel listener — direct on host)
-#   portal:29000-29999/udp  (per-lease UDP relay ports — direct on host)
+#   portal:29900-29999/udp  (per-lease UDP relay ports — direct on host)
 #
 # Portal uses host networking so UDP ports are dynamically bound on the host
 # without Docker iptables rules. This avoids the slow container start/stop
@@ -44,7 +44,7 @@ services:
   # ─── portal relay ───────────────────────────────────────────────────────────
   # Relay server with host networking.
   # TCP (4017, 4443) is reached by nginx via 127.0.0.1.
-  # UDP (4017, 29000-29999) is bound directly on the host — no port mapping.
+  # UDP (4017, 29900-29999) is bound directly on the host — no port mapping.
   # SNI_PORT is set to 4443 to avoid conflicting with nginx on port 443.
   portal:
     image: ghcr.io/gosuda/portal:2
@@ -60,7 +60,7 @@ services:
       SNI_PORT: ${SNI_PORT:-4443}
 
       # UDP port allocation range for QUIC/UDP leases.
-      UDP_PORT_MIN: ${UDP_PORT_MIN:-29000}
+      UDP_PORT_MIN: ${UDP_PORT_MIN:-29900}
       UDP_PORT_MAX: ${UDP_PORT_MAX:-29999}
 
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}

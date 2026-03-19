@@ -33,6 +33,8 @@ const (
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
+var errRelayIncompatible = errors.New("relay is incompatible")
+
 type apiClient struct {
 	baseURL        *url.URL
 	httpClient     *http.Client
@@ -90,14 +92,14 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, transport string) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
-	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
+	if err := a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
-		Transport:    transport,
+		UDPEnabled:   udpEnabled,
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -157,16 +159,21 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
 	var resp types.DomainResponse
 	if err := a.doJSONWithClient(ctx, httpClient, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
-		return fmt.Errorf("check relay compatibility: %w", err)
+		err = fmt.Errorf("check relay compatibility: %w", err)
+		var netErr net.Error
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
 	}
 	if strings.TrimSpace(resp.Version) != types.SDKProtocolVersion {
-		return fmt.Errorf("relay sdk version mismatch: relay=%q client=%q", strings.TrimSpace(resp.Version), types.SDKProtocolVersion)
+		return fmt.Errorf("%w: relay sdk version mismatch: relay=%q client=%q", errRelayIncompatible, strings.TrimSpace(resp.Version), types.SDKProtocolVersion)
 	}
 	return nil
 }
 
 func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Duration) error {
-	return a.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
+	return a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
@@ -174,7 +181,7 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 }
 
 func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
-	return a.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+	return a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 	}, nil)
@@ -226,10 +233,6 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 	}
 
 	return wrapBufferedConn(conn, reader), nil
-}
-
-func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
-	return a.doJSONWithClient(ctx, a.httpClient, method, path, payload, out)
 }
 
 func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Client, method, path string, payload any, out any) error {
@@ -296,7 +299,7 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.
-func (a *apiClient) openQUICSession(ctx context.Context, quicAddr, leaseID, reverseToken string) (*quic.Conn, error) {
+func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken string) (*quic.Conn, error) {
 	tlsConf := a.rawTLSConfig.Clone()
 	tlsConf.NextProtos = []string{"portal-tunnel"}
 
@@ -306,12 +309,7 @@ func (a *apiClient) openQUICSession(ctx context.Context, quicAddr, leaseID, reve
 		MaxIdleTimeout:  60 * time.Second,
 	}
 
-	dialAddr := utils.EnsurePort(a.baseURL.Host)
-	if quicAddr != "" {
-		dialAddr = quicAddr
-	}
-
-	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
+	conn, err := quic.DialAddr(ctx, utils.EnsurePort(a.baseURL.Host), tlsConf, quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("quic dial: %w", err)
 	}
@@ -322,30 +320,20 @@ func (a *apiClient) openQUICSession(ctx context.Context, quicAddr, leaseID, reve
 		return nil, fmt.Errorf("open control stream: %w", err)
 	}
 
-	controlMsg, _ := json.Marshal(map[string]string{
-		"lease_id":      leaseID,
-		"reverse_token": reverseToken,
-	})
-	if _, err := stream.Write(controlMsg); err != nil {
+	controlMsg := types.QUICControlMessage{
+		LeaseID:      leaseID,
+		ReverseToken: reverseToken,
+	}
+	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
 		_ = conn.CloseWithError(1, "control write failed")
 		return nil, fmt.Errorf("write control: %w", err)
 	}
 
 	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
-	buf := make([]byte, 4096)
-	n, err := stream.Read(buf)
-	if err != nil {
+	var resp types.QUICControlResponse
+	if err := json.NewDecoder(io.LimitReader(stream, 4096)).Decode(&resp); err != nil {
 		_ = conn.CloseWithError(1, "control read failed")
 		return nil, fmt.Errorf("read control response: %w", err)
-	}
-
-	var resp struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error,omitempty"`
-	}
-	if err := json.Unmarshal(buf[:n], &resp); err != nil {
-		_ = conn.CloseWithError(1, "invalid response")
-		return nil, fmt.Errorf("decode control response: %w", err)
 	}
 	if !resp.OK {
 		_ = conn.CloseWithError(1, resp.Error)

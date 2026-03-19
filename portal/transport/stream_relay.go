@@ -1,4 +1,4 @@
-package portal
+package transport
 
 import (
 	"context"
@@ -13,23 +13,22 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-var (
-	errBrokerClosed = errors.New("lease broker closed")
-	errBrokerFull   = errors.New("broker ready queue full")
-)
+const defaultSessionWriteLimit = 5 * time.Second
 
-type streamBroker struct {
+var errStreamFull = errors.New("stream ready queue full")
+
+type RelayStream struct {
 	notify       chan struct{}
 	leaseID      string
-	ready        []*reverseSession
+	ready        []*relaySession
 	idleInterval time.Duration
 	readyLimit   int
 	closedErr    error
 	mu           sync.Mutex
 }
 
-func newStreamBroker(leaseID string, idleInterval time.Duration, readyLimit int) *streamBroker {
-	return &streamBroker{
+func NewRelayStream(leaseID string, idleInterval time.Duration, readyLimit int) *RelayStream {
+	return &RelayStream{
 		leaseID:      leaseID,
 		idleInterval: idleInterval,
 		readyLimit:   readyLimit,
@@ -37,21 +36,24 @@ func newStreamBroker(leaseID string, idleInterval time.Duration, readyLimit int)
 	}
 }
 
-func (b *streamBroker) Offer(session *reverseSession) error {
-	if session == nil {
-		return errors.New("reverse session is required")
+func (b *RelayStream) OfferConn(conn net.Conn) error {
+	if conn == nil {
+		return errors.New("reverse connection is required")
 	}
+	session := newRelaySession(conn, b.idleInterval)
 
 	b.mu.Lock()
 	if b.closedErr != nil {
 		err := b.closedErr
 		b.mu.Unlock()
+		_ = session.Close()
 		return err
 	}
 
 	if b.readyLimit > 0 && len(b.ready) >= b.readyLimit {
 		b.mu.Unlock()
-		return errBrokerFull
+		_ = session.Close()
+		return errStreamFull
 	}
 
 	session.StartIdle()
@@ -63,7 +65,7 @@ func (b *streamBroker) Offer(session *reverseSession) error {
 	return nil
 }
 
-func (b *streamBroker) Claim(ctx context.Context) (*reverseSession, error) {
+func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
 	for {
 		b.mu.Lock()
 		if b.closedErr != nil {
@@ -96,12 +98,12 @@ func (b *streamBroker) Claim(ctx context.Context) (*reverseSession, error) {
 	}
 }
 
-func (b *streamBroker) Close() {
+func (b *RelayStream) Close() {
 	b.mu.Lock()
 	sessions := b.ready
 	b.ready = nil
 	if b.closedErr == nil {
-		b.closedErr = errBrokerClosed
+		b.closedErr = net.ErrClosed
 	}
 	b.signalLocked()
 	b.mu.Unlock()
@@ -111,13 +113,13 @@ func (b *streamBroker) Close() {
 	}
 }
 
-func (b *streamBroker) ReadyCount() int {
+func (b *RelayStream) ReadyCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.ready)
 }
 
-func (b *streamBroker) watchSession(session *reverseSession) {
+func (b *RelayStream) watchSession(session *relaySession) {
 	<-session.Done()
 
 	var readyCount int
@@ -133,64 +135,94 @@ func (b *streamBroker) watchSession(session *reverseSession) {
 	log.Info().
 		Str("component", "relay-server").
 		Str("lease_id", b.leaseID).
-		Str("remote_addr", session.RemoteAddr()).
+		Str("remote_addr", session.remoteAddrString()).
 		Int("ready", readyCount).
 		Msg("sdk reverse disconnected")
 	b.signalLocked()
 	b.mu.Unlock()
 }
 
-func (b *streamBroker) signalLocked() {
+func (b *RelayStream) signalLocked() {
 	select {
 	case b.notify <- struct{}{}:
 	default:
 	}
 }
 
-type reverseSessionState int
+type sessionState int
 
 const (
-	reverseSessionIdle reverseSessionState = iota
-	reverseSessionClaimed
-	reverseSessionClosed
+	sessionIdle sessionState = iota
+	sessionClaimed
+	sessionClosed
 )
 
-type reverseSession struct {
+type relaySession struct {
 	conn          net.Conn
 	keepaliveStop chan struct{}
 	keepaliveDone chan struct{}
 	done          chan struct{}
 	idleInterval  time.Duration
-	state         reverseSessionState
+	state         sessionState
 	closeOnce     sync.Once
 	mu            sync.Mutex
 }
 
-func newReverseSession(conn net.Conn, idleInterval time.Duration) *reverseSession {
-	return &reverseSession{
+func newRelaySession(conn net.Conn, idleInterval time.Duration) *relaySession {
+	return &relaySession{
 		conn:         conn,
 		idleInterval: idleInterval,
-		state:        reverseSessionIdle,
+		state:        sessionIdle,
 		done:         make(chan struct{}),
 	}
 }
 
-func (s *reverseSession) Conn() net.Conn {
-	return s.conn
+func (s *relaySession) Read(p []byte) (int, error) {
+	return s.conn.Read(p)
 }
 
-func (s *reverseSession) Done() <-chan struct{} {
+func (s *relaySession) Write(p []byte) (int, error) {
+	return s.conn.Write(p)
+}
+
+func (s *relaySession) LocalAddr() net.Addr {
+	if s == nil || s.conn == nil {
+		return nil
+	}
+	return s.conn.LocalAddr()
+}
+
+func (s *relaySession) RemoteAddr() net.Addr {
+	if s == nil || s.conn == nil {
+		return nil
+	}
+	return s.conn.RemoteAddr()
+}
+
+func (s *relaySession) SetDeadline(t time.Time) error {
+	return s.conn.SetDeadline(t)
+}
+
+func (s *relaySession) SetReadDeadline(t time.Time) error {
+	return s.conn.SetReadDeadline(t)
+}
+
+func (s *relaySession) SetWriteDeadline(t time.Time) error {
+	return s.conn.SetWriteDeadline(t)
+}
+
+func (s *relaySession) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *reverseSession) RemoteAddr() string {
+func (s *relaySession) remoteAddrString() string {
 	if s == nil || s.conn == nil || s.conn.RemoteAddr() == nil {
 		return ""
 	}
 	return s.conn.RemoteAddr().String()
 }
 
-func (s *reverseSession) IsClosed() bool {
+func (s *relaySession) IsClosed() bool {
 	select {
 	case <-s.done:
 		return true
@@ -199,9 +231,9 @@ func (s *reverseSession) IsClosed() bool {
 	}
 }
 
-func (s *reverseSession) StartIdle() {
+func (s *relaySession) StartIdle() {
 	s.mu.Lock()
-	if s.state != reverseSessionIdle || s.keepaliveStop != nil {
+	if s.state != sessionIdle || s.keepaliveStop != nil {
 		s.mu.Unlock()
 		return
 	}
@@ -214,9 +246,9 @@ func (s *reverseSession) StartIdle() {
 	go s.runKeepalive(stop, done)
 }
 
-func (s *reverseSession) Activate() error {
+func (s *relaySession) Activate() error {
 	s.mu.Lock()
-	if s.state != reverseSessionIdle {
+	if s.state != sessionIdle {
 		state := s.state
 		s.mu.Unlock()
 		return fmt.Errorf("session not idle: %d", state)
@@ -225,7 +257,7 @@ func (s *reverseSession) Activate() error {
 	done := s.keepaliveDone
 	s.keepaliveStop = nil
 	s.keepaliveDone = nil
-	s.state = reverseSessionClaimed
+	s.state = sessionClaimed
 	s.mu.Unlock()
 
 	if stop != nil {
@@ -237,7 +269,7 @@ func (s *reverseSession) Activate() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state == reverseSessionClosed {
+	if s.state == sessionClosed {
 		return net.ErrClosed
 	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
@@ -249,7 +281,7 @@ func (s *reverseSession) Activate() error {
 	return err
 }
 
-func (s *reverseSession) Close() error {
+func (s *relaySession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
@@ -257,7 +289,7 @@ func (s *reverseSession) Close() error {
 		done := s.keepaliveDone
 		s.keepaliveStop = nil
 		s.keepaliveDone = nil
-		s.state = reverseSessionClosed
+		s.state = sessionClosed
 		conn := s.conn
 		s.mu.Unlock()
 
@@ -274,7 +306,7 @@ func (s *reverseSession) Close() error {
 	return err
 }
 
-func (s *reverseSession) runKeepalive(stop <-chan struct{}, done chan<- struct{}) {
+func (s *relaySession) runKeepalive(stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 
 	ticker := time.NewTicker(s.idleInterval)
@@ -290,7 +322,7 @@ func (s *reverseSession) runKeepalive(stop <-chan struct{}, done chan<- struct{}
 		}
 
 		s.mu.Lock()
-		if s.state != reverseSessionIdle {
+		if s.state != sessionIdle {
 			s.mu.Unlock()
 			return
 		}

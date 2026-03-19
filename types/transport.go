@@ -3,53 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
-	"strings"
 )
-
-// LeaseCapabilities describes which data planes a lease exposes.
-// Stream maps to reverse TCP/TLS sessions; Datagram maps to QUIC/UDP.
-type LeaseCapabilities struct {
-	Datagram bool
-	Stream   bool
-}
-
-// ParseLeaseCapabilities normalizes the public transport string into the
-// internal capability model shared by relay and SDK.
-func ParseLeaseCapabilities(raw string) (LeaseCapabilities, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", TransportTCP:
-		return LeaseCapabilities{Stream: true}, nil
-	case TransportUDP:
-		return LeaseCapabilities{Datagram: true}, nil
-	case TransportBoth:
-		return LeaseCapabilities{Datagram: true, Stream: true}, nil
-	default:
-		return LeaseCapabilities{}, fmt.Errorf("unsupported transport %q", strings.TrimSpace(raw))
-	}
-}
-
-func (c LeaseCapabilities) SupportsDatagram() bool {
-	return c.Datagram
-}
-
-func (c LeaseCapabilities) SupportsStream() bool {
-	return c.Stream
-}
-
-// Transport returns the canonical public transport label for the capability set.
-func (c LeaseCapabilities) Transport() string {
-	switch {
-	case c.Stream && c.Datagram:
-		return TransportBoth
-	case c.Datagram:
-		return TransportUDP
-	case c.Stream:
-		return TransportTCP
-	default:
-		return ""
-	}
-}
 
 // ErrDatagramTooSmall is returned when a datagram payload is too short to
 // contain a valid flow ID varint.

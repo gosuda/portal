@@ -21,6 +21,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
+		UDPEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -83,6 +84,7 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
+		UDPEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -101,7 +103,8 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://portal.example.com",
+		PortalURL:  "https://portal.example.com",
+		UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -137,7 +140,8 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://portal.example.com",
+		PortalURL:  "https://portal.example.com",
+		UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -152,11 +156,12 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 	}
 }
 
-func TestRegisterLeaseBuildsDatagramOnlyRuntime(t *testing.T) {
+func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://portal.example.com",
+		PortalURL:  "https://portal.example.com",
+		UDPEnabled: true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -165,7 +170,7 @@ func TestRegisterLeaseBuildsDatagramOnlyRuntime(t *testing.T) {
 	resp, err := server.registerLease(types.RegisterRequest{
 		Name:         "demo-udp",
 		ReverseToken: "tok_udp",
-		Transport:    types.TransportUDP,
+		UDPEnabled:   true,
 	}, "203.0.113.10")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
@@ -175,25 +180,16 @@ func TestRegisterLeaseBuildsDatagramOnlyRuntime(t *testing.T) {
 	if !ok {
 		t.Fatal("registry.Get() = false, want registered lease")
 	}
-	if record.SupportsStream() {
-		t.Fatal("SupportsStream() = true, want false")
+	if record.stream == nil {
+		t.Fatal("stream = nil, want stream runtime")
 	}
-	if !record.SupportsDatagram() {
-		t.Fatal("SupportsDatagram() = false, want true")
+	if record.datagram == nil {
+		t.Fatal("datagram = nil, want datagram runtime")
 	}
-	if record.StreamBroker() != nil {
-		t.Fatal("StreamBroker() != nil, want nil")
-	}
-	if record.DatagramFlowMux() == nil {
-		t.Fatal("DatagramFlowMux() = nil, want flow mux")
-	}
-	if got := record.UDPPort(); got == 0 {
+	if got := record.datagram.UDPPort(); got == 0 {
 		t.Fatal("UDPPort() = 0, want allocated port")
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
-	}
-	if resp.QUICAddr == "" {
-		t.Fatal("RegisterResponse.QUICAddr = empty, want quic address")
 	}
 }

@@ -22,7 +22,7 @@ import (
 const (
 	defaultAPIPort    = 4017
 	defaultSNIPort    = 443
-	defaultUDPPortMin = 29000
+	defaultUDPPortMin = 29900
 	defaultUDPPortMax = 29999
 	defaultPortalURL  = "https://localhost:4017"
 	defaultKeylessDir = "./.portal-certs"
@@ -32,6 +32,7 @@ type relayServerConfig struct {
 	PortalURL          string
 	APIPort            int
 	SNIPort            int
+	UDPEnabled         bool
 	UDPPortMin         int
 	UDPPortMax         int
 	AdminSecretKey     string
@@ -59,6 +60,7 @@ func main() {
 	}
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
+	udpEnabled := utils.ParseBoolEnv("UDP_ENABLED", false)
 	udpPortMin := parsePortNumber(os.Getenv("UDP_PORT_MIN"), defaultUDPPortMin)
 	udpPortMax := parsePortNumber(os.Getenv("UDP_PORT_MAX"), defaultUDPPortMax)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
@@ -84,7 +86,8 @@ func main() {
 
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
-	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "SNI router port number (env: SNI_PORT)")
+	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "TCP SNI router port number (env: SNI_PORT)")
+	flag.BoolVar(&cfg.UDPEnabled, "udp", udpEnabled, "enable UDP relay ports and the internal QUIC tunnel (env: UDP_ENABLED)")
 	flag.IntVar(&cfg.UDPPortMin, "udp-port-min", udpPortMin, "Minimum UDP port for lease allocation (env: UDP_PORT_MIN)")
 	flag.IntVar(&cfg.UDPPortMax, "udp-port-max", udpPortMax, "Maximum UDP port for lease allocation (env: UDP_PORT_MAX)")
 
@@ -105,6 +108,7 @@ func main() {
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
+		Bool("udp_enabled", cfg.UDPEnabled).
 		Msg("configured relay server")
 
 	if err := runServer(cfg); err != nil {
@@ -139,6 +143,7 @@ func runServer(cfg relayServerConfig) error {
 		},
 		APIListenAddr:     apiListenAddr,
 		SNIListenAddr:     sniListenAddr,
+		UDPEnabled:        cfg.UDPEnabled,
 		TrustedProxyCIDRs: trustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		UDPPortMin:        cfg.UDPPortMin,
@@ -162,9 +167,10 @@ func runServer(cfg relayServerConfig) error {
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
+		Bool("udp_enabled", cfg.UDPEnabled).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
-	if quicAddr := server.QUICAddr(); quicAddr != "" {
-		logEvent = logEvent.Str("quic_addr", quicAddr)
+	if quicAddr := server.QUICTunnelAddr(); quicAddr != "" {
+		logEvent = logEvent.Str("internal_quic_tunnel_addr", quicAddr)
 	}
 	logEvent.Msg("relay server started")
 

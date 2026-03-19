@@ -6,12 +6,6 @@ import (
 	"time"
 )
 
-const (
-	TransportTCP  = "tcp"
-	TransportUDP  = "udp"
-	TransportBoth = "both"
-)
-
 type APIEnvelope[T any] struct {
 	Data  T         `json:"data,omitempty"`
 	Error *APIError `json:"error,omitempty"`
@@ -64,8 +58,7 @@ type RegisterRequest struct {
 	ReverseToken string        `json:"reverse_token"`
 	Metadata     LeaseMetadata `json:"metadata"`
 	TTL          int           `json:"ttl,omitempty"`
-	TLS          bool          `json:"tls"`
-	Transport    string        `json:"transport,omitempty"`
+	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -75,8 +68,17 @@ type RegisterResponse struct {
 	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
 	UDPAddr    string        `json:"udp_addr,omitempty"`
-	QUICAddr   string        `json:"quic_addr,omitempty"`
-	Transport  string        `json:"transport,omitempty"`
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+}
+
+type QUICControlMessage struct {
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
+}
+
+type QUICControlResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
 type RenewRequest struct {

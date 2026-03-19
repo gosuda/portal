@@ -134,6 +134,34 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 	return err
 }
 
+// runUDPProxy waits for the exposure datagram plane and proxies it to the
+// configured local UDP target.
+func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) error {
+	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
+
+	udpAddrs, err := exposure.WaitDatagramReady(ctx)
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return ctx.Err()
+		}
+		return fmt.Errorf("wait for udp readiness: %w", err)
+	}
+	if len(udpAddrs) == 0 {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errors.New("relay did not expose any UDP listeners")
+	}
+
+	for _, udpAddr := range udpAddrs {
+		logger.Info().
+			Str("udp_addr", udpAddr).
+			Msg("UDP tunnel ready")
+	}
+
+	return proxyExposureDatagrams(ctx, exposure, udpTarget)
+}
+
 // proxyExposureDatagrams receives datagrams from the exposure datagram plane
 // and forwards them to the local UDP service, relaying responses back.
 func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAddr string) error {
@@ -141,7 +169,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 
 	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
 	if err != nil {
-		return fmt.Errorf("invalid --host value %q: %w", localAddr, err)
+		return fmt.Errorf("invalid --udp-addr value %q: %w", localAddr, err)
 	}
 
 	resolvedAddr, err := net.ResolveUDPAddr("udp", targetAddr)
@@ -255,7 +283,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 
 	logger.Info().Str("target", targetAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
-		dg, err := exposure.AcceptDatagram()
+		frame, leaseID, relayURL, udpAddr, reply, err := exposure.AcceptDatagram()
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -267,36 +295,36 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		}
 
 		logger.Debug().
-			Uint32("flow_id", dg.FlowID).
-			Int("bytes", len(dg.Payload)).
-			Str("lease_id", dg.LeaseID).
-			Str("relay_url", dg.RelayURL).
-			Str("udp_addr", dg.UDPAddr).
+			Uint32("flow_id", frame.FlowID).
+			Int("bytes", len(frame.Payload)).
+			Str("lease_id", leaseID).
+			Str("relay_url", relayURL).
+			Str("udp_addr", udpAddr).
 			Str("target", targetAddr).
 			Msg("datagram received from relay, forwarding to local")
 
 		key := flowKey{
-			flowID:   dg.FlowID,
-			leaseID:  dg.LeaseID,
-			relayURL: dg.RelayURL,
+			flowID:   frame.FlowID,
+			leaseID:  leaseID,
+			relayURL: relayURL,
 		}
-		localConn, err := getOrCreateFlow(key, dg.Reply)
+		localConn, err := getOrCreateFlow(key, reply)
 		if err != nil {
 			logger.Warn().
 				Err(err).
-				Uint32("flow_id", dg.FlowID).
-				Str("lease_id", dg.LeaseID).
-				Str("relay_url", dg.RelayURL).
+				Uint32("flow_id", frame.FlowID).
+				Str("lease_id", leaseID).
+				Str("relay_url", relayURL).
 				Msg("dial local udp failed")
 			continue
 		}
 
-		if _, err := localConn.Write(dg.Payload); err != nil {
+		if _, err := localConn.Write(frame.Payload); err != nil {
 			logger.Warn().
 				Err(err).
-				Uint32("flow_id", dg.FlowID).
-				Str("lease_id", dg.LeaseID).
-				Str("relay_url", dg.RelayURL).
+				Uint32("flow_id", frame.FlowID).
+				Str("lease_id", leaseID).
+				Str("relay_url", relayURL).
 				Msg("write to local udp failed")
 		}
 	}

@@ -1,8 +1,9 @@
-package datagram
+package transport
 
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 
 	"github.com/quic-go/quic-go"
@@ -10,13 +11,10 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-var (
-	ErrNoConnection  = errors.New("no quic connection registered")
-	ErrSessionClosed = errors.New("quic datagram session closed")
-)
+var errNoConnection = errors.New("no quic connection registered")
 
-// Session owns one active QUIC DATAGRAM connection and exposes decoded frames.
-type Session struct {
+// datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
+type datagramSession struct {
 	incoming       chan types.DatagramFrame
 	dropIncoming   bool
 	onReceiveError func(error)
@@ -27,12 +25,12 @@ type Session struct {
 	closed bool
 }
 
-func NewSession(bufferSize int, dropIncoming bool, onReceiveError func(error)) *Session {
+func newDatagramSession(bufferSize int, dropIncoming bool, onReceiveError func(error)) *datagramSession {
 	if bufferSize <= 0 {
 		bufferSize = 256
 	}
 
-	return &Session{
+	return &datagramSession{
 		incoming:       make(chan types.DatagramFrame, bufferSize),
 		dropIncoming:   dropIncoming,
 		onReceiveError: onReceiveError,
@@ -42,7 +40,7 @@ func NewSession(bufferSize int, dropIncoming bool, onReceiveError func(error)) *
 
 // Bind installs a new active QUIC connection and starts the receive loop.
 // Any previously active connection is replaced and closed.
-func (s *Session) Bind(conn *quic.Conn) (<-chan struct{}, error) {
+func (s *datagramSession) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	if conn == nil {
 		return nil, errors.New("quic connection is required")
 	}
@@ -51,7 +49,7 @@ func (s *Session) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	if s.closed {
 		s.mu.Unlock()
 		_ = conn.CloseWithError(0, "session closed")
-		return nil, ErrSessionClosed
+		return nil, net.ErrClosed
 	}
 	old := s.conn
 	s.conn = conn
@@ -66,37 +64,33 @@ func (s *Session) Bind(conn *quic.Conn) (<-chan struct{}, error) {
 	return recvDone, nil
 }
 
-func (s *Session) Incoming() <-chan types.DatagramFrame {
-	return s.incoming
-}
-
-func (s *Session) Done() <-chan struct{} {
+func (s *datagramSession) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *Session) HasConnection() bool {
+func (s *datagramSession) hasConnection() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conn != nil && !s.closed
 }
 
-func (s *Session) Send(flowID uint32, payload []byte) error {
+func (s *datagramSession) Send(flowID uint32, payload []byte) error {
 	s.mu.Lock()
 	conn := s.conn
 	closed := s.closed
 	s.mu.Unlock()
 
 	if closed {
-		return ErrSessionClosed
+		return net.ErrClosed
 	}
 	if conn == nil {
-		return ErrNoConnection
+		return errNoConnection
 	}
 	return conn.SendDatagram(types.EncodeDatagram(flowID, payload))
 }
 
 // Clear closes the active connection but keeps the session reusable.
-func (s *Session) Clear(reason string) {
+func (s *datagramSession) Clear(reason string) {
 	s.mu.Lock()
 	conn := s.conn
 	s.conn = nil
@@ -108,7 +102,7 @@ func (s *Session) Clear(reason string) {
 }
 
 // Stop permanently closes the session and any active connection.
-func (s *Session) Stop(reason string) {
+func (s *datagramSession) Stop(reason string) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -125,7 +119,7 @@ func (s *Session) Stop(reason string) {
 	}
 }
 
-func (s *Session) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
+func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 	defer close(recvDone)
 
 	for {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	portaldatagram "github.com/gosuda/portal/v2/portal/datagram"
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -221,8 +221,12 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
 	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)
-	snapshot.Ready = record.ReadyCount()
-	snapshot.UDPPort = record.UDPPort()
+	if record.stream != nil {
+		snapshot.Ready = record.stream.ReadyCount()
+	}
+	if record.datagram != nil {
+		snapshot.UDPPort = record.datagram.UDPPort()
+	}
 	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
 	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)
 	snapshot.IsDenied = r.policy.IsLeaseDenied(record.ID)
@@ -233,167 +237,38 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 type leaseRecord struct {
 	types.Lease
 	ReverseToken string
-	Runtime      *leaseRuntime
-}
-
-func (r *leaseRecord) SupportsDatagram() bool {
-	return r != nil && r.Runtime != nil && r.Runtime.SupportsDatagram()
-}
-
-func (r *leaseRecord) SupportsStream() bool {
-	return r != nil && r.Runtime != nil && r.Runtime.SupportsStream()
-}
-
-func (r *leaseRecord) ReadyCount() int {
-	if r == nil || r.Runtime == nil {
-		return 0
-	}
-	return r.Runtime.ReadyCount()
-}
-
-func (r *leaseRecord) StreamBroker() *streamBroker {
-	if r == nil || r.Runtime == nil {
-		return nil
-	}
-	return r.Runtime.StreamBroker()
-}
-
-func (r *leaseRecord) DatagramFlowMux() *portaldatagram.FlowMux {
-	if r == nil || r.Runtime == nil {
-		return nil
-	}
-	return r.Runtime.DatagramFlowMux()
-}
-
-func (r *leaseRecord) UDPPort() int {
-	if r == nil || r.Runtime == nil {
-		return 0
-	}
-	return r.Runtime.UDPPort()
-}
-
-type leaseRuntime struct {
-	capabilities types.LeaseCapabilities
-	datagram     *leaseDatagramRuntime
+	datagram     *transport.RelayDatagram
+	ports        *transport.PortAllocator
+	stream       *transport.RelayStream
 	startErr     error
 	startOnce    sync.Once
-	stream       *leaseStreamRuntime
 }
 
-type leaseRuntimeConfig struct {
-	Capabilities  types.LeaseCapabilities
-	IdleInterval  time.Duration
-	LeaseID       string
-	LeaseName     string
-	PortAllocator *portaldatagram.PortAllocator
-	ReadyLimit    int
-}
-
-type leaseStreamRuntime struct {
-	broker *streamBroker
-}
-
-type leaseDatagramRuntime struct {
-	flowMux *portaldatagram.FlowMux
-	port    int
-	relay   *portaldatagram.Relay
-}
-
-func newLeaseRuntime(cfg leaseRuntimeConfig) (*leaseRuntime, error) {
-	runtime := &leaseRuntime{capabilities: cfg.Capabilities}
-
-	if cfg.Capabilities.SupportsStream() {
-		runtime.stream = &leaseStreamRuntime{
-			broker: newStreamBroker(cfg.LeaseID, cfg.IdleInterval, cfg.ReadyLimit),
-		}
-	}
-
-	if cfg.Capabilities.SupportsDatagram() {
-		if cfg.PortAllocator == nil {
-			return nil, errors.New("udp port allocation not available")
-		}
-		port, err := cfg.PortAllocator.Allocate(cfg.LeaseName)
-		if err != nil {
-			return nil, fmt.Errorf("allocate udp port: %w", err)
-		}
-
-		flowMux := portaldatagram.NewFlowMux(cfg.LeaseID)
-		runtime.datagram = &leaseDatagramRuntime{
-			flowMux: flowMux,
-			port:    port,
-			relay:   portaldatagram.NewRelay(cfg.LeaseID, port, flowMux),
-		}
-	}
-
-	return runtime, nil
-}
-
-func (r *leaseRuntime) Start() error {
-	if r == nil || r.datagram == nil || r.datagram.relay == nil {
+func (r *leaseRecord) Start() error {
+	if r == nil || r.datagram == nil {
 		return nil
 	}
 
 	r.startOnce.Do(func() {
-		r.startErr = r.datagram.relay.Start(context.Background())
+		r.startErr = r.datagram.Start(context.Background())
 	})
-
 	return r.startErr
 }
 
-func (r *leaseRuntime) Close(ports *portaldatagram.PortAllocator) {
+func (r *leaseRecord) Close() {
 	if r == nil {
 		return
 	}
-	if r.stream != nil && r.stream.broker != nil {
-		r.stream.broker.Close()
+	if r.stream != nil {
+		r.stream.Close()
 	}
 	if r.datagram != nil {
-		if r.datagram.flowMux != nil {
-			r.datagram.flowMux.Stop()
-		}
-		if r.datagram.relay != nil {
-			r.datagram.relay.Stop()
-		}
-		if r.datagram.port > 0 && ports != nil {
-			ports.Release(r.datagram.port)
+		port := r.datagram.UDPPort()
+		r.datagram.Close()
+		if port > 0 && r.ports != nil {
+			r.ports.Release(port)
 		}
 	}
-}
-
-func (r *leaseRuntime) SupportsDatagram() bool {
-	return r != nil && r.capabilities.SupportsDatagram()
-}
-
-func (r *leaseRuntime) SupportsStream() bool {
-	return r != nil && r.capabilities.SupportsStream()
-}
-
-func (r *leaseRuntime) ReadyCount() int {
-	if r == nil || r.stream == nil || r.stream.broker == nil {
-		return 0
-	}
-	return r.stream.broker.ReadyCount()
-}
-
-func (r *leaseRuntime) StreamBroker() *streamBroker {
-	if r == nil || r.stream == nil {
-		return nil
-	}
-	return r.stream.broker
-}
-
-func (r *leaseRuntime) DatagramFlowMux() *portaldatagram.FlowMux {
-	if r == nil || r.datagram == nil {
-		return nil
-	}
-	return r.datagram.flowMux
-}
-
-func (r *leaseRuntime) UDPPort() int {
-	if r == nil || r.datagram == nil {
-		return 0
-	}
-	return r.datagram.port
 }
 
 type routeTable struct {
