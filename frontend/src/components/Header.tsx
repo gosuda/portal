@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import {
   Tooltip,
   TooltipContent,
@@ -44,9 +45,18 @@ export function Header({
                 x2="100%"
                 y2="100%"
               >
-                <stop offset="0%" stopColor="#22c55e" />
-                <stop offset="55%" stopColor="#14b8a6" />
-                <stop offset="100%" stopColor="#0ea5e9" />
+                <stop
+                  offset="0%"
+                  style={{ stopColor: "var(--accent-orange)" }}
+                />
+                <stop
+                  offset="55%"
+                  style={{ stopColor: "var(--neon-cyan)" }}
+                />
+                <stop
+                  offset="100%"
+                  style={{ stopColor: "var(--accent-magenta)" }}
+                />
               </linearGradient>
             </defs>
             <path
@@ -73,7 +83,10 @@ export function Header({
       <div className="flex flex-wrap items-center gap-3 sm:gap-4">
         {!isAdmin && (
           <nav className="hidden items-center gap-6 text-[15px] font-medium text-text-muted md:flex">
-            <a href="#live-servers" className="transition-colors hover:text-foreground">
+            <a
+              href="#live-servers"
+              className="transition-colors hover:text-foreground"
+            >
               Live apps
             </a>
             <a
@@ -117,6 +130,8 @@ export function Header({
             </svg>
           </a>
         )}
+
+        <ThemeToggleButton />
 
         {isAdmin && onLogout && (
           <TooltipProvider>

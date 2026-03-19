@@ -6,7 +6,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
-import { Check, Copy, X } from "lucide-react";
+import { Check, Copy, RefreshCw, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { apiClient } from "@/lib/apiClient";
 import { API_PATHS } from "@/lib/apiPaths";
@@ -46,13 +46,13 @@ export function TunnelCommandForm({
   const isTerminal = theme === "terminal";
   const isHero = mode === "hero";
 
-  const currentOrigin = useMemo(() => {
+  const [currentOrigin] = useState(() => {
     if (typeof window !== "undefined") {
       return window.location.origin;
     }
     return "https://localhost:4017";
-  }, []);
-  const nameSeed = useMemo(() => {
+  });
+  const [nameSeed] = useState(() => {
     if (typeof window === "undefined") {
       return "web_portal";
     }
@@ -73,7 +73,7 @@ export function TunnelCommandForm({
     } catch {
       return "web_portal";
     }
-  }, []);
+  });
 
   const [target, setTarget] = useState(defaultHost);
   const [name, setName] = useState("");
@@ -86,6 +86,7 @@ export function TunnelCommandForm({
   const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [thumbnailURL, setThumbnailURL] = useState("");
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus>("waiting");
+
   const resolvedNameSeed = useMemo(
     () => `${nameSeed}:${nameShuffleKey}`,
     [nameSeed, nameShuffleKey]
@@ -95,12 +96,10 @@ export function TunnelCommandForm({
     [resolvedNameSeed, target]
   );
   const effectiveName = isAutoName ? generatedName : name;
-
   const normalizedThumbnailURL = useMemo(
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
     [thumbnailURL]
   );
-
   const thumbnailError = useMemo(() => {
     if (thumbnailURL.trim() === "" || normalizedThumbnailURL !== "") {
       return "";
@@ -108,54 +107,42 @@ export function TunnelCommandForm({
 
     return "Thumbnail must be an absolute http:// or https:// URL.";
   }, [thumbnailURL, normalizedThumbnailURL]);
-
-  const copyCommand = useMemo(
-    () =>
-      buildTunnelCommand({
-        currentOrigin,
-        target,
-        name: effectiveName,
-        nameSeed,
-        relayUrls: isHero ? [currentOrigin] : relayUrls,
-        defaultRelays: isHero ? true : defaultRelays,
-        thumbnailURL: normalizedThumbnailURL,
-        os,
-      }),
+  const resolvedRelayUrls = useMemo(
+    () => (isHero ? [currentOrigin] : relayUrls),
+    [currentOrigin, isHero, relayUrls]
+  );
+  const includeDefaultRelays = isHero || defaultRelays;
+  const resolvedThumbnailURL = isHero ? "" : normalizedThumbnailURL;
+  const commandOptions = useMemo(
+    () => ({
+      currentOrigin,
+      target,
+      name: effectiveName,
+      nameSeed,
+      relayUrls: resolvedRelayUrls,
+      defaultRelays: includeDefaultRelays,
+      thumbnailURL: resolvedThumbnailURL,
+      os,
+    }),
     [
       currentOrigin,
-      defaultRelays,
       effectiveName,
-      isHero,
+      includeDefaultRelays,
       nameSeed,
-      normalizedThumbnailURL,
       os,
-      relayUrls,
+      resolvedRelayUrls,
+      resolvedThumbnailURL,
       target,
     ]
   );
+
+  const copyCommand = useMemo(
+    () => buildTunnelCommand(commandOptions),
+    [commandOptions]
+  );
   const displayCommand = useMemo(
-    () =>
-      buildTunnelDisplayCommand({
-        currentOrigin,
-        target,
-        name: effectiveName,
-        nameSeed,
-        relayUrls: isHero ? [currentOrigin] : relayUrls,
-        defaultRelays: isHero ? true : defaultRelays,
-        thumbnailURL: normalizedThumbnailURL,
-        os,
-      }),
-    [
-      currentOrigin,
-      defaultRelays,
-      effectiveName,
-      isHero,
-      nameSeed,
-      normalizedThumbnailURL,
-      os,
-      relayUrls,
-      target,
-    ]
+    () => buildTunnelDisplayCommand(commandOptions),
+    [commandOptions]
   );
   const previewURL = useMemo(
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
@@ -202,6 +189,7 @@ export function TunnelCommandForm({
           setTunnelStatus("waiting");
           return;
         }
+
         setTunnelStatus(statusResponse.service_alive ? "alive" : "registered");
       } catch {
         if (!cancelled) {
@@ -285,24 +273,18 @@ export function TunnelCommandForm({
     setIsAutoName(true);
     setNameShuffleKey(next);
   };
-  const tunnelStatusTone =
-    tunnelStatus === "alive"
-      ? isTerminal
-        ? "bg-green-400"
-        : "bg-green-600"
-      : tunnelStatus === "registered"
-        ? isTerminal
-          ? "bg-sky-400"
-          : "bg-sky-600"
-        : isTerminal
-          ? "bg-slate-500"
-          : "bg-slate-400";
-  const tunnelStatusHeadline =
-    tunnelStatus === "alive"
-      ? "This URL is live now"
-      : tunnelStatus === "registered"
-        ? "URL reserved"
-        : "Waiting";
+
+  const tunnelStatusTone = {
+    alive: isTerminal ? "bg-green-400" : "bg-green-600",
+    registered: isTerminal ? "bg-sky-400" : "bg-sky-600",
+    waiting: isTerminal ? "bg-slate-500" : "bg-slate-400",
+  }[tunnelStatus];
+  const tunnelStatusHeadline = {
+    alive: "This URL is live now",
+    registered: "URL reserved",
+    waiting: "Waiting",
+  }[tunnelStatus];
+  const isPreviewURLDisabled = tunnelStatus === "waiting";
   const heroSectionLabelClass = cn(
     "text-xs font-semibold uppercase tracking-[0.24em]",
     isTerminal ? "text-slate-400" : "text-text-muted"
@@ -311,9 +293,7 @@ export function TunnelCommandForm({
   const commandSection = (
     <div className={cn("space-y-2", isHero && "space-y-3")}>
       {isHero ? (
-        <label className={heroSectionLabelClass}>
-          Command
-        </label>
+        <label className={heroSectionLabelClass}>Command</label>
       ) : (
         <label
           className={cn(
@@ -373,24 +353,37 @@ export function TunnelCommandForm({
       )}
 
       {isHero && (
-        <>
-          <div className="space-y-1.5 pt-1">
-            <p className={heroSectionLabelClass}>Public URL</p>
+        <div className="space-y-1.5 pt-1">
+          <p className={heroSectionLabelClass}>Public URL</p>
+          <div
+            className={cn(
+              "space-y-4 rounded-xl border px-4 py-3",
+              isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
+            )}
+          >
             <div
               className={cn(
-                "space-y-4 rounded-xl border px-4 py-3",
-                isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
+                "flex items-center gap-2 text-sm font-semibold",
+                isTerminal ? "text-slate-200" : "text-foreground"
               )}
             >
-              <div
+              <span
+                className={cn("h-2 w-2 rounded-full", tunnelStatusTone)}
+                aria-hidden="true"
+              />
+              <span>{tunnelStatusHeadline}</span>
+            </div>
+            {isPreviewURLDisabled ? (
+              <span
+                aria-disabled="true"
                 className={cn(
-                  "flex items-center gap-2 text-sm font-semibold",
-                  isTerminal ? "text-slate-200" : "text-foreground"
+                  "block cursor-not-allowed overflow-x-auto whitespace-nowrap font-mono text-base font-medium opacity-60 sm:text-lg",
+                  isTerminal ? "text-green-status" : "text-primary"
                 )}
               >
-                <span className={cn("h-2 w-2 rounded-full", tunnelStatusTone)} aria-hidden="true" />
-                <span>{tunnelStatusHeadline}</span>
-              </div>
+                {previewURL}
+              </span>
+            ) : (
               <a
                 href={previewURL}
                 target="_blank"
@@ -402,9 +395,9 @@ export function TunnelCommandForm({
               >
                 {previewURL}
               </a>
-            </div>
+            )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -413,26 +406,23 @@ export function TunnelCommandForm({
     "text-[11px] font-semibold uppercase tracking-[0.2em]",
     isTerminal ? "text-slate-400" : "text-text-muted"
   );
-
   const heroInputClass = cn(
-    "h-10 rounded-lg border text-sm shadow-none",
+    "h-12 rounded-xl border px-4 text-[15px] shadow-none",
     isTerminal
       ? "border-white/8 bg-black/20 text-slate-100 placeholder:text-slate-500"
       : "border-border bg-white"
   );
   const nameInputValue = isAutoName ? generatedName : name;
   const shuffleButtonClass = cn(
-    "shrink-0 rounded-lg border px-3 text-xs font-semibold transition-colors",
-    isHero ? "h-10" : "h-12",
+    "inline-flex shrink-0 items-center justify-center border px-3 text-xs font-semibold transition-colors",
+    isHero ? "h-12 rounded-xl px-4" : "h-12 rounded-lg",
     isTerminal
       ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
       : "border-border bg-white text-text-muted hover:text-foreground"
   );
   const optionSectionLabel = isHero ? (
     <div className="pt-1">
-      <p className={heroSectionLabelClass}>
-        Option
-      </p>
+      <p className={heroSectionLabelClass}>OPTIONS</p>
     </div>
   ) : null;
 
@@ -442,8 +432,8 @@ export function TunnelCommandForm({
       {optionSectionLabel}
 
       {isHero ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
             <label htmlFor={`${inputId}-host`} className={heroFieldLabelClass}>
               Host
             </label>
@@ -457,7 +447,7 @@ export function TunnelCommandForm({
             />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <label htmlFor={`${inputId}-name`} className={heroFieldLabelClass}>
               Public Name
             </label>
@@ -474,8 +464,9 @@ export function TunnelCommandForm({
                 onClick={handleShuffleName}
                 className={shuffleButtonClass}
                 aria-label="Shuffle public name"
+                title="Shuffle public name"
               >
-                🎲
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -535,8 +526,9 @@ export function TunnelCommandForm({
                 onClick={handleShuffleName}
                 className={shuffleButtonClass}
                 aria-label="Shuffle public name"
+                title="Shuffle public name"
               >
-                🎲
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -668,7 +660,7 @@ export function TunnelCommandForm({
             onClick={() => setOs("unix")}
             className={cn(
               "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-1.5 text-xs font-semibold" : "py-2 text-sm font-medium",
+              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
               os === "unix"
                 ? isTerminal
                   ? "bg-white text-slate-950 shadow-sm"
@@ -685,7 +677,7 @@ export function TunnelCommandForm({
             onClick={() => setOs("windows")}
             className={cn(
               "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-1.5 text-xs font-semibold" : "py-2 text-sm font-medium",
+              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
               os === "windows"
                 ? isTerminal
                   ? "bg-white text-slate-950 shadow-sm"

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <meta
       name="description"
       content="Transform your local services into web-accessible endpoints. Instant access from anywhere."
@@ -18,9 +18,27 @@
     <meta name="portal-release-version" content="[%RELEASE_VERSION%]" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Portal - Local to web. Instant access.</title>
+    <script>
+      (() => {
+        const defaultTheme = "light";
+
+        try {
+          const storedTheme = localStorage.getItem("theme");
+          const theme =
+            storedTheme === "light" || storedTheme === "dark"
+              ? storedTheme
+              : defaultTheme;
+
+          document.documentElement.classList.toggle("dark", theme === "dark");
+          document.documentElement.style.colorScheme = theme;
+        } catch {
+          document.documentElement.style.colorScheme = defaultTheme;
+        }
+      })();
+    </script>
   </head>
 
-  <body class="dark">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

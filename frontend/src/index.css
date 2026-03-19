@@ -1,6 +1,8 @@
 @import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-family-display: "Manrope", sans-serif;
   --font-family-sans: "Public Sans", sans-serif;
@@ -30,34 +32,97 @@
   --color-ring: var(--ring);
   --color-green-status: var(--green-status);
   --color-text-muted: var(--text-muted);
-  --color-brand-coral: var(--brand-coral);
 }
 
 @layer base {
   :root {
-    --background: oklch(99.1% 0.001 0);
-    --foreground: oklch(22% 0.01 260);
+    --background: oklch(97% 0.005 250);
+    --foreground: oklch(25% 0.02 250);
     --card: oklch(100% 0 0);
-    --card-foreground: oklch(22% 0.01 260);
+    --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
-    --popover-foreground: oklch(22% 0.01 260);
-    --primary: oklch(21% 0.008 260);
-    --primary-foreground: oklch(99.4% 0.001 0);
-    --secondary: oklch(96.7% 0.002 0);
-    --secondary-foreground: oklch(33% 0.012 260);
-    --muted: oklch(97.4% 0.001 0);
-    --muted-foreground: oklch(50% 0.01 260);
-    --accent: oklch(95.8% 0.002 0);
-    --accent-foreground: oklch(22% 0.01 260);
-    --destructive: oklch(60% 0.21 26);
-    --destructive-foreground: oklch(99.4% 0.001 0);
-    --border: oklch(90.8% 0.003 0);
-    --input: oklch(100% 0 0);
-    --ring: oklch(68% 0.19 149);
+    --popover-foreground: oklch(25% 0.02 250);
+    --primary: oklch(75% 0.14 195);
+    --primary-foreground: oklch(100% 0 0);
+    --secondary: oklch(92% 0.01 250);
+    --secondary-foreground: oklch(45% 0.02 250);
+    --muted: oklch(95% 0.005 250);
+    --muted-foreground: oklch(55% 0.03 250);
+    --accent: oklch(92% 0.01 250);
+    --accent-foreground: oklch(25% 0.02 250);
+    --destructive: oklch(55% 0.2 25);
+    --destructive-foreground: oklch(100% 0 0);
+    --border: oklch(90% 0.01 250);
+    --input: oklch(95% 0.005 250);
+    --ring: oklch(75% 0.14 195);
 
-    --green-status: oklch(68% 0.19 149);
-    --text-muted: oklch(49% 0.012 260);
-    --brand-coral: oklch(68% 0.19 149);
+    --green-status: oklch(55% 0.16 150);
+    --text-muted: oklch(55% 0.03 250);
+    --accent-orange: oklch(60% 0.2 35);
+    --accent-magenta: oklch(50% 0.22 350);
+    --neon-cyan: oklch(75% 0.14 195);
+
+    --hero-grid-dot: oklch(75% 0.14 195 / 0.18);
+    --hero-gradient-start: var(--accent-orange);
+    --hero-gradient-mid: var(--neon-cyan);
+    --hero-gradient-end: var(--accent-magenta);
+    --hero-terminal-bg:
+      linear-gradient(160deg, oklch(19% 0.005 250 / 0.98), oklch(14% 0.008 250 / 0.98));
+    --hero-terminal-border: oklch(75% 0.14 195 / 0.22);
+    --hero-terminal-foreground: oklch(98% 0.01 0);
+    --hero-terminal-accent: var(--neon-cyan);
+    --hero-terminal-shadow: oklch(15% 0 0 / 0.18);
+
+    --card-media-fallback-start: oklch(97% 0.015 220);
+    --card-media-fallback-end: oklch(91% 0.04 195);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(75% 0.14 195 / 0.18), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(100% 0 0 / 0.72));
+  }
+
+  .dark {
+    --background: oklch(15% 0 0);
+    --foreground: oklch(98% 0.01 0);
+    --card: oklch(20% 0 0);
+    --card-foreground: oklch(98% 0.01 0);
+    --popover: oklch(20% 0 0);
+    --popover-foreground: oklch(98% 0.01 0);
+    --primary: oklch(80% 0.14 195);
+    --primary-foreground: oklch(10% 0 0);
+    --secondary: oklch(25% 0.02 195);
+    --secondary-foreground: oklch(98% 0.01 0);
+    --muted: oklch(25% 0.01 0);
+    --muted-foreground: oklch(65% 0.02 0);
+    --accent: oklch(25% 0.03 195);
+    --accent-foreground: oklch(98% 0.01 0);
+    --destructive: oklch(62% 0.22 25);
+    --destructive-foreground: oklch(98% 0 0);
+    --border: oklch(100% 0 0 / 0.1);
+    --input: oklch(22% 0.01 0);
+    --ring: oklch(80% 0.14 195);
+
+    --green-status: oklch(75% 0.16 150);
+    --text-muted: oklch(65% 0.02 0);
+    --accent-orange: oklch(65% 0.2 35);
+    --accent-magenta: oklch(55% 0.25 350);
+    --neon-cyan: oklch(80% 0.14 195);
+
+    --hero-grid-dot: oklch(80% 0.14 195 / 0.22);
+    --hero-gradient-start: var(--neon-cyan);
+    --hero-gradient-mid: var(--accent-magenta);
+    --hero-gradient-end: var(--accent-orange);
+    --hero-terminal-bg:
+      linear-gradient(160deg, oklch(19% 0 0 / 0.78), oklch(12% 0.01 250 / 0.88));
+    --hero-terminal-border: oklch(80% 0.14 195 / 0.3);
+    --hero-terminal-foreground: oklch(98% 0.01 0);
+    --hero-terminal-accent: var(--neon-cyan);
+    --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
+
+    --card-media-fallback-start: oklch(26% 0.03 235);
+    --card-media-fallback-end: oklch(18% 0.02 260);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(80% 0.14 195 / 0.26), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(10% 0 0 / 0.78));
   }
 
   * {
@@ -66,6 +131,7 @@
 
   html {
     background-color: var(--background);
+    color-scheme: light;
   }
 
   @media (prefers-reduced-motion: no-preference) {
@@ -77,11 +143,22 @@
   body {
     min-height: 100vh;
     background:
-      radial-gradient(circle at top center, oklch(91% 0.055 149 / 0.16), transparent 44%),
-      linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(99.2% 0.001 0) 54%, oklch(98.5% 0.002 0) 100%);
+      radial-gradient(circle at top center, oklch(75% 0.14 195 / 0.16), transparent 36%),
+      radial-gradient(circle at 12% 18%, oklch(60% 0.2 35 / 0.08), transparent 22%),
+      linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(97% 0.005 250) 54%, oklch(95% 0.005 250) 100%);
     color: var(--foreground);
-    color-scheme: light;
     font-family: var(--font-family-sans);
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  .dark body {
+    background:
+      radial-gradient(circle at top center, oklch(80% 0.14 195 / 0.16), transparent 32%),
+      radial-gradient(circle at 82% 10%, oklch(55% 0.25 350 / 0.12), transparent 20%),
+      linear-gradient(180deg, oklch(16% 0 0) 0%, oklch(13% 0.01 250) 54%, oklch(11% 0.01 250) 100%);
   }
 
   h1,

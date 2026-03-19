@@ -1,6 +1,6 @@
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import clsx from "clsx";
-import { useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -233,13 +233,16 @@ export function ServerCard({
         style={{
           backgroundImage: thumbnail
             ? `linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.08)), url(${thumbnail})`
-            : "linear-gradient(135deg, oklch(99.4% 0.004 85) 0%, oklch(94.6% 0.008 85) 100%)",
+            : "linear-gradient(135deg, var(--card-media-fallback-start) 0%, var(--card-media-fallback-end) 100%)",
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
       >
         {!thumbnail && (
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_oklch(68%_0.19_34_/_0.24),_transparent_36%),linear-gradient(180deg,_transparent,_oklch(100%_0_0_/_0.72))]" />
+          <div
+            className="absolute inset-0"
+            style={{ background: "var(--card-media-overlay)" }}
+          />
         )}
 
         <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
@@ -313,7 +316,7 @@ export function ServerCard({
       <div className="flex flex-1 flex-col justify-between gap-4 p-5">
         <div className="space-y-4">
           <div className="space-y-2">
-            <h3 className="text-2xl font-bold tracking-tight text-foreground truncate">
+            <h3 className="truncate text-2xl font-bold tracking-tight text-foreground">
               {name}
             </h3>
             {description && (
@@ -353,10 +356,7 @@ export function ServerCard({
             {onBPSChange && (
               <div className="flex items-center justify-between gap-4">
                 <span className="text-xs text-text-muted">
-                  BPS:{" "}
-                  <span className="font-medium text-foreground">
-                    {formatBPS(bps)}
-                  </span>
+                  BPS: <span className="font-medium text-foreground">{formatBPS(bps)}</span>
                 </span>
                 <button
                   onClick={handleBPSSettingsClick}
@@ -408,8 +408,8 @@ export function ServerCard({
                     ? "Unban IP"
                     : "Ban IP"
                   : isBanned
-                  ? "Unban"
-                  : "Ban"}
+                    ? "Unban"
+                    : "Ban"}
               </button>
             )}
           </div>

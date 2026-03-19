@@ -11,7 +11,13 @@ export function LandingHero() {
         aria-hidden="true"
         className="pointer-events-none absolute inset-0"
       >
-        <div className="absolute inset-0 opacity-45 [background-image:radial-gradient(rgba(99,102,241,0.12)_0.8px,transparent_0.8px)] [background-size:14px_14px] [mask-image:linear-gradient(to_bottom,white,transparent_82%)]" />
+        <div
+          className="absolute inset-0 opacity-45 [background-size:14px_14px] [mask-image:linear-gradient(to_bottom,white,transparent_82%)]"
+          style={{
+            backgroundImage:
+              "radial-gradient(var(--hero-grid-dot) 0.8px, transparent 0.8px)",
+          }}
+        />
       </div>
 
       <a
@@ -27,7 +33,13 @@ export function LandingHero() {
           className="text-5xl font-extrabold tracking-tight text-foreground sm:text-6xl lg:text-7xl"
         >
           <span className="block">Expose Local Apps</span>
-          <span className="mt-2 block bg-[linear-gradient(90deg,#7c6cff_0%,#6c8fff_46%,#57c6ff_100%)] bg-clip-text text-transparent">
+          <span
+            className="mt-2 block bg-clip-text text-transparent"
+            style={{
+              backgroundImage:
+                "linear-gradient(90deg, var(--hero-gradient-start) 0%, var(--hero-gradient-mid) 46%, var(--hero-gradient-end) 100%)",
+            }}
+          >
             To The Public Internet
           </span>
         </h1>
@@ -37,12 +49,23 @@ export function LandingHero() {
         </p>
       </div>
 
-      <div className="relative mx-auto mt-10 max-w-[560px] rounded-[1.75rem] border border-white/10 bg-slate-950 p-5 text-white shadow-[0_30px_72px_rgba(15,23,42,0.22)] sm:p-6">
+      <div
+        className="relative mx-auto mt-10 max-w-[560px] rounded-[1.75rem] border p-5 sm:p-6"
+        style={{
+          background: "var(--hero-terminal-bg)",
+          borderColor: "var(--hero-terminal-border)",
+          color: "var(--hero-terminal-foreground)",
+          boxShadow: "0 30px 72px var(--hero-terminal-shadow)",
+        }}
+      >
         <div className="mb-5 flex items-center gap-3">
-          <Terminal className="h-5 w-5 text-green-status" />
+          <Terminal
+            className="h-5 w-5"
+            style={{ color: "var(--hero-terminal-accent)" }}
+          />
           <h2
             id="tunnel-preview"
-            className="text-2xl font-bold tracking-tight text-white"
+            className="text-2xl font-bold tracking-tight"
           >
             Run this command
           </h2>
