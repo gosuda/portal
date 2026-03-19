@@ -16,6 +16,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 type readDirFileFS interface {
@@ -83,6 +84,7 @@ func (f *Frontend) Handler() *http.ServeMux {
 
 	mux.HandleFunc(types.PathAdmin, f.serveAdmin)
 	mux.HandleFunc(types.PathAdminPrefix, f.serveAdmin)
+	mux.HandleFunc(types.PathTunnelStatus, f.serveTunnelStatus)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, f.portalURL, false)
 	})
@@ -195,6 +197,29 @@ func (f *Frontend) injectServerData(htmlContent string) string {
 	}
 	ssrScript := `<script id="__SSR_DATA__" type="application/json">` + string(jsonData) + `</script>`
 	return strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
+}
+
+func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
+	if hostname == "" {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
+		return
+	}
+
+	resp := types.TunnelStatusResponse{
+		Hostname: hostname,
+	}
+	if snapshot, ok := f.server.LeaseSnapshotByHostname(hostname); ok {
+		resp.Hostname = snapshot.Hostname
+		resp.Registered = true
+		resp.ServiceAlive = snapshot.Ready > 0
+	}
+	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
 func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL string) string {

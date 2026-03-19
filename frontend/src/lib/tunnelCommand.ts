@@ -17,8 +17,6 @@ export interface TunnelCommandOptions {
   os: TunnelCommandOS;
 }
 
-const DEFAULT_PREVIEW_HOST = "portal.run";
-
 export function buildDefaultTunnelName(
   target: string,
   nameSeed: string
@@ -36,6 +34,58 @@ export function buildTunnelCommand({
   target,
   thumbnailURL,
 }: TunnelCommandOptions): string {
+  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
+    currentOrigin,
+    defaultRelays,
+    name,
+    nameSeed,
+    os,
+    relayUrls,
+    target,
+    thumbnailURL,
+  });
+
+  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
+}
+
+export function buildTunnelDisplayCommand({
+  currentOrigin,
+  defaultRelays,
+  name,
+  nameSeed,
+  os,
+  relayUrls,
+  target,
+  thumbnailURL,
+}: TunnelCommandOptions): string {
+  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
+    currentOrigin,
+    defaultRelays,
+    name,
+    nameSeed,
+    os,
+    relayUrls,
+    target,
+    thumbnailURL,
+  });
+
+  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
+}
+
+function buildTunnelCommandParts({
+  currentOrigin,
+  defaultRelays,
+  name,
+  nameSeed,
+  os,
+  relayUrls,
+  target,
+  thumbnailURL,
+}: TunnelCommandOptions): {
+  installLine: string;
+  exposeHead: string;
+  exposeOptions: string[];
+} {
   const targetValue = target.trim() === "" ? "3000" : target.trim();
   const nameValue = resolveExposeName(name, targetValue, nameSeed);
   const relayURLValue =
@@ -65,18 +115,22 @@ export function buildTunnelCommand({
   }
 
   if (os === "windows") {
-    return [
-      `$ProgressPreference = 'SilentlyContinue'`,
-      `irm ${formatToken(installPowerShellURL, os)} | iex`,
-      `portal expose ${[...exposeArgs, formatToken(targetValue, os)].join(" ")}`,
-    ].join("\n");
+    return {
+      installLine: [
+        `$ProgressPreference = 'SilentlyContinue'`,
+        `irm ${formatToken(installPowerShellURL, os)} | iex`,
+      ].join("\n"),
+      exposeHead: "portal expose",
+      exposeOptions: [...exposeArgs, formatToken(targetValue, os)],
+    };
   }
 
   const curlFlags = isLocalRelayOrigin(currentOrigin) ? "-ksSL" : "-sSL";
-  return [
-    `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
-    `portal expose ${[...exposeArgs, formatToken(targetValue, os)].join(" ")}`,
-  ].join("\n");
+  return {
+    installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
+    exposeHead: "portal expose",
+    exposeOptions: [...exposeArgs, formatToken(targetValue, os)],
+  };
 }
 
 export function buildTunnelPreviewURL(
@@ -88,6 +142,20 @@ export function buildTunnelPreviewURL(
   const baseHost = getTunnelBaseHost(origin);
   const subdomain = resolveExposeName(name, target, nameSeed);
   return `https://${subdomain}.${baseHost}`;
+}
+
+export function buildTunnelStatusHostname(
+  origin: string,
+  name: string,
+  target: string,
+  nameSeed: string
+): string {
+  const relayHost = getRelayOriginHost(origin);
+  if (relayHost === "") {
+    return "";
+  }
+  const subdomain = resolveExposeName(name, target, nameSeed);
+  return `${subdomain}.${relayHost}`;
 }
 
 export function normalizeAbsoluteHTTPURL(raw: string): string {
@@ -108,15 +176,16 @@ export function normalizeAbsoluteHTTPURL(raw: string): string {
 }
 
 function getTunnelBaseHost(origin: string): string {
+  const relayHost = getRelayOriginHost(origin);
+  return relayHost;
+}
+
+function getRelayOriginHost(origin: string): string {
   try {
     const parsed = new URL(origin);
-    const hostname = parsed.hostname.trim().toLowerCase();
-    if (isLocalRelayHostname(hostname)) {
-      return DEFAULT_PREVIEW_HOST;
-    }
-    return hostname;
+    return parsed.hostname.trim().toLowerCase();
   } catch {
-    return DEFAULT_PREVIEW_HOST;
+    return "";
   }
 }
 
@@ -151,4 +220,12 @@ function formatToken(value: string, os: TunnelCommandOS): string {
     return value;
   }
   return os === "windows" ? quotePowerShellValue(value) : quoteShellValue(value);
+}
+
+function joinTunnelCommand(
+  installLine: string,
+  exposeHead: string,
+  exposeOptions: string[]
+): string {
+  return [installLine, [exposeHead, ...exposeOptions].join(" ")].join("\n");
 }

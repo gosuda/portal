@@ -1,11 +1,22 @@
-import { useEffect, useId, useMemo, useState, type ChangeEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from "react";
 import { Check, Copy, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { apiClient } from "@/lib/apiClient";
+import { API_PATHS } from "@/lib/apiPaths";
 import { cn } from "@/lib/utils";
 import {
   buildDefaultTunnelName,
   buildTunnelCommand,
+  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
+  buildTunnelStatusHostname,
   normalizeAbsoluteHTTPURL,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
@@ -14,6 +25,14 @@ interface TunnelCommandFormProps {
   className?: string;
   theme?: "light" | "terminal";
   mode?: "full" | "hero";
+}
+
+type TunnelStatus = "waiting" | "registered" | "alive";
+
+interface TunnelStatusResponse {
+  hostname: string;
+  registered: boolean;
+  service_alive: boolean;
 }
 
 export function TunnelCommandForm({
@@ -66,6 +85,7 @@ export function TunnelCommandForm({
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [thumbnailURL, setThumbnailURL] = useState("");
+  const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus>("waiting");
   const resolvedNameSeed = useMemo(
     () => `${nameSeed}:${nameShuffleKey}`,
     [nameSeed, nameShuffleKey]
@@ -89,14 +109,38 @@ export function TunnelCommandForm({
     return "Thumbnail must be an absolute http:// or https:// URL.";
   }, [thumbnailURL, normalizedThumbnailURL]);
 
-  const command = useMemo(
+  const copyCommand = useMemo(
     () =>
       buildTunnelCommand({
         currentOrigin,
         target,
         name: effectiveName,
         nameSeed,
-        relayUrls: isHero ? [] : relayUrls,
+        relayUrls: isHero ? [currentOrigin] : relayUrls,
+        defaultRelays: isHero ? true : defaultRelays,
+        thumbnailURL: normalizedThumbnailURL,
+        os,
+      }),
+    [
+      currentOrigin,
+      defaultRelays,
+      effectiveName,
+      isHero,
+      nameSeed,
+      normalizedThumbnailURL,
+      os,
+      relayUrls,
+      target,
+    ]
+  );
+  const displayCommand = useMemo(
+    () =>
+      buildTunnelDisplayCommand({
+        currentOrigin,
+        target,
+        name: effectiveName,
+        nameSeed,
+        relayUrls: isHero ? [currentOrigin] : relayUrls,
         defaultRelays: isHero ? true : defaultRelays,
         thumbnailURL: normalizedThumbnailURL,
         os,
@@ -117,6 +161,11 @@ export function TunnelCommandForm({
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
     [currentOrigin, effectiveName, nameSeed, target]
   );
+  const statusHostname = useMemo(
+    () =>
+      buildTunnelStatusHostname(currentOrigin, effectiveName, target, nameSeed),
+    [currentOrigin, effectiveName, nameSeed, target]
+  );
 
   useEffect(() => {
     if (!copied) {
@@ -131,6 +180,47 @@ export function TunnelCommandForm({
       window.clearTimeout(timer);
     };
   }, [copied]);
+
+  useEffect(() => {
+    if (!isHero || statusHostname === "") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const params = new URLSearchParams({ hostname: statusHostname });
+        const statusResponse = await apiClient.get<TunnelStatusResponse>(
+          `${API_PATHS.tunnel.status}?${params.toString()}`
+        );
+        if (cancelled) {
+          return;
+        }
+
+        if (!statusResponse.registered) {
+          setTunnelStatus("waiting");
+          return;
+        }
+        setTunnelStatus(statusResponse.service_alive ? "alive" : "registered");
+      } catch {
+        if (!cancelled) {
+          setTunnelStatus("waiting");
+        }
+      }
+    };
+
+    setTunnelStatus("waiting");
+    void poll();
+    const interval = window.setInterval(() => {
+      void poll();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [isHero, statusHostname]);
 
   const addRelayURL = (url: string) => {
     const trimmed = url.trim();
@@ -151,7 +241,7 @@ export function TunnelCommandForm({
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
-  const handleURLKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleURLKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
       addRelayURL(urlInput);
@@ -165,7 +255,7 @@ export function TunnelCommandForm({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(copyCommand);
       setCopied(true);
     } catch (error) {
       console.error("Failed to copy tunnel command", error);
@@ -195,44 +285,93 @@ export function TunnelCommandForm({
     setIsAutoName(true);
     setNameShuffleKey(next);
   };
+  const tunnelStatusTone =
+    tunnelStatus === "alive"
+      ? isTerminal
+        ? "bg-green-400"
+        : "bg-green-600"
+      : tunnelStatus === "registered"
+        ? isTerminal
+          ? "bg-sky-400"
+          : "bg-sky-600"
+        : isTerminal
+          ? "bg-slate-500"
+          : "bg-slate-400";
+  const tunnelStatusHeadline =
+    tunnelStatus === "alive"
+      ? "This URL is live now"
+      : tunnelStatus === "registered"
+        ? "URL reserved"
+        : "Waiting";
+  const tunnelStatusLabel =
+    tunnelStatus === "alive"
+      ? ""
+      : tunnelStatus === "registered"
+        ? "Tunnel registered on this relay"
+        : "";
 
   const commandSection = (
-    <div className="space-y-2">
+    <div className={cn("space-y-2", isHero && "space-y-3")}>
       <label
         className={cn(
           "text-sm font-medium",
           isTerminal ? "text-slate-200" : "text-foreground"
         )}
       >
-        {isHero ? "Command" : "Generated Command"}
+        {isHero ? "Copy this command" : "Generated Command"}
       </label>
+      {isHero && (
+        <p className="text-xs leading-5 text-slate-400 sm:text-sm">
+          Copy and paste it into your terminal to publish a public URL.
+        </p>
+      )}
       <div className="relative">
         <pre
           className={cn(
-            "overflow-x-auto whitespace-pre-wrap break-all rounded-xl p-4 pr-12 font-mono text-sm leading-7",
+            "overflow-x-auto whitespace-pre-wrap break-all font-mono",
             isTerminal
-              ? "border border-white/10 bg-black/30 text-white"
-              : "bg-border text-foreground"
+              ? isHero
+                ? "min-h-[104px] rounded-xl border border-green-status/20 bg-black/45 p-4 text-sm leading-7 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                : "rounded-xl border border-white/10 bg-black/30 p-4 pr-12 text-sm leading-7 text-white"
+              : "rounded-xl bg-border p-4 pr-12 text-sm leading-7 text-foreground"
           )}
         >
-          {command}
+          {displayCommand}
         </pre>
+        {!isHero && (
+          <button
+            type="button"
+            onClick={handleCopy}
+            className={cn(
+              "absolute right-2 top-2 rounded-md p-2 transition-colors",
+              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70"
+            )}
+            aria-label="Copy command"
+          >
+            {copied ? (
+              <Check className="h-4 w-4 text-green-600" />
+            ) : (
+              <Copy className="h-4 w-4 text-text-muted" />
+            )}
+          </button>
+        )}
+      </div>
+      {isHero && (
         <button
           type="button"
           onClick={handleCopy}
           className={cn(
-            "absolute right-2 top-2 rounded-md p-2 transition-colors",
-            isTerminal ? "hover:bg-white/10" : "hover:bg-background/70"
+            "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors",
+            copied
+              ? "bg-white text-slate-950"
+              : "bg-green-status text-slate-950 hover:bg-green-300"
           )}
           aria-label="Copy command"
         >
-          {copied ? (
-            <Check className="h-4 w-4 text-green-600" />
-          ) : (
-            <Copy className="h-4 w-4 text-text-muted" />
-          )}
+          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          <span>{copied ? "Copied" : "Copy command"}</span>
         </button>
-      </div>
+      )}
 
       {isHero && (
         <div
@@ -241,14 +380,15 @@ export function TunnelCommandForm({
             isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
           )}
         >
-          <p
+          <div
             className={cn(
-              "text-xs font-semibold uppercase tracking-[0.24em]",
-              isTerminal ? "text-slate-400" : "text-text-muted"
+              "flex items-center gap-2 text-sm font-semibold",
+              isTerminal ? "text-slate-200" : "text-foreground"
             )}
           >
-            Public URL
-          </p>
+            <span className={cn("h-2 w-2 rounded-full", tunnelStatusTone)} aria-hidden="true" />
+            <span>{tunnelStatusHeadline}</span>
+          </div>
           <a
             href={previewURL}
             target="_blank"
@@ -260,24 +400,20 @@ export function TunnelCommandForm({
           >
             {previewURL}
           </a>
+          {tunnelStatusLabel !== "" && (
+            <div
+              className={cn(
+                "flex items-center gap-2 text-xs font-medium",
+                isTerminal ? "text-slate-300" : "text-text-muted"
+              )}
+            >
+              <span>{tunnelStatusLabel}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
-
-  const customizationSectionLabel =
-    isHero ? (
-      <div className="pt-1">
-        <p
-          className={cn(
-            "text-xs font-semibold uppercase tracking-[0.24em]",
-            isTerminal ? "text-slate-400" : "text-text-muted"
-          )}
-        >
-          Customize
-        </p>
-      </div>
-    ) : null;
 
   const heroFieldLabelClass = cn(
     "text-[11px] font-semibold uppercase tracking-[0.2em]",
@@ -302,7 +438,6 @@ export function TunnelCommandForm({
   return (
     <div className={cn("space-y-5", className)}>
       {isHero && commandSection}
-      {customizationSectionLabel}
 
       {isHero ? (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -515,22 +650,6 @@ export function TunnelCommandForm({
       )}
 
       <div className={cn("space-y-2", isHero && "pt-1")}>
-        <label
-          className={cn(
-            isHero
-              ? "text-[11px] font-semibold uppercase tracking-[0.2em]"
-              : "text-sm font-medium",
-            isTerminal
-              ? isHero
-                ? "text-slate-400"
-                : "text-slate-200"
-              : isHero
-                ? "text-text-muted"
-                : "text-foreground"
-          )}
-        >
-          Operating System
-        </label>
         <div
           className={cn(
             "flex p-1",

@@ -21,6 +21,8 @@ const (
 	PathInstallPowerShell = "/install.ps1"
 	PathInstallBinPrefix  = "/install/bin/"
 
+	PathTunnelStatus = "/tunnel/status"
+
 	PathSDKPrefix     = "/sdk/"
 	PathSDKDomain     = "/sdk/domain"
 	PathSDKRegister   = "/sdk/register"

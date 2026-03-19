@@ -88,6 +88,12 @@ type DomainResponse struct {
 	Version string `json:"version"`
 }
 
+type TunnelStatusResponse struct {
+	Hostname     string `json:"hostname"`
+	Registered   bool   `json:"registered"`
+	ServiceAlive bool   `json:"service_alive"`
+}
+
 type AdminLoginRequest struct {
 	Key string `json:"key"`
 }

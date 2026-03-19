@@ -22,6 +22,13 @@ import {
 export type BanFilter = "all" | "banned" | "active";
 type ListServer = ClientServer | AdminServer;
 
+interface OfficialRegistryDocument {
+  relays?: string[];
+}
+
+const OFFICIAL_REGISTRY_URL =
+  "https://raw.githubusercontent.com/gosuda/portal/main/registry.json";
+
 interface ServerListViewProps {
   title?: string;
   searchQuery: string;
@@ -99,6 +106,8 @@ export function ServerListView({
   onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<string[] | null>(null);
+  const [officialRegistryFailed, setOfficialRegistryFailed] = useState(false);
   const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
     new Set()
   );
@@ -129,8 +138,6 @@ export function ServerListView({
       })),
     [serverItems]
   );
-  const featuredPublicRows = serverRows.slice(0, 3);
-  const remainingPublicRows = serverRows.slice(3);
 
   const allLeaseIds = useMemo(
     () => [
@@ -175,9 +182,57 @@ export function ServerListView({
     setSelectedLeaseIds((prev) => (prev.size === 0 ? prev : new Set()));
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (isAdmin) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadOfficialRegistry = async () => {
+      try {
+        const response = await fetch(OFFICIAL_REGISTRY_URL, {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error(`registry request failed with status ${response.status}`);
+        }
+        const document = (await response.json()) as OfficialRegistryDocument;
+        if (cancelled) {
+          return;
+        }
+
+        setOfficialRegistryFailed(false);
+        setOfficialRegistryRelays(
+          Array.isArray(document.relays)
+            ? document.relays.filter(
+                (relay): relay is string =>
+                  typeof relay === "string" && relay.trim().length > 0
+              )
+            : []
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Failed to load official registry", error);
+          setOfficialRegistryFailed(true);
+          setOfficialRegistryRelays([]);
+        }
+      }
+    };
+
+    void loadOfficialRegistry();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
+  const officialRegistryURL = OFFICIAL_REGISTRY_URL;
+  const officialRegistryAvailable =
+    officialRegistryRelays !== null && officialRegistryRelays.length > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -358,12 +413,7 @@ export function ServerListView({
             ) : (
               <>
                 <div className="sticky top-0 z-20 bg-background/95 pt-5">
-                  <Header
-                    title={title}
-                    isAdmin={isAdmin}
-                    onLogout={onLogout}
-                    ctaLabel="Get Started"
-                  />
+                  <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
                 </div>
                 <main className="z-0 flex-1 px-4 pb-14 pt-6 sm:px-6">
                   <LandingHero />
@@ -371,11 +421,11 @@ export function ServerListView({
                   <section
                     id="live-servers"
                     aria-labelledby="live-servers-title"
-                    className="mt-8 border-t border-border pt-8"
+                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
                   >
                     <div className="space-y-2">
                       <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
-                        Discovery
+                        Live apps
                       </p>
                       <h2
                         id="live-servers-title"
@@ -383,32 +433,17 @@ export function ServerListView({
                       >
                         Browse live apps
                       </h2>
-                      <p className="max-w-2xl text-sm leading-6 text-text-muted">
-                        Explore public services exposed through Portal.
-                      </p>
                     </div>
 
                     {serverRows.length > 0 ? (
-                      <>
-                        <div className="mt-6">
-                          <div className={gridClasses}>
-                            {featuredPublicRows.map(renderServerCard)}
-                          </div>
+                      <div className="mt-6 border-t border-border pt-6">
+                        {searchBar}
+                        <div className="px-1 pt-3 text-sm text-text-muted">
+                          {filteredServers.length.toLocaleString()} services
+                          visible
                         </div>
-
-                        <div className="mt-4 border-t border-border pt-6">
-                          {searchBar}
-                          <div className="px-1 pt-3 text-sm text-text-muted">
-                            {filteredServers.length.toLocaleString()} services
-                            visible
-                          </div>
-                          {remainingPublicRows.length > 0 && (
-                            <div className={gridClasses}>
-                              {remainingPublicRows.map(renderServerCard)}
-                            </div>
-                          )}
-                        </div>
-                      </>
+                        {serverGrid}
+                      </div>
                     ) : (
                       <div className="mt-6">
                         {searchBar}
@@ -422,6 +457,74 @@ export function ServerListView({
                         </div>
                       </div>
                     )}
+                  </section>
+
+                  <section
+                    id="official-registry"
+                    aria-labelledby="official-registry-title"
+                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
+                  >
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="space-y-2">
+                        <h2
+                          id="official-registry-title"
+                          className="text-2xl font-semibold tracking-tight text-foreground"
+                        >
+                          Official registry
+                        </h2>
+                        <p className="max-w-2xl text-sm leading-6 text-text-muted">
+                          Portal reads default public relays from this registry.
+                        </p>
+                      </div>
+                      <a
+                        href={officialRegistryURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex h-11 items-center justify-center rounded-full border border-border px-4 text-sm font-semibold text-foreground transition-colors hover:border-foreground"
+                      >
+                        Open registry.json
+                      </a>
+                    </div>
+
+                    <div className="mt-5">
+                      <div className="rounded-2xl border border-border bg-background px-4 py-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-muted">
+                            Relays
+                          </p>
+                          {officialRegistryAvailable && (
+                            <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold text-text-muted">
+                              {officialRegistryRelays.length}
+                            </span>
+                          )}
+                        </div>
+
+                        {officialRegistryRelays === null && !officialRegistryFailed ? (
+                          <p className="mt-3 text-sm text-text-muted">
+                            Loading official registry...
+                          </p>
+                        ) : officialRegistryAvailable &&
+                          officialRegistryRelays.length > 0 ? (
+                          <div className="mt-3 space-y-1.5">
+                            {officialRegistryRelays.map((relay) => (
+                              <a
+                                key={relay}
+                                href={relay}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="block overflow-x-auto whitespace-nowrap font-mono text-sm text-foreground underline-offset-4 hover:underline"
+                              >
+                                {relay}
+                              </a>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm text-text-muted">
+                            Registry entries are unavailable right now.
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </section>
                 </main>
               </>

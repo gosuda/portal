@@ -17,6 +17,9 @@ export const API_PATHS = {
     domain: "/sdk/domain",
     connect: "/sdk/connect",
   },
+  tunnel: {
+    status: "/tunnel/status",
+  },
   healthz: "/healthz",
   install: {
     shell: "/install.sh",

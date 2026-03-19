@@ -68,6 +68,12 @@
     background-color: var(--background);
   }
 
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
   body {
     min-height: 100vh;
     background:

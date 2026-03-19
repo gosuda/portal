@@ -207,6 +207,18 @@ func (s *Server) LeaseSnapshots() []types.Lease {
 	return snapshots
 }
 
+func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
+	if s == nil || s.registry == nil {
+		return types.Lease{}, false
+	}
+
+	record, ok := s.registry.Lookup(hostname)
+	if !ok || record == nil || time.Now().After(record.ExpiresAt) {
+		return types.Lease{}, false
+	}
+	return s.registry.Snapshot(record), true
+}
+
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
 	acmeCfg := s.cfg.ACME
 	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.rootHost {
