@@ -23,6 +23,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  "include": ["src", "../utils/exposeName.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

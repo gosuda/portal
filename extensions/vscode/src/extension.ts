@@ -77,6 +77,7 @@ function runTunnelCommand(args: {
   const command = buildCommand({
     host: args.host,
     name: args.name,
+    nameSeed: vscode.env.machineId,
     relayList: args.relaySelection.relayUrls.join(","),
     relayUrl: args.relaySelection.installRelayUrl,
     thumbnail: args.thumbnail,
@@ -117,7 +118,7 @@ async function promptName(): Promise<string | undefined> {
   const defaultName = config.get<string>("defaultName") ?? "";
   return vscode.window.showInputBox({
     title: "Portal: Service Name",
-    prompt: "Optional public hostname prefix. Leave empty to let the CLI auto-generate one.",
+    prompt: "Optional public hostname prefix. Leave empty to auto-generate a stable default name.",
     value: defaultName,
   });
 }

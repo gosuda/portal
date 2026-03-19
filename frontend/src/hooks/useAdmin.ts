@@ -345,7 +345,6 @@ export function useAdmin() {
   const handleBulkBan = (peerIds: string[]) => handleBulkAction(peerIds, "ban");
 
   return {
-    serverData,
     servers,
     ...listState,
     banFilter,
@@ -362,6 +361,5 @@ export function useAdmin() {
     handleBulkApprove,
     handleBulkDeny,
     handleBulkBan,
-    refresh: fetchData,
   };
 }

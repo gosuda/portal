@@ -1,14 +1,13 @@
 import { Link } from "react-router-dom";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import clsx from "clsx";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
@@ -22,7 +21,6 @@ interface ServerCardProps {
   online: boolean;
   firstSeen?: string;
   dns: string;
-  serverUrl: string;
   navigationPath: string;
   navigationState: any;
   isFavorite?: boolean;
@@ -59,6 +57,7 @@ export function ServerCard({
   owner,
   online,
   firstSeen,
+  dns,
   navigationPath,
   navigationState,
   isFavorite = false,
@@ -118,55 +117,56 @@ export function ServerCard({
     const idx = bpsToSliderIndex(value);
     setSliderIndex(idx);
   };
-  const handleFavoriteClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+
+  const handleFavoriteClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     onToggleFavorite?.(serverId);
   };
 
-  const handleSelectClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleSelectClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (leaseId && onToggleSelect) {
       onToggleSelect(leaseId);
     }
   };
 
-  const handleBanClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleBanClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (leaseId) {
       runAsyncAdminAction(() => onBanStatusChange?.(leaseId, !isBanned));
     }
   };
 
-  const handleApproveClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleApproveClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (leaseId) {
       runAsyncAdminAction(() => onApproveStatusChange?.(leaseId, !isApproved));
     }
   };
 
-  const handleDenyClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleDenyClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (leaseId) {
       runAsyncAdminAction(() => onDenyStatusChange?.(leaseId, !isDenied));
     }
   };
 
-  const handleIPBanClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleIPBanClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     if (ip) {
       runAsyncAdminAction(() => onIPBanStatusChange?.(ip, !isIPBanned));
     }
   };
 
-  const handleBPSSettingsClick = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handleBPSSettingsClick = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
     setSliderIndex(bpsToSliderIndex(bps));
     setBpsInput(bps.toString());
     setShowBPSModal(true);
@@ -224,38 +224,33 @@ export function ServerCard({
     <article
       data-hero-key={`server-bg-${serverId}`}
       className={clsx(
-        "relative w-full overflow-hidden rounded-3xl group border border-white/10 shadow-lg",
-        showAdminControls ? "h-[286px]" : "h-[174.5px]"
+        "group flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-border bg-card shadow-[0_18px_42px_oklch(0%_0_0_/_0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_56px_oklch(0%_0_0_/_0.08)]",
+        showAdminControls ? "min-h-[360px]" : "min-h-[310px]"
       )}
     >
       <div
-        className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105"
+        className="relative h-40 overflow-hidden border-b border-border bg-secondary"
         style={{
           backgroundImage: thumbnail
-            ? `url(${thumbnail})`
-            : "linear-gradient(135deg, var(--card) 0%, var(--background) 100%)",
+            ? `linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.08)), url(${thumbnail})`
+            : "linear-gradient(135deg, oklch(99.4% 0.004 85) 0%, oklch(94.6% 0.008 85) 100%)",
+          backgroundSize: "cover",
+          backgroundPosition: "center",
         }}
-      />
+      >
+        {!thumbnail && (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_oklch(68%_0.19_34_/_0.24),_transparent_36%),linear-gradient(180deg,_transparent,_oklch(100%_0_0_/_0.72))]" />
+        )}
 
-      <div className="absolute inset-0 bg-linear-to-t from-black via-black/60 to-transparent" />
-
-      <div className="relative z-10 flex h-full flex-col justify-between p-5">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2 rounded-full bg-black/40 px-3 py-1 backdrop-blur-sm border border-white/5">
-            <div
-              className={clsx(
-                "size-2 rounded-full",
-                online
-                  ? "bg-primary shadow-[0_0_8px_rgba(0,219,219,0.8)] animate-pulse"
-                  : "bg-gray-500"
-              )}
-            />
+        <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
+          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)]">
             <span
               className={clsx(
-                "text-[10px] font-bold uppercase tracking-wider",
-                online ? "text-white" : "text-white/60"
+                "h-2.5 w-2.5 rounded-full",
+                online ? "bg-green-status" : "bg-muted-foreground"
               )}
-            >
+            />
+            <span>
               {online ? "Online" : "Offline"}
               {formattedDuration && online && ` · ${formattedDuration}`}
             </span>
@@ -265,17 +260,17 @@ export function ServerCard({
             <button
               onClick={handleSelectClick}
               className={clsx(
-                "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
+                "flex size-9 items-center justify-center rounded-full border border-border bg-card/95 text-text-muted shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)] transition-colors cursor-pointer",
                 isSelected
-                  ? "bg-primary text-black"
-                  : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:text-foreground"
               )}
               aria-label={isSelected ? "Deselect" : "Select"}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
-                className="w-[18px] h-[18px]"
+                className="h-[18px] w-[18px]"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="3"
@@ -289,10 +284,10 @@ export function ServerCard({
             <button
               onClick={handleFavoriteClick}
               className={clsx(
-                "flex size-8 items-center justify-center rounded-full backdrop-blur-md transition-colors border border-white/5 cursor-pointer",
+                "flex size-9 items-center justify-center rounded-full border border-border bg-card/95 text-text-muted shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)] transition-colors cursor-pointer",
                 isFavorite
-                  ? "bg-primary text-black"
-                  : "bg-black/40 text-white/70 hover:bg-primary hover:text-black"
+                  ? "bg-primary text-primary-foreground"
+                  : "hover:text-foreground"
               )}
               aria-label={
                 isFavorite ? "Remove from favorites" : "Add to favorites"
@@ -301,7 +296,7 @@ export function ServerCard({
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
-                className="w-[18px] h-[18px]"
+                className="h-[18px] w-[18px]"
                 fill={isFavorite ? "currentColor" : "none"}
                 stroke="currentColor"
                 strokeWidth="2"
@@ -313,118 +308,112 @@ export function ServerCard({
             </button>
           )}
         </div>
+      </div>
 
-        <div className="flex flex-col gap-3">
-          <div className="flex items-end justify-between gap-3">
-            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-              <h3 className="font-display text-xl font-bold leading-tight text-white truncate">
-                {name}
-              </h3>
-
-              {description && (
-                <p className="text-xs text-white/70 line-clamp-1 font-medium">
-                  {description}
-                </p>
-              )}
-
-              {tags && tags.length > 0 && (
-                <ScrollArea className="w-full mt-1">
-                  <div className="flex gap-1.5 min-w-max">
-                    {tags.map((tag, index) => (
-                      <span
-                        key={index}
-                        className="rounded bg-primary/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary border border-primary/30 whitespace-nowrap"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                  <ScrollBar orientation="horizontal" />
-                </ScrollArea>
-              )}
-
-              {owner && (
-                <span className="text-[10px] font-medium text-white/50">
-                  by {owner}
-                </span>
-              )}
-            </div>
-
-            {!showAdminControls && thumbnail && (
-              <div className="shrink-0">
-                <div className="size-10 overflow-hidden rounded-xl border border-white/20 shadow-lg">
-                  <img
-                    alt={`${name} avatar`}
-                    className="h-full w-full object-cover"
-                    src={thumbnail}
-                  />
-                </div>
-              </div>
+      <div className="flex flex-1 flex-col justify-between gap-4 p-5">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <h3 className="text-2xl font-bold tracking-tight text-foreground truncate">
+              {name}
+            </h3>
+            {description && (
+              <p className="line-clamp-2 text-sm leading-6 text-text-muted">
+                {description}
+              </p>
             )}
           </div>
 
-          {showAdminControls && leaseId && (
-            <div className="flex flex-col gap-2 w-full mt-2">
-              {onBPSChange && (
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-xs text-white/60">
-                    BPS: <span className="font-medium text-white">{formatBPS(bps)}</span>
+          {tags.length > 0 && (
+            <div className="w-full overflow-x-auto">
+              <div className="flex min-w-max gap-2 pb-1">
+                {tags.map((tag, index) => (
+                  <span
+                    key={index}
+                    className="whitespace-nowrap rounded-full border border-border bg-secondary px-3 py-1 text-xs font-medium text-text-muted"
+                  >
+                    #{tag}
                   </span>
-                  <button
-                    onClick={handleBPSSettingsClick}
-                    className="px-3 py-1 text-[10px] rounded-full bg-white/10 hover:bg-white/20 text-white/80 transition-colors cursor-pointer border border-white/10"
-                  >
-                    Settings
-                  </button>
-                </div>
-              )}
-
-              {isApproved && ip && (
-                <div className="text-[10px] text-white/50">
-                  IP: <span className="font-mono">{ip}</span>
-                  {isIPBanned && (
-                    <span className="ml-2 text-red-400">(Banned)</span>
-                  )}
-                </div>
-              )}
-
-              {!isApproved && !isDenied ? (
-                <div className="flex gap-2 w-full">
-                  <button
-                    onClick={handleApproveClick}
-                    className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-green-600/80 hover:bg-green-600 backdrop-blur-sm"
-                  >
-                    Approve
-                  </button>
-                  <button
-                    onClick={handleDenyClick}
-                    className="flex-1 px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white bg-red-600/80 hover:bg-red-600 backdrop-blur-sm"
-                  >
-                    Deny
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={ip ? handleIPBanClick : handleBanClick}
-                  className={clsx(
-                    "w-full px-4 py-2 rounded-lg font-medium text-xs transition-colors cursor-pointer text-white backdrop-blur-sm",
-                    (ip ? isIPBanned : isBanned)
-                      ? "bg-green-600/80 hover:bg-green-600"
-                      : "bg-red-600/80 hover:bg-red-600"
-                  )}
-                >
-                  {ip
-                    ? isIPBanned
-                      ? "Unban IP"
-                      : "Ban IP"
-                    : isBanned
-                    ? "Unban"
-                    : "Ban"}
-                </button>
-              )}
+                ))}
+              </div>
             </div>
           )}
+
+          <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
+            {owner && <span>by {owner}</span>}
+            {dns && (
+              <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] text-secondary-foreground">
+                {dns}
+              </span>
+            )}
+          </div>
         </div>
+
+        {showAdminControls && leaseId && (
+          <div className="flex flex-col gap-3 rounded-[1.5rem] border border-border bg-secondary/70 p-4">
+            {onBPSChange && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-xs text-text-muted">
+                  BPS:{" "}
+                  <span className="font-medium text-foreground">
+                    {formatBPS(bps)}
+                  </span>
+                </span>
+                <button
+                  onClick={handleBPSSettingsClick}
+                  className="rounded-full border border-border bg-card px-3 py-1 text-[11px] font-semibold text-foreground transition-colors hover:bg-secondary cursor-pointer"
+                >
+                  Settings
+                </button>
+              </div>
+            )}
+
+            {isApproved && ip && (
+              <div className="text-[11px] text-text-muted">
+                IP: <span className="font-mono text-foreground">{ip}</span>
+                {isIPBanned && (
+                  <span className="ml-2 font-medium text-destructive">
+                    (Banned)
+                  </span>
+                )}
+              </div>
+            )}
+
+            {!isApproved && !isDenied ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={handleApproveClick}
+                  className="flex-1 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={handleDenyClick}
+                  className="flex-1 rounded-xl bg-destructive px-4 py-2 text-xs font-semibold text-destructive-foreground transition-opacity hover:opacity-90 cursor-pointer"
+                >
+                  Deny
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={ip ? handleIPBanClick : handleBanClick}
+                className={clsx(
+                  "w-full rounded-xl px-4 py-2 text-xs font-semibold transition-opacity hover:opacity-90 cursor-pointer",
+                  (ip ? isIPBanned : isBanned)
+                    ? "bg-green-status text-white"
+                    : "bg-destructive text-destructive-foreground"
+                )}
+              >
+                {ip
+                  ? isIPBanned
+                    ? "Unban IP"
+                    : "Ban IP"
+                  : isBanned
+                  ? "Unban"
+                  : "Ban"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </article>
   );
@@ -437,7 +426,7 @@ export function ServerCard({
         <Link
           to={navigationPath}
           state={navigationState}
-          className="relative cursor-pointer block"
+          className="relative block h-full cursor-pointer"
         >
           {cardBody}
         </Link>
@@ -459,19 +448,19 @@ export function ServerCard({
             min="0"
             max={bpsSteps.length - 1}
             value={sliderIndex}
-            onChange={(e) => {
-              const idx = parseInt(e.target.value, 10);
+            onChange={(event) => {
+              const idx = parseInt(event.target.value, 10);
               handleSliderChange(idx);
             }}
-            className="w-full h-2 bg-secondary rounded-md appearance-none cursor-pointer"
+            className="h-2 w-full cursor-pointer appearance-none rounded-md bg-secondary"
           />
           <div className="flex justify-between text-xs text-text-muted">
             {bpsSteps.map((step, idx) => (
               <span
                 key={idx}
                 className={clsx(
-                  "cursor-pointer hover:text-foreground transition-colors",
-                  sliderIndex === idx && "text-primary font-medium"
+                  "cursor-pointer transition-colors hover:text-foreground",
+                  sliderIndex === idx && "font-medium text-primary"
                 )}
                 onClick={() => handleSliderChange(idx)}
               >
@@ -480,17 +469,17 @@ export function ServerCard({
             ))}
           </div>
           <div>
-            <label className="text-xs text-text-muted mb-1 block">
+            <label className="mb-1 block text-xs text-text-muted">
               Custom value (B/s)
             </label>
             <input
               type="number"
               value={bpsInput}
-              onChange={(e) => {
-                setBpsInput(e.target.value);
-                syncSliderFromInput(parseInt(e.target.value, 10) || 0);
+              onChange={(event) => {
+                setBpsInput(event.target.value);
+                syncSliderFromInput(parseInt(event.target.value, 10) || 0);
               }}
-              className="w-full px-3 py-2 border border-foreground/20 rounded bg-background text-foreground"
+              className="w-full rounded border border-foreground/20 bg-background px-3 py-2 text-foreground"
               placeholder="Enter BPS limit"
               min="0"
             />

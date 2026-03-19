@@ -4,7 +4,7 @@ Expose your local service to the internet via a [Portal](https://github.com/gosu
 
 ## Features
 
-- `Portal: Start Tunnel` prompts only for the local host:port, then starts the tunnel with configured relay URLs or the default public registry
+- `Portal: Start Tunnel` prompts only for the local host:port, then starts the tunnel with a stable generated name plus configured relay URLs or the default public registry
 - `Portal: Start Tunnel (Advanced)` prompts for host, optional service name, relay source, and optional thumbnail
 - `Portal: Stop Tunnel` stops the active tunnel terminal
 - Persisted settings for relay URLs, default local host, and default service name
@@ -22,7 +22,7 @@ Expose your local service to the internet via a [Portal](https://github.com/gosu
 |---|---|---|
 | `portal.relayUrls` | `[]` | Relay server URLs (`https://` only). If empty, the extension uses `https://raw.githubusercontent.com/gosuda/portal/main/registry.json`. |
 | `portal.defaultHost` | `"localhost:3000"` | Default local host:port shown by `Portal: Start Tunnel`. |
-| `portal.defaultName` | `""` | Default tunnel service name suggestion. If empty, the advanced prompt starts blank. |
+| `portal.defaultName` | `""` | Default tunnel service name suggestion. If empty, Portal generates a stable default name from the local host and machine seed. |
 
 Example `settings.json`:
 
@@ -70,5 +70,5 @@ If you want Linux behavior from WSL, open the folder with `Remote - WSL` first s
 - Enforce `https://` relay URLs
 - Prompt only for the local host in `Portal: Start Tunnel`
 - Add `Portal: Start Tunnel (Advanced)` for host, name, relay, and thumbnail overrides
-- Allow empty service names so the CLI can auto-generate them
+- Generate a stable default service name in the extension when the name is empty
 - Use the installed Portal binary path after installer execution
