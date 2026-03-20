@@ -15,6 +15,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
@@ -74,6 +75,12 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleUnregister(w, r)
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
+		case types.PathDiscovery:
+			if !s.DiscoveryEnabled() {
+				base.ServeHTTP(w, r)
+				return
+			}
+			s.discovery.ServeHTTP(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -95,6 +102,57 @@ func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.DiscoverResponse, error) {
+	resp := types.DiscoverResponse{
+		OwnerAddress: s.ownerIdentity.Address,
+	}
+	if req.RootHost != "" && req.RootHost != s.rootHost {
+		return resp, nil
+	}
+	if req.Name == "" {
+		return resp, nil
+	}
+
+	hostname, err := utils.LeaseHostname(req.Name, s.rootHost)
+	if err != nil {
+		return types.DiscoverResponse{}, err
+	}
+
+	now := time.Now()
+	var lease types.Lease
+	ok := false
+
+	s.registry.mu.RLock()
+	if leaseID, found := s.registry.routes.LookupExact(hostname); found {
+		record, found := s.registry.leaseByID[leaseID]
+		if found && record != nil && !now.After(record.ExpiresAt) && !record.Metadata.Hide && s.registry.policy.IsLeaseRoutable(record.ID) {
+			lease = record.Lease
+			lease.Bootstraps = append([]string(nil), lease.Bootstraps...)
+			lease.Metadata = lease.Metadata.Copy()
+			ok = true
+		}
+	}
+	s.registry.mu.RUnlock()
+
+	if !ok {
+		return resp, nil
+	}
+
+	ownerAddress := lease.OwnerAddress
+	if strings.TrimSpace(ownerAddress) == "" {
+		ownerAddress = s.ownerIdentity.Address
+	}
+
+	return types.DiscoverResponse{
+		Found:        true,
+		Name:         lease.Name,
+		Hostname:     lease.Hostname,
+		ExpiresAt:    lease.ExpiresAt,
+		OwnerAddress: ownerAddress,
+		Bootstraps:   lease.Bootstraps,
+	}, nil
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
@@ -393,6 +451,17 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
+	bootstraps, err := utils.NormalizeRelayURLs(req.Bootstraps)
+	if err != nil {
+		return types.RegisterResponse{}, fmt.Errorf("normalize bootstraps: %w", err)
+	}
+	ownerAddress := strings.TrimSpace(req.OwnerAddress)
+	if ownerAddress != "" {
+		ownerAddress, err = discovery.NormalizeEVMAddress(ownerAddress)
+		if err != nil {
+			return types.RegisterResponse{}, fmt.Errorf("normalize owner address: %w", err)
+		}
+	}
 
 	if err := s.requireDatagramPlane(req.UDPEnabled); err != nil {
 		return types.RegisterResponse{}, err
@@ -412,15 +481,17 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	expiresAt := now.Add(ttl)
 	record := &leaseRecord{
 		Lease: types.Lease{
-			ID:          leaseID,
-			Name:        name,
-			Hostname:    hostname,
-			Metadata:    req.Metadata,
-			ExpiresAt:   expiresAt,
-			FirstSeenAt: now,
-			LastSeenAt:  now,
-			ClientIP:    clientIP,
-			UDPEnabled:  req.UDPEnabled,
+			ID:           leaseID,
+			Name:         name,
+			Hostname:     hostname,
+			Bootstraps:   append([]string(nil), bootstraps...),
+			Metadata:     req.Metadata,
+			OwnerAddress: ownerAddress,
+			ExpiresAt:    expiresAt,
+			FirstSeenAt:  now,
+			LastSeenAt:   now,
+			ClientIP:     clientIP,
+			UDPEnabled:   req.UDPEnabled,
 		},
 		ReverseToken: req.ReverseToken,
 		stream:       transport.NewRelayStream(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
@@ -446,12 +517,32 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		record.Close()
 		return types.RegisterResponse{}, err
 	}
+	if s.discovery != nil {
+		if err := s.discovery.MergeBootstraps(bootstraps); err != nil {
+			record.Close()
+			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+			return types.RegisterResponse{}, err
+		}
+	}
+
+	responseBootstraps := append([]string(nil), s.cfg.Bootstraps...)
+	if s.discovery != nil {
+		responseBootstraps = s.discovery.Bootstraps()
+	} else {
+		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, record.Bootstraps...))
+		if err != nil {
+			record.Close()
+			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+			return types.RegisterResponse{}, err
+		}
+	}
 
 	resp := types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
+		Bootstraps: responseBootstraps,
 		UDPEnabled: record.UDPEnabled,
 	}
 	resp.ConnectURL = strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect

@@ -108,7 +108,7 @@ func runDemoUDP() error {
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure, logger zerolog.Logger) {
 	for {
-		frame, _, _, _, reply, err := exposure.AcceptDatagram()
+		frame, err := exposure.AcceptDatagram()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
@@ -121,7 +121,8 @@ func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure, logger zerolog.
 		if len(payload) == 0 {
 			payload = []byte("pong")
 		}
-		if err := reply(payload); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+		frame.Payload = payload
+		if err := exposure.SendDatagram(frame); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
 			logger.Warn().Err(err).Uint32("flow_id", frame.FlowID).Msg("demo udp reply failed")
 			return
 		}

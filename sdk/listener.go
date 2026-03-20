@@ -14,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
@@ -24,6 +25,8 @@ type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
 	UDPEnabled       bool
+	Discovery        bool
+	OwnerAddress     string
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -34,6 +37,8 @@ type ListenerConfig struct {
 	ReadyTarget      int
 	RetryCount       int
 	RetryWait        time.Duration
+
+	bootstrapService *discovery.Service
 }
 
 type listenerStatus string
@@ -55,6 +60,7 @@ type Listener struct {
 	cancel        context.CancelFunc
 	api           *apiClient
 	relayURL      string
+	bootstrapSvc  *discovery.Service
 	startupStatus listenerStatus
 	leaseID       string
 	hostname      string
@@ -64,7 +70,7 @@ type Listener struct {
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram
 
-	registered   chan struct{} // closed after first successful registration
+	registered   chan struct{}
 	closeOnce    sync.Once
 	registerOnce sync.Once
 	mu           sync.Mutex
@@ -73,6 +79,10 @@ type Listener struct {
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Listener, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	listenerCtx, cancel := context.WithCancel(ctx)
 	readyTarget := utils.IntOrDefault(cfg.ReadyTarget, defaultReadyTarget)
 	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
@@ -92,6 +102,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		api:           api,
 		registered:    make(chan struct{}),
 		relayURL:      api.baseURL.String(),
+		bootstrapSvc:  cfg.bootstrapService,
 		startupStatus: listenerStatusInactive,
 		readyTarget:   readyTarget,
 		retryCount:    cfg.RetryCount,
@@ -99,6 +110,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		leaseTTL:      leaseTTL,
 		renewBefore:   renewBefore,
 		udpEnabled:    cfg.UDPEnabled,
+		metadata:      cfg.Metadata.Copy(),
 	}
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
 	if cfg.UDPEnabled {
@@ -442,7 +454,11 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 
-	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.udpEnabled)
+	bootstraps := []string(nil)
+	if l.bootstrapSvc != nil {
+		bootstraps = l.bootstrapSvc.Bootstraps()
+	}
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.udpEnabled, bootstraps)
 	if err != nil {
 		return err
 	}
@@ -454,11 +470,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		}
 	}
 
-	var (
-		tlsConf   *tls.Config
-		tlsCloser io.Closer
-	)
-	tlsConf, tlsCloser, err = keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
 		return err
@@ -496,6 +508,11 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	}
 	if datagram != nil {
 		datagram.Clear("lease updated")
+	}
+	if l.bootstrapSvc != nil && len(resp.Bootstraps) > 0 {
+		if err := l.bootstrapSvc.MergeBootstraps(resp.Bootstraps); err != nil {
+			log.Warn().Err(err).Strs("bootstraps", resp.Bootstraps).Msg("learn bootstraps from register response")
+		}
 	}
 	l.registerOnce.Do(func() { close(l.registered) })
 	return nil

@@ -21,20 +21,22 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 }
 
 type Lease struct {
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	ID          string
-	Name        string
-	BPS         int64
-	ClientIP    string
-	Hostname    string
-	UDPEnabled  bool
-	Metadata    LeaseMetadata
-	Ready       int
-	UDPPort     int
-	IsApproved  bool
-	IsBanned    bool
-	IsDenied    bool
-	IsIPBanned  bool
+	ExpiresAt    time.Time
+	FirstSeenAt  time.Time
+	LastSeenAt   time.Time
+	ID           string
+	Name         string
+	BPS          int64
+	ClientIP     string
+	Hostname     string
+	Bootstraps   []string
+	UDPEnabled   bool
+	Metadata     LeaseMetadata
+	OwnerAddress string
+	Ready        int
+	UDPPort      int
+	IsApproved   bool
+	IsBanned     bool
+	IsDenied     bool
+	IsIPBanned   bool
 }

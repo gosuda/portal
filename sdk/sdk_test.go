@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -357,6 +359,174 @@ func TestExposeNoRelayInputs(t *testing.T) {
 	}
 	if exposure != nil {
 		t.Fatalf("Expose() exposure = %#v, want nil", exposure)
+	}
+}
+
+func TestExposeRegistersKnownRelayURLs(t *testing.T) {
+	registerReqCh := make(chan types.RegisterRequest, 2)
+	newRelayServer := func() *httptest.Server {
+		return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case types.PathSDKDomain:
+				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+					OK: true,
+					Data: types.DomainResponse{
+						Version: types.SDKProtocolVersion,
+					},
+				})
+			case types.PathSDKRegister:
+				var registerReq types.RegisterRequest
+				if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+					t.Fatalf("decode register request: %v", err)
+				}
+				select {
+				case registerReqCh <- registerReq:
+				default:
+				}
+				writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+					OK: true,
+					Data: types.RegisterResponse{
+						LeaseID:  "lease-1",
+						Hostname: "127.0.0.1",
+					},
+				})
+			case types.PathSDKConnect:
+				writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
+					OK:    false,
+					Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
+				})
+			case types.PathSDKRenew:
+				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
+					OK:   true,
+					Data: types.RenewResponse{LeaseID: "lease-1"},
+				})
+			case types.PathSDKUnregister:
+				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	}
+
+	relayA := newRelayServer()
+	defer relayA.Close()
+	relayB := newRelayServer()
+	defer relayB.Close()
+
+	exposure, err := ExposeWithConfig(context.Background(), ExposeConfig{
+		RelayURLs:    []string{relayA.URL, relayB.URL},
+		Discovery:    true,
+		Name:         "demo",
+		OwnerAddress: "0x52908400098527886E0F7030069857D2E4169EE7",
+	})
+	if err != nil {
+		t.Fatalf("ExposeWithConfig() error = %v", err)
+	}
+	defer exposure.Close()
+
+	var requests []types.RegisterRequest
+	waitForSDKTest(t, func() bool {
+		for len(requests) < 2 {
+			select {
+			case req := <-registerReqCh:
+				requests = append(requests, req)
+			default:
+				return false
+			}
+		}
+		return true
+	})
+
+	for _, req := range requests {
+		if req.OwnerAddress != "0x52908400098527886E0F7030069857D2E4169EE7" {
+			t.Fatalf("register request OwnerAddress = %q, want configured owner address", req.OwnerAddress)
+		}
+		if len(req.Bootstraps) != 2 || req.Bootstraps[0] != relayA.URL || req.Bootstraps[1] != relayB.URL {
+			t.Fatalf("register request Bootstraps = %v, want [%q %q]", req.Bootstraps, relayA.URL, relayB.URL)
+		}
+	}
+}
+
+func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
+	ownerPrivateKey := strings.Repeat("11", 32)
+	identity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	if err != nil {
+		t.Fatalf("ResolveIdentity() error = %v", err)
+	}
+
+	registerReqCh := make(chan types.RegisterRequest, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					Version: types.SDKProtocolVersion,
+				},
+			})
+		case types.PathSDKRegister:
+			var registerReq types.RegisterRequest
+			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+				t.Fatalf("decode register request: %v", err)
+			}
+			select {
+			case registerReqCh <- registerReq:
+			default:
+			}
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					LeaseID:  "lease-1",
+					Hostname: "127.0.0.1",
+				},
+			})
+		case types.PathSDKConnect:
+			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
+				OK:    false,
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
+			})
+		case types.PathSDKRenew:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
+				OK:   true,
+				Data: types.RenewResponse{LeaseID: "lease-1"},
+			})
+		case types.PathSDKUnregister:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	exposure, err := ExposeWithConfig(context.Background(), ExposeConfig{
+		RelayURLs:       []string{server.URL},
+		Name:            "demo",
+		OwnerPrivateKey: &ownerPrivateKey,
+	})
+	if err != nil {
+		t.Fatalf("ExposeWithConfig() error = %v", err)
+	}
+	defer exposure.Close()
+
+	var registerReq types.RegisterRequest
+	waitForSDKTest(t, func() bool {
+		select {
+		case registerReq = <-registerReqCh:
+			return true
+		default:
+			return false
+		}
+	})
+
+	if registerReq.OwnerAddress != identity.Address {
+		t.Fatalf("register request OwnerAddress = %q, want %q", registerReq.OwnerAddress, identity.Address)
+	}
+	resolvedIdentity := exposure.OwnerIdentity()
+	if resolvedIdentity.Address != identity.Address {
+		t.Fatalf("OwnerIdentity().Address = %q, want %q", resolvedIdentity.Address, identity.Address)
+	}
+	if resolvedIdentity.PrivateKey != ownerPrivateKey {
+		t.Fatalf("OwnerIdentity().PrivateKey = %q, want configured private key", resolvedIdentity.PrivateKey)
 	}
 }
 

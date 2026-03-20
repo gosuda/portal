@@ -17,6 +17,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
@@ -44,7 +45,9 @@ type apiClient struct {
 	rootCAPEM      []byte
 	name           string
 	reverseToken   string
+	discovery      bool
 	metadata       types.LeaseMetadata
+	ownerAddress   string
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
@@ -70,17 +73,25 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 
 	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
+	ownerAddress := strings.TrimSpace(cfg.OwnerAddress)
+	if ownerAddress != "" {
+		ownerAddress, err = discovery.NormalizeEVMAddress(ownerAddress)
+		if err != nil {
+			return nil, fmt.Errorf("normalize owner address: %w", err)
+		}
+	}
 
-	api := &apiClient{
+	return &apiClient{
 		baseURL:        baseURL,
 		dialTimeout:    dialTimeout,
 		requestTimeout: requestTimeout,
 		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
 		name:           name,
 		reverseToken:   reverseToken,
+		discovery:      cfg.Discovery,
 		metadata:       cfg.Metadata.Copy(),
-	}
-	return api, nil
+		ownerAddress:   ownerAddress,
+	}, nil
 }
 
 func (a *apiClient) close() {
@@ -92,13 +103,18 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool, bootstraps []string) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
-	if err := a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
+	if !a.discovery {
+		bootstraps = nil
+	}
+	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
+		OwnerAddress: a.ownerAddress,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
+		Bootstraps:   bootstraps,
 		UDPEnabled:   udpEnabled,
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
@@ -111,23 +127,10 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 		return nil
 	}
 
-	rootCAPEM := append([]byte(nil), a.rootCAPEM...)
-	if len(rootCAPEM) == 0 && utils.IsLocalRelayHost(a.baseURL.Hostname()) {
-		bootstrapParent := ctx
-		if bootstrapParent == nil {
-			bootstrapParent = context.Background()
-		}
-		bootstrapCtx, cancel := context.WithTimeout(bootstrapParent, defaultDialTimeout+defaultHandshakeTimeout)
-		defer cancel()
+	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
+	defer cancel()
 
-		_, resolvedCAPEM, err := keyless.ResolveMaterials(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname())
-		if err != nil {
-			return fmt.Errorf("bootstrap localhost relay trust: %w", err)
-		}
-		rootCAPEM = resolvedCAPEM
-	}
-
-	rootCAs, err := utils.CertPoolFromPEM(rootCAPEM)
+	rootCAs, err := keyless.RelayRootCAs(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname(), a.rootCAPEM)
 	if err != nil {
 		return err
 	}
@@ -177,7 +180,7 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 }
 
 func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Duration) error {
-	return a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
+	return a.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
@@ -185,7 +188,7 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 }
 
 func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
-	return a.doJSONWithClient(ctx, a.httpClient, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
+	return a.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 	}, nil)
@@ -237,6 +240,10 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 	}
 
 	return wrapBufferedConn(conn, reader), nil
+}
+
+func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
+	return a.doJSONWithClient(ctx, a.httpClient, method, path, payload, out)
 }
 
 func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Client, method, path string, payload any, out any) error {

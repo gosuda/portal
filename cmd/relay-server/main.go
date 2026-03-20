@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -30,10 +31,13 @@ const (
 
 type relayServerConfig struct {
 	PortalURL          string
+	OwnerPrivateKey    string
+	Bootstraps         string
 	APIPort            int
 	SNIPort            int
 	UDPPortCount       int
 	AdminSecretKey     string
+	DiscoveryEnabled   bool
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
 	KeylessDir         string
@@ -59,7 +63,10 @@ func main() {
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
 	udpPortCount := parseNonNegativeInt(os.Getenv("UDP_PORT_COUNT"), defaultUDPPortCount)
+	ownerPrivateKey := trimmedEnv("OWNER_PRIVATE_KEY")
+	bootstraps := trimmedEnv("BOOTSTRAPS")
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
+	discoveryEnabled := utils.ParseBoolEnv("DISCOVERY_ENABLED", false)
 	trustProxyHeaders := utils.ParseBoolEnv("TRUST_PROXY_HEADERS", false)
 	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
 	keylessDir := trimmedEnv("KEYLESS_DIR")
@@ -86,7 +93,10 @@ func main() {
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "TCP SNI router port number (env: SNI_PORT)")
 	flag.IntVar(&cfg.UDPPortCount, "udp-port-count", udpPortCount, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled) (env: UDP_PORT_COUNT)")
 
+	flag.StringVar(&cfg.OwnerPrivateKey, "owner-private-key", ownerPrivateKey, "relay owner private key used to derive a discovery address (env: OWNER_PRIVATE_KEY)")
+	flag.StringVar(&cfg.Bootstraps, "bootstraps", bootstraps, "additional bootstrap relay API URLs used for discovery expansion (env: BOOTSTRAPS)")
 	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
+	flag.BoolVar(&cfg.DiscoveryEnabled, "discovery", discoveryEnabled, "serve relay discovery endpoints and poll discovery peers (env: DISCOVERY_ENABLED)")
 	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies (env: TRUST_PROXY_HEADERS)")
 	flag.StringVar(&cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled (env: TRUSTED_PROXY_CIDRS)")
 
@@ -103,6 +113,7 @@ func main() {
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
+		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
 
@@ -124,8 +135,21 @@ func runServer(cfg relayServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
+	bootstraps, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.Bootstraps))
+	if err != nil {
+		return fmt.Errorf("normalize bootstraps: %w", err)
+	}
+	if strings.TrimSpace(cfg.OwnerPrivateKey) == "" {
+		cfg.OwnerPrivateKey, err = loadOwnerPrivateKey(cfg.KeylessDir)
+		if err != nil {
+			return fmt.Errorf("load relay owner private key: %w", err)
+		}
+	}
+	previousOwnerPrivateKey := cfg.OwnerPrivateKey
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL: cfg.PortalURL,
+		PortalURL:       cfg.PortalURL,
+		OwnerPrivateKey: cfg.OwnerPrivateKey,
+		Bootstraps:      bootstraps,
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,
@@ -140,10 +164,19 @@ func runServer(cfg relayServerConfig) error {
 		SNIListenAddr:     sniListenAddr,
 		TrustedProxyCIDRs: trustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		DiscoveryEnabled:  cfg.DiscoveryEnabled,
 		UDPPortCount:      cfg.UDPPortCount,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
+	}
+	if identity := server.OwnerIdentity(); identity.PrivateKey != "" {
+		cfg.OwnerPrivateKey = identity.PrivateKey
+	}
+	if cfg.OwnerPrivateKey != previousOwnerPrivateKey {
+		if err := saveOwnerPrivateKey(cfg.KeylessDir, cfg.OwnerPrivateKey); err != nil {
+			return fmt.Errorf("persist relay owner private key: %w", err)
+		}
 	}
 
 	frontend, err := NewFrontend(cfg.PortalURL, server, cfg.AdminSecretKey, trustedProxyCIDRs, cfg.TrustProxyHeaders)
@@ -160,6 +193,7 @@ func runServer(cfg relayServerConfig) error {
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
+		Bool("discovery_enabled", server.DiscoveryEnabled()).
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
 	if quicAddr := server.QUICTunnelAddr(); quicAddr != "" {
@@ -196,4 +230,32 @@ func parseNonNegativeInt(raw string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+func ownerPrivateKeyPath(keylessDir string) string {
+	return filepath.Join(strings.TrimSpace(keylessDir), "owner_private_key.hex")
+}
+
+func loadOwnerPrivateKey(keylessDir string) (string, error) {
+	keyPath := ownerPrivateKeyPath(keylessDir)
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func saveOwnerPrivateKey(keylessDir, privateKey string) error {
+	privateKey = strings.TrimSpace(privateKey)
+	if privateKey == "" {
+		return nil
+	}
+	keyPath := ownerPrivateKeyPath(keylessDir)
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(keyPath, []byte(privateKey+"\n"), 0o600)
 }

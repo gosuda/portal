@@ -129,8 +129,8 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `Listener` embeds a `datagram.Session` for QUIC datagram transport (no separate UDP listener type)
 - `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the session
 - `Listener.WaitDatagramReady()`: blocks until relay publishes `udp_addr` and `quic_addr`
-- `ExposureDatagram`: wraps a `DatagramFrame` with relay context (FlowID, LeaseID, RelayURL, UDPAddr) and a `Reply()` callback for bidirectional flow
-- `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners
+- `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners with relay context populated on `DatagramFrame`
+- `Exposure.SendDatagram()`: sends a datagram frame back through the owning relay listener
 - `Exposure.WaitDatagramReady()`: blocks until at least one relay's datagram plane is ready
 
 ### Tunnel (`cmd/portal-tunnel`)
@@ -144,7 +144,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `--udp` flag (bool, default `false`): enables UDP relay in addition to TCP
 - `--udp-addr` flag (string): local UDP target address (`host:port` or port only); required when `--udp` is enabled
 - `runUDPBestEffort`: waits for datagram readiness, then calls `proxyExposureDatagrams`
-- `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `ExposureDatagram.Reply()` for return path
+- `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `Exposure.SendDatagram()` for the return path
 - Best-effort UDP — failures logged but do not terminate the TCP tunnel
 
 ## Transport Model
@@ -171,7 +171,7 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 5. Authentication: SDK sends `{lease_id, reverse_token}` JSON on the first QUIC stream; relay validates and calls `FlowMux.Register(conn)`.
 6. External UDP client sends a packet to `udp_addr` → `Relay.readLoop` → `FlowMux.TouchFlow` (assigns flow ID) → `FlowMux.SendDatagram` → QUIC DATAGRAM frame.
 7. SDK-side `Session.receiveLoop` decodes frame → `Listener.AcceptDatagram()` → `Exposure.AcceptDatagram()` → `proxyExposureDatagrams` → local UDP target.
-8. Return path: local response → per-flow read goroutine → `ExposureDatagram.Reply()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
+8. Return path: local response → per-flow read goroutine → `Exposure.SendDatagram()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
 
 ```text
 Client --UDP--> [:50000+ Relay] --DATAGRAM--> [FlowMux/Session] --QUIC--> [Session/Listener] --UDP--> Local Service
@@ -273,7 +273,7 @@ Cross-package public contract lives in:
   - shared `/sdk/*`, admin, health, install, and signer paths
 - `types/transport.go`
   - `LeaseCapabilities` (Stream/Datagram booleans)
-  - `DatagramFrame` wire format
+  - `DatagramFrame` wire frame plus SDK relay context
   - `EncodeDatagram` / `DecodeDatagram`
   - Transport constants: `TransportTCP`, `TransportUDP`, `TransportBoth`
 

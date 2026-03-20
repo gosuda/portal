@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal/v2/portal/acme"
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
@@ -41,6 +43,8 @@ const (
 
 type ServerConfig struct {
 	PortalURL             string
+	OwnerPrivateKey       string
+	Bootstraps            []string
 	ACME                  acme.Config
 	APIListenAddr         string
 	SNIListenAddr         string
@@ -52,23 +56,26 @@ type ServerConfig struct {
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
 	TrustProxyHeaders     bool
+	DiscoveryEnabled      bool
 	UDPPortCount          int
 }
 
 type Server struct {
-	sniListener  net.Listener
-	apiListener  net.Listener
-	apiServer    *http.Server
-	apiTLSClose  io.Closer
-	acmeManager  *acme.Manager
-	quicTunnel   *quic.Listener
-	cancel       context.CancelFunc
-	group        *errgroup.Group
-	registry     *leaseRegistry
-	ports        *transport.PortAllocator
-	cfg          ServerConfig
-	rootHost     string
-	shutdownOnce sync.Once
+	sniListener   net.Listener
+	apiListener   net.Listener
+	apiServer     *http.Server
+	apiTLSClose   io.Closer
+	acmeManager   *acme.Manager
+	quicTunnel    *quic.Listener
+	cancel        context.CancelFunc
+	group         *errgroup.Group
+	discovery     *discovery.Service
+	registry      *leaseRegistry
+	ports         *transport.PortAllocator
+	ownerIdentity discovery.Identity
+	cfg           ServerConfig
+	rootHost      string
+	shutdownOnce  sync.Once
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -90,6 +97,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if cfg.QUICListenAddr == "" {
 		cfg.QUICListenAddr = cfg.SNIListenAddr
 	}
+	if len(cfg.Bootstraps) > 0 {
+		bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Bootstraps = bootstraps
+	}
 
 	portMin, portMax := 0, 0
 	if cfg.UDPPortCount > 0 {
@@ -97,19 +111,41 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
 	}
 
+	ownerIdentity := discovery.Identity{}
+	if cfg.DiscoveryEnabled || strings.TrimSpace(cfg.OwnerPrivateKey) != "" {
+		identity, err := discovery.ResolveIdentity(cfg.OwnerPrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("resolve owner identity: %w", err)
+		}
+		ownerIdentity = identity
+		cfg.OwnerPrivateKey = identity.PrivateKey
+	}
+
 	registry := newLeaseRegistry(policy.NewRuntime())
 	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 
 	s := &Server{
-		cfg:      cfg,
-		rootHost: rootHost,
-		registry: registry,
-		ports:    ports,
+		cfg:           cfg,
+		rootHost:      rootHost,
+		registry:      registry,
+		ports:         ports,
+		ownerIdentity: ownerIdentity,
 	}
 
 	// Tear down all lease resources when leases expire via TTL janitor.
 	registry.onExpired = func(record *leaseRecord) {
 		s.closeLease(record)
+	}
+
+	if cfg.DiscoveryEnabled {
+		service, err := discovery.New(discovery.Config{
+			SelfURLs:   []string{cfg.PortalURL},
+			Bootstraps: cfg.Bootstraps,
+		}, discovery.ResolverFunc(s.discover))
+		if err != nil {
+			return nil, err
+		}
+		s.discovery = service
 	}
 
 	return s, nil
@@ -162,6 +198,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
+	if s.discovery != nil {
+		group.Go(func() error {
+			return s.discovery.RunPollLoop(groupCtx, 0, types.DiscoverRequest{RootHost: s.rootHost})
+		})
+	}
 	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
 
@@ -241,6 +282,17 @@ func (s *Server) QUICTunnelAddr() string {
 		return ""
 	}
 	return s.quicTunnel.Addr().String()
+}
+
+func (s *Server) DiscoveryEnabled() bool {
+	return s != nil && s.cfg.DiscoveryEnabled && s.discovery != nil
+}
+
+func (s *Server) OwnerIdentity() discovery.Identity {
+	if s == nil {
+		return discovery.Identity{}
+	}
+	return s.ownerIdentity
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {

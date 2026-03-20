@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gosuda/portal/v2/portal/acme"
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -197,5 +198,135 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
+	}
+}
+
+func TestServerStartServesOptionalDiscoveryRoutes(t *testing.T) {
+	t.Parallel()
+
+	ownerPrivateKey := strings.Repeat("11", 32)
+	ownerIdentity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	if err != nil {
+		t.Fatalf("ResolveIdentity() error = %v", err)
+	}
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:        "https://localhost:4017",
+		OwnerPrivateKey:  ownerPrivateKey,
+		Bootstraps:       []string{"https://bootstrap.example.com"},
+		ACME:             acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr:    "127.0.0.1:0",
+		SNIListenAddr:    "127.0.0.1:0",
+		DiscoveryEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	if _, err := server.registerLease(types.RegisterRequest{
+		Name:         "demo",
+		ReverseToken: "tok_demo",
+		Bootstraps:   []string{"https://relay-a.example.com", "https://bootstrap.example.com"},
+	}, "203.0.113.10"); err != nil {
+		t.Fatalf("registerLease() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery + "?root_host=localhost&name=demo")
+	if err != nil {
+		t.Fatalf("GET discovery resolve error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET discovery resolve status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var envelope types.APIEnvelope[types.DiscoverResponse]
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		t.Fatalf("decode discovery resolve response: %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("discovery resolve envelope = %+v, want ok", envelope)
+	}
+	if !envelope.Data.Found {
+		t.Fatalf("resolve found = %v, want true", envelope.Data.Found)
+	}
+	if envelope.Data.OwnerAddress != ownerIdentity.Address {
+		t.Fatalf("resolve owner address = %q, want relay owner address", envelope.Data.OwnerAddress)
+	}
+	if envelope.Data.Hostname != "demo.localhost" {
+		t.Fatalf("resolve hostname = %q, want %q", envelope.Data.Hostname, "demo.localhost")
+	}
+	if len(envelope.Data.Bootstraps) != 3 || envelope.Data.Bootstraps[0] != "https://localhost:4017" || envelope.Data.Bootstraps[1] != "https://bootstrap.example.com" || envelope.Data.Bootstraps[2] != "https://relay-a.example.com" {
+		t.Fatalf("resolve bootstraps = %v, want [%q %q %q]", envelope.Data.Bootstraps, "https://localhost:4017", "https://bootstrap.example.com", "https://relay-a.example.com")
+	}
+	if !server.DiscoveryEnabled() {
+		t.Fatal("DiscoveryEnabled() = false, want true")
+	}
+}
+
+func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:     "https://localhost:4017",
+		ACME:          acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr: "127.0.0.1:0",
+		SNIListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery + "?root_host=localhost&name=demo")
+	if err != nil {
+		t.Fatalf("GET discovery resolve error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET discovery resolve status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if server.DiscoveryEnabled() {
+		t.Fatal("DiscoveryEnabled() = true, want false without configured discovery service")
 	}
 }

@@ -16,8 +16,9 @@ const (
 )
 
 type cliConfig struct {
-	ClientID string   `json:"client_id,omitempty"`
-	Relays   []string `json:"relays,omitempty"`
+	ClientID        string   `json:"client_id,omitempty"`
+	OwnerPrivateKey string   `json:"owner_private_key,omitempty"`
+	Relays          []string `json:"relays,omitempty"`
 }
 
 func loadCLIConfig() (cliConfig, string, error) {
