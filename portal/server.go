@@ -29,16 +29,12 @@ import (
 const (
 	defaultLeaseTTL          = 30 * time.Second
 	defaultClaimTimeout      = 10 * time.Second
+	defaultDiscoveryInterval = 30 * time.Second
 	defaultIdleKeepalive     = 15 * time.Second
 	defaultReadyQueueLimit   = 8
 	defaultClientHelloWait   = 2 * time.Second
 	defaultControlBodyLimit  = 4 << 20
-	defaultSessionWriteLimit = 5 * time.Second
-	defaultQUICSNIRouteIdle  = 30 * time.Second
-	defaultQUICSNICleanup    = 5 * time.Second
-
-	defaultUDPPortBase  = 50000
-	defaultUDPPortCount = 0
+	defaultUDPPortBase       = 50000
 )
 
 type ServerConfig struct {
@@ -61,21 +57,22 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	sniListener   net.Listener
-	apiListener   net.Listener
-	apiServer     *http.Server
-	apiTLSClose   io.Closer
-	acmeManager   *acme.Manager
-	quicTunnel    *quic.Listener
-	cancel        context.CancelFunc
-	group         *errgroup.Group
-	discovery     *discovery.Service
-	registry      *leaseRegistry
-	ports         *transport.PortAllocator
-	ownerIdentity discovery.Identity
-	cfg           ServerConfig
-	rootHost      string
-	shutdownOnce  sync.Once
+	sniListener         net.Listener
+	apiListener         net.Listener
+	apiServer           *http.Server
+	apiTLSClose         io.Closer
+	acmeManager         *acme.Manager
+	quicTunnel          *quic.Listener
+	cancel              context.CancelFunc
+	group               *errgroup.Group
+	registry            *leaseRegistry
+	ports               *transport.PortAllocator
+	ownerIdentity       discovery.Identity
+	cfg                 ServerConfig
+	rootHost            string
+	discoveryMu         sync.RWMutex
+	discoveryBootstraps []string
+	shutdownOnce        sync.Once
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -138,14 +135,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	if cfg.DiscoveryEnabled {
-		service, err := discovery.New(discovery.Config{
-			SelfURLs:   []string{cfg.PortalURL},
-			Bootstraps: cfg.Bootstraps,
-		}, discovery.ResolverFunc(s.discover))
+		bootstraps, err := utils.MergeRelayURLs(nil, []string{cfg.PortalURL}, cfg.Bootstraps)
 		if err != nil {
 			return nil, err
 		}
-		s.discovery = service
+		s.discoveryBootstraps = bootstraps
 	}
 
 	return s, nil
@@ -198,10 +192,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
-	if s.discovery != nil {
-		group.Go(func() error {
-			return s.discovery.RunPollLoop(groupCtx, 0, types.DiscoverRequest{RootHost: s.rootHost})
-		})
+	if s.DiscoveryEnabled() {
+		group.Go(func() error { return s.runDiscoveryLoop(groupCtx) })
 	}
 	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
@@ -285,7 +277,7 @@ func (s *Server) QUICTunnelAddr() string {
 }
 
 func (s *Server) DiscoveryEnabled() bool {
-	return s != nil && s.cfg.DiscoveryEnabled && s.discovery != nil
+	return s != nil && s.cfg.DiscoveryEnabled
 }
 
 func (s *Server) OwnerIdentity() discovery.Identity {
@@ -540,6 +532,64 @@ func (s *Server) watchContext(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
+}
+
+func (s *Server) discoveryBootstrapsSnapshot() []string {
+	if s == nil || !s.DiscoveryEnabled() {
+		return nil
+	}
+
+	s.discoveryMu.RLock()
+	defer s.discoveryMu.RUnlock()
+	return append([]string(nil), s.discoveryBootstraps...)
+}
+
+func (s *Server) mergeDiscoveryBootstraps(inputs []string) error {
+	if s == nil || !s.DiscoveryEnabled() || len(inputs) == 0 {
+		return nil
+	}
+
+	s.discoveryMu.Lock()
+	next, err := utils.MergeRelayURLs(s.discoveryBootstraps, []string{s.cfg.PortalURL}, inputs)
+	if err == nil {
+		s.discoveryBootstraps = next
+	}
+	s.discoveryMu.Unlock()
+	return err
+}
+
+func (s *Server) runDiscoveryLoop(ctx context.Context) error {
+	ticker := time.NewTicker(defaultDiscoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		peers := s.discoveryBootstrapsSnapshot()
+		if len(peers) > 0 {
+			bootstraps, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, nil)
+			switch {
+			case err == nil:
+				if err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
+					log.Warn().
+						Err(err).
+						Int("bootstrap_count", len(peers)).
+						Msg("merge discovered bootstraps failed")
+				}
+			case ctx.Err() != nil:
+				return nil
+			default:
+				log.Warn().
+					Err(err).
+					Int("bootstrap_count", len(peers)).
+					Msg("discover bootstraps failed")
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func BridgeConns(left, right net.Conn) {

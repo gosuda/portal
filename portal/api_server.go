@@ -80,7 +80,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				base.ServeHTTP(w, r)
 				return
 			}
-			s.discovery.ServeHTTP(w, r)
+			discovery.ServeHTTP(w, r, []string{s.cfg.PortalURL}, s.discoveryBootstrapsSnapshot(), s.discover)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -517,8 +517,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		record.Close()
 		return types.RegisterResponse{}, err
 	}
-	if s.discovery != nil {
-		if err := s.discovery.MergeBootstraps(bootstraps); err != nil {
+	if s.DiscoveryEnabled() {
+		if err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
 			record.Close()
 			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
 			return types.RegisterResponse{}, err
@@ -526,8 +526,8 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	}
 
 	responseBootstraps := append([]string(nil), s.cfg.Bootstraps...)
-	if s.discovery != nil {
-		responseBootstraps = s.discovery.Bootstraps()
+	if s.DiscoveryEnabled() {
+		responseBootstraps = s.discoveryBootstrapsSnapshot()
 	} else {
 		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, record.Bootstraps...))
 		if err != nil {

@@ -45,7 +45,6 @@ type apiClient struct {
 	rootCAPEM      []byte
 	name           string
 	reverseToken   string
-	discovery      bool
 	metadata       types.LeaseMetadata
 	ownerAddress   string
 }
@@ -88,7 +87,6 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
 		name:           name,
 		reverseToken:   reverseToken,
-		discovery:      cfg.Discovery,
 		metadata:       cfg.Metadata.Copy(),
 		ownerAddress:   ownerAddress,
 	}, nil
@@ -105,9 +103,6 @@ func (a *apiClient) close() {
 
 func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool, bootstraps []string) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
-	if !a.discovery {
-		bootstraps = nil
-	}
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),

@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -32,7 +33,6 @@ type Exposure struct {
 	ownerAddress     string
 	rootCAPEM        []byte
 	discoveryEnabled bool
-	discovery        *discovery.Service
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
@@ -47,38 +47,31 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs       []string
-	Name            string
-	ReverseToken    string
-	UDPEnabled      bool
-	Discovery       bool
-	Metadata        types.LeaseMetadata
-	OwnerAddress    string
-	OwnerPrivateKey *string
-	RootCAPEM       []byte
+	RelayURLs           []string
+	DefaultRelayEnabled bool
+	Name                string
+	ReverseToken        string
+	UDPEnabled          bool
+	Discovery           bool
+	Metadata            types.LeaseMetadata
+	OwnerAddress        string
+	OwnerPrivateKey     *string
+	RootCAPEM           []byte
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // dynamic listener hub for accepting traffic from all of them.
-func Expose(ctx context.Context, relayURLs []string, name string, udpEnabled bool, metadata types.LeaseMetadata) (*Exposure, error) {
-	return ExposeWithConfig(ctx, ExposeConfig{
-		RelayURLs:  relayURLs,
-		Name:       name,
-		UDPEnabled: udpEnabled,
-		Metadata:   metadata,
-	})
-}
+func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
-	relayURLs, err := utils.NormalizeRelayURLs(cfg.RelayURLs)
+	relayURLs, err := ResolveRelayURLs(ctx, cfg.RelayURLs, cfg.DefaultRelayEnabled)
 	if err != nil {
 		return nil, err
 	}
 	if len(relayURLs) == 0 {
 		return nil, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	ownerAddress := strings.TrimSpace(cfg.OwnerAddress)
@@ -109,46 +102,19 @@ func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) 
 		starting:         make(map[string]struct{}, len(relayURLs)),
 	}
 
-	if exposure.discoveryEnabled {
-		service, err := discovery.New(discovery.Config{
-			RootCAPEM: exposure.rootCAPEM,
-			OnBootstraps: func(relays []string) {
-				if err := exposure.applyRelayURLs(relays, false); err != nil {
-					log.Warn().Err(err).Strs("relays", relays).Msg("apply discovered relay urls")
-				}
-			},
-		}, nil)
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-		exposure.discovery = service
-	}
-
-	if exposure.discovery != nil {
-		if err := exposure.discovery.MergeBootstraps(relayURLs); err != nil {
-			_ = exposure.Close()
-			return nil, err
-		}
-		if err := exposure.applyRelayURLs(exposure.discovery.Bootstraps(), true); err != nil {
-			_ = exposure.Close()
-			return nil, err
-		}
-	} else if err := exposure.applyRelayURLs(relayURLs, true); err != nil {
+	if err := exposure.applyRelayURLs(relayURLs, true); err != nil {
 		_ = exposure.Close()
 		return nil, err
 	}
 
 	go exposure.monitorStartupCounts()
+	if exposure.discoveryEnabled {
+		go exposure.runDiscoveryLoop(exposureCtx)
+	}
 	go func() {
 		<-exposure.done
 		_ = exposure.Close()
 	}()
-	if exposure.discovery != nil {
-		go func() {
-			_ = exposure.discovery.RunPollLoop(exposureCtx, 0, types.DiscoverRequest{})
-		}()
-	}
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
@@ -157,6 +123,50 @@ func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) 
 		Msg("exposure relay started")
 
 	return exposure, nil
+}
+
+const defaultDiscoveryInterval = 30 * time.Second
+
+func ResolveRelayURLs(ctx context.Context, explicit []string, includeDefaults bool) ([]string, error) {
+	explicit, err := utils.NormalizeRelayURLs(explicit)
+	if err != nil {
+		return nil, err
+	}
+	if !includeDefaults {
+		return explicit, nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, types.PortalRelayRegistryURL, nil)
+	if err != nil {
+		return explicit, nil
+	}
+
+	client := &http.Client{Timeout: defaultRequestTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return explicit, nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return explicit, nil
+	}
+
+	var registry struct {
+		Relays []string `json:"relays"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
+		return explicit, nil
+	}
+
+	defaults, err := utils.NormalizeRelayURLs(registry.Relays)
+	if err != nil {
+		return explicit, nil
+	}
+	if len(defaults) == 0 {
+		return explicit, nil
+	}
+	return utils.MergeRelayURLs(defaults, nil, explicit)
 }
 
 func (e *Exposure) RelayURLs() []string {
@@ -440,15 +450,19 @@ func (e *Exposure) reserveMissingRelayURLs() []string {
 }
 
 func (e *Exposure) newListener(relayURL string) (*Listener, error) {
+	bootstraps := []string(nil)
+	if e.discoveryEnabled {
+		bootstraps = e.RelayURLs()
+	}
+
 	cfg := ListenerConfig{
-		Name:             e.name,
-		ReverseToken:     e.reverseToken,
-		UDPEnabled:       e.udpEnabled,
-		Discovery:        e.discoveryEnabled,
-		OwnerAddress:     e.ownerAddress,
-		Metadata:         e.metadata.Copy(),
-		RootCAPEM:        append([]byte(nil), e.rootCAPEM...),
-		bootstrapService: e.discovery,
+		Name:               e.name,
+		ReverseToken:       e.reverseToken,
+		UDPEnabled:         e.udpEnabled,
+		OwnerAddress:       e.ownerAddress,
+		RegisterBootstraps: bootstraps,
+		Metadata:           e.metadata.Copy(),
+		RootCAPEM:          append([]byte(nil), e.rootCAPEM...),
 	}
 	return NewListener(context.Background(), relayURL, cfg)
 }
@@ -499,28 +513,19 @@ func (e *Exposure) listenersOrdered() []*Listener {
 	return out
 }
 
-func (e *Exposure) listenerForRelayURL(relayURL string) *Listener {
-	if e == nil {
-		return nil
-	}
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.listeners[relayURL]
-}
-
 func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 	if e == nil || listener == nil {
 		return
 	}
 
+	relayURL := listener.api.baseURL.String()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			if listener.closed() || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			log.Warn().Err(err).Str("relay_url", listener.relayURL).Msg("exposure listener accept failed")
+			log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
 			return
 		}
 
@@ -596,7 +601,9 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 		return errors.New("relay url is required")
 	}
 
-	listener := e.listenerForRelayURL(relayURL)
+	e.mu.RLock()
+	listener := e.listeners[relayURL]
+	e.mu.RUnlock()
 	if listener == nil {
 		return net.ErrClosed
 	}
@@ -719,6 +726,7 @@ func (e *Exposure) allDatagramNegotiationsResolvedWithoutDatagram() bool {
 }
 
 func (e *Exposure) attachDatagramPlane(ctx context.Context, listener *Listener) {
+	relayURL := listener.api.baseURL.String()
 	err := listener.WaitDatagramReady(ctx)
 	if err != nil {
 		switch {
@@ -731,13 +739,13 @@ func (e *Exposure) attachDatagramPlane(ctx context.Context, listener *Listener) 
 		default:
 			log.Warn().
 				Err(err).
-				Str("relay_url", listener.relayURL).
+				Str("relay_url", relayURL).
 				Msg("attach datagram plane failed")
 			return
 		}
 	}
 
-	e.forwardDatagrams(listener.relayURL, listener)
+	e.forwardDatagrams(relayURL, listener)
 }
 
 func (e *Exposure) forwardDatagrams(relayURL string, listener *Listener) {
@@ -799,6 +807,7 @@ func (e *Exposure) monitorStartupCounts() {
 			if listener == nil {
 				continue
 			}
+			relayURL := listener.api.baseURL.String()
 
 			status := listener.StartupStatus()
 			if status == listenerStatusReady {
@@ -807,14 +816,14 @@ func (e *Exposure) monitorStartupCounts() {
 				inactiveCount++
 			}
 
-			if prev, ok := prevStatuses[listener.relayURL]; ok && prev != status {
+			if prev, ok := prevStatuses[relayURL]; ok && prev != status {
 				if status == listenerStatusReady {
-					activated = append(activated, listener.relayURL)
+					activated = append(activated, relayURL)
 				} else {
-					deactivated = append(deactivated, listener.relayURL)
+					deactivated = append(deactivated, relayURL)
 				}
 			}
-			prevStatuses[listener.relayURL] = status
+			prevStatuses[relayURL] = status
 		}
 
 		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
@@ -833,6 +842,40 @@ func (e *Exposure) monitorStartupCounts() {
 
 		select {
 		case <-e.done:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(defaultDiscoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		peers := e.RelayURLs()
+		if len(peers) > 0 {
+			relayURLs, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, e.rootCAPEM)
+			switch {
+			case err == nil:
+				if err := e.applyRelayURLs(relayURLs, false); err != nil {
+					log.Warn().
+						Err(err).
+						Int("relay_count", len(peers)).
+						Msg("apply discovered relay urls failed")
+				}
+			case ctx.Err() != nil:
+				return
+			default:
+				log.Warn().
+					Err(err).
+					Int("relay_count", len(peers)).
+					Msg("discover relay urls failed")
+			}
+		}
+
+		select {
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}

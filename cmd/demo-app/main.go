@@ -34,8 +34,8 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "demo-app").Logger()
 
-	flag.StringVar(&flagRelayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; appended to registry.json defaults unless --default-relays=false is set) [env: RELAYS]")
-	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", true), "include repository registry.json default relays [env: DEFAULT_RELAYS]")
+	flag.StringVar(&flagRelayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set) [env: RELAYS]")
+	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", true), "include public registry relays [env: DEFAULT_RELAYS]")
 	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
 	flag.StringVar(&flagName, "name", "demo-app", "public hostname prefix (single DNS label)")
 	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
@@ -58,20 +58,17 @@ func runDemo() error {
 	defer stop()
 
 	relayURLs := utils.SplitCSV(flagRelayURLs)
-	if flagDefaultRelays {
-		relayURLs = sdk.WithDefaultRelayURLs(ctx, "", relayURLs...)
-	}
-	relayURLs, err := utils.NormalizeRelayURLs(relayURLs)
-	if err != nil {
-		return fmt.Errorf("resolve relay urls: %w", err)
-	}
-
-	exposure, err := sdk.Expose(ctx, relayURLs, flagName, false, types.LeaseMetadata{
-		Description: flagDesc,
-		Tags:        utils.SplitCSV(flagTags),
-		Owner:       flagOwner,
-		Thumbnail:   flagThumbnail,
-		Hide:        flagHide,
+	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		RelayURLs:           relayURLs,
+		DefaultRelayEnabled: flagDefaultRelays,
+		Name:                flagName,
+		Metadata: types.LeaseMetadata{
+			Description: flagDesc,
+			Tags:        utils.SplitCSV(flagTags),
+			Owner:       flagOwner,
+			Thumbnail:   flagThumbnail,
+			Hide:        flagHide,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)

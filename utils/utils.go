@@ -143,10 +143,39 @@ func NormalizeRelayURLs(inputs []string) ([]string, error) {
 		}
 	}
 
-	return UniqueURLs(out), nil
+	return uniqueURLs(out), nil
 }
 
-func UniqueURLs(inputs []string) []string {
+func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
+	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...))
+	if err != nil {
+		return nil, err
+	}
+	if len(excluded) == 0 {
+		return merged, nil
+	}
+
+	excluded, err = NormalizeRelayURLs(excluded)
+	if err != nil {
+		return nil, err
+	}
+
+	skip := make(map[string]struct{}, len(excluded))
+	for _, input := range excluded {
+		skip[input] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(merged))
+	for _, input := range merged {
+		if _, ok := skip[input]; ok {
+			continue
+		}
+		filtered = append(filtered, input)
+	}
+	return filtered, nil
+}
+
+func uniqueURLs(inputs []string) []string {
 	if len(inputs) == 0 {
 		return nil
 	}
@@ -168,29 +197,6 @@ func UniqueURLs(inputs []string) []string {
 		return nil
 	}
 	return out
-}
-
-func ExcludeURLs(inputs []string, excluded []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-	if len(excluded) == 0 {
-		return UniqueURLs(inputs)
-	}
-
-	skip := make(map[string]struct{}, len(excluded))
-	for _, input := range UniqueURLs(excluded) {
-		skip[input] = struct{}{}
-	}
-
-	filtered := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		if _, ok := skip[input]; ok {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	return UniqueURLs(filtered)
 }
 
 func LeaseHostname(name, rootHost string) (string, error) {

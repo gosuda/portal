@@ -168,14 +168,6 @@ func runExposeCommand(args []string) error {
 		relayInputs = []string{explicitRelays}
 	}
 
-	relayURLs, err := resolveRelayURLs(ctx, "", relayInputs, defaultRelays)
-	if err != nil {
-		return fmt.Errorf("resolve relay urls: %w", err)
-	}
-	if len(relayURLs) == 0 {
-		return errors.New("no relay URLs configured; run the installer first or pass --relays")
-	}
-
 	previousOwnerPrivateKey := cfg.OwnerPrivateKey
 	if strings.TrimSpace(privateKey) != "" {
 		cfg.OwnerPrivateKey = privateKey
@@ -185,11 +177,12 @@ func runExposeCommand(args []string) error {
 		ownerPrivateKey = &cfg.OwnerPrivateKey
 	}
 
-	exposure, err := sdk.ExposeWithConfig(ctx, sdk.ExposeConfig{
-		RelayURLs:  relayURLs,
-		Name:       name,
-		UDPEnabled: udp,
-		Discovery:  discoveryEnabled,
+	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		RelayURLs:           relayInputs,
+		DefaultRelayEnabled: defaultRelays,
+		Name:                name,
+		UDPEnabled:          udp,
+		Discovery:           discoveryEnabled,
 		Metadata: types.LeaseMetadata{
 			Description: desc,
 			Tags:        utils.SplitCSV(tags),
@@ -261,7 +254,7 @@ func runListCommand(args []string) error {
 		relayInputs = []string{explicitRelays}
 	}
 
-	relayURLs, err := resolveRelayURLs(ctx, "", relayInputs, defaultRelays)
+	relayURLs, err := sdk.ResolveRelayURLs(ctx, relayInputs, defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
@@ -364,17 +357,6 @@ func runTunnel(
 
 	logger.Info().Msg("tunnel shutdown complete")
 	return errors.Join(waitErr, udpErr, closeErr)
-}
-
-func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, includeDefaultRelays bool) ([]string, error) {
-	if includeDefaultRelays {
-		relayURLs := sdk.WithDefaultRelayURLs(ctx, registryURL, inputs...)
-		if len(relayURLs) == 0 {
-			return nil, nil
-		}
-		return relayURLs, nil
-	}
-	return utils.NormalizeRelayURLs(inputs)
 }
 
 var exposeNameOpeners = []string{

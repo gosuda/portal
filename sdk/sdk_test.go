@@ -353,7 +353,7 @@ func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
 }
 
 func TestExposeNoRelayInputs(t *testing.T) {
-	exposure, err := Expose(context.Background(), nil, "demo", false, types.LeaseMetadata{})
+	exposure, err := Expose(context.Background(), ExposeConfig{Name: "demo"})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}
@@ -413,14 +413,14 @@ func TestExposeRegistersKnownRelayURLs(t *testing.T) {
 	relayB := newRelayServer()
 	defer relayB.Close()
 
-	exposure, err := ExposeWithConfig(context.Background(), ExposeConfig{
+	exposure, err := Expose(context.Background(), ExposeConfig{
 		RelayURLs:    []string{relayA.URL, relayB.URL},
 		Discovery:    true,
 		Name:         "demo",
 		OwnerAddress: "0x52908400098527886E0F7030069857D2E4169EE7",
 	})
 	if err != nil {
-		t.Fatalf("ExposeWithConfig() error = %v", err)
+		t.Fatalf("Expose() error = %v", err)
 	}
 	defer exposure.Close()
 
@@ -498,13 +498,13 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	exposure, err := ExposeWithConfig(context.Background(), ExposeConfig{
+	exposure, err := Expose(context.Background(), ExposeConfig{
 		RelayURLs:       []string{server.URL},
 		Name:            "demo",
 		OwnerPrivateKey: &ownerPrivateKey,
 	})
 	if err != nil {
-		t.Fatalf("ExposeWithConfig() error = %v", err)
+		t.Fatalf("Expose() error = %v", err)
 	}
 	defer exposure.Close()
 
