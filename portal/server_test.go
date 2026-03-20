@@ -103,7 +103,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL:  "https://portal.example.com",
+		PortalURL:    "https://portal.example.com",
 		UDPPortCount: 1,
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL:  "https://portal.example.com",
+		PortalURL:    "https://portal.example.com",
 		UDPPortCount: 1,
 	})
 	if err != nil {
