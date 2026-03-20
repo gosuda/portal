@@ -179,6 +179,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 
 func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 	var registerCount atomic.Int32
+	registerReqCh := make(chan types.RegisterRequest, 2)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -189,6 +190,14 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 				},
 			})
 		case types.PathSDKRegister:
+			var registerReq types.RegisterRequest
+			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+				t.Fatalf("decode register request: %v", err)
+			}
+			select {
+			case registerReqCh <- registerReq:
+			default:
+			}
 			count := registerCount.Add(1)
 			leaseID := "lease-1"
 			if count > 1 {
@@ -231,9 +240,10 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 	defer server.Close()
 
 	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:        "demo",
-		LeaseTTL:    80 * time.Millisecond,
-		RenewBefore: 40 * time.Millisecond,
+		Name:               "demo",
+		LeaseTTL:           80 * time.Millisecond,
+		RenewBefore:        40 * time.Millisecond,
+		RegisterBootstraps: []string{"https://relay-a.example.com", "https://relay-b.example.com"},
 	})
 	if err != nil {
 		t.Fatalf("NewListener() error = %v", err)
@@ -243,6 +253,25 @@ func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
 	waitForSDKTest(t, func() bool {
 		return listener.LeaseID() == "lease-2"
 	})
+
+	var requests []types.RegisterRequest
+	waitForSDKTest(t, func() bool {
+		for len(requests) < 2 {
+			select {
+			case req := <-registerReqCh:
+				requests = append(requests, req)
+			default:
+				return false
+			}
+		}
+		return true
+	})
+
+	for _, req := range requests {
+		if len(req.Bootstraps) != 2 || req.Bootstraps[0] != "https://relay-a.example.com" || req.Bootstraps[1] != "https://relay-b.example.com" {
+			t.Fatalf("register request Bootstraps = %v, want [%q %q]", req.Bootstraps, "https://relay-a.example.com", "https://relay-b.example.com")
+		}
+	}
 }
 
 func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) {
@@ -445,6 +474,74 @@ func TestExposeRegistersKnownRelayURLs(t *testing.T) {
 			t.Fatalf("register request Bootstraps = %v, want [%q %q]", req.Bootstraps, relayA.URL, relayB.URL)
 		}
 	}
+}
+
+func TestExposeRemovesClosedListenersSoRelaysCanRestart(t *testing.T) {
+	var registerCount atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					Version: types.SDKProtocolVersion,
+				},
+			})
+		case types.PathSDKRegister:
+			if registerCount.Add(1) == 1 {
+				writeSDKTestEnvelope(w, http.StatusServiceUnavailable, types.APIEnvelope[any]{
+					OK:    false,
+					Error: &types.APIError{Code: types.APIErrorCodeFeatureUnavailable, Message: "relay unavailable"},
+				})
+				return
+			}
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					LeaseID:  "lease-1",
+					Hostname: "127.0.0.1",
+				},
+			})
+		case types.PathSDKConnect:
+			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
+				OK:    false,
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
+			})
+		case types.PathSDKRenew:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
+				OK:   true,
+				Data: types.RenewResponse{LeaseID: "lease-1"},
+			})
+		case types.PathSDKUnregister:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	exposure, err := Expose(context.Background(), ExposeConfig{
+		RelayURLs: []string{server.URL},
+		Name:      "demo",
+	})
+	if err != nil {
+		t.Fatalf("Expose() error = %v", err)
+	}
+	defer exposure.Close()
+
+	waitForSDKTest(t, func() bool {
+		exposure.mu.RLock()
+		defer exposure.mu.RUnlock()
+		return registerCount.Load() >= 1 && len(exposure.listeners) == 0
+	})
+
+	if err := exposure.applyRelayURLs(exposure.RelayURLs(), false); err != nil {
+		t.Fatalf("applyRelayURLs() error = %v", err)
+	}
+
+	waitForSDKTest(t, func() bool {
+		return registerCount.Load() >= 2 && len(exposure.PublicURLs()) == 1
+	})
 }
 
 func TestExposeResolvesOwnerPrivateKey(t *testing.T) {

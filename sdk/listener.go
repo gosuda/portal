@@ -52,10 +52,11 @@ type Listener struct {
 	cancel context.CancelFunc
 	doneCh <-chan struct{}
 
-	retryCount  int
-	retryWait   time.Duration
-	leaseTTL    time.Duration
-	renewBefore time.Duration
+	retryCount         int
+	retryWait          time.Duration
+	leaseTTL           time.Duration
+	renewBefore        time.Duration
+	registerBootstraps []string
 
 	stream   *transport.ClientStream
 	datagram *transport.ClientDatagram
@@ -101,16 +102,17 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	}
 
 	l := &Listener{
-		doneCh:        listenerCtx.Done(),
-		cancel:        cancel,
-		api:           api,
-		registered:    make(chan struct{}),
-		startupStatus: listenerStatusInactive,
-		retryCount:    cfg.RetryCount,
-		retryWait:     retryWait,
-		leaseTTL:      leaseTTL,
-		renewBefore:   renewBefore,
-		metadata:      cfg.Metadata.Copy(),
+		doneCh:             listenerCtx.Done(),
+		cancel:             cancel,
+		api:                api,
+		registered:         make(chan struct{}),
+		startupStatus:      listenerStatusInactive,
+		retryCount:         cfg.RetryCount,
+		retryWait:          retryWait,
+		leaseTTL:           leaseTTL,
+		renewBefore:        renewBefore,
+		registerBootstraps: append([]string(nil), initialBootstraps...),
+		metadata:           cfg.Metadata.Copy(),
 	}
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
 	if cfg.UDPEnabled {
@@ -129,15 +131,15 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		})
 	}
 
-	go l.runStartup(listenerCtx, initialBootstraps, readyTarget)
+	go l.runStartup(listenerCtx, readyTarget)
 	return l, nil
 }
 
-func (l *Listener) runStartup(ctx context.Context, initialBootstraps []string, readyTarget int) {
+func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 	var retries int
 
 	for {
-		err := l.registerAndConfigure(ctx, initialBootstraps)
+		err := l.registerAndConfigure(ctx, l.registerBootstraps)
 		switch {
 		case err == nil:
 			for range readyTarget {
@@ -451,7 +453,7 @@ func (l *Listener) renewLease(ctx context.Context) error {
 
 	requestCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := l.registerAndConfigure(requestCtx, nil); err != nil {
+	if err := l.registerAndConfigure(requestCtx, l.registerBootstraps); err != nil {
 		return err
 	}
 	return nil

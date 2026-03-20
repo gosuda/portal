@@ -519,6 +519,14 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 	}
 
 	relayURL := listener.api.baseURL.String()
+	defer func() {
+		e.mu.Lock()
+		if current, ok := e.listeners[relayURL]; ok && current == listener {
+			delete(e.listeners, relayURL)
+		}
+		e.mu.Unlock()
+	}()
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
