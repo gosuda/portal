@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -153,6 +154,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 
 	if registerReq.TTL != 42 {
 		t.Fatalf("register request TTL = %d, want 42", registerReq.TTL)
+	}
+	if registerReq.UDPEnabled {
+		t.Fatal("register request UDPEnabled = true, want false")
 	}
 	if registerReq.Name != "demo-app" {
 		t.Fatalf("register request Name = %q, want %q", registerReq.Name, "demo-app")
@@ -347,12 +351,137 @@ func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
 }
 
 func TestExposeNoRelayInputs(t *testing.T) {
-	exposure, err := Expose(context.Background(), nil, "demo", types.LeaseMetadata{})
+	exposure, err := Expose(context.Background(), nil, "demo", false, types.LeaseMetadata{})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}
 	if exposure != nil {
 		t.Fatalf("Expose() exposure = %#v, want nil", exposure)
+	}
+}
+
+func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
+	var connectCount atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					Version: types.SDKProtocolVersion,
+				},
+			})
+		case types.PathSDKRegister:
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					LeaseID:    "lease-udp",
+					Hostname:   "demo.example.com",
+					UDPAddr:    "demo.example.com:29900",
+					UDPEnabled: true,
+				},
+			})
+		case types.PathSDKConnect:
+			connectCount.Add(1)
+			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
+				OK:    false,
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
+			})
+		case types.PathSDKRenew:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
+				OK:   true,
+				Data: types.RenewResponse{LeaseID: "lease-udp"},
+			})
+		case types.PathSDKUnregister:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
+		Name:       "demo",
+		UDPEnabled: true,
+		LeaseTTL:   100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewListener() error = %v", err)
+	}
+	defer listener.Close()
+
+	waitForSDKTest(t, func() bool {
+		return listener.LeaseID() == "lease-udp"
+	})
+	time.Sleep(150 * time.Millisecond)
+
+	if connectCount.Load() == 0 {
+		t.Fatal("connect count = 0, want reverse session attempts")
+	}
+	if got := listener.PublicURL(); got == "" {
+		t.Fatal("PublicURL() = empty, want public url")
+	}
+	if !listener.SupportsDatagram() {
+		t.Fatal("SupportsDatagram() = false, want true")
+	}
+	if !listener.SupportsStream() {
+		t.Fatal("SupportsStream() = false, want true")
+	}
+}
+
+func TestListenerPublishesUDPAddressAfterRegistration(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					Version: types.SDKProtocolVersion,
+				},
+			})
+		case types.PathSDKRegister:
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					LeaseID:    "lease-udp",
+					Hostname:   "demo.example.com",
+					UDPAddr:    "demo.example.com:29900",
+					UDPEnabled: true,
+				},
+			})
+		case types.PathSDKRenew:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
+				OK:   true,
+				Data: types.RenewResponse{LeaseID: "lease-udp"},
+			})
+		case types.PathSDKUnregister:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
+		Name:       "demo",
+		UDPEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewListener() error = %v", err)
+	}
+	defer listener.Close()
+
+	if err := listener.WaitRegistered(context.Background()); err != nil {
+		t.Fatalf("WaitRegistered() error = %v", err)
+	}
+	if got := listener.UDPAddr(); got != "demo.example.com:29900" {
+		t.Fatalf("UDPAddr() = %q, want %q", got, "demo.example.com:29900")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := listener.WaitDatagramReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitDatagramReady() error = %v, want %v", err, context.DeadlineExceeded)
 	}
 }
 

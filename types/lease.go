@@ -29,8 +29,10 @@ type Lease struct {
 	BPS         int64
 	ClientIP    string
 	Hostname    string
+	UDPEnabled  bool
 	Metadata    LeaseMetadata
 	Ready       int
+	UDPPort     int
 	IsApproved  bool
 	IsBanned    bool
 	IsDenied    bool

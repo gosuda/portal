@@ -1,7 +1,9 @@
 package portal
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,19 +12,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
 var (
-	errLeaseNotFound    = errors.New(types.APIErrorCodeLeaseNotFound)
-	errIPBanned         = errors.New(types.APIErrorCodeIPBanned)
-	errUnauthorized     = errors.New(types.APIErrorCodeUnauthorized)
-	errHostnameConflict = errors.New(types.APIErrorCodeHostnameConflict)
+	errFeatureUnavailable  = errors.New(types.APIErrorCodeFeatureUnavailable)
+	errHostnameConflict    = errors.New(types.APIErrorCodeHostnameConflict)
+	errIPBanned            = errors.New(types.APIErrorCodeIPBanned)
+	errLeaseNotFound       = errors.New(types.APIErrorCodeLeaseNotFound)
+	errLeaseRejected       = errors.New(types.APIErrorCodeLeaseRejected)
+	errTransportMismatch   = errors.New(types.APIErrorCodeTransportMismatch)
+	errUnauthorized        = errors.New(types.APIErrorCodeUnauthorized)
+	errUDPDisabled         = errors.New(types.APIErrorCodeUDPDisabled)
+	errUDPCapacityExceeded = errors.New(types.APIErrorCodeUDPCapacityExceeded)
 )
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
@@ -120,11 +129,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.registerLease(req, clientIP)
 	if err != nil {
 		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
+		if errors.Is(err, errFeatureUnavailable) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable
+		}
 		if errors.Is(err, errHostnameConflict) {
 			status, code = http.StatusConflict, types.APIErrorCodeHostnameConflict
 		}
 		if errors.Is(err, errIPBanned) {
 			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
+		}
+		if errors.Is(err, transport.ErrPortExhausted) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted
+		}
+		if errors.Is(err, errUDPDisabled) {
+			status, code = http.StatusForbidden, types.APIErrorCodeUDPDisabled
+		}
+		if errors.Is(err, errUDPCapacityExceeded) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded
 		}
 		utils.WriteAPIError(w, status, code, err.Error())
 		return
@@ -215,17 +236,22 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := s.findLeaseByID(leaseID)
-	if err != nil {
+	lease, err := s.admitLeaseByID(leaseID, token, false)
+	switch {
+	case errors.Is(err, errLeaseNotFound):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
-	}
-	if !s.registry.policy.IsLeaseRoutable(lease.ID) {
+	case errors.Is(err, errLeaseRejected):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
-	}
-	if authErr := s.authorizeLeaseToken(lease, token); authErr != nil {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, authErr.Error())
+	case errors.Is(err, errUnauthorized):
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
+		return
+	case errors.Is(err, errTransportMismatch):
+		utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
+		return
+	case err != nil:
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
 
@@ -250,16 +276,24 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session := newReverseSession(conn, s.cfg.IdleKeepaliveInterval)
-	if err := lease.Broker.Offer(session); err != nil {
+	stream := lease.stream
+	if stream == nil {
+		_ = conn.Close()
+		return
+	}
+
+	remoteAddr := ""
+	if conn.RemoteAddr() != nil {
+		remoteAddr = conn.RemoteAddr().String()
+	}
+	if err := stream.OfferConn(conn); err != nil {
 		log.Warn().
 			Err(err).
 			Str("component", "relay-server").
 			Str("lease_id", lease.ID).
 			Str("lease_name", lease.Name).
-			Str("remote_addr", session.RemoteAddr()).
+			Str("remote_addr", remoteAddr).
 			Msg("sdk reverse rejected")
-		_ = session.Close()
 		return
 	}
 
@@ -268,9 +302,75 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Str("component", "relay-server").
 		Str("lease_id", lease.ID).
 		Str("lease_name", lease.Name).
-		Str("remote_addr", session.RemoteAddr()).
-		Int("ready", lease.Broker.ReadyCount()).
+		Str("remote_addr", remoteAddr).
+		Int("ready", stream.ReadyCount()).
 		Msg("sdk reverse connected")
+}
+
+func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
+	stream, err := conn.AcceptStream(context.Background())
+	if err != nil {
+		_ = conn.CloseWithError(1, "stream accept failed")
+		return
+	}
+
+	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var msg types.QUICControlMessage
+	if err := json.NewDecoder(io.LimitReader(stream, defaultControlBodyLimit)).Decode(&msg); err != nil {
+		_ = conn.CloseWithError(1, "control read failed")
+		return
+	}
+	_ = stream.SetReadDeadline(time.Time{})
+	if strings.TrimSpace(msg.LeaseID) == "" || strings.TrimSpace(msg.ReverseToken) == "" {
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
+		_ = conn.CloseWithError(1, "invalid control message")
+		return
+	}
+
+	lease, err := s.admitLeaseByID(msg.LeaseID, msg.ReverseToken, true)
+	switch {
+	case errors.Is(err, errLeaseNotFound):
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
+		_ = conn.CloseWithError(1, "lease not found")
+		return
+	case errors.Is(err, errUnauthorized):
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
+		_ = conn.CloseWithError(1, "unauthorized")
+		return
+	case errors.Is(err, errLeaseRejected):
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
+		_ = conn.CloseWithError(1, "lease rejected")
+		return
+	case errors.Is(err, errTransportMismatch):
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
+		_ = conn.CloseWithError(1, "transport mismatch")
+		return
+	case err != nil:
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
+		_ = conn.CloseWithError(1, "invalid control message")
+		return
+	}
+
+	dg := lease.datagram
+	if dg == nil {
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
+		_ = conn.CloseWithError(1, "transport mismatch")
+		return
+	}
+	if err := dg.Register(conn); err != nil {
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "broker_closed"})
+		_ = conn.CloseWithError(1, "broker closed")
+		return
+	}
+
+	_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: true})
+	s.registry.Touch(lease.ID, conn.RemoteAddr().String(), time.Now())
+	log.Info().
+		Str("component", "quic-tunnel-listener").
+		Str("lease_id", lease.ID).
+		Str("lease_name", lease.Name).
+		Str("remote_addr", conn.RemoteAddr().String()).
+		Msg("quic tunnel connected")
 }
 
 func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
@@ -294,6 +394,19 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		ttl = time.Duration(req.TTL) * time.Second
 	}
 
+	if err := s.requireDatagramPlane(req.UDPEnabled); err != nil {
+		return types.RegisterResponse{}, err
+	}
+
+	if req.UDPEnabled {
+		if !s.registry.policy.IsUDPEnabled() {
+			return types.RegisterResponse{}, errUDPDisabled
+		}
+		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.CountDatagramLeases() >= max {
+			return types.RegisterResponse{}, errUDPCapacityExceeded
+		}
+	}
+
 	leaseID := utils.RandomID("lease_")
 	now := time.Now()
 	expiresAt := now.Add(ttl)
@@ -307,22 +420,46 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			FirstSeenAt: now,
 			LastSeenAt:  now,
 			ClientIP:    clientIP,
+			UDPEnabled:  req.UDPEnabled,
 		},
 		ReverseToken: req.ReverseToken,
-		Broker:       newLeaseBroker(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+		stream:       transport.NewRelayStream(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+	}
+	if req.UDPEnabled {
+		if s.ports == nil {
+			return types.RegisterResponse{}, errors.New("udp port allocation not available")
+		}
+		port, err := s.ports.Allocate(name)
+		if err != nil {
+			return types.RegisterResponse{}, fmt.Errorf("allocate udp port: %w", err)
+		}
+		record.datagram = transport.NewRelayDatagram(leaseID, port)
+		record.ports = s.ports
 	}
 
-	if err := s.registry.Register(record); err != nil {
+	if err := record.Start(); err != nil {
+		record.Close()
 		return types.RegisterResponse{}, err
 	}
 
-	return types.RegisterResponse{
+	if err := s.registry.Register(record); err != nil {
+		record.Close()
+		return types.RegisterResponse{}, err
+	}
+
+	resp := types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
-		ConnectURL: strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect,
-	}, nil
+		UDPEnabled: record.UDPEnabled,
+	}
+	resp.ConnectURL = strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect
+	if record.datagram != nil {
+		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.datagram.UDPPort())
+	}
+
+	return resp, nil
 }
 
 func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
@@ -347,12 +484,8 @@ func (s *Server) unregisterLease(req types.UnregisterRequest) error {
 	if err != nil {
 		return err
 	}
-	record.Broker.Close()
+	s.closeLease(record)
 	return nil
-}
-
-func (s *Server) findLeaseByID(leaseID string) (*leaseRecord, error) {
-	return s.registry.FindByID(leaseID)
 }
 
 func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {

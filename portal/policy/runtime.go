@@ -10,6 +10,8 @@ type Runtime struct {
 	bpsManager   *BPSManager
 	ipFilter     *IPFilter
 	bannedLeases map[string]struct{}
+	udpEnabled   bool
+	udpMaxLeases int
 	mu           sync.RWMutex
 }
 
@@ -133,6 +135,34 @@ func (r *Runtime) IsLeaseRoutable(leaseID string) bool {
 		return false
 	}
 	return r.EffectiveApproval(leaseID)
+}
+
+func (r *Runtime) SetUDPPolicy(enabled bool, maxLeases int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.udpEnabled = enabled
+	r.udpMaxLeases = maxLeases
+	r.mu.Unlock()
+}
+
+func (r *Runtime) IsUDPEnabled() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpEnabled
+}
+
+func (r *Runtime) UDPMaxLeases() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpMaxLeases
 }
 
 func (r *Runtime) ForgetLease(leaseID string) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -17,6 +18,7 @@ type leaseRegistry struct {
 	routes    *routeTable
 	leaseByID map[string]*leaseRecord
 	policy    *policy.Runtime
+	onExpired func(*leaseRecord) // called for each expired lease during cleanup
 	mu        sync.RWMutex
 }
 
@@ -58,9 +60,7 @@ func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			for _, lease := range r.removeExpired(time.Now()) {
-				lease.Broker.Close()
-			}
+			r.cleanupExpired(time.Now())
 		}
 	}
 }
@@ -188,6 +188,14 @@ func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRec
 	return record
 }
 
+func (r *leaseRegistry) cleanupExpired(now time.Time) {
+	for _, lease := range r.removeExpired(now) {
+		if r.onExpired != nil {
+			r.onExpired(lease)
+		}
+	}
+}
+
 func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -204,6 +212,19 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 	return expired
 }
 
+func (r *leaseRegistry) CountDatagramLeases() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	count := 0
+	for _, record := range r.leaseByID {
+		if record.datagram != nil && now.Before(record.ExpiresAt) {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	if record == nil {
 		return types.Lease{}
@@ -213,7 +234,12 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
 	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)
-	snapshot.Ready = record.Broker.ReadyCount()
+	if record.stream != nil {
+		snapshot.Ready = record.stream.ReadyCount()
+	}
+	if record.datagram != nil {
+		snapshot.UDPPort = record.datagram.UDPPort()
+	}
 	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
 	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)
 	snapshot.IsDenied = r.policy.IsLeaseDenied(record.ID)
@@ -223,8 +249,39 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 
 type leaseRecord struct {
 	types.Lease
-	Broker       *leaseBroker
 	ReverseToken string
+	datagram     *transport.RelayDatagram
+	ports        *transport.PortAllocator
+	stream       *transport.RelayStream
+	startErr     error
+	startOnce    sync.Once
+}
+
+func (r *leaseRecord) Start() error {
+	if r == nil || r.datagram == nil {
+		return nil
+	}
+
+	r.startOnce.Do(func() {
+		r.startErr = r.datagram.Start(context.Background())
+	})
+	return r.startErr
+}
+
+func (r *leaseRecord) Close() {
+	if r == nil {
+		return
+	}
+	if r.stream != nil {
+		r.stream.Close()
+	}
+	if r.datagram != nil {
+		port := r.datagram.UDPPort()
+		r.datagram.Close()
+		if port > 0 && r.ports != nil {
+			r.ports.Release(port)
+		}
+	}
 }
 
 type routeTable struct {
