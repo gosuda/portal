@@ -600,7 +600,10 @@ type listenerAddr string
 func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
 
-func (l *Listener) done() bool {
+func (l *Listener) closed() bool {
+	if l == nil || l.doneCh == nil {
+		return true
+	}
 	select {
 	case <-l.doneCh:
 		return true

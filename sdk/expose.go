@@ -21,8 +21,8 @@ import (
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
-	ctx    context.Context
 	cancel context.CancelFunc
+	done   <-chan struct{}
 
 	name             string
 	reverseToken     string
@@ -36,7 +36,6 @@ type Exposure struct {
 
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
-	done      chan struct{}
 
 	mu        sync.RWMutex
 	relayURLs []string
@@ -94,8 +93,8 @@ func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) 
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
-		ctx:              exposureCtx,
 		cancel:           cancel,
+		done:             exposureCtx.Done(),
 		name:             cfg.Name,
 		reverseToken:     cfg.ReverseToken,
 		udpEnabled:       cfg.UDPEnabled,
@@ -106,7 +105,6 @@ func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) 
 		discoveryEnabled: cfg.Discovery,
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:        make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
-		done:             make(chan struct{}),
 		listeners:        make(map[string]*Listener, len(relayURLs)),
 		starting:         make(map[string]struct{}, len(relayURLs)),
 	}
@@ -141,7 +139,11 @@ func ExposeWithConfig(ctx context.Context, cfg ExposeConfig) (*Exposure, error) 
 		return nil, err
 	}
 
-	go exposure.monitorStartupCounts(exposureCtx)
+	go exposure.monitorStartupCounts()
+	go func() {
+		<-exposure.done
+		_ = exposure.Close()
+	}()
 	if exposure.discovery != nil {
 		go func() {
 			_ = exposure.discovery.RunPollLoop(exposureCtx, 0, types.DiscoverRequest{})
@@ -359,9 +361,6 @@ func (e *Exposure) Close() error {
 		if e.cancel != nil {
 			e.cancel()
 		}
-		if e.done != nil {
-			close(e.done)
-		}
 
 		listeners := e.listenersOrdered()
 		for _, listener := range listeners {
@@ -451,7 +450,7 @@ func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 		RootCAPEM:        append([]byte(nil), e.rootCAPEM...),
 		bootstrapService: e.discovery,
 	}
-	return NewListener(e.ctx, relayURL, cfg)
+	return NewListener(context.Background(), relayURL, cfg)
 }
 
 func (e *Exposure) installListener(relayURL string, listener *Listener) {
@@ -462,15 +461,12 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 	shouldClose := false
 	e.mu.Lock()
 	delete(e.starting, relayURL)
-	select {
-	case <-e.done:
+	if e.closed() {
 		shouldClose = true
-	default:
-		if _, exists := e.listeners[relayURL]; exists {
-			shouldClose = true
-		} else {
-			e.listeners[relayURL] = listener
-		}
+	} else if _, exists := e.listeners[relayURL]; exists {
+		shouldClose = true
+	} else {
+		e.listeners[relayURL] = listener
 	}
 	e.mu.Unlock()
 
@@ -482,7 +478,7 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 	log.Info().Str("relay_url", relayURL).Msg("relay added to exposure")
 	go e.runListenerAcceptLoop(listener)
 	if e.udpEnabled {
-		go e.attachDatagramPlane(e.ctx, listener)
+		go e.attachDatagramPlane(context.Background(), listener)
 	}
 }
 
@@ -521,7 +517,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if listener.done() || errors.Is(err, net.ErrClosed) {
+			if listener.closed() || errors.Is(err, net.ErrClosed) {
 				return
 			}
 			log.Warn().Err(err).Str("relay_url", listener.relayURL).Msg("exposure listener accept failed")
@@ -708,7 +704,7 @@ func (e *Exposure) allDatagramNegotiationsResolvedWithoutDatagram() bool {
 
 		registered, enabled := listener.datagramNegotiationState()
 		if !registered {
-			if listener.done() {
+			if listener.closed() {
 				resolved++
 			}
 			continue
@@ -776,7 +772,6 @@ func (e *Exposure) closed() bool {
 	if e == nil || e.done == nil {
 		return true
 	}
-
 	select {
 	case <-e.done:
 		return true
@@ -785,7 +780,7 @@ func (e *Exposure) closed() bool {
 	}
 }
 
-func (e *Exposure) monitorStartupCounts(ctx context.Context) {
+func (e *Exposure) monitorStartupCounts() {
 	if e == nil {
 		return
 	}
@@ -838,8 +833,6 @@ func (e *Exposure) monitorStartupCounts(ctx context.Context) {
 
 		select {
 		case <-e.done:
-			return
-		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}

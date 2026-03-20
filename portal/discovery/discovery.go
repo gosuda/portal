@@ -255,7 +255,7 @@ func (s *Service) RunPollLoop(ctx context.Context, interval time.Duration, req t
 		if len(s.Bootstraps()) > 0 {
 			if _, err := s.Poll(ctx, req); err != nil {
 				if ctx.Err() != nil {
-					return ctx.Err()
+					return nil
 				}
 				errText := err.Error()
 				if errText != lastPollErr {

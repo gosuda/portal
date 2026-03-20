@@ -291,7 +291,7 @@ func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) 
 	defer listener.Close()
 
 	waitForSDKTest(t, func() bool {
-		return listener.done()
+		return listener.closed()
 	})
 	if connectCount.Load() < 2 {
 		t.Fatalf("connect count = %d, want at least 2", connectCount.Load())
@@ -347,7 +347,7 @@ func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
 	waitForSDKTest(t, func() bool {
 		return connectCount.Load() >= 3
 	})
-	if listener.done() {
+	if listener.closed() {
 		t.Fatal("listener closed unexpectedly with negative RetryCount")
 	}
 }
