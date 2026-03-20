@@ -2,9 +2,14 @@
 # Replace "portal.example.com" with your actual domain throughout.
 #
 # Architecture:
-#   nginx:443  (L4 stream, ssl_preread)
-#     ├─ portal.example.com    → nginx:8443 (L7, TLS termination) → portal:4017
-#     └─ *.portal.example.com  → portal:443  (raw TCP SNI passthrough)
+#   nginx:443/tcp  (L4 stream, ssl_preread)
+#     ├─ portal.example.com    → 127.0.0.1:8443 (nginx L7, TLS termination) → 127.0.0.1:4017
+#     └─ *.portal.example.com  → 127.0.0.1:4443 (portal SNI, raw TCP passthrough)
+#   portal:4443/udp  (QUIC tunnel listener — shares SNI_PORT, only if UDP_PORT_COUNT > 0)
+#   portal:50000+/udp  (per-lease UDP relay ports — only if UDP_PORT_COUNT > 0)
+#
+# If you enable UDP transport (UDP_PORT_COUNT > 0), expose SNI_PORT/udp and
+# the allocated UDP port range (50000+) in the portal service ports section.
 #
 # Prerequisites:
 #   1. Copy .env.example to .env and set all required values.
@@ -23,56 +28,51 @@ services:
   # ─── nginx ──────────────────────────────────────────────────────────────────
   # Handles all inbound traffic on ports 80 and 443.
   # L4 stream block routes by SNI; L7 http block terminates TLS for root domain.
+  # Host networking so 127.0.0.1 reaches portal (also on host network).
   nginx:
     image: nginx:stable-alpine
     container_name: nginx
-    ports:
-      - "80:80"
-      - "443:443"
+    network_mode: host
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
     depends_on:
       - portal
     restart: unless-stopped
-    networks:
-      - portal-net
 
   # ─── portal relay ───────────────────────────────────────────────────────────
-  # Relay server. Ports are internal-only when behind nginx.
-  # nginx forwards raw TCP for tenant subdomains to portal:443.
-  # nginx proxies admin/API HTTP to portal:4017.
+  # NAT-traversal relay server.
+  # TCP (4017, 4443) is reached by nginx via 127.0.0.1.
+  # SNI_PORT is set to 4443 to avoid conflicting with nginx on port 443.
+  # If you enable UDP (UDP_PORT_COUNT > 0), expose SNI_PORT/udp and 50000+/udp as well.
   portal:
-    image: ghcr.io/gosuda/portal:2
+    image: ghcr.io/gosuda/portal:latest
     container_name: portal
+    ports:
+      - "${API_PORT:-4017}:${API_PORT:-4017}/tcp"
+      - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/tcp"
+      # Uncomment below when enabling UDP transport (host 443/udp is free — nginx only uses 443/tcp):
+      # - "443:${SNI_PORT:-4443}/udp"
+      # - "50000-50009:50000-50009/udp"  # adjust range to match UDP_PORT_COUNT
+    stop_grace_period: 30s
     environment:
-      # Public-facing relay URL. nginx handles TLS on port 443 externally,
-      # so this URL should not include a port number.
       PORTAL_URL: ${PORTAL_URL:-https://portal.example.com}
 
-      # Internal listener ports (not exposed to host).
+      # Listener ports (bound directly on host via host networking).
       API_PORT: ${API_PORT:-4017}
-      SNI_PORT: ${SNI_PORT:-443}
+      # Use a non-443 port to avoid conflict with nginx on the host.
+      SNI_PORT: ${SNI_PORT:-4443}
 
-      # Admin secret for the /admin UI. Set a strong random value.
+      # UDP transport (0 = disabled, set count to enable).
+      UDP_PORT_COUNT: ${UDP_PORT_COUNT:-0}
+
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
-
-      # Trust X-Forwarded-For and X-Real-IP headers from nginx.
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
-      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8}
 
-      # Portal's own ACME-managed TLS certificates for keyless signing.
       KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-cloudflare}
     volumes:
       - ./portal-certs:/portal-certs
-    expose:
-      - "4017"
-      - "443"
     restart: unless-stopped
-    networks:
-      - portal-net
-
-networks:
-  portal-net:
-    driver: bridge

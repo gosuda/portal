@@ -22,6 +22,7 @@ type ApprovalModeResponse = {
 type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
   leases?: ServerData[];
+  udp?: { enabled: boolean; max_leases: number };
 };
 
 type LeaseActionResult = ApprovalModeResponse;
@@ -34,6 +35,13 @@ export interface AdminServer extends BaseServer {
   isDenied: boolean;
   ip: string;
   isIPBanned: boolean;
+  transport: string;
+  udpPort: number;
+}
+
+export interface UDPSettings {
+  enabled: boolean;
+  maxLeases: number;
 }
 
 const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
@@ -97,6 +105,8 @@ function toAdminServer(
     isDenied: row.IsDenied || false,
     ip: row.ClientIP || "",
     isIPBanned: row.IsIPBanned || false,
+    transport: row.Transport || "tcp",
+    udpPort: row.UDPPort || 0,
   };
 }
 
@@ -122,6 +132,7 @@ function dedupeStrings(values: string[]): string[] {
 interface AdminSnapshot {
   serverData: ServerData[];
   approvalMode: ApprovalMode;
+  udpSettings: UDPSettings;
 }
 
 async function loadAdminSnapshot(): Promise<AdminSnapshot> {
@@ -131,12 +142,17 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
   return {
     serverData: normalizedLeases,
     approvalMode: normalizeApprovalMode(snapshot?.approval_mode),
+    udpSettings: {
+      enabled: snapshot?.udp?.enabled ?? false,
+      maxLeases: snapshot?.udp?.max_leases ?? 0,
+    },
   };
 }
 
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
+  const [udpSettings, setUDPSettings] = useState<UDPSettings>({ enabled: false, maxLeases: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -145,6 +161,7 @@ export function useAdmin() {
   const applySnapshot = (snapshot: AdminSnapshot) => {
     setServerData(snapshot.serverData);
     setApprovalMode(snapshot.approvalMode);
+    setUDPSettings(snapshot.udpSettings);
   };
 
   const fetchData = async () => {
@@ -289,6 +306,19 @@ export function useAdmin() {
     });
   };
 
+  const handleUDPSettingsChange = async (settings: UDPSettings) => {
+    await runAdminAction(async () => {
+      const response = await apiClient.post<{ enabled: boolean; max_leases: number }>(
+        API_PATHS.admin.udpSettings,
+        { enabled: settings.enabled, max_leases: settings.maxLeases }
+      );
+      setUDPSettings({
+        enabled: response?.enabled ?? settings.enabled,
+        maxLeases: response?.max_leases ?? settings.maxLeases,
+      });
+    });
+  };
+
   const handleApproveStatus = (peerId: string, approve: boolean) =>
     runAdminAction(() => updateLeaseAction(peerId, "approve", approve));
 
@@ -350,12 +380,14 @@ export function useAdmin() {
     ...listState,
     banFilter,
     approvalMode,
+    udpSettings,
     loading,
     error,
     handleBanFilterChange,
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
+    handleUDPSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,

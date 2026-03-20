@@ -21,6 +21,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
+		UDPPortCount:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -83,6 +84,7 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
+		UDPPortCount:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -101,7 +103,8 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://portal.example.com",
+		PortalURL:    "https://portal.example.com",
+		UDPPortCount: 1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -137,7 +140,8 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL: "https://portal.example.com",
+		PortalURL:    "https://portal.example.com",
+		UDPPortCount: 1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -149,5 +153,49 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 	}, "203.0.113.10")
 	if err == nil {
 		t.Fatal("registerLease() error = nil, want invalid name error")
+	}
+}
+
+func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:    "https://portal.example.com",
+		UDPPortCount: 10,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	server.registry.policy.SetUDPPolicy(true, 0)
+
+	resp, err := server.registerLease(types.RegisterRequest{
+		Name:         "demo-udp",
+		ReverseToken: "tok_udp",
+		UDPEnabled:   true,
+	}, "203.0.113.10")
+	if err != nil {
+		t.Fatalf("registerLease() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if record, ok := server.registry.Get(resp.LeaseID); ok {
+			server.closeLease(record)
+		}
+	})
+
+	record, ok := server.registry.Get(resp.LeaseID)
+	if !ok {
+		t.Fatal("registry.Get() = false, want registered lease")
+	}
+	if record.stream == nil {
+		t.Fatal("stream = nil, want stream runtime")
+	}
+	if record.datagram == nil {
+		t.Fatal("datagram = nil, want datagram runtime")
+	}
+	if got := record.datagram.UDPPort(); got == 0 {
+		t.Fatal("UDPPort() = 0, want allocated port")
+	}
+	if resp.UDPAddr == "" {
+		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
 	}
 }

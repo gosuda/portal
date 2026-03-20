@@ -19,6 +19,7 @@ export function Admin() {
     selectedTags,
     banFilter,
     approvalMode,
+    udpSettings,
     favorites,
     loading,
     error,
@@ -31,6 +32,7 @@ export function Admin() {
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
+    handleUDPSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,
@@ -86,10 +88,12 @@ export function Admin() {
         isAdmin={true}
         banFilter={banFilter}
         approvalMode={approvalMode}
+        udpSettings={udpSettings}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}
         onApprovalModeChange={handleApprovalModeChange}
+        onUDPSettingsChange={handleUDPSettingsChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
         onIPBanStatusChange={handleIPBanStatus}

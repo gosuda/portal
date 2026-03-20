@@ -20,18 +20,34 @@ import (
 // Exposure owns the lifecycle of one or more relay listeners and accepts
 // traffic from all of them through one net.Listener.
 type Exposure struct {
-	listener  net.Listener
-	listeners []*Listener
-	done      chan struct{}
+	udpEnabled bool
+	listener   net.Listener
+	listeners  []*Listener
+	datagrams  chan exposureDatagram
+	done       chan struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
 }
 
+type exposureDatagram struct {
+	FlowID   uint32
+	LeaseID  string
+	Payload  []byte
+	RelayURL string
+	UDPAddr  string
+
+	reply func([]byte) error
+}
+
+func (e *Exposure) SupportsStream() bool {
+	return e != nil
+}
+
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // merged listener for accepting traffic from all of them. Empty relay input
 // returns nil, nil so callers can fall back to local-only serving.
-func Expose(ctx context.Context, relayUrls []string, name string, metadata types.LeaseMetadata) (*Exposure, error) {
+func Expose(ctx context.Context, relayUrls []string, name string, udpEnabled bool, metadata types.LeaseMetadata) (*Exposure, error) {
 	relayURLs, err := utils.NormalizeRelayURLs(relayUrls)
 	if err != nil {
 		return nil, err
@@ -52,8 +68,9 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 
 	for _, relayURL := range relayURLs {
 		listener, err := NewListener(ctx, relayURL, ListenerConfig{
-			Name:     name,
-			Metadata: metadata,
+			Name:       name,
+			UDPEnabled: udpEnabled,
+			Metadata:   metadata,
 		})
 		if err != nil {
 			return nil, errors.Join(fmt.Errorf("listen %q: %w", relayURL, err), cleanup())
@@ -66,18 +83,22 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	for _, listener := range listeners {
 		mergedListeners = append(mergedListeners, listener)
 	}
-
 	merged, err := mergeListeners(mergedListeners...)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("merge listeners: %w", err), cleanup())
 	}
 
 	exposure := &Exposure{
-		listener:  merged,
-		listeners: listeners,
-		done:      make(chan struct{}),
+		udpEnabled: udpEnabled,
+		listener:   merged,
+		listeners:  listeners,
+		datagrams:  make(chan exposureDatagram, max(len(listeners)*32, 1)),
+		done:       make(chan struct{}),
 	}
 	go exposure.monitorStartupCounts(ctx)
+	if exposure.UDPEnabled() {
+		exposure.attachDatagramPlanes(ctx)
+	}
 
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
@@ -88,7 +109,22 @@ func Expose(ctx context.Context, relayUrls []string, name string, metadata types
 	return exposure, nil
 }
 
-// Accept implements net.Listener by accepting from the merged relay listener.
+// RelayURLs returns the normalized relay URLs backing the exposure.
+func (e *Exposure) RelayURLs() []string {
+	if e == nil || len(e.listeners) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(e.listeners))
+	for _, listener := range e.listeners {
+		if listener == nil {
+			continue
+		}
+		out = append(out, listener.relayURL)
+	}
+	return out
+}
+
 func (e *Exposure) Accept() (net.Conn, error) {
 	if e == nil || e.listener == nil {
 		return nil, net.ErrClosed
@@ -120,7 +156,6 @@ func (e *Exposure) Accept() (net.Conn, error) {
 	}, nil
 }
 
-// Addr implements net.Listener.
 func (e *Exposure) Addr() net.Addr {
 	if e == nil || e.listener == nil {
 		return listenerAddr("portal:exposure")
@@ -128,23 +163,6 @@ func (e *Exposure) Addr() net.Addr {
 	return e.listener.Addr()
 }
 
-// RelayURLs returns the normalized relay URLs backing the exposure.
-func (e *Exposure) RelayURLs() []string {
-	if e == nil || len(e.listeners) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(e.listeners))
-	for _, listener := range e.listeners {
-		if listener == nil {
-			continue
-		}
-		out = append(out, listener.relayURL)
-	}
-	return out
-}
-
-// PublicURLs returns the de-duplicated public URLs exposed by the exposure.
 func (e *Exposure) PublicURLs() []string {
 	if e == nil || len(e.listeners) == 0 {
 		return nil
@@ -172,53 +190,15 @@ func (e *Exposure) PublicURLs() []string {
 	return out
 }
 
-// RunHTTP serves one handler on the exposure and, when localAddr is set, on
-// the provided local HTTP address for app-local access. Nil exposures support
-// local-only serving.
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
-	var relayListener net.Listener
-	if e != nil {
-		relayListener = e
+	if e == nil || e.listener == nil {
+		return RunHTTP(ctx, nil, handler, localAddr)
 	}
-	return RunHTTP(ctx, relayListener, handler, localAddr)
+	return RunHTTP(ctx, e, handler, localAddr)
 }
 
-// Close closes the merged listener and all underlying relay listeners.
-func (e *Exposure) Close() error {
-	if e == nil {
-		return nil
-	}
-
-	var closeErr error
-	e.closeOnce.Do(func() {
-		if e.done != nil {
-			close(e.done)
-		}
-		if e.listener != nil {
-			closeErr = errors.Join(closeErr, e.listener.Close())
-		}
-
-		event := log.Info().
-			Int("relay_count", len(e.listeners)).
-			Strs("relays", e.RelayURLs())
-		if closeErr != nil {
-			event = log.Warn().
-				Err(closeErr).
-				Int("relay_count", len(e.listeners)).
-				Strs("relays", e.RelayURLs())
-		}
-		event.Msg("exposure closed")
-	})
-	return closeErr
-}
-
-// RunHTTP serves one handler on relayListener and, when localAddr is set, on
-// the provided local HTTP address for app-local access.
 func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
 	localAddr = strings.TrimSpace(localAddr)
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	if relayListener == nil && localAddr == "" {
 		return errors.New("relay listener or local address is required")
@@ -318,103 +298,6 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 	return errors.Join(serveErr, shutdownErr)
 }
 
-func (e *Exposure) monitorStartupCounts(ctx context.Context) {
-	if e == nil {
-		return
-	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	prevStatuses := make(map[string]listenerStatus, len(e.listeners))
-	firstRun := true
-
-	for {
-		readyCount, inactiveCount := 0, 0
-		activated := make([]string, 0)
-		deactivated := make([]string, 0)
-		for _, listener := range e.listeners {
-			status := listenerStatusInactive
-			if listener != nil {
-				status = listener.StartupStatus()
-			}
-			if status == listenerStatusReady {
-				readyCount++
-			} else {
-				inactiveCount++
-			}
-
-			if listener == nil {
-				continue
-			}
-			if prev, ok := prevStatuses[listener.relayURL]; ok && prev != status {
-				if status == listenerStatusReady {
-					activated = append(activated, listener.relayURL)
-				} else {
-					deactivated = append(deactivated, listener.relayURL)
-				}
-			}
-			prevStatuses[listener.relayURL] = status
-		}
-
-		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
-			event := log.Info().
-				Int("inactive", inactiveCount).
-				Int("ready", readyCount)
-			if len(activated) > 0 {
-				event = event.Strs("activated", activated)
-			}
-			if len(deactivated) > 0 {
-				event = event.Strs("deactivated", deactivated)
-			}
-			event.Msg("relay status")
-			firstRun = false
-		}
-
-		select {
-		case <-e.done:
-			return
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-type exposureConn struct {
-	net.Conn
-	id         uint64
-	localAddr  string
-	remoteAddr string
-	closeOnce  sync.Once
-}
-
-func (c *exposureConn) Close() error {
-	var closeErr error
-	c.closeOnce.Do(func() {
-		closeErr = c.Conn.Close()
-		if errors.Is(closeErr, net.ErrClosed) {
-			closeErr = nil
-		}
-
-		event := log.Info().
-			Uint64("conn_id", c.id).
-			Str("local_addr", c.localAddr).
-			Str("remote_addr", c.remoteAddr)
-		if closeErr != nil {
-			event = log.Warn().
-				Err(closeErr).
-				Uint64("conn_id", c.id).
-				Str("local_addr", c.localAddr).
-				Str("remote_addr", c.remoteAddr)
-		}
-		event.Msg("exposure connection closed")
-	})
-	return closeErr
-}
-
-// mergeListeners fans in multiple listeners into one net.Listener. It keeps
-// serving accepts from remaining listeners when one listener stops, and returns
-// a terminal error only after all source listeners have stopped.
 func mergeListeners(listeners ...net.Listener) (net.Listener, error) {
 	if len(listeners) == 0 {
 		return nil, errors.New("at least one listener is required")
@@ -554,4 +437,352 @@ func (l *mergedListener) terminalErrorOr(fallback error) error {
 		return fallback
 	}
 	return l.terminalErr
+}
+
+type exposureConn struct {
+	net.Conn
+	id         uint64
+	localAddr  string
+	remoteAddr string
+	closeOnce  sync.Once
+}
+
+func (c *exposureConn) Close() error {
+	var closeErr error
+	c.closeOnce.Do(func() {
+		closeErr = c.Conn.Close()
+		if errors.Is(closeErr, net.ErrClosed) {
+			closeErr = nil
+		}
+
+		event := log.Info().
+			Uint64("conn_id", c.id).
+			Str("local_addr", c.localAddr).
+			Str("remote_addr", c.remoteAddr)
+		if closeErr != nil {
+			event = log.Warn().
+				Err(closeErr).
+				Uint64("conn_id", c.id).
+				Str("local_addr", c.localAddr).
+				Str("remote_addr", c.remoteAddr)
+		}
+		event.Msg("exposure connection closed")
+	})
+	return closeErr
+}
+
+// Close closes the merged listener and all underlying relay listeners.
+func (e *Exposure) Close() error {
+	if e == nil {
+		return nil
+	}
+
+	var closeErr error
+	e.closeOnce.Do(func() {
+		if e.done != nil {
+			close(e.done)
+		}
+		if e.listener != nil {
+			closeErr = errors.Join(closeErr, e.listener.Close())
+		}
+		for _, listener := range e.listeners {
+			if listener != nil {
+				closeErr = errors.Join(closeErr, listener.Close())
+			}
+		}
+
+		event := log.Info().
+			Int("relay_count", len(e.listeners)).
+			Strs("relays", e.RelayURLs())
+		if closeErr != nil {
+			event = log.Warn().
+				Err(closeErr).
+				Int("relay_count", len(e.listeners)).
+				Strs("relays", e.RelayURLs())
+		}
+		event.Msg("exposure closed")
+	})
+	return closeErr
+}
+
+func (e *Exposure) SupportsDatagram() bool {
+	return e != nil && e.udpEnabled
+}
+
+func (e *Exposure) UDPEnabled() bool {
+	return e != nil && e.udpEnabled
+}
+
+func (e *Exposure) AcceptDatagram() (types.DatagramFrame, string, string, string, func([]byte) error, error) {
+	if e == nil || !e.SupportsDatagram() {
+		return types.DatagramFrame{}, "", "", "", nil, net.ErrClosed
+	}
+
+	select {
+	case <-e.done:
+		return types.DatagramFrame{}, "", "", "", nil, net.ErrClosed
+	case dg := <-e.datagrams:
+		reply := dg.reply
+		if reply == nil {
+			reply = func([]byte) error { return errors.New("reply path is unavailable") }
+		}
+		return types.DatagramFrame{
+			FlowID:  dg.FlowID,
+			Payload: dg.Payload,
+		}, dg.LeaseID, dg.RelayURL, dg.UDPAddr, reply, nil
+	}
+}
+
+func (e *Exposure) UDPAddrs() []string {
+	if e == nil || len(e.listeners) == 0 || !e.SupportsDatagram() {
+		return nil
+	}
+
+	out := make([]string, 0, len(e.listeners))
+	seen := make(map[string]struct{})
+	for _, listener := range e.listeners {
+		if listener == nil {
+			continue
+		}
+
+		listener.mu.Lock()
+		udpAddr := listener.udpAddr
+		listener.mu.Unlock()
+		if udpAddr == "" {
+			continue
+		}
+		if _, ok := seen[udpAddr]; ok {
+			continue
+		}
+		seen[udpAddr] = struct{}{}
+		out = append(out, udpAddr)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
+	if e == nil || !e.SupportsDatagram() {
+		return nil, errors.New("exposure does not have udp enabled")
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if addrs := e.readyUDPAddrs(); len(addrs) > 0 {
+			return addrs, nil
+		}
+		if e.allDatagramNegotiationsResolvedWithoutDatagram() {
+			return nil, errors.New("relay did not expose udp")
+		}
+
+		select {
+		case <-e.done:
+			return nil, net.ErrClosed
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *Exposure) readyUDPAddrs() []string {
+	if e == nil || len(e.listeners) == 0 || !e.SupportsDatagram() {
+		return nil
+	}
+
+	out := make([]string, 0, len(e.listeners))
+	seen := make(map[string]struct{})
+	for _, listener := range e.listeners {
+		if listener == nil || !listener.datagramConnected() {
+			continue
+		}
+
+		udpAddr := listener.UDPAddr()
+		if udpAddr == "" {
+			continue
+		}
+		if _, ok := seen[udpAddr]; ok {
+			continue
+		}
+		seen[udpAddr] = struct{}{}
+		out = append(out, udpAddr)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (e *Exposure) allDatagramNegotiationsResolvedWithoutDatagram() bool {
+	if e == nil || len(e.listeners) == 0 {
+		return true
+	}
+
+	resolved := 0
+	for _, listener := range e.listeners {
+		if listener == nil {
+			resolved++
+			continue
+		}
+
+		registered, enabled := listener.datagramNegotiationState()
+		if !registered {
+			if listener.done() {
+				resolved++
+			}
+			continue
+		}
+		if enabled {
+			return false
+		}
+		resolved++
+	}
+
+	return resolved == len(e.listeners)
+}
+
+func (e *Exposure) attachDatagramPlanes(ctx context.Context) {
+	for _, listener := range e.listeners {
+		if listener == nil {
+			continue
+		}
+
+		go e.attachDatagramPlane(ctx, listener)
+	}
+}
+
+func (e *Exposure) attachDatagramPlane(ctx context.Context, listener *Listener) {
+	err := listener.WaitDatagramReady(ctx)
+	if err != nil {
+		switch {
+		case e.closed():
+			return
+		case ctx != nil && ctx.Err() != nil:
+			return
+		case errors.Is(err, net.ErrClosed), errors.Is(err, context.Canceled):
+			return
+		default:
+			log.Warn().
+				Err(err).
+				Str("relay_url", listener.relayURL).
+				Msg("attach datagram plane failed")
+			return
+		}
+	}
+
+	e.forwardDatagrams(listener.relayURL, listener)
+}
+
+func (e *Exposure) forwardDatagrams(relayURL string, listener *Listener) {
+	for {
+		dg, err := listener.AcceptDatagram()
+		if err != nil {
+			if e.closed() || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Warn().
+				Err(err).
+				Str("relay_url", relayURL).
+				Str("lease_id", listener.LeaseID()).
+				Msg("datagram accept failed")
+			return
+		}
+
+		flowID := dg.FlowID
+		reply := func(payload []byte) error {
+			return listener.SendDatagram(flowID, payload)
+		}
+
+		select {
+		case <-e.done:
+			return
+		case e.datagrams <- exposureDatagram{
+			FlowID:   flowID,
+			LeaseID:  listener.LeaseID(),
+			Payload:  append([]byte(nil), dg.Payload...),
+			RelayURL: relayURL,
+			UDPAddr:  listener.UDPAddr(),
+			reply:    reply,
+		}:
+		}
+	}
+}
+
+func (e *Exposure) closed() bool {
+	if e == nil || e.done == nil {
+		return true
+	}
+
+	select {
+	case <-e.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Exposure) monitorStartupCounts(ctx context.Context) {
+	if e == nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	prevStatuses := make(map[string]listenerStatus, len(e.listeners))
+	firstRun := true
+
+	for {
+		readyCount, inactiveCount := 0, 0
+		activated := make([]string, 0)
+		deactivated := make([]string, 0)
+		for _, listener := range e.listeners {
+			status := listenerStatusInactive
+			if listener != nil {
+				status = listener.StartupStatus()
+			}
+			if status == listenerStatusReady {
+				readyCount++
+			} else {
+				inactiveCount++
+			}
+
+			if listener == nil {
+				continue
+			}
+			if prev, ok := prevStatuses[listener.relayURL]; ok && prev != status {
+				if status == listenerStatusReady {
+					activated = append(activated, listener.relayURL)
+				} else {
+					deactivated = append(deactivated, listener.relayURL)
+				}
+			}
+			prevStatuses[listener.relayURL] = status
+		}
+
+		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
+			event := log.Info().
+				Int("inactive", inactiveCount).
+				Int("ready", readyCount)
+			if len(activated) > 0 {
+				event = event.Strs("activated", activated)
+			}
+			if len(deactivated) > 0 {
+				event = event.Strs("deactivated", deactivated)
+			}
+			event.Msg("relay status")
+			firstRun = false
+		}
+
+		select {
+		case <-e.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

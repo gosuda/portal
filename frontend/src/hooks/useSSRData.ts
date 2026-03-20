@@ -19,6 +19,8 @@ export interface ServerData {
   Hostname: string;
   Metadata: unknown;
   Ready: number;
+  Transport?: string;
+  UDPPort?: number;
   IsApproved?: boolean;
   IsBanned?: boolean;
   IsDenied?: boolean;

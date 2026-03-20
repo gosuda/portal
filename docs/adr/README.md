@@ -14,6 +14,7 @@ This directory is the source of truth for major Portal architecture decisions.
 - [0001 - Raw TCP Reverse Connect and ACME TLS for Portal Root](./0001-raw-tcp-reverse-connect-and-autocert-tls.md) (`Accepted`)
 - [0002 - Remove WebSocket and Legacy Compatibility Paths](./0002-remove-websocket-and-legacy-compatibility.md) (`Accepted`)
 - [0003 - Security and Anti-Abuse Hardening](./0003-security-and-anti-abuse-hardening.md) (`Deprecated`)
+- [0004 - QUIC-Based UDP Transport](./0004-quic-udp-transport.md) (`Accepted`)
 
 ## Authoring Notes
 
