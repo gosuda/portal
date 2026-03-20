@@ -23,13 +23,15 @@ import (
 )
 
 var (
-	errFeatureUnavailable = errors.New(types.APIErrorCodeFeatureUnavailable)
-	errHostnameConflict   = errors.New(types.APIErrorCodeHostnameConflict)
-	errIPBanned           = errors.New(types.APIErrorCodeIPBanned)
-	errLeaseNotFound      = errors.New(types.APIErrorCodeLeaseNotFound)
-	errLeaseRejected      = errors.New(types.APIErrorCodeLeaseRejected)
-	errTransportMismatch  = errors.New(types.APIErrorCodeTransportMismatch)
-	errUnauthorized       = errors.New(types.APIErrorCodeUnauthorized)
+	errFeatureUnavailable  = errors.New(types.APIErrorCodeFeatureUnavailable)
+	errHostnameConflict    = errors.New(types.APIErrorCodeHostnameConflict)
+	errIPBanned            = errors.New(types.APIErrorCodeIPBanned)
+	errLeaseNotFound       = errors.New(types.APIErrorCodeLeaseNotFound)
+	errLeaseRejected       = errors.New(types.APIErrorCodeLeaseRejected)
+	errTransportMismatch   = errors.New(types.APIErrorCodeTransportMismatch)
+	errUnauthorized        = errors.New(types.APIErrorCodeUnauthorized)
+	errUDPDisabled         = errors.New(types.APIErrorCodeUDPDisabled)
+	errUDPCapacityExceeded = errors.New(types.APIErrorCodeUDPCapacityExceeded)
 )
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
@@ -138,6 +140,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, transport.ErrPortExhausted) {
 			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted
+		}
+		if errors.Is(err, errUDPDisabled) {
+			status, code = http.StatusForbidden, types.APIErrorCodeUDPDisabled
+		}
+		if errors.Is(err, errUDPCapacityExceeded) {
+			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded
 		}
 		utils.WriteAPIError(w, status, code, err.Error())
 		return
@@ -388,6 +396,15 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 
 	if err := s.requireDatagramPlane(req.UDPEnabled); err != nil {
 		return types.RegisterResponse{}, err
+	}
+
+	if req.UDPEnabled {
+		if !s.registry.policy.IsUDPEnabled() {
+			return types.RegisterResponse{}, errUDPDisabled
+		}
+		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.CountDatagramLeases() >= max {
+			return types.RegisterResponse{}, errUDPCapacityExceeded
+		}
 	}
 
 	leaseID := utils.RandomID("lease_")

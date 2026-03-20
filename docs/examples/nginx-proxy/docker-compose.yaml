@@ -5,12 +5,11 @@
 #   nginx:443/tcp  (L4 stream, ssl_preread)
 #     ├─ portal.example.com    → 127.0.0.1:8443 (nginx L7, TLS termination) → 127.0.0.1:4017
 #     └─ *.portal.example.com  → 127.0.0.1:4443 (portal SNI, raw TCP passthrough)
-#   portal:4017/udp  (QUIC tunnel listener — direct on host)
-#   portal:29900-29999/udp  (per-lease UDP relay ports — direct on host)
+#   portal:4443/udp  (QUIC tunnel listener — shares SNI_PORT, only if UDP_PORT_COUNT > 0)
+#   portal:50000+/udp  (per-lease UDP relay ports — only if UDP_PORT_COUNT > 0)
 #
-# Portal uses host networking so UDP ports are dynamically bound on the host
-# without Docker iptables rules. This avoids the slow container start/stop
-# caused by large port-range mappings and allows dynamic UDP port allocation.
+# If you enable UDP transport (UDP_PORT_COUNT > 0), expose SNI_PORT/udp and
+# the allocated UDP port range (50000+) in the portal service ports section.
 #
 # Prerequisites:
 #   1. Copy .env.example to .env and set all required values.
@@ -42,14 +41,19 @@ services:
     restart: unless-stopped
 
   # ─── portal relay ───────────────────────────────────────────────────────────
-  # Relay server with host networking.
+  # NAT-traversal relay server.
   # TCP (4017, 4443) is reached by nginx via 127.0.0.1.
-  # UDP (4017, 29900-29999) is bound directly on the host — no port mapping.
   # SNI_PORT is set to 4443 to avoid conflicting with nginx on port 443.
+  # If you enable UDP (UDP_PORT_COUNT > 0), expose SNI_PORT/udp and 50000+/udp as well.
   portal:
-    image: ghcr.io/gosuda/portal:2
+    image: ghcr.io/gosuda/portal:latest
     container_name: portal
-    network_mode: host
+    ports:
+      - "${API_PORT:-4017}:${API_PORT:-4017}/tcp"
+      - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/tcp"
+      # Uncomment below when enabling UDP transport (host 443/udp is free — nginx only uses 443/tcp):
+      # - "443:${SNI_PORT:-4443}/udp"
+      # - "50000-50009:50000-50009/udp"  # adjust range to match UDP_PORT_COUNT
     stop_grace_period: 30s
     environment:
       PORTAL_URL: ${PORTAL_URL:-https://portal.example.com}
@@ -59,9 +63,8 @@ services:
       # Use a non-443 port to avoid conflict with nginx on the host.
       SNI_PORT: ${SNI_PORT:-4443}
 
-      # UDP port allocation range for QUIC/UDP leases.
-      UDP_PORT_MIN: ${UDP_PORT_MIN:-29900}
-      UDP_PORT_MAX: ${UDP_PORT_MAX:-29999}
+      # UDP transport (0 = disabled, set count to enable).
+      UDP_PORT_COUNT: ${UDP_PORT_COUNT:-0}
 
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
@@ -69,6 +72,7 @@ services:
 
       KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-cloudflare}
     volumes:
       - ./portal-certs:/portal-certs
     restart: unless-stopped

@@ -46,6 +46,14 @@ type PortAllocator struct {
 }
 
 func NewPortAllocator(min, max int, grace time.Duration) *PortAllocator {
+	if min <= 0 || max <= 0 || min > max {
+		return &PortAllocator{
+			available: nil,
+			inUse:     make(map[int]string),
+			reserved:  make(map[string]portReservation),
+			grace:     grace,
+		}
+	}
 	available := make([]int, 0, max-min+1)
 	for p := min; p <= max; p++ {
 		available = append(available, p)

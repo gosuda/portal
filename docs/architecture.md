@@ -105,6 +105,13 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `transport.RelayDatagram`: per-lease raw UDP port and datagram backhaul runtime
 - `acme`: Cloudflare/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
+- `portal/datagram/`: subpackage for QUIC/UDP datagram transport
+  - `Session`: owns one active QUIC DATAGRAM connection, decodes frames, exposes `Incoming()` channel
+  - `FlowMux`: per-lease QUIC connection manager; multiplexes UDP datagrams using flow IDs over DATAGRAM frames (RFC 9221); embeds a `Session` with dispatch and idle-flow cleanup goroutines
+  - `Relay`: binds a public UDP port per lease, bridges between raw UDP sockets and `FlowMux` using `TouchFlow`/`SendDatagram`
+  - `PortAllocator`: assigns and recycles per-lease UDP ports from a count-based pool (base port 50000, count via `UDP_PORT_COUNT`) with sticky name-based reservation and grace period
+  - `ParseQUICInitialSNI`: decrypts QUIC v1 Initial packets and extracts TLS ClientHello SNI for the QUIC SNI router
+- `Server` additionally owns: `quicTunnel` (QUIC listener, ALPN `portal-tunnel`), `quicSNI` (raw UDP PacketConn for QUIC SNI routing), `quicSNIRoutes` (cached FlowMux per source address)
 
 ### SDK (`sdk/`)
 
@@ -119,6 +126,12 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `Exposure.RelayURLs()` returns the configured normalized relay URLs, while `Exposure.PublicURLs()` returns only relays that are currently registered and ready
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
+- `Listener` embeds a `datagram.Session` for QUIC datagram transport (no separate UDP listener type)
+- `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the session
+- `Listener.WaitDatagramReady()`: blocks until relay publishes `udp_addr` and `quic_addr`
+- `ExposureDatagram`: wraps a `DatagramFrame` with relay context (FlowID, LeaseID, RelayURL, UDPAddr) and a `Reply()` callback for bidirectional flow
+- `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners
+- `Exposure.WaitDatagramReady()`: blocks until at least one relay's datagram plane is ready
 
 ### Tunnel (`cmd/portal-tunnel`)
 
@@ -126,8 +139,13 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Creates one SDK listener per relay through the SDK and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
 - Proxies raw TCP to a local target passed to `portal expose`
-- Optionally proxies raw UDP to a separate local UDP target passed with `--udp-addr`
+- Optionally proxies raw UDP to a separate local UDP target when `--udp` is enabled
 - Returns an HTTP 503 response when the local target is unavailable
+- `--udp` flag (bool, default `false`): enables UDP relay in addition to TCP
+- `--udp-addr` flag (string): local UDP target address (`host:port` or port only); required when `--udp` is enabled
+- `runUDPBestEffort`: waits for datagram readiness, then calls `proxyExposureDatagrams`
+- `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `ExposureDatagram.Reply()` for return path
+- Best-effort UDP — failures logged but do not terminate the TCP tunnel
 
 ## Transport Model
 
@@ -144,30 +162,23 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
 
-### UDP datagram transport
+### UDP/QUIC Datagram Transport
 
-1. SDK/tunnel registers a lease with `udp_enabled=true`.
-2. Relay validates that the datagram plane is enabled and allocates one public UDP port for that lease from the configured `UDP_PORT_MIN` to `UDP_PORT_MAX` range.
-3. SDK/tunnel opens an internal QUIC tunnel to the relay on `API_PORT/udp` and authenticates it with a QUIC control stream.
-4. A UDP client sends raw UDP packets to the lease `UDPAddr`.
-5. Relay receives those packets on the lease UDP port, maps client traffic to a flow ID, and forwards payloads over QUIC DATAGRAM frames.
-6. SDK/tunnel receives the datagrams and either:
-   - delivers them to application code through `sdk.Exposure.AcceptDatagram()`, or
-   - proxies them to a local UDP service in `portal-tunnel`.
-7. Replies return over the same QUIC tunnel and are written back to the original client through the lease UDP port.
+1. SDK/tunnel registers a lease with `udp_enabled=true` via `POST /sdk/register`.
+2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` AND admin has enabled UDP), allocates a UDP port via `PortAllocator`, creates `FlowMux` + `Relay` in `leaseDatagramRuntime`.
+3. Response includes `udp_addr` (public UDP endpoint) and `quic_addr` (QUIC tunnel endpoint).
+4. SDK opens a QUIC connection to `quic_addr` (ALPN `portal-tunnel`, TLS 1.3, datagrams enabled).
+5. Authentication: SDK sends `{lease_id, reverse_token}` JSON on the first QUIC stream; relay validates and calls `FlowMux.Register(conn)`.
+6. External UDP client sends a packet to `udp_addr` → `Relay.readLoop` → `FlowMux.TouchFlow` (assigns flow ID) → `FlowMux.SendDatagram` → QUIC DATAGRAM frame.
+7. SDK-side `Session.receiveLoop` decodes frame → `Listener.AcceptDatagram()` → `Exposure.AcceptDatagram()` → `proxyExposureDatagrams` → local UDP target.
+8. Return path: local response → per-flow read goroutine → `ExposureDatagram.Reply()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
 
-### UDP Characteristics and Constraints
+```text
+Client --UDP--> [:50000+ Relay] --DATAGRAM--> [FlowMux/Session] --QUIC--> [Session/Listener] --UDP--> Local Service
+                                                                   <--QUIC DATAGRAM return path--
+```
 
-- UDP support is currently experimental. Expect transport details and operational behavior to keep changing while the model is being validated.
-- Public UDP ingress is raw UDP only. Portal does not currently provide public QUIC or HTTP/3 ingress.
-- The QUIC tunnel is internal only. It is a relay-to-SDK/tunnel backhaul, not a public client entry point.
-- Public UDP and internal QUIC serve different roles:
-  - public UDP keeps the external interface compatible with existing raw UDP clients
-  - internal QUIC gives the backhaul one outbound, multiplexed, TLS-protected carrier
-- Each UDP-enabled lease gets one dedicated public UDP port. The configured UDP port range therefore limits the number of concurrent UDP-enabled leases, not the number of clients behind one lease.
-- The public UDP leg is not relay-terminated TLS. Only the internal QUIC backhaul is TLS-protected by default.
-- UDP is intended for native UDP clients and services such as game servers, DNS-like protocols, and custom UDP daemons. It is not a browser-native public interface.
-- In the current public contract, stream/TCP remains available and UDP is additive when enabled.
+Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 
 ## Control Plane Flow
 
@@ -180,9 +191,14 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
   - `reverse_token`
   - optional `metadata`
   - optional `ttl`
-- optional `udp_enabled` (experimental)
+  - optional `udp_enabled` (default `false`)
 - `name` must be a valid single DNS label and relay publishes the lease at `<name>.<root host>`
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
+- When datagram-capable, response includes `udp_addr`, `quic_addr`, and `transport`
+- UDP registration requires two conditions: server must have `UDP_PORT_COUNT > 0` AND admin must enable UDP in the admin panel
+- `APIErrorCodeUDPDisabled` (HTTP 403) when UDP is disabled by admin policy
+- `APIErrorCodeUDPCapacityExceeded` (HTTP 503) when admin-configured max UDP lease limit is reached
+- `APIErrorCodeUDPPortExhausted` (HTTP 503) when the UDP port pool is exhausted
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
 ### 2. Reverse Connect
@@ -255,6 +271,11 @@ Cross-package public contract lives in:
   - reverse marker constants
 - `types/paths.go`
   - shared `/sdk/*`, admin, health, install, and signer paths
+- `types/transport.go`
+  - `LeaseCapabilities` (Stream/Datagram booleans)
+  - `DatagramFrame` wire format
+  - `EncodeDatagram` / `DecodeDatagram`
+  - Transport constants: `TransportTCP`, `TransportUDP`, `TransportBoth`
 
 Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 
@@ -278,6 +299,9 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - End-to-end tenant TLS with relay-backed keyless signing
 - Per-lease reverse token authorization for reverse session lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
+- Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
+- Per-lease UDP port allocation with sticky name-based reservation
+- QUIC tunnel authentication via control stream (lease ID + reverse token)
 
 ## ADRs
 

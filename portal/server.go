@@ -25,14 +25,18 @@ import (
 )
 
 const (
-	defaultLeaseTTL         = 30 * time.Second
-	defaultClaimTimeout     = 10 * time.Second
-	defaultIdleKeepalive    = 15 * time.Second
-	defaultReadyQueueLimit  = 8
-	defaultClientHelloWait  = 2 * time.Second
-	defaultControlBodyLimit = 4 << 20
-	defaultUDPPortMin       = 29900
-	defaultUDPPortMax       = 29999
+	defaultLeaseTTL          = 30 * time.Second
+	defaultClaimTimeout      = 10 * time.Second
+	defaultIdleKeepalive     = 15 * time.Second
+	defaultReadyQueueLimit   = 8
+	defaultClientHelloWait   = 2 * time.Second
+	defaultControlBodyLimit  = 4 << 20
+	defaultSessionWriteLimit = 5 * time.Second
+	defaultQUICSNIRouteIdle  = 30 * time.Second
+	defaultQUICSNICleanup    = 5 * time.Second
+
+	defaultUDPPortBase  = 50000
+	defaultUDPPortCount = 0
 )
 
 type ServerConfig struct {
@@ -41,7 +45,6 @@ type ServerConfig struct {
 	APIListenAddr         string
 	SNIListenAddr         string
 	QUICListenAddr        string
-	UDPEnabled            bool
 	TrustedProxyCIDRs     []*net.IPNet
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
@@ -49,8 +52,7 @@ type ServerConfig struct {
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
 	TrustProxyHeaders     bool
-	UDPPortMin            int
-	UDPPortMax            int
+	UDPPortCount          int
 }
 
 type Server struct {
@@ -85,14 +87,18 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
-	cfg.UDPPortMin = utils.IntOrDefault(cfg.UDPPortMin, defaultUDPPortMin)
-	cfg.UDPPortMax = utils.IntOrDefault(cfg.UDPPortMax, defaultUDPPortMax)
 	if cfg.QUICListenAddr == "" {
-		cfg.QUICListenAddr = cfg.APIListenAddr
+		cfg.QUICListenAddr = cfg.SNIListenAddr
+	}
+
+	portMin, portMax := 0, 0
+	if cfg.UDPPortCount > 0 {
+		portMin = defaultUDPPortBase
+		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
 	}
 
 	registry := newLeaseRegistry(policy.NewRuntime())
-	ports := transport.NewPortAllocator(cfg.UDPPortMin, cfg.UDPPortMax, 5*time.Minute)
+	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 
 	s := &Server{
 		cfg:      cfg,
@@ -159,7 +165,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
 
-	if s.cfg.UDPEnabled {
+	if s.cfg.UDPPortCount > 0 {
 		if err := s.startQUICTunnelListener(apiTLS); err != nil {
 			log.Warn().Err(err).Msg("quic tunnel listener disabled")
 		}
@@ -382,7 +388,7 @@ func (s *Server) resolveStream(serverName string) (*transport.RelayStream, error
 }
 
 func (s *Server) datagramPlaneReady() bool {
-	if s == nil || !s.cfg.UDPEnabled {
+	if s == nil || s.cfg.UDPPortCount <= 0 {
 		return false
 	}
 	if s.group == nil {

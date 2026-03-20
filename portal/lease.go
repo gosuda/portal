@@ -212,6 +212,19 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 	return expired
 }
 
+func (r *leaseRegistry) CountDatagramLeases() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	count := 0
+	for _, record := range r.leaseByID {
+		if record.datagram != nil && now.Before(record.ExpiresAt) {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	if record == nil {
 		return types.Lease{}

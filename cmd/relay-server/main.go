@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,21 +21,18 @@ import (
 )
 
 const (
-	defaultAPIPort    = 4017
-	defaultSNIPort    = 443
-	defaultUDPPortMin = 29900
-	defaultUDPPortMax = 29999
-	defaultPortalURL  = "https://localhost:4017"
-	defaultKeylessDir = "./.portal-certs"
+	defaultAPIPort      = 4017
+	defaultSNIPort      = 443
+	defaultUDPPortCount = 0
+	defaultPortalURL    = "https://localhost:4017"
+	defaultKeylessDir   = "./.portal-certs"
 )
 
 type relayServerConfig struct {
 	PortalURL          string
 	APIPort            int
 	SNIPort            int
-	UDPEnabled         bool
-	UDPPortMin         int
-	UDPPortMax         int
+	UDPPortCount       int
 	AdminSecretKey     string
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
@@ -60,9 +58,7 @@ func main() {
 	}
 	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
 	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
-	udpEnabled := utils.ParseBoolEnv("UDP_ENABLED", false)
-	udpPortMin := parsePortNumber(os.Getenv("UDP_PORT_MIN"), defaultUDPPortMin)
-	udpPortMax := parsePortNumber(os.Getenv("UDP_PORT_MAX"), defaultUDPPortMax)
+	udpPortCount := parseNonNegativeInt(os.Getenv("UDP_PORT_COUNT"), defaultUDPPortCount)
 	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
 	trustProxyHeaders := utils.ParseBoolEnv("TRUST_PROXY_HEADERS", false)
 	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
@@ -70,6 +66,7 @@ func main() {
 	if keylessDir == "" {
 		keylessDir = defaultKeylessDir
 	}
+	adminSettingsPath = filepath.Join(keylessDir, "admin_settings.json")
 	acmeDNSProvider := trimmedEnv("ACME_DNS_PROVIDER")
 	if acmeDNSProvider == "" {
 		acmeDNSProvider = "cloudflare"
@@ -87,9 +84,7 @@ func main() {
 	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
 	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
 	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "TCP SNI router port number (env: SNI_PORT)")
-	flag.BoolVar(&cfg.UDPEnabled, "udp", udpEnabled, "enable UDP relay ports and the internal QUIC tunnel (env: UDP_ENABLED)")
-	flag.IntVar(&cfg.UDPPortMin, "udp-port-min", udpPortMin, "Minimum UDP port for lease allocation (env: UDP_PORT_MIN)")
-	flag.IntVar(&cfg.UDPPortMax, "udp-port-max", udpPortMax, "Maximum UDP port for lease allocation (env: UDP_PORT_MAX)")
+	flag.IntVar(&cfg.UDPPortCount, "udp-port-count", udpPortCount, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled) (env: UDP_PORT_COUNT)")
 
 	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
 	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies (env: TRUST_PROXY_HEADERS)")
@@ -108,7 +103,7 @@ func main() {
 	logger.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
-		Bool("udp_enabled", cfg.UDPEnabled).
+		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
 
 	if err := runServer(cfg); err != nil {
@@ -143,11 +138,9 @@ func runServer(cfg relayServerConfig) error {
 		},
 		APIListenAddr:     apiListenAddr,
 		SNIListenAddr:     sniListenAddr,
-		UDPEnabled:        cfg.UDPEnabled,
 		TrustedProxyCIDRs: trustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
-		UDPPortMin:        cfg.UDPPortMin,
-		UDPPortMax:        cfg.UDPPortMax,
+		UDPPortCount:      cfg.UDPPortCount,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -167,7 +160,7 @@ func runServer(cfg relayServerConfig) error {
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
-		Bool("udp_enabled", cfg.UDPEnabled).
+		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
 	if quicAddr := server.QUICTunnelAddr(); quicAddr != "" {
 		logEvent = logEvent.Str("internal_quic_tunnel_addr", quicAddr)
@@ -191,4 +184,16 @@ func parsePortNumber(raw string, fallback int) int {
 		return fallback
 	}
 	return port
+}
+
+func parseNonNegativeInt(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	var v int
+	if _, err := fmt.Sscanf(raw, "%d", &v); err != nil || v < 0 {
+		return fallback
+	}
+	return v
 }

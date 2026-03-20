@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,7 +21,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
-		UDPEnabled:    true,
+		UDPPortCount:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -85,7 +84,7 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
-		UDPEnabled:    true,
+		UDPPortCount:  1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -105,7 +104,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:  "https://portal.example.com",
-		UDPEnabled: true,
+		UDPPortCount: 1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -142,7 +141,7 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:  "https://portal.example.com",
-		UDPEnabled: true,
+		UDPPortCount: 1,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -160,16 +159,14 @@ func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
 func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	t.Parallel()
 
-	udpPort := reserveUDPPort(t)
 	server, err := NewServer(ServerConfig{
-		PortalURL:  "https://portal.example.com",
-		UDPEnabled: true,
-		UDPPortMin: udpPort,
-		UDPPortMax: udpPort,
+		PortalURL:    "https://portal.example.com",
+		UDPPortCount: 10,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
+	server.registry.policy.SetUDPPolicy(true, 0)
 
 	resp, err := server.registerLease(types.RegisterRequest{
 		Name:         "demo-udp",
@@ -201,20 +198,4 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
 	}
-}
-
-func reserveUDPPort(t *testing.T) int {
-	t.Helper()
-
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
-	if err != nil {
-		t.Fatalf("ListenUDP() error = %v", err)
-	}
-	defer conn.Close()
-
-	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || addr.Port == 0 {
-		t.Fatalf("LocalAddr() = %v, want UDP port", conn.LocalAddr())
-	}
-	return addr.Port
 }

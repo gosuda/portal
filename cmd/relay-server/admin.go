@@ -20,7 +20,8 @@ import (
 )
 
 const cookieName = "portal_admin"
-const adminSettingsPath = "admin_settings.json"
+
+var adminSettingsPath = "admin_settings.json"
 
 type adminAuth struct {
 	sessions  map[string]time.Time
@@ -200,6 +201,30 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIData(w, http.StatusOK, types.AdminSnapshotResponse{
 			ApprovalMode: string(runtime.Approver().Mode()),
 			Leases:       f.adminLeaseSnapshots(),
+			UDP: types.AdminUDPSettingsResponse{
+				Enabled:   runtime.IsUDPEnabled(),
+				MaxLeases: runtime.UDPMaxLeases(),
+			},
+		})
+	case types.PathAdminUDP:
+		if r.Method != http.MethodPost {
+			methodNotAllowed()
+			return
+		}
+		var req types.AdminUDPSettingsRequest
+		if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+			return
+		}
+		if req.MaxLeases < 0 {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
+			return
+		}
+		runtime.SetUDPPolicy(req.Enabled, req.MaxLeases)
+		saveAdminState(runtime)
+		utils.WriteAPIData(w, http.StatusOK, types.AdminUDPSettingsResponse{
+			Enabled:   runtime.IsUDPEnabled(),
+			MaxLeases: runtime.UDPMaxLeases(),
 		})
 	case types.PathAdminApproval:
 		if r.Method != http.MethodPost {
@@ -395,6 +420,8 @@ type persistedAdminState struct {
 	BannedLeases   []string         `json:"banned_leases,omitempty"`
 	BannedIPs      []string         `json:"banned_ips,omitempty"`
 	LeaseBPS       map[string]int64 `json:"lease_bps,omitempty"`
+	UDPEnabled     bool             `json:"udp_enabled"`
+	UDPMaxLeases   int              `json:"udp_max_leases"`
 }
 
 func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
@@ -406,6 +433,8 @@ func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
 		BannedLeases:   runtime.BannedLeases(),
 		BannedIPs:      runtime.IPFilter().BannedIPs(),
 		LeaseBPS:       runtime.BPSManager().LeaseBPSLimits(),
+		UDPEnabled:     runtime.IsUDPEnabled(),
+		UDPMaxLeases:   runtime.UDPMaxLeases(),
 	}
 }
 
@@ -422,6 +451,7 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.SetBannedLeases(s.BannedLeases)
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetLeaseBPSLimits(s.LeaseBPS)
+	runtime.SetUDPPolicy(s.UDPEnabled, s.UDPMaxLeases)
 	return nil
 }
 

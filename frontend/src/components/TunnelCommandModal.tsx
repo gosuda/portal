@@ -35,6 +35,8 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<"unix" | "windows">("unix");
+  const [enableUDP, setEnableUDP] = useState(false);
+  const [udpPort, setUdpPort] = useState("");
   const [thumbnailURL, setThumbnailURL] = useState("");
   const normalizedThumbnailURL = useMemo(
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
@@ -111,6 +113,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     if (normalizedThumbnailURL) {
       exposeArgs.push(`--thumbnail ${formatToken(normalizedThumbnailURL, os)}`);
     }
+    if (enableUDP) {
+      exposeArgs.push("--udp");
+      const udpAddrVal = udpPort.trim();
+      if (udpAddrVal !== "") {
+        exposeArgs.push(`--udp-addr ${formatToken(udpAddrVal, os)}`);
+      }
+    }
 
     if (os === "windows") {
       return [
@@ -128,11 +137,13 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
   }, [
     currentOrigin,
     defaultRelays,
+    enableUDP,
     name,
     normalizedThumbnailURL,
     os,
     relayUrls,
     target,
+    udpPort,
   ]);
 
   const handleCopy = async () => {
@@ -157,6 +168,8 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
     setUrlInput("");
     setCopied(false);
     setOs("unix");
+    setEnableUDP(false);
+    setUdpPort("");
     setThumbnailURL("");
   };
 
@@ -255,6 +268,43 @@ export function TunnelCommandModal({ trigger }: TunnelCommandModalProps) {
                 />
               </div>
             </div>
+
+          {/* UDP Transport */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">
+              UDP Transport
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableUDP}
+                onChange={(e) => {
+                  setEnableUDP(e.target.checked);
+                  if (!e.target.checked) {
+                    setUdpPort("");
+                  }
+                }}
+                className="h-4 w-4"
+              />
+              <span className="text-sm text-muted-foreground">
+                Enable UDP transport (for game servers, VoIP, etc.)
+              </span>
+            </label>
+            {enableUDP && (
+              <div className="space-y-1.5">
+                <Input
+                  id="udp-port"
+                  type="text"
+                  value={udpPort}
+                  onChange={(e) => setUdpPort(e.target.value)}
+                  placeholder={target.trim() || defaultHost}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Local UDP port to forward. Defaults to the same as Host.
+                </p>
+              </div>
+            )}
+          </div>
 
           <div className="space-y-2">
             <label

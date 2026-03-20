@@ -8,7 +8,8 @@ You need:
 
 - A public domain (example: `example.com`)
 - A public Linux server with a static public IP
-- Open inbound ports: `443/tcp`, `4017/tcp`, `4017/udp`, `29900-29999/udp` (UDP range for QUIC/UDP leases)
+- Open inbound ports: `443/tcp`, `4017/tcp`
+- Optional UDP ports (if enabling UDP transport): `4017/udp`, `50000+/udp` (see section 3.2)
 - Docker and Docker Compose
 - A DNS provider account for ACME DNS-01 automation with a supported provider (`cloudflare` or `route53`)
 
@@ -110,16 +111,56 @@ Equivalent relay flags:
 - `/sdk/renew` and `/sdk/unregister` require `lease_id` + `reverse_token`.
 - `/sdk/connect` is hijacked into a long-lived reverse TCP session after validation.
 
-### 3.2 UDP/QUIC Transport
+### 3.2 Enabling UDP Transport
 
-Portal automatically starts a QUIC tunnel listener on `API_PORT/udp` (default `:4017/udp`) and allocates raw UDP ports from the `UDP_PORT_MIN`–`UDP_PORT_MAX` range (default `29900`–`29999`) for UDP leases.
+UDP transport is disabled by default. To enable UDP for real-time workloads (game servers, VoIP), complete all steps:
+
+**Step 1: Open UDP ports on your VM/host**
+
+If running on a cloud VM (AWS EC2, GCP, OCI, etc.), open the required UDP ports in the security group / firewall rules:
+- `4017/udp` — QUIC tunnel listener (relay ↔ tunnel)
+- `50000-50009/udp` — Raw UDP lease ports (adjust count to match `UDP_PORT_COUNT`)
+
+Example (UFW, 10 ports):
+```bash
+sudo ufw allow 4017/udp
+sudo ufw allow 50000:50009/udp
+```
+
+**Step 2: Expose UDP ports in Docker**
+
+If using Docker with `network_mode: host`, UDP ports are directly accessible on the host — no additional Docker config needed.
+
+If using bridge networking, map the UDP ports explicitly in `docker-compose.yaml`:
+```yaml
+ports:
+  - "4017:4017/udp"
+  - "50000-50009:50000-50009/udp"
+```
+
+**Step 3: Configure UDP port count in `.env`**
+
+Set `UDP_PORT_COUNT` to the number of concurrent UDP leases you want to support. Ports are allocated starting from port 50000:
+```bash
+UDP_PORT_COUNT=10   # allocates ports 50000-50009
+```
 
 | Variable | Default | Description |
 |---|---|---|
-| `UDP_PORT_MIN` | `29900` | Start of the UDP port allocation range |
-| `UDP_PORT_MAX` | `29999` | End of the UDP port allocation range |
+| `UDP_PORT_COUNT` | `0` (disabled) | Number of UDP ports to allocate, starting at port 50000 |
+
+**Step 4: Enable UDP in the admin panel**
+
+Navigate to `/admin`, toggle UDP transport to "Enabled", and optionally set a max concurrent UDP lease limit.
 
 > **Docker note:** Use `network_mode: host` for the portal container to avoid Docker iptables port-mapping overhead. Docker creates one iptables rule per mapped port, so large UDP ranges cause very slow container start/stop. Host networking bypasses this entirely and allows dynamic UDP port allocation. See the nginx-proxy examples for the recommended setup.
+
+> **UDP buffer tuning (Linux):** Increase kernel UDP buffer limits for QUIC performance:
+> ```bash
+> sudo sysctl -w net.core.rmem_max=7500000
+> sudo sysctl -w net.core.wmem_max=7500000
+> ```
+> To persist across reboots, add to `/etc/sysctl.conf` or a file in `/etc/sysctl.d/`.
 
 ### 3.3 Certificates and DNS Maintenance
 
@@ -137,7 +178,6 @@ Portal automatically starts a QUIC tunnel listener on `API_PORT/udp` (default `:
 
 ```bash
 PORTAL_URL=https://example.com
-BOOTSTRAP_URIS=https://example.com
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs
@@ -158,7 +198,7 @@ AWS_REGION=us-east-1
 AWS_HOSTED_ZONE_ID=Z1234567890ABC
 ```
 
-For non-apex deployments, set `PORTAL_URL` and `BOOTSTRAP_URIS` to the same non-apex host value (for example, `https://portal.example.com:8443`).
+For non-apex deployments, set `PORTAL_URL` to the non-apex host value (for example, `https://portal.example.com:8443`).
 `PORTAL_URL` path/query segments are ignored for route derivation; only the host component is used.
 
 If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
@@ -192,7 +232,6 @@ cd "$(dirname "$0")"
 
 docker compose pull
 docker compose up -d
-docker image prune -f
 ```
 
 ### 5.2 Watcher script
@@ -265,15 +304,19 @@ Required inbound ports:
 
 - `443/tcp` — SNI router (tenant TLS passthrough)
 - `4017/tcp` — Admin/API listener
-- `4017/udp` — QUIC tunnel listener (tunnel ↔ relay)
-- `29900-29999/udp` — Raw UDP lease ports (client ↔ relay, adjust to match `UDP_PORT_MAX`)
+- `4017/udp` — QUIC tunnel listener (only if `UDP_PORT_COUNT > 0`)
+- `50000+/udp` — Raw UDP lease ports (only if `UDP_PORT_COUNT > 0`, adjust range to match count)
 
-UFW example:
+UFW example (with 10 UDP ports):
 
 ```bash
 sudo ufw allow 443/tcp
 sudo ufw allow 4017/tcp
 sudo ufw allow 4017/udp
-sudo ufw allow 29900:29999/udp
+sudo ufw allow 50000:50009/udp
 sudo ufw status
 ```
+
+### 6.2 QUIC UDP buffer warnings
+
+If relay logs show `failed to sufficiently increase receive buffer size`, the kernel UDP buffer limit is too low. Apply the sysctl settings from section 3.2.

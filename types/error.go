@@ -20,5 +20,7 @@ const (
 	APIErrorCodeSessionCreateFailed = "session_create_failed"
 	APIErrorCodeUnauthorized        = "unauthorized"
 	APIErrorCodeUDPPortExhausted    = "udp_port_exhausted"
+	APIErrorCodeUDPDisabled         = "udp_disabled"
+	APIErrorCodeUDPCapacityExceeded = "udp_capacity_exceeded"
 	APIErrorCodeTransportMismatch   = "transport_mismatch"
 )

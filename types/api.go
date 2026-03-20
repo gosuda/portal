@@ -67,8 +67,8 @@ type RegisterResponse struct {
 	ConnectURL string        `json:"connect_url"`
 	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
-	UDPAddr    string        `json:"udp_addr,omitempty"`
-	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	UDPAddr    string `json:"udp_addr,omitempty"`
+	UDPEnabled bool   `json:"udp_enabled,omitempty"`
 }
 
 type QUICControlMessage struct {
@@ -115,8 +115,9 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode string  `json:"approval_mode"`
-	Leases       []Lease `json:"leases,omitempty"`
+	ApprovalMode string                  `json:"approval_mode"`
+	Leases       []Lease                 `json:"leases,omitempty"`
+	UDP          AdminUDPSettingsResponse `json:"udp"`
 }
 
 type AdminApprovalModeRequest struct {
@@ -129,4 +130,14 @@ type AdminApprovalModeResponse struct {
 
 type AdminBPSRequest struct {
 	BPS int64 `json:"bps"`
+}
+
+type AdminUDPSettingsRequest struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+type AdminUDPSettingsResponse struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
 }

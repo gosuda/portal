@@ -58,8 +58,8 @@ type Listener struct {
 	startupStatus listenerStatus
 	leaseID       string
 	hostname      string
-	udpAddr       string
-	udpEnabled    bool
+	udpAddr    string
+	udpEnabled bool
 	metadata      types.LeaseMetadata
 	stream        *transport.ClientStream
 	datagram      *transport.ClientDatagram

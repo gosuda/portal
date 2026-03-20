@@ -317,7 +317,8 @@ func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken s
 		MaxIdleTimeout:  60 * time.Second,
 	}
 
-	conn, err := quic.DialAddr(ctx, utils.EnsurePort(a.baseURL.Host), tlsConf, quicConf)
+	dialAddr := utils.EnsurePort(a.baseURL.Host)
+	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("quic dial: %w", err)
 	}
