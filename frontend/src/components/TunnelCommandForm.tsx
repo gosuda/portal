@@ -84,6 +84,8 @@ export function TunnelCommandForm({
   const [urlInput, setUrlInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
+  const [enableUDP, setEnableUDP] = useState(false);
+  const [udpPort, setUDPPort] = useState("");
   const [thumbnailURL, setThumbnailURL] = useState("");
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus>("waiting");
 
@@ -122,17 +124,21 @@ export function TunnelCommandForm({
       relayUrls: resolvedRelayUrls,
       defaultRelays: includeDefaultRelays,
       thumbnailURL: resolvedThumbnailURL,
+      enableUDP: !isHero && enableUDP,
+      udpPort: isHero ? "" : udpPort,
       os,
     }),
     [
       currentOrigin,
       effectiveName,
+      enableUDP,
       includeDefaultRelays,
       nameSeed,
       os,
       resolvedRelayUrls,
       resolvedThumbnailURL,
       target,
+      udpPort,
     ]
   );
 
@@ -616,6 +622,65 @@ export function TunnelCommandForm({
       {!isHero && (
         <div className="space-y-2">
           <label
+            className={cn(
+              "text-sm font-medium",
+              isTerminal ? "text-slate-200" : "text-foreground"
+            )}
+          >
+            UDP Transport
+          </label>
+          <label
+            className={cn(
+              "flex items-center gap-2 text-sm",
+              isTerminal ? "text-slate-300" : "text-muted-foreground"
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={enableUDP}
+              onChange={(event) => {
+                const nextEnabled = event.target.checked;
+                setEnableUDP(nextEnabled);
+                if (!nextEnabled) {
+                  setUDPPort("");
+                }
+              }}
+              className="h-4 w-4"
+            />
+            <span>Enable UDP transport</span>
+          </label>
+
+          {enableUDP && (
+            <div className="space-y-1.5">
+              <Input
+                id={`${inputId}-udp-port`}
+                type="text"
+                value={udpPort}
+                onChange={(event) => setUDPPort(event.target.value)}
+                placeholder={target.trim() || defaultHost}
+                className={cn(
+                  "h-12 rounded-xl",
+                  isTerminal
+                    ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+                    : "border-border bg-white"
+                )}
+              />
+              <p
+                className={cn(
+                  "text-xs",
+                  isTerminal ? "text-slate-400" : "text-muted-foreground"
+                )}
+              >
+                Local UDP port to forward. Defaults to the same as Host.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!isHero && (
+        <div className="space-y-2">
+          <label
             htmlFor={`${inputId}-thumbnail`}
             className={cn(
               "text-sm font-medium",
@@ -637,6 +702,22 @@ export function TunnelCommandForm({
                 : "border-border bg-white"
             )}
           />
+          {normalizedThumbnailURL && (
+            <div
+              className={cn(
+                "flex h-20 w-20 items-center justify-center overflow-hidden rounded-md border",
+                isTerminal
+                  ? "border-white/10 bg-white/5"
+                  : "border-border bg-background"
+              )}
+            >
+              <img
+                src={normalizedThumbnailURL}
+                alt="Thumbnail preview"
+                className="h-full w-full object-cover"
+              />
+            </div>
+          )}
           {thumbnailError && (
             <p className="text-xs text-destructive">{thumbnailError}</p>
           )}

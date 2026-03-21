@@ -44,6 +44,7 @@ interface ServerCardProps {
   ) => void | Promise<void>;
   onDenyStatusChange?: (leaseId: string, deny: boolean) => void | Promise<void>;
   onIPBanStatusChange?: (ip: string, isBan: boolean) => void | Promise<void>;
+  transport?: string;
   isSelected?: boolean;
   onToggleSelect?: (leaseId: string) => void;
 }
@@ -75,6 +76,7 @@ export function ServerCard({
   onApproveStatusChange,
   onDenyStatusChange,
   onIPBanStatusChange,
+  transport = "tcp",
   isSelected = false,
   onToggleSelect,
 }: ServerCardProps) {
@@ -258,6 +260,11 @@ export function ServerCard({
               {formattedDuration && online && ` · ${formattedDuration}`}
             </span>
           </div>
+          {showAdminControls && transport !== "tcp" && (
+            <span className="rounded-full bg-black/40 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-primary backdrop-blur-sm border border-primary/30">
+              {transport}
+            </span>
+          )}
 
           {showAdminControls ? (
             <button

@@ -57,7 +57,10 @@ type RegisterRequest struct {
 	Name         string        `json:"name"`
 	ReverseToken string        `json:"reverse_token"`
 	Metadata     LeaseMetadata `json:"metadata"`
+	OwnerAddress string        `json:"owner_address,omitempty"`
 	TTL          int           `json:"ttl,omitempty"`
+	Bootstraps   []string      `json:"bootstraps,omitempty"`
+	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -66,6 +69,33 @@ type RegisterResponse struct {
 	ConnectURL string        `json:"connect_url"`
 	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
+	Bootstraps []string      `json:"bootstraps,omitempty"`
+	UDPAddr    string        `json:"udp_addr,omitempty"`
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+}
+
+type DiscoverRequest struct {
+	RootHost string `json:"root_host"`
+	Name     string `json:"name"`
+}
+
+type DiscoverResponse struct {
+	Found        bool      `json:"found"`
+	Name         string    `json:"name,omitempty"`
+	Hostname     string    `json:"hostname,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	OwnerAddress string    `json:"owner_address,omitempty"`
+	Bootstraps   []string  `json:"bootstraps,omitempty"`
+}
+
+type QUICControlMessage struct {
+	LeaseID      string `json:"lease_id"`
+	ReverseToken string `json:"reverse_token"`
+}
+
+type QUICControlResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
 }
 
 type RenewRequest struct {
@@ -108,8 +138,9 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode string  `json:"approval_mode"`
-	Leases       []Lease `json:"leases,omitempty"`
+	ApprovalMode string                   `json:"approval_mode"`
+	Leases       []Lease                  `json:"leases,omitempty"`
+	UDP          AdminUDPSettingsResponse `json:"udp"`
 }
 
 type AdminApprovalModeRequest struct {
@@ -122,4 +153,14 @@ type AdminApprovalModeResponse struct {
 
 type AdminBPSRequest struct {
 	BPS int64 `json:"bps"`
+}
+
+type AdminUDPSettingsRequest struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+type AdminUDPSettingsResponse struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
 }

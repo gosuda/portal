@@ -1,14 +1,31 @@
 package keyless
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 
 	keylesstls "github.com/gosuda/keyless_tls/keyless"
+
+	"github.com/gosuda/portal/v2/utils"
 )
+
+func RelayRootCAs(ctx context.Context, endpoint, serverName string, rootCAPEM []byte) (*x509.CertPool, error) {
+	resolvedRootCAPEM := append([]byte(nil), rootCAPEM...)
+	if len(resolvedRootCAPEM) == 0 && utils.IsLocalRelayHost(serverName) {
+		_, fetchedRootCAPEM, err := ResolveMaterials(ctx, endpoint, serverName)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap localhost relay trust: %w", err)
+		}
+		resolvedRootCAPEM = fetchedRootCAPEM
+	}
+
+	return utils.CertPoolFromPEM(resolvedRootCAPEM)
+}
 
 type TLSMaterialConfig struct {
 	Keyless *RemoteSignerConfig

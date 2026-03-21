@@ -12,9 +12,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -22,6 +24,7 @@ import (
 type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
+	UDPEnabled       bool
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -32,6 +35,9 @@ type ListenerConfig struct {
 	ReadyTarget      int
 	RetryCount       int
 	RetryWait        time.Duration
+
+	RegisterBootstraps []string
+	ownerAddress       string
 }
 
 type listenerStatus string
@@ -42,36 +48,36 @@ const (
 )
 
 type Listener struct {
-	tlsCloser        io.Closer
-	tlsConfig        *tls.Config
-	readyTarget      int
-	retryCount       int
-	retryWait        time.Duration
-	leaseTTL         time.Duration
-	renewBefore      time.Duration
-	handshakeTimeout time.Duration
-	doneCh           <-chan struct{}
-	cancel           context.CancelFunc
-	api              *apiClient
-	accepted         chan net.Conn
-	relayURL         string
-	startupStatus    listenerStatus
-	activeSessions   int
-	leaseID          string
-	hostname         string
-	metadata         types.LeaseMetadata
+	api    *apiClient
+	cancel context.CancelFunc
+	doneCh <-chan struct{}
 
-	closeOnce sync.Once
-	mu        sync.Mutex
+	retryCount         int
+	retryWait          time.Duration
+	leaseTTL           time.Duration
+	renewBefore        time.Duration
+	registerBootstraps []string
+
+	stream   *transport.ClientStream
+	datagram *transport.ClientDatagram
+
+	registered   chan struct{}
+	closeOnce    sync.Once
+	registerOnce sync.Once
+
+	mu            sync.Mutex
+	startupStatus listenerStatus
+	leaseID       string
+	hostname      string
+	udpAddr       string
+	metadata      types.LeaseMetadata
+	tlsConfig     *tls.Config
+	tlsCloser     io.Closer
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Listener, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	listenerCtx, cancel := context.WithCancel(ctx)
 	readyTarget := utils.IntOrDefault(cfg.ReadyTarget, defaultReadyTarget)
 	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
@@ -85,60 +91,103 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		return nil, err
 	}
 
-	l := &Listener{
-		doneCh:           listenerCtx.Done(),
-		cancel:           cancel,
-		api:              api,
-		accepted:         make(chan net.Conn, max(readyTarget*2, 1)),
-		relayURL:         api.baseURL.String(),
-		startupStatus:    listenerStatusInactive,
-		readyTarget:      readyTarget,
-		retryCount:       cfg.RetryCount,
-		retryWait:        retryWait,
-		leaseTTL:         leaseTTL,
-		renewBefore:      renewBefore,
-		handshakeTimeout: handshakeTimeout,
+	initialBootstraps, err := utils.NormalizeRelayURLs(cfg.RegisterBootstraps...)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}
 
-	go l.runStartup(listenerCtx)
+	l := &Listener{
+		doneCh:             listenerCtx.Done(),
+		cancel:             cancel,
+		api:                api,
+		registered:         make(chan struct{}),
+		startupStatus:      listenerStatusInactive,
+		retryCount:         cfg.RetryCount,
+		retryWait:          retryWait,
+		leaseTTL:           leaseTTL,
+		renewBefore:        renewBefore,
+		registerBootstraps: append([]string(nil), initialBootstraps...),
+		metadata:           cfg.Metadata.Copy(),
+	}
+	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
+	if cfg.UDPEnabled {
+		l.datagram = transport.NewClientDatagram(func(err error) {
+			log.Warn().
+				Err(err).
+				Str("component", "sdk-datagram-plane").
+				Str("lease_id", l.LeaseID()).
+				Msg("quic receive loop ended")
+		})
+	}
+
+	if l.datagram != nil {
+		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
+			return l.api.openQUICSession(ctx, state.LeaseID, state.ReverseToken)
+		})
+	}
+
+	go l.runStartup(listenerCtx, readyTarget)
 	return l, nil
 }
 
-func (l *Listener) runStartup(ctx context.Context) {
+func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 	var retries int
 
 	for {
-		err := l.registerAndConfigure(ctx)
+		err := l.registerAndConfigure(ctx, l.registerBootstraps)
 		switch {
 		case err == nil:
-			for i := 0; i < l.readyTarget; i++ {
-				go l.runSessionLoop(ctx)
+			for range readyTarget {
+				go l.stream.RunLoop(
+					ctx,
+					func(ctx context.Context) (net.Conn, error) {
+						l.mu.Lock()
+						leaseID := l.leaseID
+						l.mu.Unlock()
+						return l.api.openReverseSession(ctx, leaseID)
+					},
+					func() *tls.Config {
+						l.mu.Lock()
+						defer l.mu.Unlock()
+						return l.tlsConfig
+					},
+					func() { l.setStartupStatus(listenerStatusReady) },
+					func() { l.setStartupStatus(listenerStatusInactive) },
+					l.retryOrClose,
+				)
 			}
 			go l.runRenewLoop(ctx)
 			publicURL := l.PublicURL()
-			log.Info().
-				Str("relay_url", l.relayURL).
-				Str("lease_id", l.LeaseID()).
-				Str("public_url", publicURL).
-				Msg("service is available at this URL")
+			event := log.Info().
+				Str("relay_url", l.api.baseURL.String()).
+				Str("lease_id", l.LeaseID())
+			if publicURL != "" {
+				event = event.Str("public_url", publicURL)
+			}
+			event.Msg("relay listener registered")
 			return
 		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
 			return
 		default:
+			if errors.Is(err, errRelayIncompatible) ||
+				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeFeatureUnavailable}) ||
+				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeTransportMismatch}) ||
+				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeHostnameConflict}) ||
+				errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeIPBanned}) {
+				log.Error().
+					Err(err).
+					Str("relay_url", l.api.baseURL.String()).
+					Str("lease_id", l.LeaseID()).
+					Msg("lease registration failed; closing listener")
+				_ = l.Close()
+				return
+			}
 			retries++
 			if !l.retryOrClose(ctx, "lease registration", err, retries) {
 				return
 			}
 		}
-	}
-}
-
-func (l *Listener) Accept() (net.Conn, error) {
-	select {
-	case <-l.doneCh:
-		return nil, net.ErrClosed
-	case conn := <-l.accepted:
-		return conn, nil
 	}
 }
 
@@ -152,14 +201,22 @@ func (l *Listener) Close() error {
 		l.mu.Lock()
 		leaseID := l.leaseID
 		tlsCloser := l.tlsCloser
+		stream := l.stream
+		datagram := l.datagram
 		api := l.api
 		l.leaseID = ""
 		l.hostname = ""
+		l.udpAddr = ""
 		l.tlsConfig = nil
 		l.tlsCloser = nil
 		l.mu.Unlock()
 
-		l.drainAccepted()
+		if stream != nil {
+			stream.Drain()
+		}
+		if datagram != nil {
+			datagram.Close()
+		}
 
 		if api != nil && leaseID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,6 +231,13 @@ func (l *Listener) Close() error {
 		}
 	})
 	return closeErr
+}
+
+func (l *Listener) Accept() (net.Conn, error) {
+	if l.stream == nil {
+		return nil, net.ErrClosed
+	}
+	return l.stream.Accept(l.doneCh)
 }
 
 func (l *Listener) Addr() net.Addr {
@@ -204,55 +268,55 @@ func (l *Listener) Metadata() types.LeaseMetadata {
 }
 
 func (l *Listener) PublicURL() string {
+	if l == nil || l.api == nil || l.api.baseURL == nil {
+		return ""
+	}
+
 	l.mu.Lock()
 	hostname := l.hostname
-	relayURL := l.relayURL
 	l.mu.Unlock()
 
 	if hostname == "" {
 		return ""
 	}
 
-	parsed, err := url.Parse(relayURL)
-	if err != nil || strings.TrimSpace(parsed.Scheme) == "" {
+	if strings.TrimSpace(l.api.baseURL.Scheme) == "" {
 		return "https://" + hostname
 	}
 
 	host := hostname
-	if port := strings.TrimSpace(parsed.Port()); port != "" {
+	if port := strings.TrimSpace(l.api.baseURL.Port()); port != "" {
 		host = net.JoinHostPort(hostname, port)
 	}
 
 	return (&url.URL{
-		Scheme: parsed.Scheme,
+		Scheme: l.api.baseURL.Scheme,
 		Host:   host,
 	}).String()
 }
 
-func (l *Listener) runSessionLoop(ctx context.Context) {
-	var retries int
+func (l *Listener) UDPAddr() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.udpAddr
+}
 
-	for {
-		claimed, err := l.runSession(ctx)
-		switch {
-		case err == nil:
-			retries = 0
-		case errors.Is(err, context.Canceled), errors.Is(err, net.ErrClosed):
-			return
-		case claimed:
-			// A claimed connection already reached the data plane.
-			// Do not spend retry budget on browser-side TLS failures or disconnects.
-			retries = 0
-		default:
-			retries++
-			if l.ActiveSessions() == 0 {
-				l.setStartupStatus(listenerStatusInactive)
-			}
-			if !l.retryOrClose(ctx, "reverse session connect", err, retries) {
-				return
-			}
-		}
+func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) {
+	if l.datagram == nil {
+		return transport.ClientDatagramState{}, false
 	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.api == nil || l.leaseID == "" || l.udpAddr == "" {
+		return transport.ClientDatagramState{}, false
+	}
+
+	return transport.ClientDatagramState{
+		LeaseID:      l.leaseID,
+		ReverseToken: l.api.reverseToken,
+	}, true
 }
 
 func (l *Listener) runRenewLoop(ctx context.Context) {
@@ -290,64 +354,6 @@ func (l *Listener) runRenewLoop(ctx context.Context) {
 	}
 }
 
-func (l *Listener) runSession(ctx context.Context) (bool, error) {
-	l.mu.Lock()
-	leaseID := l.leaseID
-	l.mu.Unlock()
-
-	conn, err := l.api.openReverseSession(ctx, leaseID)
-	if err != nil {
-		return false, err
-	}
-	l.sessionOpened()
-	defer l.sessionClosed()
-
-	var marker [1]byte
-	for {
-		_ = conn.SetReadDeadline(time.Now().Add(2 * l.handshakeTimeout))
-		if _, err := io.ReadFull(conn, marker[:]); err != nil {
-			_ = conn.Close()
-			return false, err
-		}
-		_ = conn.SetReadDeadline(time.Time{})
-
-		switch marker[0] {
-		case types.MarkerKeepalive:
-			continue
-		case types.MarkerTLSStart:
-			if err := l.activate(ctx, conn); err != nil {
-				_ = conn.Close()
-				return true, err
-			}
-			return true, nil
-		default:
-			_ = conn.Close()
-			return false, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
-		}
-	}
-}
-
-func (l *Listener) activate(ctx context.Context, conn net.Conn) error {
-	l.mu.Lock()
-	tlsCfg := l.tlsConfig
-	l.mu.Unlock()
-
-	tlsConn := tls.Server(conn, tlsCfg)
-	handshakeCtx, cancel := context.WithTimeout(ctx, l.handshakeTimeout)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		return err
-	}
-
-	select {
-	case <-ctx.Done():
-		_ = tlsConn.Close()
-		return ctx.Err()
-	case l.accepted <- tlsConn:
-		return nil
-	}
-}
-
 func (l *Listener) renewLease(ctx context.Context) error {
 	l.mu.Lock()
 	leaseID := l.leaseID
@@ -359,24 +365,33 @@ func (l *Listener) renewLease(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
-	if !isLeaseNotFound(err) {
+	if !errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound}) {
 		return err
 	}
 
-	if err := l.reregister(ctx); err != nil {
+	requestCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := l.registerAndConfigure(requestCtx, l.registerBootstraps); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (l *Listener) registerAndConfigure(ctx context.Context) error {
+func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps []string) error {
 	if err := l.api.ensureReady(ctx); err != nil {
 		return err
 	}
 
-	resp, err := l.api.registerLease(ctx, l.leaseTTL)
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil, registerBootstraps)
 	if err != nil {
 		return err
+	}
+	if l.datagram != nil && !resp.UDPEnabled {
+		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		return &types.APIRequestError{
+			Code:    types.APIErrorCodeFeatureUnavailable,
+			Message: "relay did not enable required udp support",
+		}
 	}
 
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
@@ -387,7 +402,9 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 
 	if ctx.Err() != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
-		_ = tlsCloser.Close()
+		if tlsCloser != nil {
+			_ = tlsCloser.Close()
+		}
 		return ctx.Err()
 	}
 
@@ -395,12 +412,16 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	if ctx.Err() != nil {
 		l.mu.Unlock()
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
-		_ = tlsCloser.Close()
+		if tlsCloser != nil {
+			_ = tlsCloser.Close()
+		}
 		return ctx.Err()
 	}
 	oldCloser := l.tlsCloser
+	datagram := l.datagram
 	l.leaseID = resp.LeaseID
 	l.hostname = resp.Hostname
+	l.udpAddr = resp.UDPAddr
 	l.metadata = resp.Metadata.Copy()
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
@@ -409,18 +430,23 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	if oldCloser != nil {
 		_ = oldCloser.Close()
 	}
+	if datagram != nil {
+		datagram.Clear("lease updated")
+	}
+	l.registerOnce.Do(func() { close(l.registered) })
 	return nil
 }
 
-func (l *Listener) reregister(ctx context.Context) error {
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	return l.registerAndConfigure(requestCtx)
-}
-
-func isLeaseNotFound(err error) bool {
-	return errors.Is(err, &types.APIRequestError{Code: types.APIErrorCodeLeaseNotFound})
+// WaitRegistered blocks until the first successful lease registration or context cancellation.
+func (l *Listener) WaitRegistered(ctx context.Context) error {
+	select {
+	case <-l.registered:
+		return nil
+	case <-l.doneCh:
+		return net.ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (l *Listener) retryOrClose(ctx context.Context, operation string, err error, retries int) bool {
@@ -429,7 +455,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 	}
 
 	logger := log.With().
-		Str("relay_url", l.relayURL).
+		Str("relay_url", l.api.baseURL.String()).
 		Str("operation", operation).
 		Str("lease_id", l.LeaseID()).
 		Logger()
@@ -466,25 +492,15 @@ type listenerAddr string
 func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
 
-func (l *Listener) done() bool {
+func (l *Listener) closed() bool {
+	if l == nil || l.doneCh == nil {
+		return true
+	}
 	select {
 	case <-l.doneCh:
 		return true
 	default:
 		return false
-	}
-}
-
-func (l *Listener) drainAccepted() {
-	for {
-		select {
-		case conn := <-l.accepted:
-			if conn != nil {
-				_ = conn.Close()
-			}
-		default:
-			return
-		}
 	}
 }
 
@@ -505,37 +521,4 @@ func (l *Listener) StartupStatus() listenerStatus {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.startupStatus
-}
-
-func (l *Listener) ActiveSessions() int {
-	if l == nil {
-		return 0
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.activeSessions
-}
-
-func (l *Listener) sessionOpened() {
-	if l == nil {
-		return
-	}
-
-	l.mu.Lock()
-	l.activeSessions++
-	l.startupStatus = listenerStatusReady
-	l.mu.Unlock()
-}
-
-func (l *Listener) sessionClosed() {
-	if l == nil {
-		return
-	}
-
-	l.mu.Lock()
-	if l.activeSessions > 0 {
-		l.activeSessions--
-	}
-	l.mu.Unlock()
 }

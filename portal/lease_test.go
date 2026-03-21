@@ -3,10 +3,12 @@ package portal
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -22,6 +24,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
 		ReverseToken: "tok_1",
+		stream:       transport.NewRelayStream("lease_1", time.Minute, 1),
 	}
 
 	if err := registry.Register(record); err != nil {
@@ -71,6 +74,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
 		ReverseToken: "tok_wildcard",
+		stream:       transport.NewRelayStream("lease_wildcard", time.Minute, 1),
 	}
 	if err := registry.Register(wildcardLease); err != nil {
 		t.Fatalf("Register(wildcard) error = %v", err)
@@ -90,6 +94,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
 		ReverseToken: "tok_conflict",
+		stream:       transport.NewRelayStream("lease_conflict", time.Minute, 1),
 	}
 	err := registry.Register(conflict)
 	if !errors.Is(err, errHostnameConflict) {
@@ -115,7 +120,7 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 			ClientIP:  "203.0.113.20",
 		},
 		ReverseToken: "tok_policy",
-		Broker:       newLeaseBroker("lease_policy", time.Minute, 1),
+		stream:       transport.NewRelayStream("lease_policy", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -148,6 +153,9 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 	t.Parallel()
 
 	registry := newLeaseRegistry(policy.NewRuntime())
+	registry.onExpired = func(r *leaseRecord) {
+		r.Close()
+	}
 	record := &leaseRecord{
 		Lease: types.Lease{
 			ID:        "lease_expired",
@@ -155,21 +163,21 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 			ExpiresAt: time.Now().Add(-time.Second),
 		},
 		ReverseToken: "tok_expired",
-		Broker:       newLeaseBroker("lease_expired", time.Minute, 1),
+		stream:       transport.NewRelayStream("lease_expired", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
 	for _, lease := range registry.removeExpired(time.Now()) {
-		lease.Broker.Close()
+		lease.Close()
 	}
 
 	if _, ok := registry.Lookup("expired.example.com"); ok {
 		t.Fatal("Lookup() after removeExpired() = true, want false")
 	}
-	if _, err := record.Broker.Claim(context.Background()); !errors.Is(err, errBrokerClosed) {
-		t.Fatalf("Claim() after removeExpired() error = %v, want %v", err, errBrokerClosed)
+	if _, err := record.stream.Claim(context.Background()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Claim() after removeExpired() error = %v, want %v", err, net.ErrClosed)
 	}
 }
 

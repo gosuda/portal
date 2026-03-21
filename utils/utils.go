@@ -12,8 +12,6 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -130,9 +128,8 @@ func NormalizeHostname(host string) string {
 	return host
 }
 
-func NormalizeRelayURLs(inputs []string) ([]string, error) {
+func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
 
 	for _, input := range inputs {
 		for _, part := range SplitCSV(input) {
@@ -140,18 +137,64 @@ func NormalizeRelayURLs(inputs []string) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
 			out = append(out, normalized)
 		}
 	}
 
-	if len(out) == 0 {
-		return nil, nil
+	return uniqueURLs(out), nil
+}
+
+func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
+	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...)...)
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	if len(excluded) == 0 {
+		return merged, nil
+	}
+
+	excluded, err = NormalizeRelayURLs(excluded...)
+	if err != nil {
+		return nil, err
+	}
+
+	skip := make(map[string]struct{}, len(excluded))
+	for _, input := range excluded {
+		skip[input] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(merged))
+	for _, input := range merged {
+		if _, ok := skip[input]; ok {
+			continue
+		}
+		filtered = append(filtered, input)
+	}
+	return filtered, nil
+}
+
+func uniqueURLs(inputs []string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		if _, ok := seen[input]; ok {
+			continue
+		}
+		seen[input] = struct{}{}
+		out = append(out, input)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func LeaseHostname(name, rootHost string) (string, error) {
@@ -200,21 +243,6 @@ func FormatLastSeen(d time.Duration) string {
 		return fmt.Sprintf("%dm", minutes)
 	}
 	return fmt.Sprintf("%ds", int(d/time.Second))
-}
-
-func FormatISOTime(ts time.Time) string {
-	if ts.IsZero() {
-		return ""
-	}
-	return ts.UTC().Format(time.RFC3339)
-}
-
-func LeaseLink(host string) string {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		return ""
-	}
-	return "https://" + host + "/"
 }
 
 func DecodeBase64URLString(encoded string) (string, error) {
@@ -336,14 +364,6 @@ func CertPoolFromPEM(rootCAPEM []byte) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// Generic value helpers.
-func DurationOrDefault(v, fallback time.Duration) time.Duration {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
 func SleepOrDone(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -353,26 +373,6 @@ func SleepOrDone(ctx context.Context, d time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func IntOrDefault(v, fallback int) int {
-	if v > 0 {
-		return v
-	}
-	return fallback
-}
-
-// ParseBoolEnv reads a boolean environment variable and falls back when unset or invalid.
-func ParseBoolEnv(name string, fallback bool) bool {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(raw)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }
 
 // Random value helpers.

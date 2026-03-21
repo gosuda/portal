@@ -1,0 +1,367 @@
+package utils
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+type CommandFunc func([]string) error
+type IntEnvParser func(string, int) int
+type boolFlagValue interface{ IsBoolFlag() bool }
+
+func TrimmedEnv(name string) string {
+	return strings.TrimSpace(os.Getenv(name))
+}
+
+func ResolveStringEnv(fallback string, envNames ...string) string {
+	value := fallback
+	for _, envName := range envNames {
+		if envValue := TrimmedEnv(envName); envValue != "" {
+			value = envValue
+			break
+		}
+	}
+	return value
+}
+
+func ResolveBoolEnv(fallback bool, envNames ...string) bool {
+	for _, envName := range envNames {
+		raw := TrimmedEnv(envName)
+		if raw == "" {
+			continue
+		}
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fallback
+		}
+		return parsed
+	}
+	return fallback
+}
+
+func ResolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
+	if parse == nil {
+		parse = func(raw string, fallback int) int {
+			v, err := strconv.Atoi(strings.TrimSpace(raw))
+			if err != nil {
+				return fallback
+			}
+			return v
+		}
+	}
+	for _, envName := range envNames {
+		raw := TrimmedEnv(envName)
+		if raw == "" {
+			continue
+		}
+		return parse(raw, fallback)
+	}
+	return fallback
+}
+
+func ParsePortNumber(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || port < 1 || port > 65535 {
+		return fallback
+	}
+	return port
+}
+
+func ParseNonNegativeInt(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < 0 {
+		return fallback
+	}
+	return v
+}
+
+func DurationOrDefault(v, fallback time.Duration) time.Duration {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func IntOrDefault(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func StringOrDefault(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
+}
+
+func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) {
+	ensureFlagSet(fs).StringVar(target, name, fallback, usage)
+}
+
+func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
+	ensureFlagSet(fs).StringVar(target, name, ResolveStringEnv(fallback, envNames...), flagUsage(usage, envNames...))
+}
+
+func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
+	ensureFlagSet(fs).BoolVar(target, name, fallback, usage)
+}
+
+func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
+	ensureFlagSet(fs).BoolVar(target, name, ResolveBoolEnv(fallback, envNames...), flagUsage(usage, envNames...))
+}
+
+func IntFlag(fs *flag.FlagSet, target *int, name string, fallback int, usage string) {
+	ensureFlagSet(fs).IntVar(target, name, fallback, usage)
+}
+
+func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
+	ensureFlagSet(fs).IntVar(target, name, ResolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
+}
+
+func ensureFlagSet(fs *flag.FlagSet) *flag.FlagSet {
+	if fs != nil {
+		return fs
+	}
+	return flag.CommandLine
+}
+
+func flagUsage(usage string, envNames ...string) string {
+	names := make([]string, 0, len(envNames))
+	for _, envName := range envNames {
+		envName = strings.TrimSpace(envName)
+		if envName != "" {
+			names = append(names, envName)
+		}
+	}
+	if len(names) == 0 {
+		return usage
+	}
+	var envUsage string
+	switch len(names) {
+	case 1:
+		envUsage = names[0]
+	case 2:
+		envUsage = names[0] + " or " + names[1]
+	default:
+		envUsage = strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
+	}
+	if strings.TrimSpace(usage) == "" {
+		return "(env: " + envUsage + ")"
+	}
+	return usage + " (env: " + envUsage + ")"
+}
+
+func SignalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+}
+
+func RunCommands(
+	args []string,
+	stdout io.Writer,
+	stderr io.Writer,
+	usage func(io.Writer),
+	commands map[string]CommandFunc,
+) error {
+	defaultCommand, hasDefaultCommand := commands[""]
+	if len(args) == 0 {
+		if hasDefaultCommand {
+			return defaultCommand(nil)
+		}
+		if usage != nil {
+			usage(stdout)
+		}
+		return nil
+	}
+
+	command := strings.TrimSpace(args[0])
+	switch {
+	case command == "help":
+		if runCommand, ok := commands[command]; ok {
+			return runCommand(args[1:])
+		}
+		if usage != nil {
+			usage(stdout)
+		}
+		return nil
+	case command == "-h" || command == "--help":
+		if usage != nil {
+			usage(stdout)
+		}
+		return nil
+	case command == "" || strings.HasPrefix(command, "-"):
+		if hasDefaultCommand {
+			return defaultCommand(args)
+		}
+	}
+
+	runCommand, ok := commands[command]
+	if !ok {
+		if usage != nil {
+			usage(stderr)
+		}
+		return fmt.Errorf("unknown command %q", command)
+	}
+	return runCommand(args[1:])
+}
+
+func NewFlagSet(name string, usage func(io.Writer)) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if usage != nil {
+		fs.Usage = func() {
+			usage(fs.Output())
+		}
+	}
+	return fs
+}
+
+func ParseFlagSet(fs *flag.FlagSet, args []string, usage func(io.Writer)) error {
+	args = normalizeFlagArgs(fs, args)
+	if len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		if usage != nil {
+			usage(os.Stdout)
+		}
+		return flag.ErrHelp
+	}
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			if usage != nil {
+				usage(os.Stdout)
+			}
+			return flag.ErrHelp
+		}
+		if usage != nil {
+			usage(os.Stderr)
+		}
+		return err
+	}
+	return nil
+}
+
+func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
+	if fs == nil || len(args) < 2 {
+		return args
+	}
+
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "" || arg == "-" || !strings.HasPrefix(arg, "-") {
+			positionals = append(positionals, args[i])
+			continue
+		}
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+
+		name := strings.TrimLeft(strings.TrimSpace(arg), "-")
+		if name == "" {
+			positionals = append(positionals, args[i])
+			continue
+		}
+		hasInlineValue := false
+		if cut, _, ok := strings.Cut(name, "="); ok {
+			name = strings.TrimSpace(cut)
+			hasInlineValue = true
+		}
+		if name == "" {
+			positionals = append(positionals, args[i])
+			continue
+		}
+
+		flags = append(flags, args[i])
+
+		flagDef := fs.Lookup(name)
+		if hasInlineValue || flagDef == nil {
+			continue
+		}
+		boolValue, ok := flagDef.Value.(boolFlagValue)
+		if ok && boolValue.IsBoolFlag() {
+			continue
+		}
+		if i+1 >= len(args) {
+			continue
+		}
+		i++
+		flags = append(flags, args[i])
+	}
+
+	return append(flags, positionals...)
+}
+
+func OptionalSingleArg(args []string, name string) (string, error) {
+	switch len(args) {
+	case 0:
+		return "", nil
+	case 1:
+		return strings.TrimSpace(args[0]), nil
+	default:
+		return "", fmt.Errorf("only one %s is supported", strings.TrimSpace(name))
+	}
+}
+
+func RequireNoArgs(args []string, command string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s does not accept positional arguments", strings.TrimSpace(command))
+}
+
+func NormalizeLoopbackTarget(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if port, ok := strings.CutPrefix(raw, ":"); ok {
+		if _, err := strconv.Atoi(port); err == nil {
+			return net.JoinHostPort("127.0.0.1", port), nil
+		}
+	}
+	if _, err := strconv.Atoi(raw); err == nil {
+		return net.JoinHostPort("127.0.0.1", raw), nil
+	}
+	return NormalizeTargetAddr(raw)
+}
+
+func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
+	if w == nil {
+		return
+	}
+	if len(usage) > 0 {
+		fmt.Fprintln(w, "Usage:")
+		for _, line := range usage {
+			fmt.Fprintln(w, "  "+strings.TrimSpace(line))
+		}
+	}
+	if len(examples) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Examples:")
+	for _, line := range examples {
+		fmt.Fprintln(w, "  "+strings.TrimSpace(line))
+	}
+}

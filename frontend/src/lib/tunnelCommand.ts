@@ -14,6 +14,8 @@ export interface TunnelCommandOptions {
   relayUrls: string[];
   defaultRelays: boolean;
   thumbnailURL: string;
+  enableUDP?: boolean;
+  udpPort?: string;
   os: TunnelCommandOS;
 }
 
@@ -27,22 +29,26 @@ export function buildDefaultTunnelName(
 export function buildTunnelCommand({
   currentOrigin,
   defaultRelays,
+  enableUDP = false,
   name,
   nameSeed,
   os,
   relayUrls,
   target,
   thumbnailURL,
+  udpPort = "",
 }: TunnelCommandOptions): string {
   const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
     currentOrigin,
     defaultRelays,
+    enableUDP,
     name,
     nameSeed,
     os,
     relayUrls,
     target,
     thumbnailURL,
+    udpPort,
   });
 
   return joinTunnelCommand(installLine, exposeHead, exposeOptions);
@@ -51,22 +57,26 @@ export function buildTunnelCommand({
 export function buildTunnelDisplayCommand({
   currentOrigin,
   defaultRelays,
+  enableUDP = false,
   name,
   nameSeed,
   os,
   relayUrls,
   target,
   thumbnailURL,
+  udpPort = "",
 }: TunnelCommandOptions): string {
   const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
     currentOrigin,
     defaultRelays,
+    enableUDP,
     name,
     nameSeed,
     os,
     relayUrls,
     target,
     thumbnailURL,
+    udpPort,
   });
 
   return joinTunnelCommand(installLine, exposeHead, exposeOptions);
@@ -75,12 +85,14 @@ export function buildTunnelDisplayCommand({
 function buildTunnelCommandParts({
   currentOrigin,
   defaultRelays,
+  enableUDP = false,
   name,
   nameSeed,
   os,
   relayUrls,
   target,
   thumbnailURL,
+  udpPort = "",
 }: TunnelCommandOptions): {
   installLine: string;
   exposeHead: string;
@@ -112,6 +124,13 @@ function buildTunnelCommandParts({
   const normalizedThumbnailURL = normalizeAbsoluteHTTPURL(thumbnailURL);
   if (normalizedThumbnailURL !== "") {
     exposeArgs.push(`--thumbnail ${formatToken(normalizedThumbnailURL, os)}`);
+  }
+  if (enableUDP) {
+    exposeArgs.push("--udp");
+    const normalizedUDPPort = udpPort.trim();
+    if (normalizedUDPPort !== "") {
+      exposeArgs.push(`--udp-addr ${formatToken(normalizedUDPPort, os)}`);
+    }
   }
 
   if (os === "windows") {

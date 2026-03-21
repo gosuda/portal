@@ -2,20 +2,26 @@ package portal
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
+	"github.com/quic-go/quic-go"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/gosuda/portal/v2/portal/acme"
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
@@ -23,48 +29,61 @@ import (
 const (
 	defaultLeaseTTL          = 30 * time.Second
 	defaultClaimTimeout      = 10 * time.Second
+	defaultDiscoveryInterval = 30 * time.Second
 	defaultIdleKeepalive     = 15 * time.Second
 	defaultReadyQueueLimit   = 8
 	defaultClientHelloWait   = 2 * time.Second
 	defaultControlBodyLimit  = 4 << 20
-	defaultSessionWriteLimit = 5 * time.Second
+	defaultUDPPortBase       = 50000
 )
 
 type ServerConfig struct {
 	PortalURL             string
+	OwnerPrivateKey       string
+	Bootstraps            []string
 	ACME                  acme.Config
+	APIPort               int
+	SNIPort               int
 	APIListenAddr         string
 	SNIListenAddr         string
-	TrustedProxyCIDRs     []*net.IPNet
+	QUICListenAddr        string
+	TrustedProxyCIDRs     string
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
 	ReadyQueueLimit       int
 	ClientHelloTimeout    time.Duration
 	TrustProxyHeaders     bool
+	DiscoveryEnabled      bool
+	UDPPortCount          int
 }
 
 type Server struct {
-	sniListener  net.Listener
-	apiListener  net.Listener
-	apiServer    *http.Server
-	apiTLSClose  io.Closer
-	acmeManager  *acme.Manager
-	cancel       context.CancelFunc
-	group        *errgroup.Group
-	registry     *leaseRegistry
-	cfg          ServerConfig
-	rootHost     string
-	shutdownOnce sync.Once
+	sniListener         net.Listener
+	apiListener         net.Listener
+	apiServer           *http.Server
+	apiTLSClose         io.Closer
+	acmeManager         *acme.Manager
+	quicTunnel          *quic.Listener
+	cancel              context.CancelFunc
+	group               *errgroup.Group
+	registry            *leaseRegistry
+	ports               *transport.PortAllocator
+	ownerIdentity       discovery.Identity
+	cfg                 ServerConfig
+	rootHost            string
+	trustedProxyCIDRs   []*net.IPNet
+	discoveryMu         sync.RWMutex
+	discoveryBootstraps []string
+	shutdownOnce        sync.Once
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
-	if cfg.APIListenAddr == "" {
-		cfg.APIListenAddr = ":4017"
-	}
-	if cfg.SNIListenAddr == "" {
-		cfg.SNIListenAddr = ":443"
-	}
+	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
+	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
+	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
+	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
+	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	cfg.LeaseTTL = utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
 	cfg.ClaimTimeout = utils.DurationOrDefault(cfg.ClaimTimeout, defaultClaimTimeout)
 	cfg.IdleKeepaliveInterval = utils.DurationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
@@ -74,11 +93,67 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
-	return &Server{
-		cfg:      cfg,
-		rootHost: rootHost,
-		registry: newLeaseRegistry(nil),
-	}, nil
+	cfg.QUICListenAddr = utils.StringOrDefault(cfg.QUICListenAddr, cfg.SNIListenAddr)
+	trustedProxyCIDRs, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
+	}
+	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
+	if err != nil {
+		return nil, fmt.Errorf("normalize bootstraps: %w", err)
+	}
+	cfg.Bootstraps = bootstraps
+
+	portMin, portMax := 0, 0
+	if cfg.UDPPortCount > 0 {
+		portMin = defaultUDPPortBase
+		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
+	}
+
+	ownerPrivateKey := strings.TrimSpace(cfg.OwnerPrivateKey)
+	ownerIdentity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	if err != nil {
+		if ownerPrivateKey == "" {
+			return nil, fmt.Errorf("generate relay owner private key: %w", err)
+		}
+		return nil, fmt.Errorf("resolve owner identity: %w", err)
+	}
+	if ownerPrivateKey == "" {
+		log.Warn().
+			Str("owner_address", ownerIdentity.Address).
+			Str("owner_private_key", ownerIdentity.PrivateKey).
+			Msg("generated relay owner private key; set OWNER_PRIVATE_KEY unique identity")
+	}
+	cfg.OwnerPrivateKey = ""
+
+	runtime := policy.NewRuntime()
+	runtime.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
+	registry := newLeaseRegistry(runtime)
+	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
+
+	s := &Server{
+		cfg:               cfg,
+		rootHost:          rootHost,
+		registry:          registry,
+		ports:             ports,
+		ownerIdentity:     ownerIdentity,
+		trustedProxyCIDRs: trustedProxyCIDRs,
+	}
+
+	// Tear down all lease resources when leases expire via TTL janitor.
+	registry.onExpired = func(record *leaseRecord) {
+		s.closeLease(record)
+	}
+
+	if cfg.DiscoveryEnabled {
+		bootstraps, err := utils.MergeRelayURLs(nil, []string{cfg.PortalURL}, cfg.Bootstraps)
+		if err != nil {
+			return nil, err
+		}
+		s.discoveryBootstraps = bootstraps
+	}
+
+	return s, nil
 }
 
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
@@ -128,8 +203,18 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
+	if s.DiscoveryEnabled() {
+		group.Go(func() error { return s.runDiscoveryLoop(groupCtx) })
+	}
 	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
+
+	if s.cfg.UDPPortCount > 0 {
+		if err := s.startQUICTunnelListener(apiTLS); err != nil {
+			log.Warn().Err(err).Msg("quic tunnel listener disabled")
+		}
+	}
+
 	return nil
 }
 
@@ -148,9 +233,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		for _, lease := range s.registry.CloseAll() {
-			lease.Broker.Close()
+			s.closeLease(lease)
 		}
 
+		if s.quicTunnel != nil {
+			_ = s.quicTunnel.Close()
+		}
 		if s.sniListener != nil {
 			if err := s.sniListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				shutdownErr = err
@@ -190,6 +278,31 @@ func (s *Server) SNIAddr() string {
 		return ""
 	}
 	return s.sniListener.Addr().String()
+}
+
+func (s *Server) QUICTunnelAddr() string {
+	if s.quicTunnel == nil {
+		return ""
+	}
+	return s.quicTunnel.Addr().String()
+}
+
+func (s *Server) DiscoveryEnabled() bool {
+	return s != nil && s.cfg.DiscoveryEnabled
+}
+
+func (s *Server) PortalURL() string {
+	if s == nil {
+		return ""
+	}
+	return s.cfg.PortalURL
+}
+
+func (s *Server) RootHost() string {
+	if s == nil {
+		return ""
+	}
+	return s.rootHost
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
@@ -291,12 +404,8 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	record, ok := s.registry.Lookup(serverName)
-	if !ok || time.Now().After(record.ExpiresAt) {
-		_ = wrappedConn.Close()
-		return
-	}
-	if !s.registry.policy.IsLeaseRoutable(record.ID) {
+	stream, err := s.resolveStream(serverName)
+	if err != nil {
 		_ = wrappedConn.Close()
 		return
 	}
@@ -304,14 +413,13 @@ func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 	claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
 	defer cancel()
 
-	session, err := record.Broker.Claim(claimCtx)
+	session, err := stream.Claim(claimCtx)
 	if err != nil {
 		_ = wrappedConn.Close()
 		return
 	}
 
-	BridgeConns(wrappedConn, session.Conn())
-	_ = session.Close()
+	BridgeConns(wrappedConn, session)
 }
 
 func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
@@ -328,11 +436,213 @@ func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
 	BridgeConns(conn, upstream)
 }
 
+func (s *Server) lookupRoutableLease(serverName string) (*leaseRecord, error) {
+	record, ok := s.registry.Lookup(serverName)
+	if !ok || record == nil {
+		return nil, errors.New("no route")
+	}
+	if time.Now().After(record.ExpiresAt) {
+		return nil, errors.New("lease expired")
+	}
+	if !s.registry.policy.IsLeaseRoutable(record.ID) {
+		return nil, errors.New("not routable")
+	}
+	return record, nil
+}
+
+func (s *Server) resolveStream(serverName string) (*transport.RelayStream, error) {
+	record, err := s.lookupRoutableLease(serverName)
+	if err != nil {
+		return nil, err
+	}
+	if record.stream == nil {
+		return nil, errors.New("transport mismatch")
+	}
+	return record.stream, nil
+}
+
+func (s *Server) datagramPlaneReady() bool {
+	if s == nil || s.cfg.UDPPortCount <= 0 {
+		return false
+	}
+	if s.group == nil {
+		return true
+	}
+	return s.quicTunnel != nil
+}
+
+func (s *Server) requireDatagramPlane(udpEnabled bool) error {
+	if !udpEnabled {
+		return nil
+	}
+	if s.datagramPlaneReady() {
+		return nil
+	}
+	return errFeatureUnavailable
+}
+
+func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*leaseRecord, error) {
+	record, err := s.registry.FindByID(leaseID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.registry.policy.IsLeaseRoutable(record.ID) {
+		return nil, errLeaseRejected
+	}
+	if err := s.authorizeLeaseToken(record, token); err != nil {
+		return nil, err
+	}
+	if record.stream == nil {
+		return nil, errTransportMismatch
+	}
+	if requireDatagram && record.datagram == nil {
+		return nil, errTransportMismatch
+	}
+	return record, nil
+}
+
+func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error {
+	if len(apiTLS.KeyPEM) == 0 {
+		return fmt.Errorf("quic tunnel requires api tls key")
+	}
+	tlsCert, err := tls.X509KeyPair(apiTLS.CertPEM, apiTLS.KeyPEM)
+	if err != nil {
+		return fmt.Errorf("parse quic tls keypair: %w", err)
+	}
+
+	tlsConf := &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		NextProtos:   []string{"portal-tunnel"},
+		MinVersion:   tls.VersionTLS13,
+	}
+	quicConf := &quic.Config{
+		EnableDatagrams:    true,
+		KeepAlivePeriod:    15 * time.Second,
+		MaxIdleTimeout:     60 * time.Second,
+		MaxIncomingStreams: 16,
+	}
+
+	listener, err := quic.ListenAddr(s.cfg.QUICListenAddr, tlsConf, quicConf)
+	if err != nil {
+		return fmt.Errorf("listen quic: %w", err)
+	}
+
+	s.quicTunnel = listener
+	s.group.Go(func() error { return s.runQUICTunnelListener(listener) })
+
+	log.Info().
+		Str("internal_quic_tunnel_addr", listener.Addr().String()).
+		Msg("internal quic tunnel listener started")
+	return nil
+}
+
+func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
+	for {
+		conn, err := listener.Accept(context.Background())
+		if err != nil {
+			if errors.Is(err, quic.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go s.handleQUICTunnelConn(conn)
+	}
+}
+
+func (s *Server) closeLease(record *leaseRecord) {
+	if record == nil {
+		return
+	}
+	record.Close()
+}
+
 func (s *Server) watchContext(ctx context.Context) error {
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return s.Shutdown(shutdownCtx)
+}
+
+func (s *Server) discoveryBootstrapsSnapshot() []string {
+	if s == nil || !s.DiscoveryEnabled() {
+		return nil
+	}
+
+	s.discoveryMu.RLock()
+	defer s.discoveryMu.RUnlock()
+	return append([]string(nil), s.discoveryBootstraps...)
+}
+
+func (s *Server) mergeDiscoveryBootstraps(inputs []string) ([]string, error) {
+	if s == nil || !s.DiscoveryEnabled() || len(inputs) == 0 {
+		return nil, nil
+	}
+
+	s.discoveryMu.Lock()
+	defer s.discoveryMu.Unlock()
+
+	next, err := utils.MergeRelayURLs(s.discoveryBootstraps, []string{s.cfg.PortalURL}, inputs)
+	if err != nil {
+		return nil, err
+	}
+
+	existing := make(map[string]struct{}, len(s.discoveryBootstraps))
+	for _, bootstrap := range s.discoveryBootstraps {
+		existing[bootstrap] = struct{}{}
+	}
+
+	added := make([]string, 0, len(next))
+	for _, bootstrap := range next {
+		if _, ok := existing[bootstrap]; ok {
+			continue
+		}
+		added = append(added, bootstrap)
+	}
+
+	s.discoveryBootstraps = next
+	return added, nil
+}
+
+func (s *Server) runDiscoveryLoop(ctx context.Context) error {
+	ticker := time.NewTicker(defaultDiscoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		peers := s.discoveryBootstrapsSnapshot()
+		if len(peers) > 0 {
+			bootstraps, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, nil)
+			switch {
+			case err == nil:
+				added, err := s.mergeDiscoveryBootstraps(bootstraps)
+				if err != nil {
+					log.Warn().
+						Err(err).
+						Int("bootstrap_count", len(peers)).
+						Msg("merge discovered bootstraps failed")
+				} else if len(added) > 0 {
+					log.Info().
+						Int("peer_count", len(peers)).
+						Int("added_count", len(added)).
+						Int("total_bootstrap_count", len(s.discoveryBootstrapsSnapshot())).
+						Strs("added_bootstraps", added).
+						Msg("discovery bootstraps updated")
+				}
+			case ctx.Err() != nil:
+				return nil
+			default:
+				log.Warn().
+					Err(err).
+					Int("bootstrap_count", len(peers)).
+					Msg("discover bootstraps failed")
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func BridgeConns(left, right net.Conn) {

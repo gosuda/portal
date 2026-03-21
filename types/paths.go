@@ -16,6 +16,7 @@ const (
 	PathAdminLogout       = "/admin/logout"
 	PathAdminAuthStatus   = "/admin/auth/status"
 	PathAdminApproval     = "/admin/settings/approval-mode"
+	PathAdminUDP          = "/admin/settings/udp"
 	PathAdminIPsPrefix    = "/admin/ips/"
 	PathInstallShell      = "/install.sh"
 	PathInstallPowerShell = "/install.ps1"
@@ -29,4 +30,5 @@ const (
 	PathSDKRenew      = "/sdk/renew"
 	PathSDKUnregister = "/sdk/unregister"
 	PathSDKConnect    = "/sdk/connect"
+	PathDiscovery     = "/discovery"
 )

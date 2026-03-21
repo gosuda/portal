@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quic-go/quic-go"
+
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
@@ -31,6 +33,8 @@ const (
 	defaultHTTPShutdownTimeout = 5 * time.Second
 )
 
+var errRelayIncompatible = errors.New("relay is incompatible")
+
 type apiClient struct {
 	baseURL        *url.URL
 	httpClient     *http.Client
@@ -41,6 +45,7 @@ type apiClient struct {
 	name           string
 	reverseToken   string
 	metadata       types.LeaseMetadata
+	ownerAddress   string
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
@@ -67,7 +72,7 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
-	api := &apiClient{
+	return &apiClient{
 		baseURL:        baseURL,
 		dialTimeout:    dialTimeout,
 		requestTimeout: requestTimeout,
@@ -75,8 +80,8 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		name:           name,
 		reverseToken:   reverseToken,
 		metadata:       cfg.Metadata.Copy(),
-	}
-	return api, nil
+		ownerAddress:   cfg.ownerAddress,
+	}, nil
 }
 
 func (a *apiClient) close() {
@@ -88,13 +93,16 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool, bootstraps []string) (types.RegisterResponse, error) {
 	var resp types.RegisterResponse
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
+		OwnerAddress: a.ownerAddress,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
+		Bootstraps:   bootstraps,
+		UDPEnabled:   udpEnabled,
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -106,23 +114,10 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 		return nil
 	}
 
-	rootCAPEM := append([]byte(nil), a.rootCAPEM...)
-	if len(rootCAPEM) == 0 && utils.IsLocalRelayHost(a.baseURL.Hostname()) {
-		bootstrapParent := ctx
-		if bootstrapParent == nil {
-			bootstrapParent = context.Background()
-		}
-		bootstrapCtx, cancel := context.WithTimeout(bootstrapParent, defaultDialTimeout+defaultHandshakeTimeout)
-		defer cancel()
+	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
+	defer cancel()
 
-		_, resolvedCAPEM, err := keyless.ResolveMaterials(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname())
-		if err != nil {
-			return fmt.Errorf("bootstrap localhost relay trust: %w", err)
-		}
-		rootCAPEM = resolvedCAPEM
-	}
-
-	rootCAs, err := utils.CertPoolFromPEM(rootCAPEM)
+	rootCAs, err := keyless.RelayRootCAs(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname(), a.rootCAPEM)
 	if err != nil {
 		return err
 	}
@@ -154,10 +149,19 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
 	var resp types.DomainResponse
 	if err := a.doJSONWithClient(ctx, httpClient, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
-		return fmt.Errorf("check relay compatibility: %w", err)
+		err = fmt.Errorf("check relay compatibility: %w", err)
+		var netErr net.Error
+		var apiErr *types.APIRequestError
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) {
+			return err
+		}
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 500 {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
 	}
 	if strings.TrimSpace(resp.Version) != types.SDKProtocolVersion {
-		return fmt.Errorf("relay sdk version mismatch: relay=%q client=%q", strings.TrimSpace(resp.Version), types.SDKProtocolVersion)
+		return fmt.Errorf("%w: relay sdk version mismatch: relay=%q client=%q", errRelayIncompatible, strings.TrimSpace(resp.Version), types.SDKProtocolVersion)
 	}
 	return nil
 }
@@ -256,6 +260,10 @@ func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Clien
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return utils.DecodeAPIRequestError(resp)
+	}
+
 	envelope, err := utils.DecodeAPIEnvelope[json.RawMessage](resp.Body)
 	if err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -290,4 +298,50 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 		return c.reader.Read(p)
 	}
 	return c.Conn.Read(p)
+}
+
+// openQUICSession opens a QUIC connection to the relay for datagram transport.
+func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken string) (*quic.Conn, error) {
+	tlsConf := a.rawTLSConfig.Clone()
+	tlsConf.NextProtos = []string{"portal-tunnel"}
+
+	quicConf := &quic.Config{
+		EnableDatagrams: true,
+		KeepAlivePeriod: 15 * time.Second,
+		MaxIdleTimeout:  60 * time.Second,
+	}
+
+	dialAddr := utils.EnsurePort(a.baseURL.Host)
+	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
+	if err != nil {
+		return nil, fmt.Errorf("quic dial: %w", err)
+	}
+
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		_ = conn.CloseWithError(1, "stream open failed")
+		return nil, fmt.Errorf("open control stream: %w", err)
+	}
+
+	controlMsg := types.QUICControlMessage{
+		LeaseID:      leaseID,
+		ReverseToken: reverseToken,
+	}
+	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
+		_ = conn.CloseWithError(1, "control write failed")
+		return nil, fmt.Errorf("write control: %w", err)
+	}
+
+	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var resp types.QUICControlResponse
+	if err := json.NewDecoder(io.LimitReader(stream, 4096)).Decode(&resp); err != nil {
+		_ = conn.CloseWithError(1, "control read failed")
+		return nil, fmt.Errorf("read control response: %w", err)
+	}
+	if !resp.OK {
+		_ = conn.CloseWithError(1, resp.Error)
+		return nil, fmt.Errorf("quic connect rejected: %s", resp.Error)
+	}
+
+	return conn, nil
 }
