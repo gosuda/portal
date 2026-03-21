@@ -26,7 +26,7 @@ type ListServer = ClientServer | AdminServer;
 
 interface OfficialRegistryRelay {
   url: string;
-  status: "online" | "unreachable" | "unknown";
+  status: "online" | "unreachable";
   version?: string;
 }
 
@@ -41,6 +41,46 @@ interface OfficialRegistryDocument {
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal";
+
+async function loadOfficialRegistryRelay(
+  relayURL: string
+): Promise<OfficialRegistryRelay> {
+  const domainURL = new URL(API_PATHS.sdk.domain, relayURL).toString();
+
+  try {
+    const domain = await apiClient.get<RelayDomainResponse>(domainURL);
+    return {
+      url: relayURL,
+      status: "online",
+      version: typeof domain?.version === "string" ? domain.version.trim() : "",
+    };
+  } catch {
+    return { url: relayURL, status: "unreachable", version: "" };
+  }
+}
+
+async function loadOfficialRegistryRelays(
+  sourceURL: string
+): Promise<OfficialRegistryRelay[]> {
+  const response = await fetch(sourceURL, {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`registry request failed with status ${response.status}`);
+  }
+
+  const document = (await response.json()) as OfficialRegistryDocument;
+  const relayURLs = Array.isArray(document.relays)
+    ? document.relays.filter(
+        (relay): relay is string =>
+          typeof relay === "string" && relay.trim().length > 0
+      )
+    : [];
+
+  return Promise.all(
+    relayURLs.map((relayURL) => loadOfficialRegistryRelay(relayURL.trim()))
+  );
+}
 
 interface ServerListViewProps {
   title?: string;
@@ -123,8 +163,9 @@ export function ServerListView({
   onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<OfficialRegistryRelay[] | null>(null);
-  const [officialRegistryFailed, setOfficialRegistryFailed] = useState(false);
+  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<
+    OfficialRegistryRelay[] | null
+  >(null);
   const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
     new Set()
   );
@@ -205,65 +246,20 @@ export function ServerListView({
     }
 
     let cancelled = false;
+    setOfficialRegistryRelays(null);
 
-    const loadRelayVersion = async (
-      relayURL: string
-    ): Promise<OfficialRegistryRelay> => {
-      const trimmedURL = relayURL.trim();
-      if (trimmedURL === "") {
-        return { url: relayURL, status: "unknown", version: "" };
-      }
-
-      try {
-        const domainURL = new URL(API_PATHS.sdk.domain, trimmedURL).toString();
-        const domain = await apiClient.get<RelayDomainResponse>(domainURL);
-        return {
-          url: trimmedURL,
-          status: "online",
-          version:
-            typeof domain?.version === "string" ? domain.version.trim() : "",
-        };
-      } catch {
-        return { url: trimmedURL, status: "unreachable", version: "" };
-      }
-    };
-
-    const loadOfficialRegistry = async () => {
-      try {
-        const response = await fetch(OFFICIAL_REGISTRY_SOURCE_URL, {
-          headers: { Accept: "application/json" },
-        });
-        if (!response.ok) {
-          throw new Error(`registry request failed with status ${response.status}`);
+    void loadOfficialRegistryRelays(OFFICIAL_REGISTRY_SOURCE_URL)
+      .then((relays) => {
+        if (!cancelled) {
+          setOfficialRegistryRelays(relays);
         }
-        const document = (await response.json()) as OfficialRegistryDocument;
-        if (cancelled) {
-          return;
-        }
-
-        const relayURLs = Array.isArray(document.relays)
-          ? document.relays.filter(
-              (relay): relay is string =>
-                typeof relay === "string" && relay.trim().length > 0
-            )
-          : [];
-        const relays = await Promise.all(relayURLs.map(loadRelayVersion));
-        if (cancelled) {
-          return;
-        }
-
-        setOfficialRegistryFailed(false);
-        setOfficialRegistryRelays(relays);
-      } catch (error) {
+      })
+      .catch((error) => {
         if (!cancelled) {
           console.error("Failed to load official registry", error);
-          setOfficialRegistryFailed(true);
           setOfficialRegistryRelays([]);
         }
-      }
-    };
-
-    void loadOfficialRegistry();
+      });
 
     return () => {
       cancelled = true;
@@ -273,9 +269,7 @@ export function ServerListView({
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
-  const officialRegistryURL = OFFICIAL_REGISTRY_SOURCE_URL;
-  const officialRegistryAvailable =
-    officialRegistryRelays !== null && officialRegistryRelays.length > 0;
+  const officialRegistryAvailable = (officialRegistryRelays?.length ?? 0) > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -466,19 +460,13 @@ export function ServerListView({
 
   const gridClasses =
     "grid grid-cols-1 gap-6 p-4 min-[500px]:grid-cols-2 min-[500px]:p-6 md:grid-cols-3";
-
-  const serverGrid = (
-    <div className={gridClasses}>
-      {serverRows.length > 0 ? (
-        serverRows.map(renderServerCard)
-      ) : (
-        <div className="col-span-full py-12 text-center">
-          <p className="text-lg text-text-muted">
-            No servers match these filters
-          </p>
-        </div>
-      )}
-    </div>
+  const serverCards = serverRows.map(renderServerCard);
+  const serverGrid =
+    serverCards.length > 0 ? (
+      <div className={gridClasses}>{serverCards}</div>
+    ) : null;
+  const noMatchingServersMessage = (
+    <p className="text-lg text-text-muted">No servers match these filters</p>
   );
 
   const searchBar = (
@@ -560,7 +548,13 @@ export function ServerListView({
               </div>
             </div>
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
-              <main className="z-0 flex-1">{serverGrid}</main>
+              <main className="z-0 flex-1">
+                {serverGrid ?? (
+                  <div className="py-12 text-center">
+                    {noMatchingServersMessage}
+                  </div>
+                )}
+              </main>
             </div>
           </>
         ) : (
@@ -612,9 +606,7 @@ export function ServerListView({
                         0 services visible
                       </div>
                       <div className="flex flex-1 items-center justify-center py-12 text-center">
-                        <p className="text-lg text-text-muted">
-                          No servers match these filters
-                        </p>
+                        {noMatchingServersMessage}
                       </div>
                     </div>
                   )}
@@ -639,7 +631,7 @@ export function ServerListView({
                         </p>
                       </div>
                       <a
-                        href={officialRegistryURL}
+                        href={OFFICIAL_REGISTRY_SOURCE_URL}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
@@ -648,7 +640,7 @@ export function ServerListView({
                       </a>
                     </div>
 
-                    {officialRegistryRelays === null && !officialRegistryFailed ? (
+                    {officialRegistryRelays === null ? (
                       <p className="mt-6 text-sm text-text-muted">
                         Loading official registry...
                       </p>
@@ -658,15 +650,10 @@ export function ServerListView({
                           const statusLabel = {
                             online: "ONLINE",
                             unreachable: "OFFLINE",
-                            unknown: "UNKNOWN",
                           }[relay.status];
                           const statusClass = {
-                            online:
-                              "bg-primary/12 text-primary",
-                            unreachable:
-                              "bg-secondary text-text-muted",
-                            unknown:
-                              "bg-secondary text-text-muted",
+                            online: "bg-primary/12 text-primary",
+                            unreachable: "bg-secondary text-text-muted",
                           }[relay.status];
 
                           return (

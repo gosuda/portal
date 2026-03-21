@@ -173,7 +173,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 
 	htmlContent := string(f.cachedPortalHTML)
 	htmlContent = f.injectServerData(htmlContent)
-	htmlContent = f.injectOGMetadata(htmlContent, "", "", "")
+	htmlContent = f.injectOGMetadata(htmlContent, "", "")
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -217,25 +217,17 @@ func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
-func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL string) string {
+func (f *Frontend) injectOGMetadata(htmlContent, title, description string) string {
 	if title == "" {
 		title = "Portal Proxy Gateway"
 	}
 	if description == "" {
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
-	if imageURL == "" {
-		base := strings.TrimSuffix(f.server.PortalURL(), "/")
-		if !strings.HasPrefix(base, "http") {
-			base = "https://" + base
-		}
-		imageURL = base + "/portal.jpg"
-	}
 
 	replacer := strings.NewReplacer(
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
-		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
 		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
 	return replacer.Replace(htmlContent)
@@ -328,6 +320,5 @@ func frontendRootAssetPaths() []string {
 		"/apple-touch-icon.png",
 		"/web-app-manifest-192x192.png",
 		"/web-app-manifest-512x512.png",
-		"/portal.jpg",
 	}
 }
