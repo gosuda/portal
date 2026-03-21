@@ -115,12 +115,13 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### SDK (`sdk/`)
 
-- `WithDefaultRelayURLs`: fetches the default Portal relay list from the repository-root `registry.json`, appends explicit relay inputs, and normalizes the combined list
+- `ExposeConfig.DefaultRelayEnabled`: when true, `Expose` fetches the default Portal relay registry, merges it with explicit relay inputs, and normalizes the result
 - Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
 - `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
 - `api_client.go`: internal relay client for control-plane requests, reverse session dialing, and internal QUIC tunnel setup
 - `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
-- Default app flow is `WithDefaultRelayURLs -> NewListener -> PublicURL -> http.Server.Serve(listener)` or `WithDefaultRelayURLs -> Expose -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
+- `NewListener` callers provide explicit normalized relay URLs
+- Default exposure flow is `Expose{DefaultRelayEnabled: true} -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
 - `expose.go`: optional `RunHTTP` helper for serving one handler on both a local HTTP port and the relay listener
 - `Expose` keeps one listener per configured relay URL. Relay startup and reconnect failures are retried independently per relay, and successful relays remain available while failed relays keep retrying in the background
 - `Exposure.RelayURLs()` returns the configured normalized relay URLs, while `Exposure.PublicURLs()` returns only relays that are currently registered and ready
@@ -129,8 +130,8 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `Listener` embeds a `datagram.Session` for QUIC datagram transport (no separate UDP listener type)
 - `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the session
 - `Listener.WaitDatagramReady()`: blocks until relay publishes `udp_addr` and `quic_addr`
-- `ExposureDatagram`: wraps a `DatagramFrame` with relay context (FlowID, LeaseID, RelayURL, UDPAddr) and a `Reply()` callback for bidirectional flow
-- `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners
+- `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners with relay context populated on `DatagramFrame`
+- `Exposure.SendDatagram()`: sends a datagram frame back through the owning relay listener
 - `Exposure.WaitDatagramReady()`: blocks until at least one relay's datagram plane is ready
 
 ### Tunnel (`cmd/portal-tunnel`)
@@ -144,7 +145,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `--udp` flag (bool, default `false`): enables UDP relay in addition to TCP
 - `--udp-addr` flag (string): local UDP target address (`host:port` or port only); required when `--udp` is enabled
 - `runUDPBestEffort`: waits for datagram readiness, then calls `proxyExposureDatagrams`
-- `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `ExposureDatagram.Reply()` for return path
+- `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `Exposure.SendDatagram()` for the return path
 - Best-effort UDP — failures logged but do not terminate the TCP tunnel
 
 ## Transport Model
@@ -171,7 +172,7 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 5. Authentication: SDK sends `{lease_id, reverse_token}` JSON on the first QUIC stream; relay validates and calls `FlowMux.Register(conn)`.
 6. External UDP client sends a packet to `udp_addr` → `Relay.readLoop` → `FlowMux.TouchFlow` (assigns flow ID) → `FlowMux.SendDatagram` → QUIC DATAGRAM frame.
 7. SDK-side `Session.receiveLoop` decodes frame → `Listener.AcceptDatagram()` → `Exposure.AcceptDatagram()` → `proxyExposureDatagrams` → local UDP target.
-8. Return path: local response → per-flow read goroutine → `ExposureDatagram.Reply()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
+8. Return path: local response → per-flow read goroutine → `Exposure.SendDatagram()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
 
 ```text
 Client --UDP--> [:50000+ Relay] --DATAGRAM--> [FlowMux/Session] --QUIC--> [Session/Listener] --UDP--> Local Service
@@ -273,7 +274,7 @@ Cross-package public contract lives in:
   - shared `/sdk/*`, admin, health, install, and signer paths
 - `types/transport.go`
   - `LeaseCapabilities` (Stream/Datagram booleans)
-  - `DatagramFrame` wire format
+  - `DatagramFrame` wire frame plus SDK relay context
   - `EncodeDatagram` / `DecodeDatagram`
   - Transport constants: `TransportTCP`, `TransportUDP`, `TransportBoth`
 

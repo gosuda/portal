@@ -69,16 +69,18 @@ func runExposeCommand(args []string) error {
 	fs.SetOutput(io.Discard)
 
 	var (
-		relayCSV  string
-		target    string
-		udpAddr   string
-		name      string
-		desc      string
-		tags      string
-		thumbnail string
-		owner     string
-		hide      bool
-		udp       bool
+		relayCSV         string
+		target           string
+		udpAddr          string
+		name             string
+		desc             string
+		tags             string
+		thumbnail        string
+		owner            string
+		privateKey       string
+		discoveryEnabled bool
+		hide             bool
+		udp              bool
 	)
 	fs.StringVar(&relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	fs.BoolVar(&defaultRelays, "default-relays", defaultRelays, "Include public registry relays")
@@ -87,6 +89,8 @@ func runExposeCommand(args []string) error {
 	fs.StringVar(&tags, "tags", "", "Service tags metadata (comma-separated)")
 	fs.StringVar(&thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	fs.StringVar(&owner, "owner", "", "Service owner metadata")
+	fs.StringVar(&privateKey, "private-key", "", "Owner private key used to derive a discovery address")
+	fs.BoolVar(&discoveryEnabled, "discovery", false, "Advertise known relay URLs and discover additional relay bootstraps")
 	fs.BoolVar(&hide, "hide", false, "Hide service from discovery")
 
 	fs.BoolVar(&udp, "udp", utils.ParseBoolEnv("UDP_ENABLED", false), "Enable public UDP relay in addition to the default TCP relay")
@@ -164,29 +168,54 @@ func runExposeCommand(args []string) error {
 		relayInputs = []string{explicitRelays}
 	}
 
-	relayURLs, err := resolveRelayURLs(ctx, "", relayInputs, defaultRelays)
-	if err != nil {
-		return fmt.Errorf("resolve relay urls: %w", err)
+	previousOwnerPrivateKey := cfg.OwnerPrivateKey
+	if strings.TrimSpace(privateKey) != "" {
+		cfg.OwnerPrivateKey = privateKey
 	}
-	if len(relayURLs) == 0 {
-		return errors.New("no relay URLs configured; run the installer first or pass --relays")
+	var ownerPrivateKey *string
+	if discoveryEnabled || strings.TrimSpace(cfg.OwnerPrivateKey) != "" {
+		ownerPrivateKey = &cfg.OwnerPrivateKey
 	}
 
-	return runTunnel(
-		ctx,
-		stop,
-		relayURLs,
-		target,
-		udpAddr,
-		name,
-		udp,
-		types.LeaseMetadata{
+	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		RelayURLs:           relayInputs,
+		DefaultRelayEnabled: defaultRelays,
+		Name:                name,
+		UDPEnabled:          udp,
+		Discovery:           discoveryEnabled,
+		Metadata: types.LeaseMetadata{
 			Description: desc,
 			Tags:        utils.SplitCSV(tags),
 			Owner:       owner,
 			Thumbnail:   thumbnail,
 			Hide:        hide,
 		},
+		OwnerPrivateKey: ownerPrivateKey,
+	})
+	if err != nil {
+		return fmt.Errorf("service %s: failed to start relays: %w", name, err)
+	}
+	if exposure == nil {
+		return errors.New("no relay URLs provided")
+	}
+	if identity := exposure.OwnerIdentity(); identity.PrivateKey != "" {
+		cfg.OwnerPrivateKey = identity.PrivateKey
+	}
+	if cfg.OwnerPrivateKey != previousOwnerPrivateKey {
+		if saveErr := saveCLIConfig(cfgPath, cfg); saveErr != nil {
+			_ = exposure.Close()
+			return fmt.Errorf("persist portal config: %w", saveErr)
+		}
+	}
+
+	return runTunnel(
+		ctx,
+		stop,
+		exposure,
+		target,
+		udpAddr,
+		name,
+		udp,
 	)
 }
 
@@ -225,7 +254,7 @@ func runListCommand(args []string) error {
 		relayInputs = []string{explicitRelays}
 	}
 
-	relayURLs, err := resolveRelayURLs(ctx, "", relayInputs, defaultRelays)
+	relayURLs, err := sdk.ResolveRelayURLs(ctx, relayInputs, defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
@@ -242,18 +271,13 @@ func runListCommand(args []string) error {
 func runTunnel(
 	ctx context.Context,
 	stop func(),
-	relayURLs []string,
+	exposure *sdk.Exposure,
 	tcpTarget string,
 	udpTarget string,
 	name string,
 	udpEnabled bool,
-	metadata types.LeaseMetadata,
 ) error {
 	logger := log.With().Str("component", "portal").Logger()
-	exposure, err := sdk.Expose(ctx, relayURLs, name, udpEnabled, metadata)
-	if err != nil {
-		return fmt.Errorf("service %s: failed to start relays: %w", name, err)
-	}
 	if exposure == nil {
 		return errors.New("no relay URLs provided")
 	}
@@ -333,17 +357,6 @@ func runTunnel(
 
 	logger.Info().Msg("tunnel shutdown complete")
 	return errors.Join(waitErr, udpErr, closeErr)
-}
-
-func resolveRelayURLs(ctx context.Context, registryURL string, inputs []string, includeDefaultRelays bool) ([]string, error) {
-	if includeDefaultRelays {
-		relayURLs := sdk.WithDefaultRelayURLs(ctx, registryURL, inputs...)
-		if len(relayURLs) == 0 {
-			return nil, nil
-		}
-		return relayURLs, nil
-	}
-	return utils.NormalizeRelayURLs(inputs)
 }
 
 var exposeNameOpeners = []string{

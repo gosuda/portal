@@ -9,11 +9,15 @@ import (
 // contain a valid flow ID varint.
 var ErrDatagramTooSmall = errors.New("datagram too small to decode")
 
-// DatagramFrame is the wire format for QUIC DATAGRAM payloads.
-// Layout: [flowID varint][payload bytes]
+// DatagramFrame carries one relayed datagram.
+// Wire encoding uses only FlowID and Payload with layout:
+// [flowID varint][payload bytes]
 type DatagramFrame struct {
-	FlowID  uint32
-	Payload []byte
+	FlowID   uint32
+	Payload  []byte
+	LeaseID  string
+	RelayURL string
+	UDPAddr  string
 }
 
 // EncodeDatagram serialises a flow-framed datagram for transmission.

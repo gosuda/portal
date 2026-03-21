@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/sdk"
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
@@ -185,7 +186,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 	type flowEntry struct {
 		conn     *net.UDPConn
 		lastSeen time.Time
-		reply    func([]byte) error
+		frame    types.DatagramFrame
 	}
 
 	var mu sync.Mutex
@@ -212,11 +213,16 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		}
 	}()
 
-	getOrCreateFlow := func(key flowKey, reply func([]byte) error) (*net.UDPConn, error) {
+	getOrCreateFlow := func(frame types.DatagramFrame) (*net.UDPConn, error) {
+		key := flowKey{
+			flowID:   frame.FlowID,
+			leaseID:  frame.LeaseID,
+			relayURL: frame.RelayURL,
+		}
+
 		mu.Lock()
 		if f, ok := flows[key]; ok {
 			f.lastSeen = time.Now()
-			f.reply = reply
 			mu.Unlock()
 			return f.conn, nil
 		}
@@ -232,10 +238,18 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			mu.Unlock()
 			_ = localConn.Close()
 			f.lastSeen = time.Now()
-			f.reply = reply
 			return f.conn, nil
 		}
-		flows[key] = &flowEntry{conn: localConn, lastSeen: time.Now(), reply: reply}
+		flows[key] = &flowEntry{
+			conn:     localConn,
+			lastSeen: time.Now(),
+			frame: types.DatagramFrame{
+				FlowID:   frame.FlowID,
+				LeaseID:  frame.LeaseID,
+				RelayURL: frame.RelayURL,
+				UDPAddr:  frame.UDPAddr,
+			},
+		}
 		mu.Unlock()
 
 		go func() {
@@ -260,13 +274,14 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 				if entry != nil {
 					entry.lastSeen = time.Now()
 				}
-				replyFn := func([]byte) error { return net.ErrClosed }
-				if entry != nil && entry.reply != nil {
-					replyFn = entry.reply
+				replyFrame := types.DatagramFrame{}
+				if entry != nil {
+					replyFrame = entry.frame
+					replyFrame.Payload = append([]byte(nil), buf[:n]...)
 				}
 				mu.Unlock()
 
-				if sendErr := replyFn(buf[:n]); sendErr != nil {
+				if sendErr := exposure.SendDatagram(replyFrame); sendErr != nil {
 					logger.Debug().
 						Err(sendErr).
 						Uint32("flow_id", key.flowID).
@@ -283,7 +298,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 
 	logger.Info().Str("target", targetAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
-		frame, leaseID, relayURL, udpAddr, reply, err := exposure.AcceptDatagram()
+		frame, err := exposure.AcceptDatagram()
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -297,24 +312,19 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		logger.Debug().
 			Uint32("flow_id", frame.FlowID).
 			Int("bytes", len(frame.Payload)).
-			Str("lease_id", leaseID).
-			Str("relay_url", relayURL).
-			Str("udp_addr", udpAddr).
+			Str("lease_id", frame.LeaseID).
+			Str("relay_url", frame.RelayURL).
+			Str("udp_addr", frame.UDPAddr).
 			Str("target", targetAddr).
 			Msg("datagram received from relay, forwarding to local")
 
-		key := flowKey{
-			flowID:   frame.FlowID,
-			leaseID:  leaseID,
-			relayURL: relayURL,
-		}
-		localConn, err := getOrCreateFlow(key, reply)
+		localConn, err := getOrCreateFlow(frame)
 		if err != nil {
 			logger.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
-				Str("lease_id", leaseID).
-				Str("relay_url", relayURL).
+				Str("lease_id", frame.LeaseID).
+				Str("relay_url", frame.RelayURL).
 				Msg("dial local udp failed")
 			continue
 		}
@@ -323,8 +333,8 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			logger.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
-				Str("lease_id", leaseID).
-				Str("relay_url", relayURL).
+				Str("lease_id", frame.LeaseID).
+				Str("relay_url", frame.RelayURL).
 				Msg("write to local udp failed")
 		}
 	}

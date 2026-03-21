@@ -8,6 +8,8 @@ GOIMPORTS_VERSION := v0.41.0
 GOLANGCI_LINT_VERSION := v2.11.1
 GOVULNCHECK_VERSION := v1.1.4
 
+export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
+
 help:
 	@echo "Available targets:"
 	@echo "  make install           - Install Go developer tools used by this repo"
@@ -21,9 +23,9 @@ help:
 	@echo "  make clean             - Remove build artifacts"
 
 install:
-	GOTOOLCHAIN=$(GO_TOOLCHAIN_VERSION) go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
-	GOTOOLCHAIN=$(GO_TOOLCHAIN_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	GOTOOLCHAIN=$(GO_TOOLCHAIN_VERSION) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 fmt:
 	gofmt -w .

@@ -13,6 +13,7 @@ const (
 	APIErrorCodeInvalidLeaseID      = "invalid_lease_id"
 	APIErrorCodeInvalidMode         = "invalid_mode"
 	APIErrorCodeInvalidRequest      = "invalid_request"
+	APIErrorCodeInternal            = "internal"
 	APIErrorCodeIPBanned            = "ip_banned"
 	APIErrorCodeLeaseNotFound       = "lease_not_found"
 	APIErrorCodeLeaseRejected       = "lease_rejected"

@@ -36,8 +36,8 @@ func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
 	logger := log.With().Str("component", "demo-udp").Logger()
 
-	flag.StringVar(&flagRelayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; appended to registry.json defaults unless --default-relays=false is set) [env: RELAYS]")
-	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", false), "include repository registry.json default relays [env: DEFAULT_RELAYS]")
+	flag.StringVar(&flagRelayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set) [env: RELAYS]")
+	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", false), "include public registry relays [env: DEFAULT_RELAYS]")
 	flag.StringVar(&flagName, "name", "demo-udp", "public hostname prefix (single DNS label)")
 	flag.StringVar(&flagDesc, "description", "Portal demo UDP echo service", "lease description")
 	flag.StringVar(&flagTags, "tags", "demo,udp,echo", "comma-separated lease tags")
@@ -59,20 +59,18 @@ func runDemoUDP() error {
 	defer stop()
 
 	relayURLs := utils.SplitCSV(flagRelayURLs)
-	if flagDefaultRelays {
-		relayURLs = sdk.WithDefaultRelayURLs(ctx, "", relayURLs...)
-	}
-	relayURLs, err := utils.NormalizeRelayURLs(relayURLs)
-	if err != nil {
-		return fmt.Errorf("resolve relay urls: %w", err)
-	}
-
-	exposure, err := sdk.Expose(ctx, relayURLs, flagName, true, types.LeaseMetadata{
-		Description: flagDesc,
-		Tags:        utils.SplitCSV(flagTags),
-		Owner:       flagOwner,
-		Thumbnail:   flagThumbnail,
-		Hide:        flagHide,
+	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		RelayURLs:           relayURLs,
+		DefaultRelayEnabled: flagDefaultRelays,
+		Name:                flagName,
+		UDPEnabled:          true,
+		Metadata: types.LeaseMetadata{
+			Description: flagDesc,
+			Tags:        utils.SplitCSV(flagTags),
+			Owner:       flagOwner,
+			Thumbnail:   flagThumbnail,
+			Hide:        flagHide,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
@@ -108,7 +106,7 @@ func runDemoUDP() error {
 
 func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure, logger zerolog.Logger) {
 	for {
-		frame, _, _, _, reply, err := exposure.AcceptDatagram()
+		frame, err := exposure.AcceptDatagram()
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
@@ -121,7 +119,8 @@ func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure, logger zerolog.
 		if len(payload) == 0 {
 			payload = []byte("pong")
 		}
-		if err := reply(payload); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+		frame.Payload = payload
+		if err := exposure.SendDatagram(frame); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
 			logger.Warn().Err(err).Uint32("flow_id", frame.FlowID).Msg("demo udp reply failed")
 			return
 		}

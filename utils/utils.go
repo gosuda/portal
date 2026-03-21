@@ -132,7 +132,6 @@ func NormalizeHostname(host string) string {
 
 func NormalizeRelayURLs(inputs []string) ([]string, error) {
 	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
 
 	for _, input := range inputs {
 		for _, part := range SplitCSV(input) {
@@ -140,18 +139,64 @@ func NormalizeRelayURLs(inputs []string) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
-			if _, ok := seen[normalized]; ok {
-				continue
-			}
-			seen[normalized] = struct{}{}
 			out = append(out, normalized)
 		}
 	}
 
-	if len(out) == 0 {
-		return nil, nil
+	return uniqueURLs(out), nil
+}
+
+func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
+	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...))
+	if err != nil {
+		return nil, err
 	}
-	return out, nil
+	if len(excluded) == 0 {
+		return merged, nil
+	}
+
+	excluded, err = NormalizeRelayURLs(excluded)
+	if err != nil {
+		return nil, err
+	}
+
+	skip := make(map[string]struct{}, len(excluded))
+	for _, input := range excluded {
+		skip[input] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(merged))
+	for _, input := range merged {
+		if _, ok := skip[input]; ok {
+			continue
+		}
+		filtered = append(filtered, input)
+	}
+	return filtered, nil
+}
+
+func uniqueURLs(inputs []string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		if _, ok := seen[input]; ok {
+			continue
+		}
+		seen[input] = struct{}{}
+		out = append(out, input)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func LeaseHostname(name, rootHost string) (string, error) {
