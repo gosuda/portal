@@ -115,7 +115,8 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	Version string `json:"version"`
+	SDKVersion     string `json:"sdk_version"`
+	ReleaseVersion string `json:"release_version"`
 }
 
 type TunnelStatusResponse struct {

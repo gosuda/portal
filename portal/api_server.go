@@ -164,7 +164,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		Version: types.SDKProtocolVersion,
+		SDKVersion:     types.SDKProtocolVersion,
+		ReleaseVersion: types.ReleaseVersion,
 	})
 }
 

@@ -27,11 +27,11 @@ type ListServer = ClientServer | AdminServer;
 interface OfficialRegistryRelay {
   url: string;
   status: "online" | "unreachable";
-  version?: string;
+  releaseVersion?: string;
 }
 
 interface RelayDomainResponse {
-  version?: string;
+  release_version?: string;
 }
 
 interface OfficialRegistryDocument {
@@ -52,10 +52,17 @@ async function loadOfficialRegistryRelay(
     return {
       url: relayURL,
       status: "online",
-      version: typeof domain?.version === "string" ? domain.version.trim() : "",
+      releaseVersion:
+        typeof domain?.release_version === "string"
+          ? domain.release_version.trim()
+          : "",
     };
   } catch {
-    return { url: relayURL, status: "unreachable", version: "" };
+    return {
+      url: relayURL,
+      status: "unreachable",
+      releaseVersion: "",
+    };
   }
 }
 
@@ -647,15 +654,6 @@ export function ServerListView({
                     ) : officialRegistryAvailable ? (
                       <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {officialRegistryRelays.map((relay) => {
-                          const statusLabel = {
-                            online: "ONLINE",
-                            unreachable: "OFFLINE",
-                          }[relay.status];
-                          const statusClass = {
-                            online: "bg-primary/12 text-primary",
-                            unreachable: "bg-secondary text-text-muted",
-                          }[relay.status];
-
                           return (
                             <div
                               key={relay.url}
@@ -670,16 +668,15 @@ export function ServerListView({
                                 {relay.url}
                               </a>
                               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                <span
-                                  className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${statusClass}`}
-                                >
-                                  {statusLabel}
-                                </span>
-                                {relay.version && (
+                                {relay.status === "unreachable" ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                    SDK {relay.version}
+                                    Offline
                                   </span>
-                                )}
+                                ) : relay.releaseVersion ? (
+                                  <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
+                                    Release {relay.releaseVersion}
+                                  </span>
+                                ) : null}
                               </div>
                             </div>
                           );
