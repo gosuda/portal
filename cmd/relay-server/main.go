@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -98,6 +99,10 @@ func runServeCommand(args []string) error {
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
+	return runServer(ctx, cfg)
+}
+
+func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:       cfg.PortalURL,
 		OwnerPrivateKey: cfg.OwnerPrivateKey,
