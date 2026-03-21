@@ -26,9 +26,10 @@ type Exposure struct {
 	done   <-chan struct{}
 
 	name             string
+	TargetAddr       string
+	UDPAddr          string
 	reverseToken     string
 	udpEnabled       bool
-	identity         discovery.Identity
 	metadata         types.LeaseMetadata
 	ownerAddress     string
 	rootCAPEM        []byte
@@ -51,38 +52,38 @@ type ExposeConfig struct {
 	RelayURLs           []string
 	DefaultRelayEnabled bool
 	Name                string
+	TargetAddr          string
+	UDPAddr             string
 	ReverseToken        string
 	UDPEnabled          bool
 	Discovery           bool
 	Metadata            types.LeaseMetadata
-	OwnerAddress        string
-	OwnerPrivateKey     *string
+	OwnerPrivateKey     string
 	RootCAPEM           []byte
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	relayURLs, err := ResolveRelayURLs(ctx, cfg.RelayURLs, cfg.DefaultRelayEnabled)
 	if err != nil {
 		return nil, err
 	}
-	if len(relayURLs) == 0 {
-		return nil, nil
-	}
 
-	ownerAddress := strings.TrimSpace(cfg.OwnerAddress)
-	identity := discovery.Identity{}
-	if cfg.OwnerPrivateKey != nil {
-		identity, err = discovery.ResolveIdentity(*cfg.OwnerPrivateKey)
+	identity, err := discovery.ResolveIdentity(cfg.OwnerPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("resolve owner identity: %w", err)
+	}
+	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid target value %q: %w", cfg.TargetAddr, err)
+	}
+	udpAddr := cfg.UDPAddr
+	if cfg.UDPEnabled {
+		udpAddr, err = utils.NormalizeLoopbackTarget(utils.StringOrDefault(udpAddr, targetAddr))
 		if err != nil {
-			return nil, fmt.Errorf("resolve owner identity: %w", err)
+			return nil, fmt.Errorf("invalid --udp-addr value %q: %w", cfg.UDPAddr, err)
 		}
-		ownerAddress = identity.Address
 	}
 
 	exposureCtx, cancel := context.WithCancel(ctx)
@@ -90,11 +91,12 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		cancel:           cancel,
 		done:             exposureCtx.Done(),
 		name:             cfg.Name,
+		TargetAddr:       targetAddr,
+		UDPAddr:          udpAddr,
 		reverseToken:     cfg.ReverseToken,
 		udpEnabled:       cfg.UDPEnabled,
-		identity:         identity,
 		metadata:         cfg.Metadata.Copy(),
-		ownerAddress:     ownerAddress,
+		ownerAddress:     identity.Address,
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
 		discoveryEnabled: cfg.Discovery,
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
@@ -103,12 +105,16 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		starting:         make(map[string]struct{}, len(relayURLs)),
 	}
 
-	if _, err := exposure.applyRelayURLs(relayURLs, true); err != nil {
-		_ = exposure.Close()
-		return nil, err
+	if len(relayURLs) > 0 {
+		if _, err := exposure.applyRelayURLs(relayURLs, true); err != nil {
+			_ = exposure.Close()
+			return nil, err
+		}
 	}
 
-	go exposure.monitorStartupCounts()
+	if len(relayURLs) > 0 {
+		go exposure.monitorStartupCounts()
+	}
 	if exposure.discoveryEnabled {
 		go exposure.runDiscoveryLoop(exposureCtx)
 	}
@@ -117,11 +123,13 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		_ = exposure.Close()
 	}()
 
-	log.Info().
-		Str("release_version", types.ReleaseVersion).
-		Int("relay_count", len(exposure.ActiveRelayURLs())).
-		Strs("relays", exposure.ActiveRelayURLs()).
-		Msg("exposure relay started")
+	if len(relayURLs) > 0 {
+		log.Info().
+			Str("release_version", types.ReleaseVersion).
+			Int("relay_count", len(exposure.ActiveRelayURLs())).
+			Strs("relays", exposure.ActiveRelayURLs()).
+			Msg("exposure relay started")
+	}
 
 	return exposure, nil
 }
@@ -129,7 +137,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 const defaultDiscoveryInterval = 30 * time.Second
 
 func ResolveRelayURLs(ctx context.Context, explicit []string, includeDefaults bool) ([]string, error) {
-	explicit, err := utils.NormalizeRelayURLs(explicit)
+	explicit, err := utils.NormalizeRelayURLs(explicit...)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +168,7 @@ func ResolveRelayURLs(ctx context.Context, explicit []string, includeDefaults bo
 		return explicit, nil
 	}
 
-	defaults, err := utils.NormalizeRelayURLs(registry.Relays)
+	defaults, err := utils.NormalizeRelayURLs(registry.Relays...)
 	if err != nil {
 		return explicit, nil
 	}
@@ -170,15 +178,7 @@ func ResolveRelayURLs(ctx context.Context, explicit []string, includeDefaults bo
 	return utils.MergeRelayURLs(defaults, nil, explicit)
 }
 
-func (e *Exposure) RelayURLs() []string {
-	return e.ActiveRelayURLs()
-}
-
 func (e *Exposure) KnownRelayURLs() []string {
-	if e == nil {
-		return nil
-	}
-
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -190,10 +190,6 @@ func (e *Exposure) KnownRelayURLs() []string {
 }
 
 func (e *Exposure) ActiveRelayURLs() []string {
-	if e == nil {
-		return nil
-	}
-
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -204,18 +200,7 @@ func (e *Exposure) ActiveRelayURLs() []string {
 	return append([]string(nil), e.activeRelayURLs...)
 }
 
-func (e *Exposure) OwnerIdentity() discovery.Identity {
-	if e == nil {
-		return discovery.Identity{}
-	}
-	return e.identity
-}
-
 func (e *Exposure) Accept() (net.Conn, error) {
-	if e == nil {
-		return nil, net.ErrClosed
-	}
-
 	select {
 	case <-e.done:
 		return nil, net.ErrClosed
@@ -274,7 +259,7 @@ func (e *Exposure) PublicURLs() []string {
 
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
 	var relayListener net.Listener
-	if e != nil {
+	if len(e.ActiveRelayURLs()) > 0 {
 		relayListener = e
 	}
 	return RunHTTP(ctx, relayListener, handler, localAddr)
@@ -382,10 +367,6 @@ func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handl
 }
 
 func (e *Exposure) Close() error {
-	if e == nil {
-		return nil
-	}
-
 	var closeErr error
 	e.closeOnce.Do(func() {
 		if e.cancel != nil {
@@ -414,7 +395,7 @@ func (e *Exposure) Close() error {
 }
 
 func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]string, error) {
-	if e == nil || len(relayURLs) == 0 {
+	if len(relayURLs) == 0 {
 		return nil, nil
 	}
 
@@ -448,11 +429,20 @@ func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]strin
 }
 
 func (e *Exposure) syncListeners(failOnError bool) error {
-	if e == nil {
-		return nil
+	e.mu.Lock()
+	missing := make([]string, 0)
+	for _, relayURL := range e.activeRelayURLs {
+		if _, ok := e.listeners[relayURL]; ok {
+			continue
+		}
+		if _, ok := e.starting[relayURL]; ok {
+			continue
+		}
+		e.starting[relayURL] = struct{}{}
+		missing = append(missing, relayURL)
 	}
+	e.mu.Unlock()
 
-	missing := e.reserveMissingRelayURLs()
 	for _, relayURL := range missing {
 		listener, err := e.newListener(relayURL)
 		if err != nil {
@@ -470,24 +460,6 @@ func (e *Exposure) syncListeners(failOnError bool) error {
 	return nil
 }
 
-func (e *Exposure) reserveMissingRelayURLs() []string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	missing := make([]string, 0)
-	for _, relayURL := range e.activeRelayURLs {
-		if _, ok := e.listeners[relayURL]; ok {
-			continue
-		}
-		if _, ok := e.starting[relayURL]; ok {
-			continue
-		}
-		e.starting[relayURL] = struct{}{}
-		missing = append(missing, relayURL)
-	}
-	return missing
-}
-
 func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 	bootstraps := []string(nil)
 	if e.discoveryEnabled {
@@ -498,16 +470,16 @@ func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 		Name:               e.name,
 		ReverseToken:       e.reverseToken,
 		UDPEnabled:         e.udpEnabled,
-		OwnerAddress:       e.ownerAddress,
 		RegisterBootstraps: bootstraps,
 		Metadata:           e.metadata.Copy(),
 		RootCAPEM:          append([]byte(nil), e.rootCAPEM...),
+		ownerAddress:       e.ownerAddress,
 	}
 	return NewListener(context.Background(), relayURL, cfg)
 }
 
 func (e *Exposure) installListener(relayURL string, listener *Listener) {
-	if e == nil || listener == nil {
+	if listener == nil {
 		return
 	}
 
@@ -531,15 +503,73 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 	log.Info().Str("relay_url", relayURL).Msg("relay added to exposure")
 	go e.runListenerAcceptLoop(listener)
 	if e.udpEnabled {
-		go e.attachDatagramPlane(context.Background(), listener)
+		go func() {
+			relayURL := listener.api.baseURL.String()
+			if err := listener.WaitRegistered(context.Background()); err != nil {
+				switch {
+				case e.closed():
+					return
+				case errors.Is(err, net.ErrClosed), errors.Is(err, context.Canceled):
+					return
+				default:
+					log.Warn().
+						Err(err).
+						Str("relay_url", relayURL).
+						Msg("attach datagram plane failed")
+					return
+				}
+			}
+			if listener.UDPAddr() == "" {
+				if !e.closed() && !listener.closed() {
+					log.Warn().
+						Str("relay_url", relayURL).
+						Msg("attach datagram plane failed")
+				}
+				return
+			}
+
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+			for listener.datagram == nil || !listener.datagram.Connected() {
+				select {
+				case <-e.done:
+					return
+				case <-listener.doneCh:
+					return
+				case <-ticker.C:
+				}
+			}
+
+			for {
+				frame, err := listener.datagram.Accept(listener.doneCh)
+				if err != nil {
+					if e.closed() || errors.Is(err, net.ErrClosed) {
+						return
+					}
+					log.Warn().
+						Err(err).
+						Str("relay_url", relayURL).
+						Str("lease_id", listener.LeaseID()).
+						Msg("datagram accept failed")
+					return
+				}
+
+				frame.Payload = append([]byte(nil), frame.Payload...)
+				frame.LeaseID = listener.LeaseID()
+				frame.RelayURL = relayURL
+				frame.UDPAddr = listener.UDPAddr()
+
+				select {
+				case <-e.done:
+					return
+				case e.datagrams <- frame:
+				}
+			}
+		}()
 	}
 }
 
 func (e *Exposure) listenersOrdered() []*Listener {
-	if e == nil {
-		return nil
-	}
-
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -553,7 +583,7 @@ func (e *Exposure) listenersOrdered() []*Listener {
 }
 
 func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
-	if e == nil || listener == nil {
+	if listener == nil {
 		return
 	}
 
@@ -617,16 +647,8 @@ func (c *exposureConn) Close() error {
 	return closeErr
 }
 
-func (e *Exposure) SupportsDatagram() bool {
-	return e != nil && e.udpEnabled
-}
-
-func (e *Exposure) UDPEnabled() bool {
-	return e != nil && e.udpEnabled
-}
-
 func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
-	if e == nil || !e.SupportsDatagram() {
+	if !e.udpEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
 	}
 
@@ -639,7 +661,7 @@ func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 }
 
 func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
-	if e == nil || !e.SupportsDatagram() {
+	if !e.udpEnabled {
 		return net.ErrClosed
 	}
 
@@ -651,45 +673,17 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 	e.mu.RLock()
 	listener := e.listeners[relayURL]
 	e.mu.RUnlock()
-	if listener == nil {
+	if listener == nil || listener.datagram == nil {
 		return net.ErrClosed
 	}
 	if leaseID := strings.TrimSpace(frame.LeaseID); leaseID != "" && leaseID != listener.LeaseID() {
 		return errors.New("datagram frame targets stale lease")
 	}
-	return listener.SendDatagram(frame.FlowID, frame.Payload)
-}
-
-func (e *Exposure) UDPAddrs() []string {
-	listeners := e.listenersOrdered()
-	if len(listeners) == 0 || !e.SupportsDatagram() {
-		return nil
-	}
-
-	out := make([]string, 0, len(listeners))
-	seen := make(map[string]struct{})
-	for _, listener := range listeners {
-		if listener == nil {
-			continue
-		}
-		udpAddr := listener.UDPAddr()
-		if udpAddr == "" {
-			continue
-		}
-		if _, ok := seen[udpAddr]; ok {
-			continue
-		}
-		seen[udpAddr] = struct{}{}
-		out = append(out, udpAddr)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return listener.datagram.Send(frame.FlowID, frame.Payload)
 }
 
 func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
-	if e == nil || !e.SupportsDatagram() {
+	if !e.udpEnabled {
 		return nil, errors.New("exposure does not have udp enabled")
 	}
 
@@ -697,10 +691,38 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 	defer ticker.Stop()
 
 	for {
-		if addrs := e.readyUDPAddrs(); len(addrs) > 0 {
+		listeners := e.listenersOrdered()
+		addrs := make([]string, 0, len(listeners))
+		seen := make(map[string]struct{})
+		resolvedWithoutDatagram := true
+		for _, listener := range listeners {
+			if listener == nil {
+				continue
+			}
+
+			udpAddr := listener.UDPAddr()
+			if listener.datagram != nil && listener.datagram.Connected() && udpAddr != "" {
+				if _, ok := seen[udpAddr]; !ok {
+					seen[udpAddr] = struct{}{}
+					addrs = append(addrs, udpAddr)
+				}
+			}
+
+			select {
+			case <-listener.registered:
+				if udpAddr != "" {
+					resolvedWithoutDatagram = false
+				}
+			default:
+				if !listener.closed() {
+					resolvedWithoutDatagram = false
+				}
+			}
+		}
+		if len(addrs) > 0 {
 			return addrs, nil
 		}
-		if e.allDatagramNegotiationsResolvedWithoutDatagram() {
+		if resolvedWithoutDatagram {
 			return nil, errors.New("relay did not expose udp")
 		}
 
@@ -714,119 +736,7 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 	}
 }
 
-func (e *Exposure) readyUDPAddrs() []string {
-	listeners := e.listenersOrdered()
-	if len(listeners) == 0 || !e.SupportsDatagram() {
-		return nil
-	}
-
-	out := make([]string, 0, len(listeners))
-	seen := make(map[string]struct{})
-	for _, listener := range listeners {
-		if listener == nil || !listener.datagramConnected() {
-			continue
-		}
-
-		udpAddr := listener.UDPAddr()
-		if udpAddr == "" {
-			continue
-		}
-		if _, ok := seen[udpAddr]; ok {
-			continue
-		}
-		seen[udpAddr] = struct{}{}
-		out = append(out, udpAddr)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (e *Exposure) allDatagramNegotiationsResolvedWithoutDatagram() bool {
-	listeners := e.listenersOrdered()
-	if len(listeners) == 0 {
-		return true
-	}
-
-	resolved := 0
-	for _, listener := range listeners {
-		if listener == nil {
-			resolved++
-			continue
-		}
-
-		registered, enabled := listener.datagramNegotiationState()
-		if !registered {
-			if listener.closed() {
-				resolved++
-			}
-			continue
-		}
-		if enabled {
-			return false
-		}
-		resolved++
-	}
-
-	return resolved == len(listeners)
-}
-
-func (e *Exposure) attachDatagramPlane(ctx context.Context, listener *Listener) {
-	relayURL := listener.api.baseURL.String()
-	err := listener.WaitDatagramReady(ctx)
-	if err != nil {
-		switch {
-		case e.closed():
-			return
-		case ctx != nil && ctx.Err() != nil:
-			return
-		case errors.Is(err, net.ErrClosed), errors.Is(err, context.Canceled):
-			return
-		default:
-			log.Warn().
-				Err(err).
-				Str("relay_url", relayURL).
-				Msg("attach datagram plane failed")
-			return
-		}
-	}
-
-	e.forwardDatagrams(relayURL, listener)
-}
-
-func (e *Exposure) forwardDatagrams(relayURL string, listener *Listener) {
-	for {
-		frame, err := listener.AcceptDatagram()
-		if err != nil {
-			if e.closed() || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			log.Warn().
-				Err(err).
-				Str("relay_url", relayURL).
-				Str("lease_id", listener.LeaseID()).
-				Msg("datagram accept failed")
-			return
-		}
-
-		frame.Payload = append([]byte(nil), frame.Payload...)
-		frame.LeaseID = listener.LeaseID()
-		frame.RelayURL = relayURL
-		frame.UDPAddr = listener.UDPAddr()
-
-		select {
-		case <-e.done:
-			return
-		case e.datagrams <- frame:
-		}
-	}
-}
-
 func (e *Exposure) closed() bool {
-	if e == nil || e.done == nil {
-		return true
-	}
 	select {
 	case <-e.done:
 		return true
@@ -836,10 +746,6 @@ func (e *Exposure) closed() bool {
 }
 
 func (e *Exposure) monitorStartupCounts() {
-	if e == nil {
-		return
-	}
-
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	prevStatuses := make(map[string]listenerStatus)

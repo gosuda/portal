@@ -20,11 +20,7 @@ type Resolver func(context.Context, types.DiscoverRequest) (types.DiscoverRespon
 const defaultRequestTimeout = 15 * time.Second
 
 func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverRequest, rootCAPEM []byte) ([]string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	peers, err := utils.NormalizeRelayURLs(peers)
+	peers, err := utils.NormalizeRelayURLs(peers...)
 	if err != nil {
 		return nil, err
 	}
@@ -197,11 +193,11 @@ func buildResponseBootstraps(selfURLs, bootstraps, extra []string) ([]string, er
 		return merged, nil
 	}
 
-	normalizedSelf, err := utils.NormalizeRelayURLs(selfURLs)
+	normalizedSelf, err := utils.NormalizeRelayURLs(selfURLs...)
 	if err != nil {
 		return nil, fmt.Errorf("normalize self urls: %w", err)
 	}
-	resolvedBootstraps, err := utils.NormalizeRelayURLs(append(normalizedSelf, merged...))
+	resolvedBootstraps, err := utils.NormalizeRelayURLs(append(normalizedSelf, merged...)...)
 	if err != nil {
 		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}

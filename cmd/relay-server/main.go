@@ -5,12 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -21,26 +18,31 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-const (
-	defaultAPIPort      = 4017
-	defaultSNIPort      = 443
-	defaultUDPPortCount = 0
-	defaultPortalURL    = "https://localhost:4017"
-	defaultKeylessDir   = "./.portal-certs"
-)
+func main() {
+	log.Logger = log.Output(zerolog.NewConsoleWriter())
+	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
+		"":      runServeCommand,
+		"serve": runServeCommand,
+		"help":  runHelpCommand,
+	}); err != nil {
+		log.Error().Err(err).Msg("execute root command")
+		os.Exit(1)
+	}
+}
 
 type relayServerConfig struct {
 	PortalURL          string
-	OwnerPrivateKey    string
-	Bootstraps         string
 	APIPort            int
 	SNIPort            int
 	UDPPortCount       int
-	AdminSecretKey     string
+	Bootstraps         string
 	DiscoveryEnabled   bool
+	OwnerPrivateKey    string
+	AdminSecretKey     string
 	TrustProxyHeaders  bool
 	TrustedProxyCIDRs  string
 	KeylessDir         string
+	AdminSettingsPath  string
 	ACMEDNSProvider    string
 	CloudflareToken    string
 	AWSAccessKeyID     string
@@ -50,106 +52,61 @@ type relayServerConfig struct {
 	AWSHostedZoneID    string
 }
 
-func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
-	logger := log.With().Str("component", "relay-server").Logger()
-
+func runServeCommand(args []string) error {
 	cfg := relayServerConfig{}
+	fs := utils.NewFlagSet("relay-server", printRootUsage)
 
-	portalURL := strings.TrimSuffix(trimmedEnv("PORTAL_URL"), "/")
-	if portalURL == "" {
-		portalURL = defaultPortalURL
+	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost:4017", "portal base URL", "PORTAL_URL")
+	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
+	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
+	utils.IntFlagEnv(fs, &cfg.UDPPortCount, "udp-port-count", 0, utils.ParseNonNegativeInt, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled)", "UDP_PORT_COUNT")
+	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
+	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY_ENABLED")
+	utils.StringFlagEnv(fs, &cfg.OwnerPrivateKey, "owner-private-key", "", "relay owner private key used to derive a discovery address", "OWNER_PRIVATE_KEY")
+	utils.StringFlagEnv(fs, &cfg.AdminSecretKey, "admin-secret-key", "", "admin auth secret", "ADMIN_SECRET_KEY")
+	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
+	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
+
+	utils.StringFlagEnv(fs, &cfg.KeylessDir, "keyless-dir", "./.portal-certs", "directory path for relay keyless materials", "KEYLESS_DIR")
+	utils.StringFlagEnv(fs, &cfg.AdminSettingsPath, "admin-settings-path", "admin_settings.json", "admin settings file path", "ADMIN_SETTINGS_PATH")
+	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "cloudflare", "ACME DNS provider for DNS-01 and A-record sync (cloudflare|route53)", "ACME_DNS_PROVIDER")
+	utils.StringFlagEnv(fs, &cfg.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
+	utils.StringFlagEnv(fs, &cfg.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
+	utils.StringFlagEnv(fs, &cfg.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
+	utils.StringFlagEnv(fs, &cfg.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
+
+	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
 	}
-	apiPort := parsePortNumber(os.Getenv("API_PORT"), defaultAPIPort)
-	sniPort := parsePortNumber(os.Getenv("SNI_PORT"), defaultSNIPort)
-	udpPortCount := parseNonNegativeInt(os.Getenv("UDP_PORT_COUNT"), defaultUDPPortCount)
-	ownerPrivateKey := trimmedEnv("OWNER_PRIVATE_KEY")
-	bootstraps := trimmedEnv("BOOTSTRAPS")
-	adminSecretKey := trimmedEnv("ADMIN_SECRET_KEY")
-	discoveryEnabled := utils.ParseBoolEnv("DISCOVERY_ENABLED", false)
-	trustProxyHeaders := utils.ParseBoolEnv("TRUST_PROXY_HEADERS", false)
-	trustedProxyCIDRs := trimmedEnv("TRUSTED_PROXY_CIDRS")
-	keylessDir := trimmedEnv("KEYLESS_DIR")
-	if keylessDir == "" {
-		keylessDir = defaultKeylessDir
+	if err := utils.RequireNoArgs(fs.Args(), "relay-server"); err != nil {
+		printRootUsage(os.Stderr)
+		return err
 	}
-	adminSettingsPath = filepath.Join(keylessDir, "admin_settings.json")
-	acmeDNSProvider := trimmedEnv("ACME_DNS_PROVIDER")
-	if acmeDNSProvider == "" {
-		acmeDNSProvider = "cloudflare"
-	}
-	cloudflareToken := trimmedEnv("CLOUDFLARE_TOKEN")
-	awsAccessKeyID := trimmedEnv("AWS_ACCESS_KEY_ID")
-	awsSecretAccessKey := trimmedEnv("AWS_SECRET_ACCESS_KEY")
-	awsSessionToken := trimmedEnv("AWS_SESSION_TOKEN")
-	awsRegion := trimmedEnv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = trimmedEnv("AWS_DEFAULT_REGION")
-	}
-	awsHostedZoneID := trimmedEnv("AWS_HOSTED_ZONE_ID")
 
-	flag.StringVar(&cfg.PortalURL, "portal-url", portalURL, "portal base URL (env: PORTAL_URL)")
-	flag.IntVar(&cfg.APIPort, "api-port", apiPort, "Admin/API server port (env: API_PORT)")
-	flag.IntVar(&cfg.SNIPort, "sni-port", sniPort, "TCP SNI router port number (env: SNI_PORT)")
-	flag.IntVar(&cfg.UDPPortCount, "udp-port-count", udpPortCount, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled) (env: UDP_PORT_COUNT)")
-
-	flag.StringVar(&cfg.OwnerPrivateKey, "owner-private-key", ownerPrivateKey, "relay owner private key used to derive a discovery address (env: OWNER_PRIVATE_KEY)")
-	flag.StringVar(&cfg.Bootstraps, "bootstraps", bootstraps, "additional bootstrap relay API URLs used for discovery expansion (env: BOOTSTRAPS)")
-	flag.StringVar(&cfg.AdminSecretKey, "admin-secret-key", adminSecretKey, "admin auth secret (env: ADMIN_SECRET_KEY)")
-	flag.BoolVar(&cfg.DiscoveryEnabled, "discovery", discoveryEnabled, "serve relay discovery endpoints and poll discovery peers (env: DISCOVERY_ENABLED)")
-	flag.BoolVar(&cfg.TrustProxyHeaders, "trust-proxy-headers", trustProxyHeaders, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies (env: TRUST_PROXY_HEADERS)")
-	flag.StringVar(&cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", trustedProxyCIDRs, "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled (env: TRUSTED_PROXY_CIDRS)")
-
-	flag.StringVar(&cfg.KeylessDir, "keyless-dir", keylessDir, "directory path for relay keyless materials (env: KEYLESS_DIR)")
-	flag.StringVar(&cfg.ACMEDNSProvider, "acme-dns-provider", acmeDNSProvider, "ACME DNS provider for DNS-01 and A-record sync (cloudflare|route53) (env: ACME_DNS_PROVIDER)")
-	flag.StringVar(&cfg.CloudflareToken, "cloudflare-token", cloudflareToken, "Cloudflare DNS API token (required when acme-dns-provider=cloudflare) (env: CLOUDFLARE_TOKEN)")
-	flag.StringVar(&cfg.AWSAccessKeyID, "aws-access-key-id", awsAccessKeyID, "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted (env: AWS_ACCESS_KEY_ID)")
-	flag.StringVar(&cfg.AWSSecretAccessKey, "aws-secret-access-key", awsSecretAccessKey, "AWS secret access key for Route53 static credentials (env: AWS_SECRET_ACCESS_KEY)")
-	flag.StringVar(&cfg.AWSSessionToken, "aws-session-token", awsSessionToken, "AWS session token for Route53 temporary credentials (env: AWS_SESSION_TOKEN)")
-	flag.StringVar(&cfg.AWSRegion, "aws-region", awsRegion, "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset (env: AWS_REGION or AWS_DEFAULT_REGION)")
-	flag.StringVar(&cfg.AWSHostedZoneID, "aws-hosted-zone-id", awsHostedZoneID, "explicit Route53 hosted zone ID override (env: AWS_HOSTED_ZONE_ID)")
-	flag.Parse()
-
-	logger.Info().
+	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
+		Str("admin_settings_path", cfg.AdminSettingsPath).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
 
-	if err := runServer(cfg); err != nil {
-		logger.Fatal().Err(err).Msg("execute root command")
-	}
-}
-
-func runServer(cfg relayServerConfig) error {
-	logger := log.With().Str("component", "relay-server").Logger()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := utils.SignalContext()
 	defer stop()
 
-	rootHost := utils.PortalRootHost(cfg.PortalURL)
-	apiListenAddr := fmt.Sprintf(":%d", cfg.APIPort)
-	sniListenAddr := fmt.Sprintf(":%d", cfg.SNIPort)
-	trustedProxyCIDRs, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs)
-	if err != nil {
-		return fmt.Errorf("parse trusted proxy cidrs: %w", err)
-	}
-	bootstraps, err := utils.NormalizeRelayURLs(utils.SplitCSV(cfg.Bootstraps))
-	if err != nil {
-		return fmt.Errorf("normalize bootstraps: %w", err)
-	}
-	if strings.TrimSpace(cfg.OwnerPrivateKey) == "" {
-		cfg.OwnerPrivateKey, err = loadOwnerPrivateKey(cfg.KeylessDir)
-		if err != nil {
-			return fmt.Errorf("load relay owner private key: %w", err)
-		}
-	}
-	previousOwnerPrivateKey := cfg.OwnerPrivateKey
+	return runServer(ctx, cfg)
+}
+
+func runServer(ctx context.Context, cfg relayServerConfig) error {
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:       cfg.PortalURL,
 		OwnerPrivateKey: cfg.OwnerPrivateKey,
-		Bootstraps:      bootstraps,
+		Bootstraps:      []string{cfg.Bootstraps},
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,
@@ -160,9 +117,9 @@ func runServer(cfg relayServerConfig) error {
 			AWSRegion:          cfg.AWSRegion,
 			AWSHostedZoneID:    cfg.AWSHostedZoneID,
 		},
-		APIListenAddr:     apiListenAddr,
-		SNIListenAddr:     sniListenAddr,
-		TrustedProxyCIDRs: trustedProxyCIDRs,
+		APIPort:           cfg.APIPort,
+		SNIPort:           cfg.SNIPort,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
 		UDPPortCount:      cfg.UDPPortCount,
@@ -170,16 +127,8 @@ func runServer(cfg relayServerConfig) error {
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
 	}
-	if identity := server.OwnerIdentity(); identity.PrivateKey != "" {
-		cfg.OwnerPrivateKey = identity.PrivateKey
-	}
-	if cfg.OwnerPrivateKey != previousOwnerPrivateKey {
-		if err := saveOwnerPrivateKey(cfg.KeylessDir, cfg.OwnerPrivateKey); err != nil {
-			return fmt.Errorf("persist relay owner private key: %w", err)
-		}
-	}
 
-	frontend, err := NewFrontend(cfg.PortalURL, server, cfg.AdminSecretKey, trustedProxyCIDRs, cfg.TrustProxyHeaders)
+	frontend, err := NewFrontend(server, cfg.AdminSecretKey, cfg.AdminSettingsPath)
 	if err != nil {
 		return fmt.Errorf("create frontend: %w", err)
 	}
@@ -188,7 +137,8 @@ func runServer(cfg relayServerConfig) error {
 		return fmt.Errorf("start relay server: %w", err)
 	}
 
-	logEvent := logger.Info().
+	rootHost := server.RootHost()
+	logEvent := log.Info().
 		Str("api_addr", utils.HostPortOrLoopback(server.APIAddr())).
 		Str("sni_addr", server.SNIAddr()).
 		Str("root_host", rootHost).
@@ -204,58 +154,39 @@ func runServer(cfg relayServerConfig) error {
 	return server.Wait()
 }
 
-func trimmedEnv(name string) string {
-	return strings.TrimSpace(os.Getenv(name))
-}
-
-func parsePortNumber(raw string, fallback int) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	var port int
-	if _, err := fmt.Sscanf(raw, "%d", &port); err != nil || port < 1 || port > 65535 {
-		return fallback
-	}
-	return port
-}
-
-func parseNonNegativeInt(raw string, fallback int) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	var v int
-	if _, err := fmt.Sscanf(raw, "%d", &v); err != nil || v < 0 {
-		return fallback
-	}
-	return v
-}
-
-func ownerPrivateKeyPath(keylessDir string) string {
-	return filepath.Join(strings.TrimSpace(keylessDir), "owner_private_key.hex")
-}
-
-func loadOwnerPrivateKey(keylessDir string) (string, error) {
-	keyPath := ownerPrivateKeyPath(keylessDir)
-	data, err := os.ReadFile(keyPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(data)), nil
-}
-
-func saveOwnerPrivateKey(keylessDir, privateKey string) error {
-	privateKey = strings.TrimSpace(privateKey)
-	if privateKey == "" {
+func runHelpCommand(args []string) error {
+	switch len(args) {
+	case 0:
+		printRootUsage(os.Stdout)
 		return nil
+	case 1:
+		switch strings.TrimSpace(args[0]) {
+		case "", "help", "-h", "--help", "serve":
+			printRootUsage(os.Stdout)
+			return nil
+		default:
+			printRootUsage(os.Stderr)
+			return fmt.Errorf("unknown help topic %q", strings.TrimSpace(args[0]))
+		}
+	default:
+		printRootUsage(os.Stderr)
+		return errors.New("only one help topic is supported")
 	}
-	keyPath := ownerPrivateKeyPath(keylessDir)
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(keyPath, []byte(privateKey+"\n"), 0o600)
+}
+
+func printRootUsage(w io.Writer) {
+	utils.WriteCommandUsage(w,
+		[]string{
+			"relay-server [flags]",
+			"relay-server serve [flags]",
+			"relay-server help",
+		},
+		[]string{
+			"relay-server",
+			"relay-server serve",
+			"relay-server --portal-url https://portal.example.com",
+			"relay-server --discovery --udp-port-count 100",
+			"relay-server help",
+		},
+	)
 }

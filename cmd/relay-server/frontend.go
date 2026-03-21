@@ -7,7 +7,6 @@ import (
 	"html"
 	"io/fs"
 	"mime"
-	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -27,18 +26,16 @@ type readDirFileFS interface {
 var embeddedDistFS embed.FS
 
 type Frontend struct {
-	distFS       readDirFileFS
-	portalURL    string
-	server       *portal.Server
-	auth         *adminAuth
-	trustProxy   bool
-	trustedCIDRs []*net.IPNet
+	distFS            readDirFileFS
+	server            *portal.Server
+	auth              *adminAuth
+	adminSettingsPath string
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 }
 
-func NewFrontend(portalURL string, server *portal.Server, adminSecret string, trustedProxyCIDRs []*net.IPNet, trustProxy bool) (*Frontend, error) {
+func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string) (*Frontend, error) {
 	if server == nil {
 		return nil, errors.New("frontend requires portal server")
 	}
@@ -46,17 +43,15 @@ func NewFrontend(portalURL string, server *portal.Server, adminSecret string, tr
 	if runtime == nil {
 		return nil, errors.New("frontend requires policy runtime")
 	}
-	if err := loadAdminState(runtime); err != nil {
+	if err := loadAdminState(adminSettingsPath, runtime); err != nil {
 		return nil, err
 	}
 
 	return &Frontend{
-		distFS:       embeddedDistFS,
-		portalURL:    strings.TrimSpace(portalURL),
-		server:       server,
-		auth:         newAdminAuth(adminSecret),
-		trustProxy:   trustProxy,
-		trustedCIDRs: trustedProxyCIDRs,
+		distFS:            embeddedDistFS,
+		server:            server,
+		auth:              newAdminAuth(adminSecret),
+		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
 	}, nil
 }
 
@@ -84,10 +79,10 @@ func (f *Frontend) Handler() *http.ServeMux {
 	mux.HandleFunc(types.PathAdmin, f.serveAdmin)
 	mux.HandleFunc(types.PathAdminPrefix, f.serveAdmin)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
-		serveInstallScript(w, r, f.portalURL, false)
+		serveInstallScript(w, r, f.server.PortalURL(), false)
 	})
 	mux.HandleFunc(types.PathInstallPowerShell, func(w http.ResponseWriter, r *http.Request) {
-		serveInstallScript(w, r, f.portalURL, true)
+		serveInstallScript(w, r, f.server.PortalURL(), true)
 	})
 	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 
@@ -205,7 +200,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL st
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 	if imageURL == "" {
-		base := strings.TrimSuffix(f.portalURL, "/")
+		base := strings.TrimSuffix(f.server.PortalURL(), "/")
 		if !strings.HasPrefix(base, "http") {
 			base = "https://" + base
 		}

@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,7 +10,7 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-const installShellScriptTemplatePrefix = `#!/usr/bin/env sh
+const installShellScriptTemplate = `#!/usr/bin/env sh
 set -eu
 
 OS="$(uname -s)"
@@ -108,19 +107,6 @@ pick_install_path() {
   return 1
 }
 
-write_config() {
-  CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-  CONFIG_DIR="$CONFIG_HOME/portal"
-  CONFIG_PATH="$CONFIG_DIR/config.json"
-  mkdir -p "$CONFIG_DIR"
-  cat > "$CONFIG_PATH" <<'EOF'
-`
-
-const installShellScriptTemplateSuffix = `
-EOF
-  printf '%%s\n' "$CONFIG_PATH"
-}
-
 INSTALL_PATH="$(pick_install_path)" || {
   echo "No writable install directory found. Ensure an existing portal install is writable or create \$HOME/.local/bin or \$HOME/bin." >&2
   exit 1
@@ -128,10 +114,8 @@ INSTALL_PATH="$(pick_install_path)" || {
 
 cp "$BIN_PATH" "$INSTALL_PATH"
 chmod +x "$INSTALL_PATH"
-CONFIG_PATH="$(write_config)"
 
 echo "Installed portal to $INSTALL_PATH" >&2
-echo "Saved default relay config to $CONFIG_PATH" >&2
 
 INSTALL_DIR="$(dirname "$INSTALL_PATH")"
 case ":$PATH:" in
@@ -142,10 +126,10 @@ case ":$PATH:" in
 esac
 
 echo "Next step:" >&2
-echo "  portal expose 3000" >&2
+echo "  portal expose --relays $BASE_URL 3000" >&2
 `
 
-const installPowerShellTemplatePrefix = `$ErrorActionPreference = "Stop"
+const installPowerShellTemplate = `$ErrorActionPreference = "Stop"
 $BaseUrl = if ($env:BASE_URL) { $env:BASE_URL } else { %s }
 $OriginalSecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
@@ -186,23 +170,6 @@ try {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     $InstallPath = Join-Path $InstallDir "portal.exe"
     Copy-Item -Force $BinPath $InstallPath
-
-    $ConfigRoot = [Environment]::GetFolderPath("ApplicationData")
-    if ([string]::IsNullOrWhiteSpace($ConfigRoot)) {
-        throw "Failed to resolve ApplicationData directory."
-    }
-
-    $ConfigDir = Join-Path $ConfigRoot "portal"
-    New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
-    $ConfigPath = Join-Path $ConfigDir "config.json"
-    $ConfigPayload = @'
-`
-
-const installPowerShellTemplateSuffix = `
-'@
-    $Utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($ConfigPath, $ConfigPayload, $Utf8NoBom)
-
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $UserEntries = @()
     if (-not [string]::IsNullOrWhiteSpace($UserPath)) {
@@ -223,9 +190,8 @@ const installPowerShellTemplateSuffix = `
     }
 
     Write-Host "Installed portal to $InstallPath"
-    Write-Host "Saved default relay config to $ConfigPath"
     Write-Host "Next step:"
-    Write-Host "  portal expose 3000"
+    Write-Host "  portal expose --relays $BaseUrl 3000"
 } finally {
     [System.Net.ServicePointManager]::SecurityProtocol = $OriginalSecurityProtocol
     if ($WorkDir -and (Test-Path $WorkDir)) {
@@ -289,22 +255,10 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 		return
 	}
 
-	type installerConfig struct {
-		Relays []string `json:"relays"`
-	}
-	configPayload, err := json.Marshal(installerConfig{
-		Relays: []string{strings.TrimSpace(portalURL)},
-	})
-	if err != nil {
-		http.Error(w, "failed to build installer config", http.StatusInternalServerError)
-		return
-	}
-
-	script := buildInstallShellScript(portalURL, configPayload)
+	script := buildInstallScript(portalURL, isWindows)
 	contentType := "text/x-shellscript"
 	filename := "install.sh"
 	if isWindows {
-		script = buildInstallPowerShellScript(portalURL, configPayload)
 		contentType = "text/plain; charset=utf-8"
 		filename = "install.ps1"
 	}
@@ -316,26 +270,12 @@ func serveInstallScript(w http.ResponseWriter, r *http.Request, portalURL string
 	}
 }
 
-func buildInstallShellScript(portalURL string, configPayload []byte) string {
-	var script strings.Builder
-	fmt.Fprintf(&script, installShellScriptTemplatePrefix, shellSingleQuoted(portalURL))
-	script.Write(configPayload)
-	script.WriteString(installShellScriptTemplateSuffix)
-	return script.String()
-}
+func buildInstallScript(portalURL string, isWindows bool) string {
+	if !isWindows {
+		quotedPortalURL := "'" + strings.ReplaceAll(portalURL, "'", `'"'"'`) + "'"
+		return fmt.Sprintf(installShellScriptTemplate, quotedPortalURL)
+	}
 
-func buildInstallPowerShellScript(portalURL string, configPayload []byte) string {
-	var script strings.Builder
-	fmt.Fprintf(&script, installPowerShellTemplatePrefix, powerShellSingleQuoted(portalURL))
-	script.Write(configPayload)
-	script.WriteString(installPowerShellTemplateSuffix)
-	return script.String()
-}
-
-func shellSingleQuoted(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
-}
-
-func powerShellSingleQuoted(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+	quotedPortalURL := "'" + strings.ReplaceAll(portalURL, "'", "''") + "'"
+	return fmt.Sprintf(installPowerShellTemplate, quotedPortalURL)
 }
