@@ -535,7 +535,7 @@ func TestExposeRemovesClosedListenersSoRelaysCanRestart(t *testing.T) {
 		return registerCount.Load() >= 1 && len(exposure.listeners) == 0
 	})
 
-	if err := exposure.applyRelayURLs(exposure.RelayURLs(), false); err != nil {
+	if _, err := exposure.applyRelayURLs(exposure.RelayURLs(), false); err != nil {
 		t.Fatalf("applyRelayURLs() error = %v", err)
 	}
 

@@ -518,7 +518,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		return types.RegisterResponse{}, err
 	}
 	if s.DiscoveryEnabled() {
-		if err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
+		if _, err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
 			record.Close()
 			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
 			return types.RegisterResponse{}, err

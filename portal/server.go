@@ -544,18 +544,34 @@ func (s *Server) discoveryBootstrapsSnapshot() []string {
 	return append([]string(nil), s.discoveryBootstraps...)
 }
 
-func (s *Server) mergeDiscoveryBootstraps(inputs []string) error {
+func (s *Server) mergeDiscoveryBootstraps(inputs []string) ([]string, error) {
 	if s == nil || !s.DiscoveryEnabled() || len(inputs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	s.discoveryMu.Lock()
+	defer s.discoveryMu.Unlock()
+
 	next, err := utils.MergeRelayURLs(s.discoveryBootstraps, []string{s.cfg.PortalURL}, inputs)
-	if err == nil {
-		s.discoveryBootstraps = next
+	if err != nil {
+		return nil, err
 	}
-	s.discoveryMu.Unlock()
-	return err
+
+	existing := make(map[string]struct{}, len(s.discoveryBootstraps))
+	for _, bootstrap := range s.discoveryBootstraps {
+		existing[bootstrap] = struct{}{}
+	}
+
+	added := make([]string, 0, len(next))
+	for _, bootstrap := range next {
+		if _, ok := existing[bootstrap]; ok {
+			continue
+		}
+		added = append(added, bootstrap)
+	}
+
+	s.discoveryBootstraps = next
+	return added, nil
 }
 
 func (s *Server) runDiscoveryLoop(ctx context.Context) error {
@@ -568,11 +584,20 @@ func (s *Server) runDiscoveryLoop(ctx context.Context) error {
 			bootstraps, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, nil)
 			switch {
 			case err == nil:
-				if err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
+				added, err := s.mergeDiscoveryBootstraps(bootstraps)
+				if err != nil {
 					log.Warn().
 						Err(err).
 						Int("bootstrap_count", len(peers)).
 						Msg("merge discovered bootstraps failed")
+				} else if len(added) > 0 {
+					log.Info().
+						Str("component", "relay-server").
+						Int("peer_count", len(peers)).
+						Int("added_count", len(added)).
+						Int("total_bootstrap_count", len(s.discoveryBootstrapsSnapshot())).
+						Strs("added_bootstraps", added).
+						Msg("discovery bootstraps updated")
 				}
 			case ctx.Err() != nil:
 				return nil
