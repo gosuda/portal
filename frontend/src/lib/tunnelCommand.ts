@@ -79,7 +79,7 @@ export function buildTunnelDisplayCommand({
     udpPort,
   });
 
-  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
+  return joinTunnelDisplayCommand(installLine, exposeHead, exposeOptions);
 }
 
 function buildTunnelCommandParts({
@@ -140,7 +140,7 @@ function buildTunnelCommandParts({
         `irm ${formatToken(installPowerShellURL, os)} | iex`,
       ].join("\n"),
       exposeHead: "portal expose",
-      exposeOptions: [...exposeArgs, formatToken(targetValue, os)],
+      exposeOptions: [formatToken(targetValue, os), ...exposeArgs],
     };
   }
 
@@ -148,7 +148,7 @@ function buildTunnelCommandParts({
   return {
     installLine: `curl ${curlFlags} ${formatToken(installScriptURL, os)} | bash`,
     exposeHead: "portal expose",
-    exposeOptions: [...exposeArgs, formatToken(targetValue, os)],
+    exposeOptions: [formatToken(targetValue, os), ...exposeArgs],
   };
 }
 
@@ -247,4 +247,25 @@ function joinTunnelCommand(
   exposeOptions: string[]
 ): string {
   return [installLine, [exposeHead, ...exposeOptions].join(" ")].join("\n");
+}
+
+function joinTunnelDisplayCommand(
+  installLine: string,
+  exposeHead: string,
+  exposeOptions: string[]
+): string {
+  const relayIndex = exposeOptions.findIndex((option) =>
+    option.startsWith("--relays ")
+  );
+
+  if (relayIndex < 0) {
+    return joinTunnelCommand(installLine, exposeHead, exposeOptions);
+  }
+
+  const exposeLines = [
+    [exposeHead, ...exposeOptions.slice(0, relayIndex)].join(" "),
+    exposeOptions.slice(relayIndex).join(" "),
+  ];
+
+  return [installLine, ...exposeLines].join("\n");
 }

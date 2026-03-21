@@ -295,9 +295,13 @@ export function TunnelCommandForm({
     "text-xs font-semibold uppercase tracking-[0.24em]",
     isTerminal ? "text-slate-400" : "text-text-muted"
   );
+  const heroURLClass = cn(
+    "block overflow-x-auto whitespace-nowrap font-mono text-[15px] font-medium sm:text-base",
+    isTerminal ? "text-sky-300" : "text-primary"
+  );
 
   const commandSection = (
-    <div className={cn("space-y-2", isHero && "space-y-3")}>
+    <div className={cn("space-y-2", isHero && "space-y-4")}>
       {isHero ? (
         <label className={heroSectionLabelClass}>Command</label>
       ) : (
@@ -316,7 +320,7 @@ export function TunnelCommandForm({
             "overflow-x-auto whitespace-pre-wrap break-all font-mono",
             isTerminal
               ? isHero
-                ? "min-h-[104px] rounded-xl border border-green-status/20 bg-black/45 p-4 text-sm leading-7 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+                ? "min-h-[148px] rounded-xl border border-primary/20 bg-black/50 px-4 py-4 text-sm leading-7 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
                 : "rounded-xl border border-white/10 bg-black/30 p-4 pr-12 text-sm leading-7 text-white"
               : "rounded-xl bg-border p-4 pr-12 text-sm leading-7 text-foreground"
           )}
@@ -346,10 +350,10 @@ export function TunnelCommandForm({
           type="button"
           onClick={handleCopy}
           className={cn(
-            "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors",
+            "inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all duration-200",
             copied
-              ? "bg-white text-slate-950"
-              : "bg-green-status text-slate-950 hover:bg-green-300"
+              ? "border-sky-400/45 bg-linear-to-r from-sky-400 via-cyan-300 to-blue-400 text-slate-950 shadow-[0_10px_24px_rgba(37,99,235,0.18)]"
+              : "border-sky-400/45 bg-linear-to-r from-sky-500 via-cyan-400 to-blue-500 text-slate-950 shadow-[0_12px_30px_rgba(37,99,235,0.22)] hover:brightness-105 hover:saturate-125"
           )}
           aria-label="Copy command"
         >
@@ -359,18 +363,20 @@ export function TunnelCommandForm({
       )}
 
       {isHero && (
-        <div className="space-y-1.5 pt-1">
+        <div className="space-y-1.5 pt-0.5">
           <p className={heroSectionLabelClass}>Public URL</p>
           <div
             className={cn(
-              "space-y-4 rounded-xl border px-4 py-3",
-              isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
+              "space-y-3 rounded-xl border px-3.5 py-3",
+              isTerminal
+                ? "border-white/8 bg-white/[0.045]"
+                : "border-border bg-white"
             )}
           >
             <div
               className={cn(
-                "flex items-center gap-2 text-sm font-semibold",
-                isTerminal ? "text-slate-200" : "text-foreground"
+                "flex items-center gap-2 text-[13px] font-semibold",
+                isTerminal ? "text-slate-300" : "text-foreground"
               )}
             >
               <span
@@ -383,8 +389,8 @@ export function TunnelCommandForm({
               <span
                 aria-disabled="true"
                 className={cn(
-                  "block cursor-not-allowed overflow-x-auto whitespace-nowrap font-mono text-base font-medium opacity-60 sm:text-lg",
-                  isTerminal ? "text-green-status" : "text-primary"
+                  heroURLClass,
+                  "cursor-not-allowed opacity-70"
                 )}
               >
                 {previewURL}
@@ -395,8 +401,8 @@ export function TunnelCommandForm({
                 target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
-                  "block overflow-x-auto whitespace-nowrap font-mono text-base font-medium underline-offset-4 hover:underline sm:text-lg",
-                  isTerminal ? "text-green-status" : "text-primary"
+                  heroURLClass,
+                  "underline-offset-4 hover:underline"
                 )}
               >
                 {previewURL}
@@ -408,76 +414,117 @@ export function TunnelCommandForm({
     </div>
   );
 
-  const heroFieldLabelClass = cn(
-    "text-[11px] font-semibold uppercase tracking-[0.2em]",
-    isTerminal ? "text-slate-400" : "text-text-muted"
-  );
   const heroInputClass = cn(
-    "h-12 rounded-xl border px-4 text-[15px] shadow-none",
+    "h-10 rounded-lg border px-3 text-sm shadow-none",
     isTerminal
-      ? "border-white/8 bg-black/20 text-slate-100 placeholder:text-slate-500"
+      ? "border-white/6 bg-white/[0.035] text-slate-200 placeholder:text-slate-500"
       : "border-border bg-white"
   );
   const nameInputValue = isAutoName ? generatedName : name;
   const shuffleButtonClass = cn(
     "inline-flex shrink-0 items-center justify-center border px-3 text-xs font-semibold transition-colors",
-    isHero ? "h-12 rounded-xl px-4" : "h-12 rounded-lg",
+    isHero ? "h-10 rounded-lg px-3" : "h-12 rounded-lg",
     isTerminal
-      ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
+      ? "border-white/6 bg-white/[0.035] text-slate-400 hover:bg-white/5 hover:text-white"
       : "border-border bg-white text-text-muted hover:text-foreground"
   );
-  const optionSectionLabel = isHero ? (
-    <div className="pt-1">
-      <p className={heroSectionLabelClass}>OPTIONS</p>
+  const heroControlsSection = isHero ? (
+    <div
+      className={cn(
+        "space-y-1.5 border-t pt-3",
+        isTerminal ? "border-white/6" : "border-border/80"
+      )}
+    >
+      <div
+        className={cn(
+          "grid grid-cols-[62px_minmax(0,1fr)_140px] gap-2 px-1 text-[9px] font-semibold uppercase tracking-[0.16em]",
+          isTerminal ? "text-slate-500" : "text-text-muted"
+        )}
+      >
+        <span>Port</span>
+        <span>Name</span>
+        <span>Platform</span>
+      </div>
+      <div className="grid grid-cols-[62px_minmax(0,1fr)_140px] items-center gap-2">
+        <Input
+          id={`${inputId}-host`}
+          type="text"
+          value={target}
+          onChange={(event) => setTarget(event.target.value)}
+          placeholder={defaultHost}
+          aria-label="Port"
+          className={cn(heroInputClass, "w-full px-2.5 text-[13px] font-mono")}
+        />
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Input
+            id={`${inputId}-name`}
+            type="text"
+            value={nameInputValue}
+            onChange={handleNameChange}
+            aria-label="Public name"
+            className={cn(heroInputClass, "min-w-0 flex-1 px-2.5 text-[13px]")}
+          />
+          <button
+            type="button"
+            onClick={handleShuffleName}
+            className={cn(shuffleButtonClass, "w-10 rounded-lg px-0")}
+            aria-label="Shuffle public name"
+            title="Shuffle public name"
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div
+          className={cn(
+            "flex w-full shrink-0 rounded-lg border p-0.5",
+            isTerminal ? "border-white/6 bg-white/[0.035]" : "border-border bg-border"
+          )}
+        >
+          <div className="flex w-full">
+            <button
+              type="button"
+              onClick={() => setOs("unix")}
+              className={cn(
+                "flex-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors",
+                os === "unix"
+                  ? isTerminal
+                    ? "bg-white text-slate-950 shadow-sm"
+                    : "bg-background text-foreground shadow-sm"
+                  : isTerminal
+                    ? "text-slate-500 hover:text-white"
+                    : "text-text-muted hover:text-foreground"
+                )}
+              >
+                Linux
+              </button>
+            <button
+              type="button"
+              onClick={() => setOs("windows")}
+              className={cn(
+                "flex-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors",
+                os === "windows"
+                  ? isTerminal
+                    ? "bg-white text-slate-950 shadow-sm"
+                    : "bg-background text-foreground shadow-sm"
+                  : isTerminal
+                    ? "text-slate-500 hover:text-white"
+                    : "text-text-muted hover:text-foreground"
+                )}
+              >
+              Windows
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   ) : null;
 
   return (
-    <div className={cn("space-y-5", className)}>
+    <div className={cn(isHero ? "space-y-4" : "space-y-5", className)}>
       {isHero && commandSection}
-      {optionSectionLabel}
+      {heroControlsSection}
 
-      {isHero ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor={`${inputId}-host`} className={heroFieldLabelClass}>
-              Host
-            </label>
-            <Input
-              id={`${inputId}-host`}
-              type="text"
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              placeholder={defaultHost}
-              className={heroInputClass}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor={`${inputId}-name`} className={heroFieldLabelClass}>
-              Public Name
-            </label>
-            <div className="flex items-center gap-2">
-              <Input
-                id={`${inputId}-name`}
-                type="text"
-                value={nameInputValue}
-                onChange={handleNameChange}
-                className={cn(heroInputClass, "flex-1")}
-              />
-              <button
-                type="button"
-                onClick={handleShuffleName}
-                className={shuffleButtonClass}
-                aria-label="Shuffle public name"
-                title="Shuffle public name"
-              >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
+      {!isHero && (
         <>
           <div className="space-y-2">
             <label
@@ -724,54 +771,49 @@ export function TunnelCommandForm({
         </div>
       )}
 
-      <div className={cn("space-y-2", isHero && "pt-1")}>
-        <div
-          className={cn(
-            "flex p-1",
-            isHero ? "rounded-lg" : "rounded-xl",
-            isTerminal
-              ? isHero
-                ? "bg-black/20"
-                : "bg-white/8"
-              : "bg-border"
-          )}
-        >
-          <button
-            type="button"
-            onClick={() => setOs("unix")}
+      {!isHero && (
+        <div className="space-y-2">
+          <div
             className={cn(
-              "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
-              os === "unix"
-                ? isTerminal
-                  ? "bg-white text-slate-950 shadow-sm"
-                  : "bg-background text-foreground shadow-sm"
-                : isTerminal
-                  ? "text-slate-400 hover:text-white"
-                  : "text-text-muted hover:text-foreground"
+              "flex rounded-xl p-1",
+              isTerminal ? "bg-white/8" : "bg-border"
             )}
           >
-            Linux / macOS
-          </button>
-          <button
-            type="button"
-            onClick={() => setOs("windows")}
-            className={cn(
-              "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
-              os === "windows"
-                ? isTerminal
-                  ? "bg-white text-slate-950 shadow-sm"
-                  : "bg-background text-foreground shadow-sm"
-                : isTerminal
-                  ? "text-slate-400 hover:text-white"
-                  : "text-text-muted hover:text-foreground"
-            )}
-          >
-            Windows (PowerShell)
-          </button>
+            <button
+              type="button"
+              onClick={() => setOs("unix")}
+              className={cn(
+                "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                os === "unix"
+                  ? isTerminal
+                    ? "bg-white text-slate-950 shadow-sm"
+                    : "bg-background text-foreground shadow-sm"
+                  : isTerminal
+                    ? "text-slate-400 hover:text-white"
+                    : "text-text-muted hover:text-foreground"
+              )}
+            >
+              Linux / macOS
+            </button>
+            <button
+              type="button"
+              onClick={() => setOs("windows")}
+              className={cn(
+                "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                os === "windows"
+                  ? isTerminal
+                    ? "bg-white text-slate-950 shadow-sm"
+                    : "bg-background text-foreground shadow-sm"
+                  : isTerminal
+                    ? "text-slate-400 hover:text-white"
+                    : "text-text-muted hover:text-foreground"
+              )}
+            >
+              Windows (PowerShell)
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {!isHero && commandSection}
     </div>

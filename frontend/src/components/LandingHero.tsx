@@ -1,11 +1,39 @@
 import { Terminal } from "lucide-react";
 import { TunnelCommandForm } from "@/components/TunnelCommandForm";
 
+const heroFeatures = [
+  {
+    title: "No setup. No port forwarding.",
+    description:
+      "Works instantly, even behind NAT and firewalls.",
+  },
+  {
+    title: "End-to-end TLS",
+    description:
+      "Traffic is routed via SNI with keyless TLS, while TLS still terminates on your app.",
+  },
+  {
+    title: "Permissionless hosting",
+    description:
+      "Attach to arbitrary relays - no accounts, no approval, no trust required.",
+  },
+  {
+    title: "UDP support",
+    description:
+      "Expose web apps and arbitrary protocols through the same tunnel.",
+  },
+  {
+    title: "One command. Done.",
+    description:
+      "Install and expose your app in a single copy-paste.",
+  },
+] as const;
+
 export function LandingHero() {
   return (
     <section
       aria-labelledby="landing-title"
-      className="relative overflow-hidden px-0 py-10 sm:py-12 lg:py-16"
+      className="relative pt-10 sm:pt-12 lg:pt-16"
     >
       <div
         aria-hidden="true"
@@ -27,10 +55,11 @@ export function LandingHero() {
         Skip to live servers
       </a>
 
-      <div className="relative mx-auto max-w-4xl text-center">
+      <div className="relative mx-auto max-w-4xl px-2 text-center sm:px-4">
         <h1
           id="landing-title"
-          className="text-5xl font-extrabold tracking-tight text-foreground sm:text-6xl lg:text-7xl"
+          className="text-4xl font-extrabold tracking-tight text-foreground sm:text-5xl lg:text-7xl"
+          style={{ lineHeight: 0.96 }}
         >
           <span className="block">Expose Local Apps</span>
           <span
@@ -50,7 +79,7 @@ export function LandingHero() {
       </div>
 
       <div
-        className="relative mx-auto mt-10 max-w-[560px] rounded-[1.75rem] border p-5 sm:p-6"
+        className="relative mx-auto mt-10 w-full max-w-[550px] rounded-[1.75rem] border px-4 py-5 sm:px-5 sm:py-6"
         style={{
           background: "var(--hero-terminal-bg)",
           borderColor: "var(--hero-terminal-border)",
@@ -58,20 +87,53 @@ export function LandingHero() {
           boxShadow: "0 30px 72px var(--hero-terminal-shadow)",
         }}
       >
-        <div className="mb-5 flex items-center gap-3">
+        <div className="mb-5 flex min-w-0 items-center gap-3">
           <Terminal
-            className="h-5 w-5"
+            className="h-5 w-5 shrink-0"
             style={{ color: "var(--hero-terminal-accent)" }}
           />
           <h2
             id="tunnel-preview"
-            className="text-2xl font-bold tracking-tight"
+            className="min-w-0 text-xl font-bold tracking-tight sm:text-2xl"
           >
             Run this command
           </h2>
         </div>
 
         <TunnelCommandForm theme="terminal" mode="hero" />
+      </div>
+
+      <div className="relative mt-18 -mx-4 w-auto sm:mt-20 sm:-mx-6 md:-mx-8">
+        <div className="overflow-hidden border-t border-border/80 bg-border/70">
+          <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-3">
+            <div className="flex min-h-[184px] bg-background/88 p-6 text-left sm:min-h-[196px] sm:p-7">
+              <div className="space-y-2">
+                <h2 className="whitespace-nowrap text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-none">
+                  Make localhost public
+                </h2>
+                <p className="max-w-[28ch] text-[0.95rem] leading-6 text-text-muted">
+                  Turn any local app into a shareable HTTPS URL in seconds.
+                </p>
+              </div>
+            </div>
+
+            {heroFeatures.map(({ title, description }) => (
+              <article
+                key={title}
+                className="flex min-h-[184px] bg-background/88 p-6 text-left transition-colors duration-200 hover:bg-background/92 sm:min-h-[196px] sm:p-7"
+              >
+                <div className="space-y-2">
+                  <h3 className="whitespace-nowrap text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-none">
+                    {title}
+                  </h3>
+                  <p className="max-w-[28ch] text-[0.95rem] leading-6 text-text-muted">
+                    {description}
+                  </p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );

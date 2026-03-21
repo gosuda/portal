@@ -51,7 +51,7 @@ export function buildCommand(opts: TunnelCommandOptions, target = shellTargetFor
     exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
   }
 
-  const exposeCommand = `expose ${[...exposeArgs, formatToken(host, target)].join(" ")}`;
+  const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
 
   if (target === "windows") {
     const commandLines = [`$ProgressPreference = 'SilentlyContinue'`];

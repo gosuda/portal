@@ -12,6 +12,8 @@ import { BanStatusButtons } from "@/components/button/BanStatusButtons";
 import { SortbySelect } from "@/components/select/SortbySelect";
 import { ApprovalModeToggle } from "@/components/button/ApprovalModeToggle";
 import { FloatingActionBar } from "@/components/FloatingActionBar";
+import { apiClient } from "@/lib/apiClient";
+import { API_PATHS, ROUTE_PATHS } from "@/lib/apiPaths";
 import {
   Dialog,
   DialogContent,
@@ -22,12 +24,23 @@ import {
 export type BanFilter = "all" | "banned" | "active";
 type ListServer = ClientServer | AdminServer;
 
+interface OfficialRegistryRelay {
+  url: string;
+  status: "online" | "unreachable" | "unknown";
+  version?: string;
+}
+
+interface RelayDomainResponse {
+  version?: string;
+}
+
 interface OfficialRegistryDocument {
   relays?: string[];
 }
 
-const OFFICIAL_REGISTRY_URL =
+const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal/main/registry.json";
+const REPOSITORY_URL = "https://github.com/gosuda/portal";
 
 interface ServerListViewProps {
   title?: string;
@@ -110,7 +123,7 @@ export function ServerListView({
   onLogout,
 }: ServerListViewProps) {
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<string[] | null>(null);
+  const [officialRegistryRelays, setOfficialRegistryRelays] = useState<OfficialRegistryRelay[] | null>(null);
   const [officialRegistryFailed, setOfficialRegistryFailed] = useState(false);
   const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
     new Set()
@@ -193,9 +206,31 @@ export function ServerListView({
 
     let cancelled = false;
 
+    const loadRelayVersion = async (
+      relayURL: string
+    ): Promise<OfficialRegistryRelay> => {
+      const trimmedURL = relayURL.trim();
+      if (trimmedURL === "") {
+        return { url: relayURL, status: "unknown", version: "" };
+      }
+
+      try {
+        const domainURL = new URL(API_PATHS.sdk.domain, trimmedURL).toString();
+        const domain = await apiClient.get<RelayDomainResponse>(domainURL);
+        return {
+          url: trimmedURL,
+          status: "online",
+          version:
+            typeof domain?.version === "string" ? domain.version.trim() : "",
+        };
+      } catch {
+        return { url: trimmedURL, status: "unreachable", version: "" };
+      }
+    };
+
     const loadOfficialRegistry = async () => {
       try {
-        const response = await fetch(OFFICIAL_REGISTRY_URL, {
+        const response = await fetch(OFFICIAL_REGISTRY_SOURCE_URL, {
           headers: { Accept: "application/json" },
         });
         if (!response.ok) {
@@ -206,15 +241,19 @@ export function ServerListView({
           return;
         }
 
+        const relayURLs = Array.isArray(document.relays)
+          ? document.relays.filter(
+              (relay): relay is string =>
+                typeof relay === "string" && relay.trim().length > 0
+            )
+          : [];
+        const relays = await Promise.all(relayURLs.map(loadRelayVersion));
+        if (cancelled) {
+          return;
+        }
+
         setOfficialRegistryFailed(false);
-        setOfficialRegistryRelays(
-          Array.isArray(document.relays)
-            ? document.relays.filter(
-                (relay): relay is string =>
-                  typeof relay === "string" && relay.trim().length > 0
-              )
-            : []
-        );
+        setOfficialRegistryRelays(relays);
       } catch (error) {
         if (!cancelled) {
           console.error("Failed to load official registry", error);
@@ -234,7 +273,7 @@ export function ServerListView({
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
-  const officialRegistryURL = OFFICIAL_REGISTRY_URL;
+  const officialRegistryURL = OFFICIAL_REGISTRY_SOURCE_URL;
   const officialRegistryAvailable =
     officialRegistryRelays !== null && officialRegistryRelays.length > 0;
 
@@ -458,92 +497,137 @@ export function ServerListView({
       setShowFilterModal={isAdmin ? setShowFilterModal : undefined}
     />
   );
+  const publicFooter = (
+    <footer className="w-full bg-secondary/35">
+      <div className="flex w-full flex-col gap-6 px-6 py-8 sm:px-8 md:flex-row md:items-end md:justify-between lg:px-10">
+        <div className="space-y-1.5">
+          <a
+            href={ROUTE_PATHS.home}
+            className="inline-block text-lg font-bold tracking-tight text-foreground transition-colors hover:text-primary"
+          >
+            PORTAL
+          </a>
+          <p className="text-sm text-text-muted">
+            Public relay index and localhost tunnel launcher.
+          </p>
+        </div>
+
+        <nav
+          aria-label="Footer"
+          className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-text-muted md:justify-end"
+        >
+          <a href={ROUTE_PATHS.admin} className="transition-colors hover:text-foreground">
+            Admin
+          </a>
+          <a
+            href={REPOSITORY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="transition-colors hover:text-foreground"
+          >
+            Source
+          </a>
+        </nav>
+      </div>
+    </footer>
+  );
 
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
       <div className="flex h-full grow flex-col">
-        <div className="flex flex-1 justify-center">
-          <div className="flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
-            {isAdmin ? (
-              <>
-                <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
-                  <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1">{searchBar}</div>
+        {isAdmin ? (
+          <>
+            <div className="sticky top-0 z-10 w-full bg-background pb-4 pt-5">
+              <div className="flex w-full flex-col px-4 sm:px-6 lg:px-8">
+                <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">{searchBar}</div>
+                </div>
+                <div className="mt-4 hidden flex-wrap items-center gap-6 px-4 sm:flex sm:px-6">
+                  {adminFilterControls}
+                </div>
+                {onApprovalModeChange && (
+                  <div className="mt-4 flex items-center gap-3 px-4 sm:hidden">
+                    <span className="text-sm font-medium text-text-muted">
+                      Approval
+                    </span>
+                    <ApprovalModeToggle
+                      approvalMode={approvalMode}
+                      onApprovalModeChange={onApprovalModeChange}
+                    />
                   </div>
-                  <div className="hidden sm:flex flex-wrap items-center gap-6 mt-4 px-4 sm:px-6">
-                    {adminFilterControls}
+                )}
+              </div>
+            </div>
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
+              <main className="z-0 flex-1">{serverGrid}</main>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="sticky top-0 z-20 w-full bg-background/95 pt-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <div className="flex w-full flex-col px-6 sm:px-8 lg:px-10">
+                <Header
+                  title={title}
+                  isAdmin={isAdmin}
+                  onLogout={onLogout}
+                />
+              </div>
+            </div>
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
+              <main className="z-0 flex-1 pb-14">
+                <section className="border-b border-border/80 px-4 pt-6 sm:px-6 md:px-8">
+                  <LandingHero />
+                </section>
+
+                <section
+                  id="live-servers"
+                  aria-labelledby="live-servers-title"
+                  className="scroll-mt-24 min-h-[34rem] border-b border-border/80 px-4 py-8 sm:min-h-[36rem] sm:px-6 md:px-8"
+                >
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
+                      Live apps
+                    </p>
+                    <h2
+                      id="live-servers-title"
+                      className="text-3xl font-semibold tracking-tight text-foreground"
+                    >
+                      Browse live apps
+                    </h2>
                   </div>
-                  {onApprovalModeChange && (
-                    <div className="sm:hidden flex items-center gap-3 mt-4 px-4">
-                      <span className="text-sm font-medium text-text-muted">
-                        Approval
-                      </span>
-                      <ApprovalModeToggle
-                        approvalMode={approvalMode}
-                        onApprovalModeChange={onApprovalModeChange}
-                      />
+
+                  {serverRows.length > 0 ? (
+                    <div className="mt-6">
+                      {searchBar}
+                      <div className="px-1 pt-3 text-sm text-text-muted">
+                        {filteredServers.length.toLocaleString()} services visible
+                      </div>
+                      {serverGrid}
+                    </div>
+                  ) : (
+                    <div className="mt-6 flex min-h-[22rem] flex-col">
+                      {searchBar}
+                      <div className="px-1 pt-3 text-sm text-text-muted">
+                        0 services visible
+                      </div>
+                      <div className="flex flex-1 items-center justify-center py-12 text-center">
+                        <p className="text-lg text-text-muted">
+                          No servers match these filters
+                        </p>
+                      </div>
                     </div>
                   )}
-                </div>
-                <main className="z-0 flex-1">{serverGrid}</main>
-              </>
-            ) : (
-              <>
-                <div className="sticky top-0 z-20 bg-background/95 pt-5">
-                  <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
-                </div>
-                <main className="z-0 flex-1 px-4 pb-14 pt-6 sm:px-6">
-                  <LandingHero />
+                </section>
 
-                  <section
-                    id="live-servers"
-                    aria-labelledby="live-servers-title"
-                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
-                  >
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
-                        Live apps
-                      </p>
-                      <h2
-                        id="live-servers-title"
-                        className="text-3xl font-semibold tracking-tight text-foreground"
-                      >
-                        Browse live apps
-                      </h2>
-                    </div>
-
-                    {serverRows.length > 0 ? (
-                      <div className="mt-6 border-t border-border pt-6">
-                        {searchBar}
-                        <div className="px-1 pt-3 text-sm text-text-muted">
-                          {filteredServers.length.toLocaleString()} services
-                          visible
-                        </div>
-                        {serverGrid}
-                      </div>
-                    ) : (
-                      <div className="mt-6">
-                        {searchBar}
-                        <div className="px-1 pt-3 text-sm text-text-muted">
-                          0 services visible
-                        </div>
-                        <div className="py-12 text-center">
-                          <p className="text-lg text-text-muted">
-                            No servers match these filters
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </section>
-
-                  <section
-                    id="official-registry"
-                    aria-labelledby="official-registry-title"
-                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
-                  >
+                <section
+                  id="official-registry"
+                  aria-labelledby="official-registry-title"
+                  className="scroll-mt-24 px-4 py-8 sm:px-6 md:px-8"
+                >
+                  <div className="rounded-[1.75rem] border border-border/80 bg-secondary/35 p-5 sm:p-6">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="space-y-2">
+                      <div className="space-y-1.5">
                         <h2
                           id="official-registry-title"
                           className="text-2xl font-semibold tracking-tight text-foreground"
@@ -551,64 +635,81 @@ export function ServerListView({
                           Official registry
                         </h2>
                         <p className="max-w-2xl text-sm leading-6 text-text-muted">
-                          Portal reads default public relays from this registry.
+                          Trusted public relays provided by the community.
                         </p>
                       </div>
                       <a
                         href={officialRegistryURL}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex h-11 items-center justify-center rounded-full border border-border px-4 text-sm font-semibold text-foreground transition-colors hover:border-foreground"
+                        className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
                       >
                         Open registry.json
                       </a>
                     </div>
 
-                    <div className="mt-5">
-                      <div className="rounded-2xl border border-border bg-background px-4 py-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-muted">
-                            Relays
-                          </p>
-                          {officialRegistryAvailable && (
-                            <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold text-text-muted">
-                              {officialRegistryRelays.length}
-                            </span>
-                          )}
-                        </div>
+                    {officialRegistryRelays === null && !officialRegistryFailed ? (
+                      <p className="mt-6 text-sm text-text-muted">
+                        Loading official registry...
+                      </p>
+                    ) : officialRegistryAvailable ? (
+                      <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {officialRegistryRelays.map((relay) => {
+                          const statusLabel = {
+                            online: "ONLINE",
+                            unreachable: "OFFLINE",
+                            unknown: "UNKNOWN",
+                          }[relay.status];
+                          const statusClass = {
+                            online:
+                              "bg-primary/12 text-primary",
+                            unreachable:
+                              "bg-secondary text-text-muted",
+                            unknown:
+                              "bg-secondary text-text-muted",
+                          }[relay.status];
 
-                        {officialRegistryRelays === null && !officialRegistryFailed ? (
-                          <p className="mt-3 text-sm text-text-muted">
-                            Loading official registry...
-                          </p>
-                        ) : officialRegistryAvailable &&
-                          officialRegistryRelays.length > 0 ? (
-                          <div className="mt-3 space-y-1.5">
-                            {officialRegistryRelays.map((relay) => (
+                          return (
+                            <div
+                              key={relay.url}
+                              className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                            >
                               <a
-                                key={relay}
-                                href={relay}
+                                href={relay.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="block overflow-x-auto whitespace-nowrap font-mono text-sm text-foreground underline-offset-4 hover:underline"
+                                className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[13px] text-foreground underline-offset-4 hover:underline sm:text-sm"
                               >
-                                {relay}
+                                {relay.url}
                               </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="mt-3 text-sm text-text-muted">
-                            Registry entries are unavailable right now.
-                          </p>
-                        )}
+                              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${statusClass}`}
+                                >
+                                  {statusLabel}
+                                </span>
+                                {relay.version && (
+                                  <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
+                                    SDK {relay.version}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    </div>
-                  </section>
-                </main>
-              </>
-            )}
-          </div>
-        </div>
+                    ) : (
+                      <p className="mt-6 text-sm text-text-muted">
+                        Registry entries are unavailable right now.
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </main>
+            </div>
+            {publicFooter}
+          </>
+        )}
       </div>
 
       {isAdmin && (

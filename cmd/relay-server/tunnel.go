@@ -126,7 +126,7 @@ case ":$PATH:" in
 esac
 
 echo "Next step:" >&2
-echo "  portal expose --relays $BASE_URL 3000" >&2
+echo "  portal expose 3000 --relays $BASE_URL" >&2
 `
 
 const installPowerShellTemplate = `$ErrorActionPreference = "Stop"
@@ -191,7 +191,7 @@ try {
 
     Write-Host "Installed portal to $InstallPath"
     Write-Host "Next step:"
-    Write-Host "  portal expose --relays $BaseUrl 3000"
+    Write-Host "  portal expose 3000 --relays $BaseUrl"
 } finally {
     [System.Net.ServicePointManager]::SecurityProtocol = $OriginalSecurityProtocol
     if ($WorkDir -and (Test-Path $WorkDir)) {

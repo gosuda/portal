@@ -156,6 +156,8 @@ func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.D
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
 	if r.Method != http.MethodGet {
 		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return

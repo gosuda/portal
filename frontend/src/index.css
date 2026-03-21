@@ -1,11 +1,11 @@
-@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Open+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-family-display: "Manrope", sans-serif;
-  --font-family-sans: "Public Sans", sans-serif;
+  --font-family-sans: "Open Sans", sans-serif;
 
   --radius: 0.875rem;
   --radius-lg: 1.25rem;
@@ -150,6 +150,12 @@
     font-family: var(--font-family-sans);
   }
 
+  input,
+  textarea,
+  select {
+    font-family: var(--font-family-sans);
+  }
+
   .dark {
     color-scheme: dark;
   }
@@ -169,6 +175,10 @@
   h6 {
     font-family: var(--font-family-display);
     letter-spacing: -0.03em;
+  }
+
+  button {
+    font-family: var(--font-family-display);
   }
 
   a {
