@@ -25,7 +25,6 @@ type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
 	UDPEnabled       bool
-	OwnerAddress     string
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -38,6 +37,7 @@ type ListenerConfig struct {
 	RetryWait        time.Duration
 
 	RegisterBootstraps []string
+	ownerAddress       string
 }
 
 type listenerStatus string
@@ -78,10 +78,6 @@ type Listener struct {
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
 // Only local config validation fails immediately; relay startup runs in the background until ready.
 func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Listener, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	listenerCtx, cancel := context.WithCancel(ctx)
 	readyTarget := utils.IntOrDefault(cfg.ReadyTarget, defaultReadyTarget)
 	leaseTTL := utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
@@ -95,7 +91,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		return nil, err
 	}
 
-	initialBootstraps, err := utils.NormalizeRelayURLs(cfg.RegisterBootstraps)
+	initialBootstraps, err := utils.NormalizeRelayURLs(cfg.RegisterBootstraps...)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("normalize bootstraps: %w", err)
@@ -299,27 +295,6 @@ func (l *Listener) PublicURL() string {
 	}).String()
 }
 
-func (l *Listener) ActiveSessions() int {
-	if l == nil || l.stream == nil {
-		return 0
-	}
-	return l.stream.ActiveSessions()
-}
-
-func (l *Listener) AcceptDatagram() (types.DatagramFrame, error) {
-	if l == nil || !l.activeSupportsDatagram() || l.datagram == nil {
-		return types.DatagramFrame{}, net.ErrClosed
-	}
-	return l.datagram.Accept(l.doneCh)
-}
-
-func (l *Listener) SendDatagram(flowID uint32, payload []byte) error {
-	if l == nil || !l.activeSupportsDatagram() || l.datagram == nil {
-		return net.ErrClosed
-	}
-	return l.datagram.Send(flowID, payload)
-}
-
 func (l *Listener) UDPAddr() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -327,14 +302,14 @@ func (l *Listener) UDPAddr() string {
 }
 
 func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) {
-	if l == nil || !l.activeSupportsDatagram() {
+	if l.datagram == nil {
 		return transport.ClientDatagramState{}, false
 	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.api == nil || l.leaseID == "" {
+	if l.api == nil || l.leaseID == "" || l.udpAddr == "" {
 		return transport.ClientDatagramState{}, false
 	}
 
@@ -342,63 +317,6 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 		LeaseID:      l.leaseID,
 		ReverseToken: l.api.reverseToken,
 	}, true
-}
-
-func (l *Listener) WaitDatagramReady(ctx context.Context) error {
-	if l == nil || l.datagram == nil {
-		return errors.New("lease does not have udp enabled")
-	}
-	if err := l.WaitRegistered(ctx); err != nil {
-		return err
-	}
-	if !l.activeSupportsDatagram() {
-		return errors.New("relay did not enable udp")
-	}
-	if l.UDPAddr() == "" {
-		return errors.New("lease registration did not expose udp address")
-	}
-
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if l.datagramConnected() {
-			return nil
-		}
-
-		select {
-		case <-l.doneCh:
-			return net.ErrClosed
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func (l *Listener) activeSupportsDatagram() bool {
-	if l == nil || l.datagram == nil {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.udpAddr != ""
-}
-
-func (l *Listener) datagramConnected() bool {
-	return l != nil && l.datagram != nil && l.datagram.Connected()
-}
-
-func (l *Listener) datagramNegotiationState() (registered bool, enabled bool) {
-	if l == nil {
-		return true, false
-	}
-	select {
-	case <-l.registered:
-		return true, l.activeSupportsDatagram()
-	default:
-		return false, false
-	}
 }
 
 func (l *Listener) runRenewLoop(ctx context.Context) {
@@ -517,18 +435,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps 
 	}
 	l.registerOnce.Do(func() { close(l.registered) })
 	return nil
-}
-
-func (l *Listener) SupportsDatagram() bool {
-	return l != nil && l.datagram != nil
-}
-
-func (l *Listener) SupportsStream() bool {
-	return l != nil
-}
-
-func (l *Listener) UDPEnabled() bool {
-	return l != nil && l.datagram != nil
 }
 
 // WaitRegistered blocks until the first successful lease registration or context cancellation.

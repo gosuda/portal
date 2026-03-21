@@ -17,7 +17,6 @@ import (
 
 	"github.com/quic-go/quic-go"
 
-	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
@@ -72,13 +71,6 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 
 	dialTimeout := utils.DurationOrDefault(cfg.DialTimeout, defaultDialTimeout)
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
-	ownerAddress := strings.TrimSpace(cfg.OwnerAddress)
-	if ownerAddress != "" {
-		ownerAddress, err = discovery.NormalizeEVMAddress(ownerAddress)
-		if err != nil {
-			return nil, fmt.Errorf("normalize owner address: %w", err)
-		}
-	}
 
 	return &apiClient{
 		baseURL:        baseURL,
@@ -88,7 +80,7 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		name:           name,
 		reverseToken:   reverseToken,
 		metadata:       cfg.Metadata.Copy(),
-		ownerAddress:   ownerAddress,
+		ownerAddress:   cfg.ownerAddress,
 	}, nil
 }
 

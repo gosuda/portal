@@ -172,7 +172,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
@@ -218,7 +218,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
@@ -288,7 +288,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
 	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.cfg.TrustedProxyCIDRs)
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
 		return
@@ -347,7 +347,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err := stream.OfferConn(conn); err != nil {
 		log.Warn().
 			Err(err).
-			Str("component", "relay-server").
 			Str("lease_id", lease.ID).
 			Str("lease_name", lease.Name).
 			Str("remote_addr", remoteAddr).
@@ -357,7 +356,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	s.registry.Touch(lease.ID, clientIP, time.Now())
 	log.Info().
-		Str("component", "relay-server").
 		Str("lease_id", lease.ID).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", remoteAddr).
@@ -451,7 +449,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	bootstraps, err := utils.NormalizeRelayURLs(req.Bootstraps)
+	bootstraps, err := utils.NormalizeRelayURLs(req.Bootstraps...)
 	if err != nil {
 		return types.RegisterResponse{}, fmt.Errorf("normalize bootstraps: %w", err)
 	}
@@ -525,16 +523,21 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		}
 	}
 
-	responseBootstraps := append([]string(nil), s.cfg.Bootstraps...)
+	responseBootstraps, err := utils.NormalizeRelayURLs(s.cfg.PortalURL)
+	if err != nil {
+		record.Close()
+		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+		return types.RegisterResponse{}, err
+	}
 	if s.DiscoveryEnabled() {
-		responseBootstraps = s.discoveryBootstrapsSnapshot()
+		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, s.discoveryBootstrapsSnapshot()...)...)
 	} else {
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, record.Bootstraps...))
-		if err != nil {
-			record.Close()
-			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-			return types.RegisterResponse{}, err
-		}
+		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, append(s.cfg.Bootstraps, record.Bootstraps...)...)...)
+	}
+	if err != nil {
+		record.Close()
+		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+		return types.RegisterResponse{}, err
 	}
 
 	resp := types.RegisterResponse{

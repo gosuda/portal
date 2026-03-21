@@ -42,10 +42,12 @@ type ServerConfig struct {
 	OwnerPrivateKey       string
 	Bootstraps            []string
 	ACME                  acme.Config
+	APIPort               int
+	SNIPort               int
 	APIListenAddr         string
 	SNIListenAddr         string
 	QUICListenAddr        string
-	TrustedProxyCIDRs     []*net.IPNet
+	TrustedProxyCIDRs     string
 	LeaseTTL              time.Duration
 	ClaimTimeout          time.Duration
 	IdleKeepaliveInterval time.Duration
@@ -70,18 +72,18 @@ type Server struct {
 	ownerIdentity       discovery.Identity
 	cfg                 ServerConfig
 	rootHost            string
+	trustedProxyCIDRs   []*net.IPNet
 	discoveryMu         sync.RWMutex
 	discoveryBootstraps []string
 	shutdownOnce        sync.Once
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
-	if cfg.APIListenAddr == "" {
-		cfg.APIListenAddr = ":4017"
-	}
-	if cfg.SNIListenAddr == "" {
-		cfg.SNIListenAddr = ":443"
-	}
+	cfg.PortalURL = strings.TrimSuffix(strings.TrimSpace(cfg.PortalURL), "/")
+	cfg.APIPort = utils.IntOrDefault(cfg.APIPort, 4017)
+	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
+	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
+	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
 	cfg.LeaseTTL = utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
 	cfg.ClaimTimeout = utils.DurationOrDefault(cfg.ClaimTimeout, defaultClaimTimeout)
 	cfg.IdleKeepaliveInterval = utils.DurationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
@@ -91,16 +93,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
-	if cfg.QUICListenAddr == "" {
-		cfg.QUICListenAddr = cfg.SNIListenAddr
+	cfg.QUICListenAddr = utils.StringOrDefault(cfg.QUICListenAddr, cfg.SNIListenAddr)
+	trustedProxyCIDRs, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
 	}
-	if len(cfg.Bootstraps) > 0 {
-		bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps)
-		if err != nil {
-			return nil, err
-		}
-		cfg.Bootstraps = bootstraps
+	bootstraps, err := utils.NormalizeRelayURLs(cfg.Bootstraps...)
+	if err != nil {
+		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}
+	cfg.Bootstraps = bootstraps
 
 	portMin, portMax := 0, 0
 	if cfg.UDPPortCount > 0 {
@@ -108,25 +110,34 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
 	}
 
-	ownerIdentity := discovery.Identity{}
-	if cfg.DiscoveryEnabled || strings.TrimSpace(cfg.OwnerPrivateKey) != "" {
-		identity, err := discovery.ResolveIdentity(cfg.OwnerPrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("resolve owner identity: %w", err)
+	ownerPrivateKey := strings.TrimSpace(cfg.OwnerPrivateKey)
+	ownerIdentity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	if err != nil {
+		if ownerPrivateKey == "" {
+			return nil, fmt.Errorf("generate relay owner private key: %w", err)
 		}
-		ownerIdentity = identity
-		cfg.OwnerPrivateKey = identity.PrivateKey
+		return nil, fmt.Errorf("resolve owner identity: %w", err)
 	}
+	if ownerPrivateKey == "" {
+		log.Warn().
+			Str("owner_address", ownerIdentity.Address).
+			Str("owner_private_key", ownerIdentity.PrivateKey).
+			Msg("generated relay owner private key; set OWNER_PRIVATE_KEY unique identity")
+	}
+	cfg.OwnerPrivateKey = ""
 
-	registry := newLeaseRegistry(policy.NewRuntime())
+	runtime := policy.NewRuntime()
+	runtime.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
+	registry := newLeaseRegistry(runtime)
 	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 
 	s := &Server{
-		cfg:           cfg,
-		rootHost:      rootHost,
-		registry:      registry,
-		ports:         ports,
-		ownerIdentity: ownerIdentity,
+		cfg:               cfg,
+		rootHost:          rootHost,
+		registry:          registry,
+		ports:             ports,
+		ownerIdentity:     ownerIdentity,
+		trustedProxyCIDRs: trustedProxyCIDRs,
 	}
 
 	// Tear down all lease resources when leases expire via TTL janitor.
@@ -280,11 +291,18 @@ func (s *Server) DiscoveryEnabled() bool {
 	return s != nil && s.cfg.DiscoveryEnabled
 }
 
-func (s *Server) OwnerIdentity() discovery.Identity {
+func (s *Server) PortalURL() string {
 	if s == nil {
-		return discovery.Identity{}
+		return ""
 	}
-	return s.ownerIdentity
+	return s.cfg.PortalURL
+}
+
+func (s *Server) RootHost() string {
+	if s == nil {
+		return ""
+	}
+	return s.rootHost
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
@@ -501,7 +519,6 @@ func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error
 	s.group.Go(func() error { return s.runQUICTunnelListener(listener) })
 
 	log.Info().
-		Str("component", "relay-server").
 		Str("internal_quic_tunnel_addr", listener.Addr().String()).
 		Msg("internal quic tunnel listener started")
 	return nil
@@ -592,7 +609,6 @@ func (s *Server) runDiscoveryLoop(ctx context.Context) error {
 						Msg("merge discovered bootstraps failed")
 				} else if len(added) > 0 {
 					log.Info().
-						Str("component", "relay-server").
 						Int("peer_count", len(peers)).
 						Int("added_count", len(added)).
 						Int("total_bootstrap_count", len(s.discoveryBootstrapsSnapshot())).

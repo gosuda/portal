@@ -133,7 +133,6 @@ func (b *RelayStream) watchSession(session *relaySession) {
 	}
 	readyCount = len(b.ready)
 	log.Info().
-		Str("component", "relay-server").
 		Str("lease_id", b.leaseID).
 		Str("remote_addr", session.remoteAddrString()).
 		Int("ready", readyCount).

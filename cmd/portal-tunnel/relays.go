@@ -14,14 +14,97 @@ import (
 
 	"github.com/gosuda/portal/v2/sdk"
 	"github.com/gosuda/portal/v2/types"
-	"github.com/gosuda/portal/v2/utils"
 )
 
-func proxyRelayConnections(ctx context.Context, relayListener net.Listener, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
-	logger := log.With().Str("component", "portal-tunnel").Logger()
+func proxyExposure(ctx context.Context, exposure *sdk.Exposure, serviceName string) error {
+	defer exposure.Close()
+	if len(exposure.ActiveRelayURLs()) == 0 {
+		return errors.New("no relay URLs provided")
+	}
 
+	tcpTarget := exposure.TargetAddr
+	udpTarget := exposure.UDPAddr
+	udpEnabled := udpTarget != ""
+
+	log.Info().
+		Str("release_version", types.ReleaseVersion).
+		Str("tcp_target", tcpTarget).
+		Str("service_name", serviceName).
+		Strs("relays", exposure.ActiveRelayURLs()).
+		Msg("starting portal tunnel")
+	if udpEnabled {
+		log.Info().
+			Str("udp_target", udpTarget).
+			Str("service_name", serviceName).
+			Msg("udp relay enabled")
+	}
+
+	var connWG sync.WaitGroup
+	var connCount atomic.Int64
+	var udpErrCh chan error
+
+	if udpEnabled {
+		udpErrCh = make(chan error, 1)
+		go func() {
+			if err := runUDPProxy(ctx, exposure, udpTarget); err != nil && ctx.Err() == nil {
+				udpErrCh <- err
+				_ = exposure.Close()
+			}
+		}()
+	}
+
+	go func() {
+		<-ctx.Done()
+		_ = exposure.Close()
+	}()
+
+	waitErr := proxyRelayConnections(ctx, exposure, tcpTarget, &connWG, &connCount)
+	if waitErr != nil {
+		_ = exposure.Close()
+	}
+
+	var udpErr error
+	if udpErrCh != nil {
+		select {
+		case udpErr = <-udpErrCh:
+		default:
+		}
+	}
+
+	closeErr := exposure.Close()
+	if waitErr != nil {
+		log.Error().Err(waitErr).Msg("relay supervisor exited with error")
+	}
+	if udpErr != nil {
+		log.Error().Err(udpErr).Msg("udp proxy exited with error")
+	}
+	if closeErr != nil {
+		log.Error().Err(closeErr).Msg("relay shutdown failed")
+	}
+
+	if ctx.Err() != nil {
+		log.Info().Msg("tunnel shutting down")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		connWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		log.Warn().Msg("tunnel shutdown timeout; connections still active")
+	}
+
+	log.Info().Msg("tunnel shutdown complete")
+	return errors.Join(waitErr, udpErr, closeErr)
+}
+
+func proxyRelayConnections(ctx context.Context, exposure *sdk.Exposure, localAddr string, connWG *sync.WaitGroup, connCount *atomic.Int64) error {
 	for {
-		relayConn, err := relayListener.Accept()
+		relayConn, err := exposure.Accept()
 		if err != nil {
 			switch {
 			case ctx.Err() != nil || errors.Is(err, context.Canceled):
@@ -34,7 +117,7 @@ func proxyRelayConnections(ctx context.Context, relayListener net.Listener, loca
 		}
 
 		connID := connCount.Add(1)
-		logger.Info().
+		log.Info().
 			Int64("conn_id", connID).
 			Str("remote_addr", relayConn.RemoteAddr().String()).
 			Msg("accepted relay connection")
@@ -43,9 +126,9 @@ func proxyRelayConnections(ctx context.Context, relayListener net.Listener, loca
 		go func(connID int64, relayConn net.Conn) {
 			defer connWG.Done()
 			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-				logger.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
+				log.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
 			}
-			logger.Info().Int64("conn_id", connID).Msg("proxy connection closed")
+			log.Info().Int64("conn_id", connID).Msg("proxy connection closed")
 		}(connID, relayConn)
 	}
 }
@@ -60,13 +143,8 @@ var bufferPool = sync.Pool{
 func proxyConnection(ctx context.Context, localAddr string, relayConn net.Conn) error {
 	defer relayConn.Close()
 
-	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
-	if err != nil {
-		return fmt.Errorf("invalid target %q: %w", localAddr, err)
-	}
-
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	localConn, err := dialer.DialContext(ctx, "tcp", targetAddr)
+	localConn, err := dialer.DialContext(ctx, "tcp", localAddr)
 	if err != nil {
 		return writeEmptyHTTPResponse(relayConn)
 	}
@@ -138,8 +216,6 @@ func writeEmptyHTTPResponse(conn net.Conn) error {
 // runUDPProxy waits for the exposure datagram plane and proxies it to the
 // configured local UDP target.
 func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) error {
-	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
-
 	udpAddrs, err := exposure.WaitDatagramReady(ctx)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
@@ -155,7 +231,7 @@ func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) 
 	}
 
 	for _, udpAddr := range udpAddrs {
-		logger.Info().
+		log.Info().
 			Str("udp_addr", udpAddr).
 			Msg("UDP tunnel ready")
 	}
@@ -166,16 +242,9 @@ func runUDPProxy(ctx context.Context, exposure *sdk.Exposure, udpTarget string) 
 // proxyExposureDatagrams receives datagrams from the exposure datagram plane
 // and forwards them to the local UDP service, relaying responses back.
 func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAddr string) error {
-	logger := log.With().Str("component", "portal-tunnel-udp").Logger()
-
-	targetAddr, err := utils.NormalizeTargetAddr(localAddr)
+	resolvedAddr, err := net.ResolveUDPAddr("udp", localAddr)
 	if err != nil {
-		return fmt.Errorf("invalid --udp-addr value %q: %w", localAddr, err)
-	}
-
-	resolvedAddr, err := net.ResolveUDPAddr("udp", targetAddr)
-	if err != nil {
-		return fmt.Errorf("resolve udp addr %q: %w", targetAddr, err)
+		return fmt.Errorf("resolve udp addr %q: %w", localAddr, err)
 	}
 
 	type flowKey struct {
@@ -260,7 +329,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 					if ctx.Err() != nil {
 						return
 					}
-					logger.Debug().
+					log.Debug().
 						Err(err).
 						Uint32("flow_id", key.flowID).
 						Str("lease_id", key.leaseID).
@@ -282,7 +351,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 				mu.Unlock()
 
 				if sendErr := exposure.SendDatagram(replyFrame); sendErr != nil {
-					logger.Debug().
+					log.Debug().
 						Err(sendErr).
 						Uint32("flow_id", key.flowID).
 						Str("lease_id", key.leaseID).
@@ -296,7 +365,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		return localConn, nil
 	}
 
-	logger.Info().Str("target", targetAddr).Msg("udp proxy loop started, waiting for datagrams")
+	log.Info().Str("target", localAddr).Msg("udp proxy loop started, waiting for datagrams")
 	for {
 		frame, err := exposure.AcceptDatagram()
 		if err != nil {
@@ -309,18 +378,18 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			return fmt.Errorf("accept datagram: %w", err)
 		}
 
-		logger.Debug().
+		log.Debug().
 			Uint32("flow_id", frame.FlowID).
 			Int("bytes", len(frame.Payload)).
 			Str("lease_id", frame.LeaseID).
 			Str("relay_url", frame.RelayURL).
 			Str("udp_addr", frame.UDPAddr).
-			Str("target", targetAddr).
+			Str("target", localAddr).
 			Msg("datagram received from relay, forwarding to local")
 
 		localConn, err := getOrCreateFlow(frame)
 		if err != nil {
-			logger.Warn().
+			log.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
 				Str("lease_id", frame.LeaseID).
@@ -330,7 +399,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		}
 
 		if _, err := localConn.Write(frame.Payload); err != nil {
-			logger.Warn().
+			log.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
 				Str("lease_id", frame.LeaseID).

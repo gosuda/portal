@@ -13,16 +13,17 @@ Architecture, product behavior, and design rationale belong in `docs/architectur
 
 ## Project Principles
 
-- No wrapper functions or helpers without demonstrated value.
-- Prefer fewer concepts and direct code over extra layers, facades, and indirection.
-- Prefer flattening and merging nearby responsibilities over splitting files or packages by default.
-- Remove dead fields, dead methods, dead config, and stale state while touching nearby code.
-- Avoid duplicate normalization, copying, and caching unless aliasing or trust boundaries require it.
-- Keep stable shared contracts, shared constants, and public paths in `types/`, not runtime state, package-local logic, or generic helpers.
+- When caller and callee are both local and no real boundary exists, change both directly; do not preserve local call shapes.
+- If a field, method, wrapper, or abstraction has no clear, current use and does not protect a real boundary, remove it immediately.
+- No wrapper functions or helpers unless they remove real coupling or protect a real boundary.
+- Prefer direct code over layers, facades, and indirection.
+- Prefer flattening and merging nearby responsibilities over splitting by default.
+- Remove dead fields, methods, config, and stale state while touching nearby code.
+- Do not duplicate normalization, validation, or defaulting logic; keep it in a single real owner.
 - Keep shared stateless transforms in `utils/`; keep stateful and domain-shaped logic with the real owner.
-- Resolve complexity in the lowest coherent owner and expose only the minimum necessary surface upward.
-- Shared runtime logic should live in one real owner and be reused, not mirrored by parallel helpers.
-- Prefer not preserving backward compatibility by default, but ask when breaking it may cause real downstream problems.
+- Keep stable shared contracts, constants, and public paths in `types/`, not in runtime or helpers.
+- Resolve complexity in the lowest coherent owner and expose only the minimum surface upward.
+- Shared runtime logic must live in one real owner and be reused, not mirrored.
 
 ## Verification
 

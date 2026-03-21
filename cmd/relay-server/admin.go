@@ -21,8 +21,6 @@ import (
 
 const cookieName = "portal_admin"
 
-var adminSettingsPath = "admin_settings.json"
-
 type adminAuth struct {
 	sessions  map[string]time.Time
 	secretKey string
@@ -38,7 +36,6 @@ func newAdminAuth(secretKey string) *adminAuth {
 		}
 		secretKey = generated
 		log.Warn().
-			Str("component", "relay-server-admin").
 			Str("admin_secret_key", secretKey).
 			Msg("generated random admin secret key because ADMIN_SECRET_KEY was empty")
 	}
@@ -100,8 +97,8 @@ func (a *adminAuth) cleanupExpiredSessionsLocked() {
 	}
 }
 
-func loadAdminState(runtime *policy.Runtime) error {
-	root, name, err := openSettingsRoot(adminSettingsPath)
+func loadAdminState(path string, runtime *policy.Runtime) error {
+	root, name, err := openSettingsRoot(path)
 	if err != nil {
 		return err
 	}
@@ -188,7 +185,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 	}
 	writeOK := func() {
-		saveAdminState(runtime)
+		f.saveAdminState(runtime)
 		utils.WriteAPIOK(w, http.StatusOK)
 	}
 
@@ -221,7 +218,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		runtime.SetUDPPolicy(req.Enabled, req.MaxLeases)
-		saveAdminState(runtime)
+		f.saveAdminState(runtime)
 		utils.WriteAPIData(w, http.StatusOK, types.AdminUDPSettingsResponse{
 			Enabled:   runtime.IsUDPEnabled(),
 			MaxLeases: runtime.UDPMaxLeases(),
@@ -240,7 +237,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidMode, "invalid mode (must be 'auto' or 'manual')")
 			return
 		}
-		saveAdminState(runtime)
+		f.saveAdminState(runtime)
 		utils.WriteAPIData(w, http.StatusOK, types.AdminApprovalModeResponse{
 			ApprovalMode: string(runtime.Approver().Mode()),
 		})
@@ -398,14 +395,21 @@ func (f *Frontend) isAuthenticated(r *http.Request) bool {
 	return f.auth.ValidateSession(cookie.Value)
 }
 
-func saveAdminState(runtime *policy.Runtime) {
+func (f *Frontend) saveAdminState(runtime *policy.Runtime) {
+	if f == nil {
+		return
+	}
+	saveAdminState(f.adminSettingsPath, runtime)
+}
+
+func saveAdminState(path string, runtime *policy.Runtime) {
 	payload := persistedStateFromRuntime(runtime)
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return
 	}
 
-	root, name, err := openSettingsRoot(adminSettingsPath)
+	root, name, err := openSettingsRoot(path)
 	if err != nil {
 		return
 	}
@@ -420,12 +424,14 @@ type persistedAdminState struct {
 	BannedLeases   []string         `json:"banned_leases,omitempty"`
 	BannedIPs      []string         `json:"banned_ips,omitempty"`
 	LeaseBPS       map[string]int64 `json:"lease_bps,omitempty"`
-	UDPEnabled     bool             `json:"udp_enabled"`
-	UDPMaxLeases   int              `json:"udp_max_leases"`
+	UDPEnabled     *bool            `json:"udp_enabled,omitempty"`
+	UDPMaxLeases   *int             `json:"udp_max_leases,omitempty"`
 }
 
 func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
 	approver := runtime.Approver()
+	udpEnabled := runtime.IsUDPEnabled()
+	udpMaxLeases := runtime.UDPMaxLeases()
 	return persistedAdminState{
 		ApprovalMode:   string(approver.Mode()),
 		ApprovedLeases: approver.ApprovedLeases(),
@@ -433,8 +439,8 @@ func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
 		BannedLeases:   runtime.BannedLeases(),
 		BannedIPs:      runtime.IPFilter().BannedIPs(),
 		LeaseBPS:       runtime.BPSManager().LeaseBPSLimits(),
-		UDPEnabled:     runtime.IsUDPEnabled(),
-		UDPMaxLeases:   runtime.UDPMaxLeases(),
+		UDPEnabled:     &udpEnabled,
+		UDPMaxLeases:   &udpMaxLeases,
 	}
 }
 
@@ -451,7 +457,14 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.SetBannedLeases(s.BannedLeases)
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetLeaseBPSLimits(s.LeaseBPS)
-	runtime.SetUDPPolicy(s.UDPEnabled, s.UDPMaxLeases)
+	switch {
+	case s.UDPEnabled != nil && s.UDPMaxLeases != nil:
+		runtime.SetUDPPolicy(*s.UDPEnabled, *s.UDPMaxLeases)
+	case s.UDPEnabled != nil:
+		runtime.SetUDPPolicy(*s.UDPEnabled, runtime.UDPMaxLeases())
+	case s.UDPMaxLeases != nil:
+		runtime.SetUDPPolicy(runtime.IsUDPEnabled(), *s.UDPMaxLeases)
+	}
 	return nil
 }
 

@@ -11,10 +11,10 @@ import (
 func TestNormalizeRelayURLs(t *testing.T) {
 	t.Parallel()
 
-	got, err := NormalizeRelayURLs([]string{
+	got, err := NormalizeRelayURLs(
 		" localhost:4017 , https://relay.example.com/base/relay?x=1#frag ",
 		"https://relay.example.com/base",
-	})
+	)
 	if err != nil {
 		t.Fatalf("NormalizeRelayURLs() error = %v", err)
 	}
@@ -97,23 +97,6 @@ func TestFormatLastSeen(t *testing.T) {
 
 	if got := FormatLastSeen(65 * time.Second); got != "1m 5s" {
 		t.Fatalf("FormatLastSeen() = %q, want %q", got, "1m 5s")
-	}
-}
-
-func TestFormatISOTime(t *testing.T) {
-	t.Parallel()
-
-	ts := time.Date(2026, time.March, 17, 9, 10, 11, 0, time.FixedZone("KST", 9*60*60))
-	if got := FormatISOTime(ts); got != "2026-03-17T00:10:11Z" {
-		t.Fatalf("FormatISOTime() = %q, want %q", got, "2026-03-17T00:10:11Z")
-	}
-}
-
-func TestLeaseLink(t *testing.T) {
-	t.Parallel()
-
-	if got := LeaseLink("demo.example.com"); got != "https://demo.example.com/" {
-		t.Fatalf("LeaseLink() = %q, want %q", got, "https://demo.example.com/")
 	}
 }
 

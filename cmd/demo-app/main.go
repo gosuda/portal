@@ -5,10 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -18,71 +17,144 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-var (
-	flagRelayURLs     string
-	flagDefaultRelays bool
-	flagAddr          string
-	flagName          string
-	flagDesc          string
-	flagTags          string
-	flagOwner         string
-	flagHide          bool
-	flagThumbnail     string
-)
-
 func main() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
-	logger := log.With().Str("component", "demo-app").Logger()
-
-	flag.StringVar(&flagRelayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set) [env: RELAYS]")
-	flag.BoolVar(&flagDefaultRelays, "default-relays", utils.ParseBoolEnv("DEFAULT_RELAYS", true), "include public registry relays [env: DEFAULT_RELAYS]")
-	flag.StringVar(&flagAddr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
-	flag.StringVar(&flagName, "name", "demo-app", "public hostname prefix (single DNS label)")
-	flag.StringVar(&flagDesc, "description", "Portal demo connectivity app", "lease description")
-	flag.StringVar(&flagTags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
-	flag.StringVar(&flagOwner, "owner", "PortalApp Developer", "lease owner")
-	flag.StringVar(&flagThumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
-	flag.BoolVar(&flagHide, "hide", false, "hide this lease from listings")
-
-	flag.Parse()
-
-	if err := runDemo(); err != nil {
-		logger.Error().Err(err).Msg("demo command failed")
+	log.Logger = log.Output(zerolog.NewConsoleWriter())
+	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
+		"":     runTCPCommand,
+		"tcp":  runTCPCommand,
+		"udp":  runUDPCommand,
+		"help": runHelpCommand,
+	}); err != nil {
+		log.Error().Err(err).Msg("demo command failed")
 		os.Exit(1)
 	}
 }
 
-func runDemo() error {
-	logger := log.With().Str("component", "demo-app").Logger()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGHUP)
+type demoConfig struct {
+	relayURLs     string
+	defaultRelays bool
+	addr          string
+	name          string
+	desc          string
+	tags          string
+	owner         string
+	hide          bool
+	thumbnail     string
+}
+
+func runTCPCommand(args []string) error {
+	cfg := demoConfig{}
+
+	fs := utils.NewFlagSet("demo-app", printTCPUsage)
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.defaultRelays, "default-relays", true, "include public registry relays", "DEFAULT_RELAYS")
+	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
+	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label)")
+	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
+	utils.StringFlag(fs, &cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
+	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
+	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
+	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
+
+	if err := utils.ParseFlagSet(fs, args, printTCPUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "demo-app"); err != nil {
+		printTCPUsage(os.Stderr)
+		return err
+	}
+
+	ctx, stop := utils.SignalContext()
 	defer stop()
 
-	relayURLs := utils.SplitCSV(flagRelayURLs)
+	return runTCPDemo(ctx, cfg)
+}
+
+func runUDPCommand(args []string) error {
+	cfg := demoConfig{}
+	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
+
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.defaultRelays, "default-relays", false, "include public registry relays", "DEFAULT_RELAYS")
+	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
+	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
+	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
+	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
+	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "", "lease thumbnail")
+	utils.BoolFlag(fs, &cfg.hide, "hide", true, "hide this lease from listings")
+
+	if err := utils.ParseFlagSet(fs, args, printUDPUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := utils.RequireNoArgs(fs.Args(), "udp"); err != nil {
+		printUDPUsage(os.Stderr)
+		return err
+	}
+
+	ctx, stop := utils.SignalContext()
+	defer stop()
+
+	return runUDPDemo(ctx, cfg)
+}
+
+func runHelpCommand(args []string) error {
+	if len(args) == 0 {
+		printRootUsage(os.Stdout)
+		return nil
+	}
+	if len(args) > 1 {
+		printRootUsage(os.Stderr)
+		return errors.New("only one help topic is supported")
+	}
+
+	switch args[0] {
+	case "", "help", "-h", "--help":
+		printRootUsage(os.Stdout)
+		return nil
+	case "tcp":
+		printTCPUsage(os.Stdout)
+		return nil
+	case "udp":
+		printUDPUsage(os.Stdout)
+		return nil
+	default:
+		printRootUsage(os.Stderr)
+		return fmt.Errorf("unknown help topic %q", args[0])
+	}
+}
+
+func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:           relayURLs,
-		DefaultRelayEnabled: flagDefaultRelays,
-		Name:                flagName,
+		RelayURLs:           utils.SplitCSV(cfg.relayURLs),
+		DefaultRelayEnabled: cfg.defaultRelays,
+		Name:                cfg.name,
 		Metadata: types.LeaseMetadata{
-			Description: flagDesc,
-			Tags:        utils.SplitCSV(flagTags),
-			Owner:       flagOwner,
-			Thumbnail:   flagThumbnail,
-			Hide:        flagHide,
+			Description: cfg.desc,
+			Tags:        utils.SplitCSV(cfg.tags),
+			Owner:       cfg.owner,
+			Thumbnail:   cfg.thumbnail,
+			Hide:        cfg.hide,
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("exposure listen error: %w", err)
 	}
-	defer exposure.Close()
-	if exposure == nil {
-		logger.Info().Msg("demo app running without relay")
-	}
 
-	flagAddr, err := utils.NormalizeTargetAddr(flagAddr)
+	rawAddr := cfg.addr
+	cfg.addr, err = utils.NormalizeTargetAddr(cfg.addr)
 	if err != nil {
-		return fmt.Errorf("invalid --addr value %q: %w", flagAddr, err)
+		return fmt.Errorf("invalid --addr value %q: %w", rawAddr, err)
 	}
-	if err := exposure.RunHTTP(ctx, newHandler(), flagAddr); err != nil {
+	httpHandler := newHandler()
+	defer exposure.Close()
+	err = exposure.RunHTTP(ctx, httpHandler, cfg.addr)
+	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = nil
 		}
@@ -90,8 +162,118 @@ func runDemo() error {
 	}
 
 	if ctx.Err() != nil {
-		logger.Info().Msg("demo app shutting down")
+		log.Info().Msg("demo app shutting down")
 	}
-	logger.Info().Msg("demo app shutdown complete")
+	log.Info().Msg("demo app shutdown complete")
 	return nil
+}
+
+func runUDPDemo(ctx context.Context, cfg demoConfig) error {
+	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
+		RelayURLs:           utils.SplitCSV(cfg.relayURLs),
+		DefaultRelayEnabled: cfg.defaultRelays,
+		Name:                cfg.name,
+		UDPEnabled:          true,
+		Metadata: types.LeaseMetadata{
+			Description: cfg.desc,
+			Tags:        utils.SplitCSV(cfg.tags),
+			Owner:       cfg.owner,
+			Thumbnail:   cfg.thumbnail,
+			Hide:        cfg.hide,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("exposure listen error: %w", err)
+	}
+	defer exposure.Close()
+
+	udpAddrs, err := exposure.WaitDatagramReady(ctx)
+	if err != nil {
+		return fmt.Errorf("wait for udp readiness: %w", err)
+	}
+	for _, udpAddr := range udpAddrs {
+		log.Info().Str("udp_addr", udpAddr).Msg("demo udp relay ready")
+	}
+
+	go runUDPEchoLoop(ctx, exposure)
+
+	if err := exposure.RunHTTP(ctx, newUDPInfoHandler(exposure), ""); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			err = nil
+		}
+		return err
+	}
+
+	if ctx.Err() != nil {
+		log.Info().Msg("demo udp shutting down")
+	}
+	log.Info().Msg("demo udp shutdown complete")
+	return nil
+}
+
+func runUDPEchoLoop(ctx context.Context, exposure *sdk.Exposure) {
+	for {
+		frame, err := exposure.AcceptDatagram()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Warn().Err(err).Msg("demo udp accept failed")
+			return
+		}
+
+		payload := append([]byte(nil), frame.Payload...)
+		if len(payload) == 0 {
+			payload = []byte("pong")
+		}
+		frame.Payload = payload
+		if err := exposure.SendDatagram(frame); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+			log.Warn().Err(err).Uint32("flow_id", frame.FlowID).Msg("demo udp reply failed")
+			return
+		}
+	}
+}
+
+func printRootUsage(w io.Writer) {
+	utils.WriteCommandUsage(w,
+		[]string{
+			"demo-app [flags]",
+			"demo-app tcp [flags]",
+			"demo-app udp [flags]",
+			"demo-app help",
+		},
+		[]string{
+			"demo-app",
+			"demo-app --name my-app",
+			"demo-app tcp --addr 127.0.0.1:9000",
+			"demo-app udp",
+		},
+	)
+}
+
+func printTCPUsage(w io.Writer) {
+	utils.WriteCommandUsage(w,
+		[]string{
+			"demo-app [flags]",
+			"demo-app tcp [flags]",
+		},
+		[]string{
+			"demo-app",
+			"demo-app --name my-app",
+			"demo-app tcp --addr 127.0.0.1:9000",
+		},
+	)
+}
+
+func printUDPUsage(w io.Writer) {
+	utils.WriteCommandUsage(w,
+		[]string{
+			"demo-app udp [flags]",
+		},
+		[]string{
+			"demo-app udp",
+			"demo-app udp --name my-udp-demo",
+			"demo-app udp --default-relays=true",
+		},
+	)
 }

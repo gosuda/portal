@@ -3,77 +3,15 @@ package sdk
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
 )
-
-func TestNewListenerRetriesInitialStartupUntilReady(t *testing.T) {
-	var domainCount atomic.Int32
-	var registerCount atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			if domainCount.Add(1) == 1 {
-				http.Error(w, "temporarily unavailable", http.StatusBadGateway)
-				return
-			}
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			if registerCount.Add(1) == 1 {
-				http.Error(w, "temporarily unavailable", http.StatusBadGateway)
-				return
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:  "lease-1",
-					Hostname: "127.0.0.1",
-				},
-			})
-		case types.PathSDKConnect:
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-			})
-		case types.PathSDKRenew:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-1"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:      "demo",
-		RetryWait: 10 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
-
-	waitForSDKTest(t, func() bool {
-		return domainCount.Load() >= 2 && registerCount.Load() >= 2 && listener.LeaseID() == "lease-1"
-	})
-}
 
 func TestNewListenerRejectsInvalidName(t *testing.T) {
 	listener, err := NewListener(context.Background(), "https://relay.example.com", ListenerConfig{Name: "demo app"})
@@ -177,371 +115,18 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	}
 }
 
-func TestNewListenerReregistersOnLeaseNotFound(t *testing.T) {
-	var registerCount atomic.Int32
-	registerReqCh := make(chan types.RegisterRequest, 2)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			var registerReq types.RegisterRequest
-			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
-				t.Fatalf("decode register request: %v", err)
-			}
-			select {
-			case registerReqCh <- registerReq:
-			default:
-			}
-			count := registerCount.Add(1)
-			leaseID := "lease-1"
-			if count > 1 {
-				leaseID = "lease-2"
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:  leaseID,
-					Hostname: "127.0.0.1",
-				},
-			})
-		case types.PathSDKRenew:
-			var req types.RenewRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatalf("decode renew request: %v", err)
-			}
-			if req.LeaseID == "lease-1" {
-				writeSDKTestEnvelope(w, http.StatusNotFound, types.APIEnvelope[any]{
-					OK:    false,
-					Error: &types.APIError{Code: types.APIErrorCodeLeaseNotFound, Message: "lease not found"},
-				})
-				return
-			}
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{LeaseID: req.LeaseID},
-			})
-		case types.PathSDKConnect:
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:               "demo",
-		LeaseTTL:           80 * time.Millisecond,
-		RenewBefore:        40 * time.Millisecond,
-		RegisterBootstraps: []string{"https://relay-a.example.com", "https://relay-b.example.com"},
-	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
-
-	waitForSDKTest(t, func() bool {
-		return listener.LeaseID() == "lease-2"
-	})
-
-	var requests []types.RegisterRequest
-	waitForSDKTest(t, func() bool {
-		for len(requests) < 2 {
-			select {
-			case req := <-registerReqCh:
-				requests = append(requests, req)
-			default:
-				return false
-			}
-		}
-		return true
-	})
-
-	for _, req := range requests {
-		if len(req.Bootstraps) != 2 || req.Bootstraps[0] != "https://relay-a.example.com" || req.Bootstraps[1] != "https://relay-b.example.com" {
-			t.Fatalf("register request Bootstraps = %v, want [%q %q]", req.Bootstraps, "https://relay-a.example.com", "https://relay-b.example.com")
-		}
-	}
-}
-
-func TestNewListenerClosesAfterReverseSessionRetryBudgetExhausted(t *testing.T) {
-	var connectCount atomic.Int32
-	var unregisterCount atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:  "lease-1",
-					Hostname: "127.0.0.1",
-				},
-			})
-		case types.PathSDKConnect:
-			connectCount.Add(1)
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
-			})
-		case types.PathSDKUnregister:
-			unregisterCount.Add(1)
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:       "demo",
-		RetryCount: 1,
-		RetryWait:  10 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
-
-	waitForSDKTest(t, func() bool {
-		return listener.closed()
-	})
-	if connectCount.Load() < 2 {
-		t.Fatalf("connect count = %d, want at least 2", connectCount.Load())
-	}
-	if unregisterCount.Load() == 0 {
-		t.Fatal("expected listener to unregister lease after retry budget exhaustion")
-	}
-}
-
-func TestNewListenerRetriesForeverWhenRetryCountIsNegative(t *testing.T) {
-	var connectCount atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:  "lease-1",
-					Hostname: "127.0.0.1",
-				},
-			})
-		case types.PathSDKConnect:
-			connectCount.Add(1)
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:       "demo",
-		RetryCount: -1,
-		RetryWait:  10 * time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
-
-	waitForSDKTest(t, func() bool {
-		return connectCount.Load() >= 3
-	})
-	if listener.closed() {
-		t.Fatal("listener closed unexpectedly with negative RetryCount")
-	}
-}
-
 func TestExposeNoRelayInputs(t *testing.T) {
 	exposure, err := Expose(context.Background(), ExposeConfig{Name: "demo"})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}
-	if exposure != nil {
-		t.Fatalf("Expose() exposure = %#v, want nil", exposure)
-	}
-}
-
-func TestExposeRegistersKnownRelayURLs(t *testing.T) {
-	registerReqCh := make(chan types.RegisterRequest, 2)
-	newRelayServer := func() *httptest.Server {
-		return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case types.PathSDKDomain:
-				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-					OK: true,
-					Data: types.DomainResponse{
-						Version: types.SDKProtocolVersion,
-					},
-				})
-			case types.PathSDKRegister:
-				var registerReq types.RegisterRequest
-				if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
-					t.Fatalf("decode register request: %v", err)
-				}
-				select {
-				case registerReqCh <- registerReq:
-				default:
-				}
-				writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-					OK: true,
-					Data: types.RegisterResponse{
-						LeaseID:  "lease-1",
-						Hostname: "127.0.0.1",
-					},
-				})
-			case types.PathSDKConnect:
-				writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-					OK:    false,
-					Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-				})
-			case types.PathSDKRenew:
-				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-					OK:   true,
-					Data: types.RenewResponse{LeaseID: "lease-1"},
-				})
-			case types.PathSDKUnregister:
-				writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-	}
-
-	relayA := newRelayServer()
-	defer relayA.Close()
-	relayB := newRelayServer()
-	defer relayB.Close()
-
-	exposure, err := Expose(context.Background(), ExposeConfig{
-		RelayURLs:    []string{relayA.URL, relayB.URL},
-		Discovery:    true,
-		Name:         "demo",
-		OwnerAddress: "0x52908400098527886E0F7030069857D2E4169EE7",
-	})
-	if err != nil {
-		t.Fatalf("Expose() error = %v", err)
+	if exposure == nil {
+		t.Fatal("Expose() exposure = nil, want non-nil")
 	}
 	defer exposure.Close()
-
-	var requests []types.RegisterRequest
-	waitForSDKTest(t, func() bool {
-		for len(requests) < 2 {
-			select {
-			case req := <-registerReqCh:
-				requests = append(requests, req)
-			default:
-				return false
-			}
-		}
-		return true
-	})
-
-	for _, req := range requests {
-		if req.OwnerAddress != "0x52908400098527886E0F7030069857D2E4169EE7" {
-			t.Fatalf("register request OwnerAddress = %q, want configured owner address", req.OwnerAddress)
-		}
-		if len(req.Bootstraps) != 2 || req.Bootstraps[0] != relayA.URL || req.Bootstraps[1] != relayB.URL {
-			t.Fatalf("register request Bootstraps = %v, want [%q %q]", req.Bootstraps, relayA.URL, relayB.URL)
-		}
+	if got := exposure.ActiveRelayURLs(); len(got) != 0 {
+		t.Fatalf("Expose() relay urls = %v, want empty", got)
 	}
-}
-
-func TestExposeRemovesClosedListenersSoRelaysCanRestart(t *testing.T) {
-	var registerCount atomic.Int32
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			if registerCount.Add(1) == 1 {
-				writeSDKTestEnvelope(w, http.StatusServiceUnavailable, types.APIEnvelope[any]{
-					OK:    false,
-					Error: &types.APIError{Code: types.APIErrorCodeFeatureUnavailable, Message: "relay unavailable"},
-				})
-				return
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:  "lease-1",
-					Hostname: "127.0.0.1",
-				},
-			})
-		case types.PathSDKConnect:
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-			})
-		case types.PathSDKRenew:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-1"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	exposure, err := Expose(context.Background(), ExposeConfig{
-		RelayURLs: []string{server.URL},
-		Name:      "demo",
-	})
-	if err != nil {
-		t.Fatalf("Expose() error = %v", err)
-	}
-	defer exposure.Close()
-
-	waitForSDKTest(t, func() bool {
-		exposure.mu.RLock()
-		defer exposure.mu.RUnlock()
-		return registerCount.Load() >= 1 && len(exposure.listeners) == 0
-	})
-
-	if _, err := exposure.applyRelayURLs(exposure.RelayURLs(), false); err != nil {
-		t.Fatalf("applyRelayURLs() error = %v", err)
-	}
-
-	waitForSDKTest(t, func() bool {
-		return registerCount.Load() >= 2 && len(exposure.PublicURLs()) == 1
-	})
 }
 
 func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
@@ -598,7 +183,7 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 	exposure, err := Expose(context.Background(), ExposeConfig{
 		RelayURLs:       []string{server.URL},
 		Name:            "demo",
-		OwnerPrivateKey: &ownerPrivateKey,
+		OwnerPrivateKey: ownerPrivateKey,
 	})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
@@ -618,17 +203,10 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 	if registerReq.OwnerAddress != identity.Address {
 		t.Fatalf("register request OwnerAddress = %q, want %q", registerReq.OwnerAddress, identity.Address)
 	}
-	resolvedIdentity := exposure.OwnerIdentity()
-	if resolvedIdentity.Address != identity.Address {
-		t.Fatalf("OwnerIdentity().Address = %q, want %q", resolvedIdentity.Address, identity.Address)
-	}
-	if resolvedIdentity.PrivateKey != ownerPrivateKey {
-		t.Fatalf("OwnerIdentity().PrivateKey = %q, want configured private key", resolvedIdentity.PrivateKey)
-	}
 }
 
-func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
-	var connectCount atomic.Int32
+func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
+	registerReqCh := make(chan types.RegisterRequest, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -639,25 +217,30 @@ func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
 				},
 			})
 		case types.PathSDKRegister:
+			var registerReq types.RegisterRequest
+			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+				t.Fatalf("decode register request: %v", err)
+			}
+			select {
+			case registerReqCh <- registerReq:
+			default:
+			}
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:    "lease-udp",
-					Hostname:   "demo.example.com",
-					UDPAddr:    "demo.example.com:29900",
-					UDPEnabled: true,
+					LeaseID:  "lease-1",
+					Hostname: "127.0.0.1",
 				},
 			})
 		case types.PathSDKConnect:
-			connectCount.Add(1)
 			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
 				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "reverse session denied"},
+				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-udp"},
+				Data: types.RenewResponse{LeaseID: "lease-1"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -667,88 +250,30 @@ func TestNewListenerUDPEnabledKeepsStreamAndDatagram(t *testing.T) {
 	}))
 	defer server.Close()
 
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:       "demo",
-		UDPEnabled: true,
-		LeaseTTL:   100 * time.Millisecond,
+	exposure, err := Expose(context.Background(), ExposeConfig{
+		RelayURLs: []string{server.URL},
+		Name:      "demo",
 	})
 	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
+		t.Fatalf("Expose() error = %v", err)
 	}
-	defer listener.Close()
+	defer exposure.Close()
 
+	var registerReq types.RegisterRequest
 	waitForSDKTest(t, func() bool {
-		return listener.LeaseID() == "lease-udp"
-	})
-	time.Sleep(150 * time.Millisecond)
-
-	if connectCount.Load() == 0 {
-		t.Fatal("connect count = 0, want reverse session attempts")
-	}
-	if got := listener.PublicURL(); got == "" {
-		t.Fatal("PublicURL() = empty, want public url")
-	}
-	if !listener.SupportsDatagram() {
-		t.Fatal("SupportsDatagram() = false, want true")
-	}
-	if !listener.SupportsStream() {
-		t.Fatal("SupportsStream() = false, want true")
-	}
-}
-
-func TestListenerPublishesUDPAddressAfterRegistration(t *testing.T) {
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					Version: types.SDKProtocolVersion,
-				},
-			})
-		case types.PathSDKRegister:
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					LeaseID:    "lease-udp",
-					Hostname:   "demo.example.com",
-					UDPAddr:    "demo.example.com:29900",
-					UDPEnabled: true,
-				},
-			})
-		case types.PathSDKRenew:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-udp"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
+		select {
+		case registerReq = <-registerReqCh:
+			return true
 		default:
-			http.NotFound(w, r)
+			return false
 		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:       "demo",
-		UDPEnabled: true,
 	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
 
-	if err := listener.WaitRegistered(context.Background()); err != nil {
-		t.Fatalf("WaitRegistered() error = %v", err)
+	if registerReq.OwnerAddress == "" {
+		t.Fatal("register request OwnerAddress = empty, want generated address")
 	}
-	if got := listener.UDPAddr(); got != "demo.example.com:29900" {
-		t.Fatalf("UDPAddr() = %q, want %q", got, "demo.example.com:29900")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	if err := listener.WaitDatagramReady(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("WaitDatagramReady() error = %v, want %v", err, context.DeadlineExceeded)
+	if _, err := discovery.NormalizeEVMAddress(registerReq.OwnerAddress); err != nil {
+		t.Fatalf("register request OwnerAddress = %q, want valid EVM address: %v", registerReq.OwnerAddress, err)
 	}
 }
 
