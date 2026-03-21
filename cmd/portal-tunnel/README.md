@@ -19,13 +19,13 @@ portal list
 Custom relay and metadata example:
 
 ```text
-portal expose --name myapp \
+portal expose localhost:8080 \
+  --name myapp \
   --relays https://portal.example.com \
   --description "Service description" \
   --tags tag1,tag2 \
   --thumbnail https://example.com/thumb.png \
-  --owner "Portal Operator" \
-  localhost:8080
+  --owner "Portal Operator"
 ```
 
 ## Commands

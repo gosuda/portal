@@ -1,22 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Open+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Font families */
-  --font-family-display: "Space Grotesk", sans-serif;
-  --font-family-sans: "Noto Sans", sans-serif;
+  --font-family-display: "Manrope", sans-serif;
+  --font-family-sans: "Open Sans", sans-serif;
 
-  /* Border radius */
-  --radius: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
+  --radius: 0.875rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.75rem;
 
-  /* Glass effect tokens */
-  --glass-blur: 12px;
-
-  /* Color mappings */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -38,61 +32,62 @@
   --color-ring: var(--ring);
   --color-green-status: var(--green-status);
   --color-text-muted: var(--text-muted);
-
-  /* Cyberpunk accent colors */
-  --color-accent-orange: var(--accent-orange);
-  --color-accent-magenta: var(--accent-magenta);
-  --color-neon-cyan: var(--neon-cyan);
 }
 
 @layer base {
   :root {
-    /* Light Theme - Clean slate-based design */
-    --background: oklch(97% 0.005 250); /* #F5F7FA */
-    --foreground: oklch(25% 0.02 250); /* Slate 800 #1e293b */
-    --card: oklch(100% 0 0); /* White */
+    --background: oklch(97% 0.005 250);
+    --foreground: oklch(25% 0.02 250);
+    --card: oklch(100% 0 0);
     --card-foreground: oklch(25% 0.02 250);
     --popover: oklch(100% 0 0);
     --popover-foreground: oklch(25% 0.02 250);
-    --primary: oklch(75% 0.14 195); /* #00dbdb cyan - slightly darker for light bg */
+    --primary: oklch(75% 0.14 195);
     --primary-foreground: oklch(100% 0 0);
-    --secondary: oklch(92% 0.01 250); /* Slate 200 */
-    --secondary-foreground: oklch(45% 0.02 250); /* Slate 600 */
-    --muted: oklch(95% 0.005 250); /* Slate 100 */
-    --muted-foreground: oklch(55% 0.03 250); /* Slate 500 #64748b */
+    --secondary: oklch(92% 0.01 250);
+    --secondary-foreground: oklch(45% 0.02 250);
+    --muted: oklch(95% 0.005 250);
+    --muted-foreground: oklch(55% 0.03 250);
     --accent: oklch(92% 0.01 250);
     --accent-foreground: oklch(25% 0.02 250);
-    --destructive: oklch(55% 0.20 25);
+    --destructive: oklch(55% 0.2 25);
     --destructive-foreground: oklch(100% 0 0);
-    --border: oklch(90% 0.01 250); /* Slate 200 border */
-    --input: oklch(95% 0.005 250); /* Slate 100 */
+    --border: oklch(90% 0.01 250);
+    --input: oklch(95% 0.005 250);
     --ring: oklch(75% 0.14 195);
 
-    /* Custom light theme colors */
-    --green-status: oklch(55% 0.16 150); /* Green 600 */
-    --text-muted: oklch(55% 0.03 250); /* Slate 500 */
-    --accent-orange: oklch(60% 0.20 35); /* Orange */
-    --accent-magenta: oklch(50% 0.22 350); /* Magenta */
+    --green-status: oklch(55% 0.16 150);
+    --text-muted: oklch(55% 0.03 250);
+    --accent-orange: oklch(60% 0.2 35);
+    --accent-magenta: oklch(50% 0.22 350);
     --neon-cyan: oklch(75% 0.14 195);
 
-    /* Glass effects - light mode */
-    --glass-bg: oklch(100% 0 0 / 0.7);
-    --glass-bg-hover: oklch(100% 0 0 / 0.9);
-    --glass-border: oklch(100% 0 0 / 0.5);
-    --glass-border-hover: oklch(75% 0.14 195 / 0.3);
-    --shadow-neon: 0 0 10px oklch(75% 0.14 195 / 0.4), 0 0 20px oklch(75% 0.14 195 / 0.2);
-    --shadow-glass: 0 4px 30px oklch(0% 0 0 / 0.05);
+    --hero-grid-dot: oklch(75% 0.14 195 / 0.18);
+    --hero-gradient-start: var(--accent-orange);
+    --hero-gradient-mid: var(--neon-cyan);
+    --hero-gradient-end: var(--accent-magenta);
+    --hero-terminal-bg:
+      linear-gradient(160deg, oklch(19% 0.005 250 / 0.98), oklch(14% 0.008 250 / 0.98));
+    --hero-terminal-border: oklch(75% 0.14 195 / 0.22);
+    --hero-terminal-foreground: oklch(98% 0.01 0);
+    --hero-terminal-accent: var(--neon-cyan);
+    --hero-terminal-shadow: oklch(15% 0 0 / 0.18);
+
+    --card-media-fallback-start: oklch(97% 0.015 220);
+    --card-media-fallback-end: oklch(91% 0.04 195);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(75% 0.14 195 / 0.18), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(100% 0 0 / 0.72));
   }
 
   .dark {
-    /* Dark Theme - Cyberpunk Neon */
-    --background: oklch(15% 0 0); /* #121212 deep charcoal */
+    --background: oklch(15% 0 0);
     --foreground: oklch(98% 0.01 0);
-    --card: oklch(20% 0 0); /* #1E1E1E surface dark */
+    --card: oklch(20% 0 0);
     --card-foreground: oklch(98% 0.01 0);
     --popover: oklch(20% 0 0);
     --popover-foreground: oklch(98% 0.01 0);
-    --primary: oklch(80% 0.14 195); /* #00dbdb cyan */
+    --primary: oklch(80% 0.14 195);
     --primary-foreground: oklch(10% 0 0);
     --secondary: oklch(25% 0.02 195);
     --secondary-foreground: oklch(98% 0.01 0);
@@ -102,100 +97,91 @@
     --accent-foreground: oklch(98% 0.01 0);
     --destructive: oklch(62% 0.22 25);
     --destructive-foreground: oklch(98% 0 0);
-    --border: oklch(100% 0 0 / 0.1); /* white/10 for dark mode */
+    --border: oklch(100% 0 0 / 0.1);
     --input: oklch(22% 0.01 0);
     --ring: oklch(80% 0.14 195);
 
-    /* Custom dark theme colors - Cyberpunk */
     --green-status: oklch(75% 0.16 150);
     --text-muted: oklch(65% 0.02 0);
-    --accent-orange: oklch(65% 0.20 35); /* #FF5733 */
-    --accent-magenta: oklch(55% 0.25 350); /* #E6007A */
+    --accent-orange: oklch(65% 0.2 35);
+    --accent-magenta: oklch(55% 0.25 350);
     --neon-cyan: oklch(80% 0.14 195);
 
-    /* Glass effects - dark mode */
-    --glass-bg: oklch(20% 0 0 / 0.4);
-    --glass-bg-hover: oklch(20% 0 0 / 0.6);
-    --glass-border: oklch(100% 0 0 / 0.08);
-    --glass-border-hover: oklch(80% 0.14 195 / 0.3);
-    --shadow-neon: 0 0 10px oklch(80% 0.14 195 / 0.5), 0 0 20px oklch(80% 0.14 195 / 0.3);
-    --shadow-glass: 0 4px 30px oklch(0% 0 0 / 0.1);
+    --hero-grid-dot: oklch(80% 0.14 195 / 0.22);
+    --hero-gradient-start: var(--neon-cyan);
+    --hero-gradient-mid: var(--accent-magenta);
+    --hero-gradient-end: var(--accent-orange);
+    --hero-terminal-bg:
+      linear-gradient(160deg, oklch(19% 0 0 / 0.78), oklch(12% 0.01 250 / 0.88));
+    --hero-terminal-border: oklch(80% 0.14 195 / 0.3);
+    --hero-terminal-foreground: oklch(98% 0.01 0);
+    --hero-terminal-accent: var(--neon-cyan);
+    --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
+
+    --card-media-fallback-start: oklch(26% 0.03 235);
+    --card-media-fallback-end: oklch(18% 0.02 260);
+    --card-media-overlay:
+      radial-gradient(circle at top left, oklch(80% 0.14 195 / 0.26), transparent 36%),
+      linear-gradient(180deg, transparent, oklch(10% 0 0 / 0.78));
   }
 
   * {
     border-color: var(--border);
   }
 
-  body {
+  html {
     background-color: var(--background);
+    color-scheme: light;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top center, oklch(75% 0.14 195 / 0.16), transparent 36%),
+      radial-gradient(circle at 12% 18%, oklch(60% 0.2 35 / 0.08), transparent 22%),
+      linear-gradient(180deg, oklch(100% 0 0) 0%, oklch(97% 0.005 250) 54%, oklch(95% 0.005 250) 100%);
     color: var(--foreground);
     font-family: var(--font-family-sans);
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  input,
+  textarea,
+  select {
+    font-family: var(--font-family-sans);
+  }
+
+  .dark {
+    color-scheme: dark;
+  }
+
+  .dark body {
+    background:
+      radial-gradient(circle at top center, oklch(80% 0.14 195 / 0.16), transparent 32%),
+      radial-gradient(circle at 82% 10%, oklch(55% 0.25 350 / 0.12), transparent 20%),
+      linear-gradient(180deg, oklch(16% 0 0) 0%, oklch(13% 0.01 250) 54%, oklch(11% 0.01 250) 100%);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-family-display);
+    letter-spacing: -0.03em;
+  }
+
+  button {
     font-family: var(--font-family-display);
   }
 
-  /* Default to dark mode */
-  body {
-    color-scheme: dark;
-  }
-
-  body.dark {
-    color-scheme: dark;
-  }
-
-  body.light {
-    color-scheme: light;
-  }
-
-  /* Hide scrollbar for horizontal scroll */
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-@layer components {
-  /* Glass card effect */
-  .glass-card {
-    background: var(--glass-bg);
-    backdrop-filter: blur(var(--glass-blur));
-    -webkit-backdrop-filter: blur(var(--glass-blur));
-    border: 1px solid var(--glass-border);
-    box-shadow: var(--shadow-glass);
-    transition: all 0.3s ease;
-  }
-
-  .glass-card:hover {
-    border-color: var(--glass-border-hover);
-    background: var(--glass-bg-hover);
-  }
-
-  /* Neon glow effects */
-  .neon-glow {
-    box-shadow: var(--shadow-neon);
-  }
-
-  .neon-text {
-    text-shadow: 0 0 10px oklch(80% 0.14 195 / 0.7);
-  }
-
-  .dark .neon-text {
-    text-shadow: 0 0 10px oklch(80% 0.14 195 / 0.7);
-  }
-
-  :root .neon-text {
-    text-shadow: 0 0 10px oklch(45% 0.14 195 / 0.5);
-  }
-
-  /* Neon border on focus/hover */
-  .neon-border {
-    border-color: var(--neon-cyan);
-    box-shadow: 0 0 5px var(--neon-cyan);
+  a {
+    color: inherit;
   }
 }

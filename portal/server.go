@@ -298,6 +298,13 @@ func (s *Server) PortalURL() string {
 	return s.cfg.PortalURL
 }
 
+func (s *Server) OwnerAddress() string {
+	if s == nil {
+		return ""
+	}
+	return s.ownerIdentity.Address
+}
+
 func (s *Server) RootHost() string {
 	if s == nil {
 		return ""
@@ -318,6 +325,18 @@ func (s *Server) LeaseSnapshots() []types.Lease {
 		snapshots = append(snapshots, s.registry.Snapshot(record))
 	}
 	return snapshots
+}
+
+func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
+	if s == nil || s.registry == nil {
+		return types.Lease{}, false
+	}
+
+	record, ok := s.registry.Lookup(hostname)
+	if !ok || record == nil || time.Now().After(record.ExpiresAt) {
+		return types.Lease{}, false
+	}
+	return s.registry.Snapshot(record), true
 }
 
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {

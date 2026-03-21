@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { KeyRound, ShieldCheck } from "lucide-react";
+import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import { getReleaseVersion } from "@/lib/releaseVersion";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -92,6 +93,7 @@ export function AdminLogin() {
                   )}
                 </div>
               </div>
+              <ThemeToggleButton />
             </header>
 
             {/* Main Content */}

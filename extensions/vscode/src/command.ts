@@ -1,4 +1,5 @@
 import * as os from "os";
+import { resolveExposeName } from "../../../utils/exposeName";
 
 export type ShellTarget = "unix" | "windows";
 
@@ -7,6 +8,7 @@ export const defaultRelayRegistryURL = "https://raw.githubusercontent.com/gosuda
 export interface TunnelCommandOptions {
   host: string;
   name: string;
+  nameSeed: string;
   relayList: string;
   relayUrl: string;
   thumbnail: string;
@@ -35,14 +37,13 @@ export function shellTargetForPlatform(platform = os.platform()): ShellTarget {
 }
 
 export function buildCommand(opts: TunnelCommandOptions, target = shellTargetForPlatform()): string {
-  const { host, name, relayList, relayUrl, thumbnail, isLocal } = opts;
+  const { host, name, nameSeed, relayList, relayUrl, thumbnail, isLocal } = opts;
   const installShellUrl = `${relayUrl}/install.sh`;
   const installPowerShellUrl = `${relayUrl}/install.ps1`;
   const exposeArgs: string[] = [];
+  const resolvedName = resolveExposeName(name, host, nameSeed);
 
-  if (name.trim()) {
-    exposeArgs.push(`--name ${formatToken(name.trim(), target)}`);
-  }
+  exposeArgs.push(`--name ${formatToken(resolvedName, target)}`);
   if (relayList.trim()) {
     exposeArgs.push(`--relays ${formatToken(relayList, target)}`);
   }
@@ -50,7 +51,7 @@ export function buildCommand(opts: TunnelCommandOptions, target = shellTargetFor
     exposeArgs.push(`--thumbnail ${formatToken(thumbnail.trim(), target)}`);
   }
 
-  const exposeCommand = `expose ${[...exposeArgs, formatToken(host, target)].join(" ")}`;
+  const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
 
   if (target === "windows") {
     const commandLines = [`$ProgressPreference = 'SilentlyContinue'`];

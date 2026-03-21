@@ -9,7 +9,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 - Split quick start and advanced commands
 - Make `Portal: Start Tunnel` prompt only for the local host
 - Enforce `https://` relay URLs
-- Allow empty service names so the CLI can auto-generate them
+- Generate a stable default service name in the extension when the name is empty
 - Use the installed Portal binary path after installer execution
 
 ## [0.0.1]

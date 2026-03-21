@@ -97,26 +97,29 @@ func (a *adminAuth) cleanupExpiredSessionsLocked() {
 	}
 }
 
-func loadAdminState(path string, runtime *policy.Runtime) error {
+func loadAdminState(path string, runtime *policy.Runtime) (persistedAdminState, error) {
 	root, name, err := openSettingsRoot(path)
 	if err != nil {
-		return err
+		return persistedAdminState{}, err
 	}
 	defer root.Close()
 
 	data, err := root.ReadFile(name)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return persistedAdminState{}, nil
 		}
-		return err
+		return persistedAdminState{}, err
 	}
 
 	var payload persistedAdminState
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return err
+		return persistedAdminState{}, err
 	}
-	return payload.apply(runtime)
+	if err := payload.apply(runtime); err != nil {
+		return persistedAdminState{}, err
+	}
+	return payload, nil
 }
 
 func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
@@ -196,12 +199,28 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, types.AdminSnapshotResponse{
-			ApprovalMode: string(runtime.Approver().Mode()),
-			Leases:       f.adminLeaseSnapshots(),
+			ApprovalMode:       string(runtime.Approver().Mode()),
+			LandingPageEnabled: f.isLandingPageEnabled(),
+			Leases:             f.adminLeaseSnapshots(),
 			UDP: types.AdminUDPSettingsResponse{
 				Enabled:   runtime.IsUDPEnabled(),
 				MaxLeases: runtime.UDPMaxLeases(),
 			},
+		})
+	case types.PathAdminLandingPage:
+		if r.Method != http.MethodPost {
+			methodNotAllowed()
+			return
+		}
+		var req types.AdminLandingPageSettingsRequest
+		if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+			return
+		}
+		f.setLandingPageEnabled(req.Enabled)
+		f.saveAdminState(runtime)
+		utils.WriteAPIData(w, http.StatusOK, types.AdminLandingPageSettingsResponse{
+			Enabled: f.isLandingPageEnabled(),
 		})
 	case types.PathAdminUDP:
 		if r.Method != http.MethodPost {
@@ -399,11 +418,11 @@ func (f *Frontend) saveAdminState(runtime *policy.Runtime) {
 	if f == nil {
 		return
 	}
-	saveAdminState(f.adminSettingsPath, runtime)
+	saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
 }
 
-func saveAdminState(path string, runtime *policy.Runtime) {
-	payload := persistedStateFromRuntime(runtime)
+func saveAdminState(path string, runtime *policy.Runtime, landingPageEnabled bool) {
+	payload := persistedStateFromRuntime(runtime, landingPageEnabled)
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return
@@ -418,30 +437,36 @@ func saveAdminState(path string, runtime *policy.Runtime) {
 }
 
 type persistedAdminState struct {
-	ApprovalMode   string           `json:"approval_mode"`
-	ApprovedLeases []string         `json:"approved_leases,omitempty"`
-	DeniedLeases   []string         `json:"denied_leases,omitempty"`
-	BannedLeases   []string         `json:"banned_leases,omitempty"`
-	BannedIPs      []string         `json:"banned_ips,omitempty"`
-	LeaseBPS       map[string]int64 `json:"lease_bps,omitempty"`
-	UDPEnabled     *bool            `json:"udp_enabled,omitempty"`
-	UDPMaxLeases   *int             `json:"udp_max_leases,omitempty"`
+	ApprovalMode       string           `json:"approval_mode"`
+	ApprovedLeases     []string         `json:"approved_leases,omitempty"`
+	DeniedLeases       []string         `json:"denied_leases,omitempty"`
+	BannedLeases       []string         `json:"banned_leases,omitempty"`
+	BannedIPs          []string         `json:"banned_ips,omitempty"`
+	LeaseBPS           map[string]int64 `json:"lease_bps,omitempty"`
+	UDPEnabled         *bool            `json:"udp_enabled,omitempty"`
+	UDPMaxLeases       *int             `json:"udp_max_leases,omitempty"`
+	LandingPageEnabled *bool            `json:"landing_page_enabled,omitempty"`
 }
 
-func persistedStateFromRuntime(runtime *policy.Runtime) persistedAdminState {
+func persistedStateFromRuntime(runtime *policy.Runtime, landingPageEnabled bool) persistedAdminState {
 	approver := runtime.Approver()
 	udpEnabled := runtime.IsUDPEnabled()
 	udpMaxLeases := runtime.UDPMaxLeases()
 	return persistedAdminState{
-		ApprovalMode:   string(approver.Mode()),
-		ApprovedLeases: approver.ApprovedLeases(),
-		DeniedLeases:   approver.DeniedLeases(),
-		BannedLeases:   runtime.BannedLeases(),
-		BannedIPs:      runtime.IPFilter().BannedIPs(),
-		LeaseBPS:       runtime.BPSManager().LeaseBPSLimits(),
-		UDPEnabled:     &udpEnabled,
-		UDPMaxLeases:   &udpMaxLeases,
+		ApprovalMode:       string(approver.Mode()),
+		ApprovedLeases:     approver.ApprovedLeases(),
+		DeniedLeases:       approver.DeniedLeases(),
+		BannedLeases:       runtime.BannedLeases(),
+		BannedIPs:          runtime.IPFilter().BannedIPs(),
+		LeaseBPS:           runtime.BPSManager().LeaseBPSLimits(),
+		UDPEnabled:         &udpEnabled,
+		UDPMaxLeases:       &udpMaxLeases,
+		LandingPageEnabled: &landingPageEnabled,
 	}
+}
+
+func (s persistedAdminState) landingPageEnabled() bool {
+	return s.LandingPageEnabled == nil || *s.LandingPageEnabled
 }
 
 func (s persistedAdminState) apply(runtime *policy.Runtime) error {
