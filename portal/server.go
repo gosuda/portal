@@ -298,6 +298,13 @@ func (s *Server) PortalURL() string {
 	return s.cfg.PortalURL
 }
 
+func (s *Server) OwnerAddress() string {
+	if s == nil {
+		return ""
+	}
+	return s.ownerIdentity.Address
+}
+
 func (s *Server) RootHost() string {
 	if s == nil {
 		return ""

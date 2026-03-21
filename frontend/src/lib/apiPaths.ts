@@ -8,6 +8,7 @@ export const API_PATHS = {
     leases: "/admin/leases",
     stats: "/admin/stats",
     approvalMode: "/admin/settings/approval-mode",
+    landingPage: "/admin/settings/landing-page",
     udpSettings: "/admin/settings/udp",
   },
   sdk: {

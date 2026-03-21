@@ -79,7 +79,7 @@ export function LandingHero() {
       </div>
 
       <div
-        className="relative mx-auto mt-10 w-full max-w-[550px] rounded-[1.75rem] border px-4 py-5 sm:px-5 sm:py-6"
+        className="relative mx-auto mt-10 w-full max-w-[520px] rounded-[1.75rem] border px-4 py-5 sm:px-5 sm:py-6"
         style={{
           background: "var(--hero-terminal-bg)",
           borderColor: "var(--hero-terminal-border)",

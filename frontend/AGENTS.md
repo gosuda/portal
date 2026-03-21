@@ -23,7 +23,7 @@ High-signal constraints for the relay-server frontend. Only items expensive to r
    - Why: any tooling or script assuming `index.html` post-build will fail.
 
 5. **HTML metadata placeholders must match between HTML and Go.**
-   `index.html` (renamed to `portal.html`) contains `[%OG_TITLE%]`, `[%OG_DESCRIPTION%]`, `[%RELEASE_VERSION%]`. Server-side substitution happens in `cmd/relay-server/frontend.go`.
+   `index.html` (renamed to `portal.html`) contains `[%OG_TITLE%]`, `[%OG_DESCRIPTION%]`, `[%LANDING_PAGE_ENABLED%]`, `[%SERVER_OWNER_ADDRESS%]`, `[%RELEASE_VERSION%]`. Server-side substitution happens in `cmd/relay-server/frontend.go`.
    - Why: renaming a placeholder in one place without the other leaves raw placeholder strings in production HTML.
 
 6. **Admin state reads are aggregated through `/admin/snapshot`.**

@@ -19,8 +19,13 @@ type ApprovalModeResponse = {
   approval_mode?: ApprovalMode;
 };
 
+type LandingPageSettingsResponse = {
+  enabled?: boolean;
+};
+
 type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
+  landing_page_enabled?: boolean;
   leases?: ServerData[];
   udp?: { enabled: boolean; max_leases: number };
 };
@@ -132,6 +137,7 @@ function dedupeStrings(values: string[]): string[] {
 interface AdminSnapshot {
   serverData: ServerData[];
   approvalMode: ApprovalMode;
+  landingPageEnabled: boolean;
   udpSettings: UDPSettings;
 }
 
@@ -142,6 +148,7 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
   return {
     serverData: normalizedLeases,
     approvalMode: normalizeApprovalMode(snapshot?.approval_mode),
+    landingPageEnabled: snapshot?.landing_page_enabled ?? true,
     udpSettings: {
       enabled: snapshot?.udp?.enabled ?? false,
       maxLeases: snapshot?.udp?.max_leases ?? 0,
@@ -152,6 +159,7 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
 export function useAdmin() {
   const [serverData, setServerData] = useState<ServerData[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
+  const [landingPageEnabled, setLandingPageEnabled] = useState(true);
   const [udpSettings, setUDPSettings] = useState<UDPSettings>({ enabled: false, maxLeases: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -161,6 +169,7 @@ export function useAdmin() {
   const applySnapshot = (snapshot: AdminSnapshot) => {
     setServerData(snapshot.serverData);
     setApprovalMode(snapshot.approvalMode);
+    setLandingPageEnabled(snapshot.landingPageEnabled);
     setUDPSettings(snapshot.udpSettings);
   };
 
@@ -319,6 +328,16 @@ export function useAdmin() {
     });
   };
 
+  const handleLandingPageEnabledChange = async (enabled: boolean) => {
+    await runAdminAction(async () => {
+      const response = await apiClient.post<LandingPageSettingsResponse>(
+        API_PATHS.admin.landingPage,
+        { enabled }
+      );
+      setLandingPageEnabled(response?.enabled ?? enabled);
+    });
+  };
+
   const handleApproveStatus = (peerId: string, approve: boolean) =>
     runAdminAction(() => updateLeaseAction(peerId, "approve", approve));
 
@@ -379,6 +398,7 @@ export function useAdmin() {
     ...listState,
     banFilter,
     approvalMode,
+    landingPageEnabled,
     udpSettings,
     loading,
     error,
@@ -386,6 +406,7 @@ export function useAdmin() {
     handleBanStatus,
     handleBPSChange,
     handleApprovalModeChange,
+    handleLandingPageEnabledChange,
     handleUDPSettingsChange,
     handleApproveStatus,
     handleDenyStatus,

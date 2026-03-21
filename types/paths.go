@@ -16,6 +16,7 @@ const (
 	PathAdminLogout       = "/admin/logout"
 	PathAdminAuthStatus   = "/admin/auth/status"
 	PathAdminApproval     = "/admin/settings/approval-mode"
+	PathAdminLandingPage  = "/admin/settings/landing-page"
 	PathAdminUDP          = "/admin/settings/udp"
 	PathAdminIPsPrefix    = "/admin/ips/"
 	PathInstallShell      = "/install.sh"

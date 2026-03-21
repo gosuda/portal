@@ -106,6 +106,7 @@ interface ServerListViewProps {
   isAdmin?: boolean;
   banFilter?: BanFilter;
   approvalMode?: ApprovalMode;
+  landingPageEnabled?: boolean;
   onBanFilterChange?: (value: BanFilter) => void;
   onBanStatusChange?: (
     leaseId: string,
@@ -113,6 +114,7 @@ interface ServerListViewProps {
   ) => void | Promise<void>;
   onBPSChange?: (leaseId: string, bps: number) => void | Promise<void>;
   onApprovalModeChange?: (mode: ApprovalMode) => void;
+  onLandingPageEnabledChange?: (enabled: boolean) => void | Promise<void>;
   udpSettings?: UDPSettings;
   onUDPSettingsChange?: (settings: UDPSettings) => void | Promise<void>;
   onApproveStatusChange?: (
@@ -155,10 +157,12 @@ export function ServerListView({
   isAdmin = false,
   banFilter = "all",
   approvalMode = "auto",
+  landingPageEnabled = true,
   onBanFilterChange,
   onBanStatusChange,
   onBPSChange,
   onApprovalModeChange,
+  onLandingPageEnabledChange,
   udpSettings,
   onUDPSettingsChange,
   onApproveStatusChange,
@@ -178,6 +182,7 @@ export function ServerListView({
   );
   const serverItems = filteredServers as ListServer[];
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
+  const showLandingHero = !isAdmin && landingPageEnabled;
 
   const handleToggleSelect = (leaseId: string) => {
     setSelectedLeaseIds((prev) => {
@@ -325,6 +330,12 @@ export function ServerListView({
     }
   };
 
+  const handleLandingPageToggle = (enabled: boolean) => {
+    if (onLandingPageEnabledChange) {
+      void onLandingPageEnabledChange(enabled);
+    }
+  };
+
   const handleMaxLeasesSave = () => {
     if (onUDPSettingsChange && udpSettings) {
       const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
@@ -353,6 +364,33 @@ export function ServerListView({
             approvalMode={approvalMode}
             onApprovalModeChange={onApprovalModeChange}
           />
+        </div>
+      )}
+      {onLandingPageEnabledChange && (
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-text-muted">Landing</span>
+          <div className="flex overflow-hidden rounded-lg border border-foreground/20">
+            <button
+              onClick={() => handleLandingPageToggle(true)}
+              className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                landingPageEnabled
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              Shown
+            </button>
+            <button
+              onClick={() => handleLandingPageToggle(false)}
+              className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
+                !landingPageEnabled
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+              }`}
+            >
+              Hidden
+            </button>
+          </div>
         </div>
       )}
       {onUDPSettingsChange && udpSettings && (
@@ -553,6 +591,35 @@ export function ServerListView({
                   </div>
                 )}
               </div>
+              {onLandingPageEnabledChange && (
+                <div className="mt-4 flex items-center gap-3 px-4 sm:hidden">
+                  <span className="text-sm font-medium text-text-muted">
+                    Landing
+                  </span>
+                  <div className="flex overflow-hidden rounded-lg border border-foreground/20">
+                    <button
+                      onClick={() => handleLandingPageToggle(true)}
+                      className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                        landingPageEnabled
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                      }`}
+                    >
+                      Shown
+                    </button>
+                    <button
+                      onClick={() => handleLandingPageToggle(false)}
+                      className={`cursor-pointer border-l border-foreground/20 px-4 h-10 text-sm font-medium transition-colors ${
+                        !landingPageEnabled
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                      }`}
+                    >
+                      Hidden
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
               <main className="z-0 flex-1">
@@ -566,7 +633,7 @@ export function ServerListView({
           </>
         ) : (
           <>
-            <div className="sticky top-0 z-20 w-full bg-background/95 pt-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <div className="sticky top-0 z-20 w-full bg-background/95 py-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
               <div className="flex w-full flex-col px-6 sm:px-8 lg:px-10">
                 <Header
                   title={title}
@@ -577,9 +644,11 @@ export function ServerListView({
             </div>
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
               <main className="z-0 flex-1 pb-14">
-                <section className="border-b border-border/80 px-4 pt-6 sm:px-6 md:px-8">
-                  <LandingHero />
-                </section>
+                {showLandingHero && (
+                  <section className="border-b border-border/80 px-4 pt-6 sm:px-6 md:px-8">
+                    <LandingHero />
+                  </section>
+                )}
 
                 <section
                   id="live-servers"
@@ -674,7 +743,7 @@ export function ServerListView({
                                   </span>
                                 ) : relay.releaseVersion ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                    Release {relay.releaseVersion}
+                                    {relay.releaseVersion}
                                   </span>
                                 ) : null}
                               </div>

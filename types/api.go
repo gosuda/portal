@@ -139,9 +139,10 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode string                   `json:"approval_mode"`
-	Leases       []Lease                  `json:"leases,omitempty"`
-	UDP          AdminUDPSettingsResponse `json:"udp"`
+	ApprovalMode       string                   `json:"approval_mode"`
+	LandingPageEnabled bool                     `json:"landing_page_enabled"`
+	Leases             []Lease                  `json:"leases,omitempty"`
+	UDP                AdminUDPSettingsResponse `json:"udp"`
 }
 
 type AdminApprovalModeRequest struct {
@@ -150,6 +151,14 @@ type AdminApprovalModeRequest struct {
 
 type AdminApprovalModeResponse struct {
 	ApprovalMode string `json:"approval_mode"`
+}
+
+type AdminLandingPageSettingsRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+type AdminLandingPageSettingsResponse struct {
+	Enabled bool `json:"enabled"`
 }
 
 type AdminBPSRequest struct {

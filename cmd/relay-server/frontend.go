@@ -9,8 +9,10 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/portal/v2/portal"
@@ -34,6 +36,7 @@ type Frontend struct {
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
+	landingPageEnabled   atomic.Bool
 }
 
 func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string) (*Frontend, error) {
@@ -44,16 +47,19 @@ func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath st
 	if runtime == nil {
 		return nil, errors.New("frontend requires policy runtime")
 	}
-	if err := loadAdminState(adminSettingsPath, runtime); err != nil {
+	state, err := loadAdminState(adminSettingsPath, runtime)
+	if err != nil {
 		return nil, err
 	}
 
-	return &Frontend{
+	frontend := &Frontend{
 		distFS:            embeddedDistFS,
 		server:            server,
 		auth:              newAdminAuth(adminSecret),
 		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
-	}, nil
+	}
+	frontend.setLandingPageEnabled(state.landingPageEnabled())
+	return frontend, nil
 }
 
 func (f *Frontend) Handler() *http.ServeMux {
@@ -228,9 +234,25 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description string) stri
 	replacer := strings.NewReplacer(
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
+		"[%LANDING_PAGE_ENABLED%]", html.EscapeString(strconv.FormatBool(f.isLandingPageEnabled())),
+		"[%SERVER_OWNER_ADDRESS%]", html.EscapeString(f.server.OwnerAddress()),
 		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
 	return replacer.Replace(htmlContent)
+}
+
+func (f *Frontend) isLandingPageEnabled() bool {
+	if f == nil {
+		return true
+	}
+	return f.landingPageEnabled.Load()
+}
+
+func (f *Frontend) setLandingPageEnabled(enabled bool) {
+	if f == nil {
+		return
+	}
+	f.landingPageEnabled.Store(enabled)
 }
 
 func (f *Frontend) adminLeaseSnapshots() []types.Lease {
