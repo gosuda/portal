@@ -118,7 +118,7 @@ write_config() {
 
 const installShellScriptTemplateSuffix = `
 EOF
-  printf '%%s\n' "$CONFIG_PATH"
+  printf '%s\n' "$CONFIG_PATH"
 }
 
 INSTALL_PATH="$(pick_install_path)" || {

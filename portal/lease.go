@@ -238,7 +238,10 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 		snapshot.Ready = record.stream.ReadyCount()
 	}
 	if record.datagram != nil {
+		snapshot.Transport = "udp"
 		snapshot.UDPPort = record.datagram.UDPPort()
+	} else {
+		snapshot.Transport = "tcp"
 	}
 	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
 	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)

@@ -14,6 +14,8 @@ export interface TunnelCommandOptions {
   relayUrls: string[];
   defaultRelays: boolean;
   thumbnailURL: string;
+  enableUDP: boolean;
+  udpAddr: string;
   os: TunnelCommandOS;
 }
 
@@ -24,63 +26,24 @@ export function buildDefaultTunnelName(
   return buildDefaultExposeName(target, nameSeed);
 }
 
-export function buildTunnelCommand({
-  currentOrigin,
-  defaultRelays,
-  name,
-  nameSeed,
-  os,
-  relayUrls,
-  target,
-  thumbnailURL,
-}: TunnelCommandOptions): string {
-  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
-    currentOrigin,
-    defaultRelays,
-    name,
-    nameSeed,
-    os,
-    relayUrls,
-    target,
-    thumbnailURL,
-  });
-
+export function buildTunnelCommand(options: TunnelCommandOptions): string {
+  const { installLine, exposeHead, exposeOptions } =
+    buildTunnelCommandParts(options);
   return joinTunnelCommand(installLine, exposeHead, exposeOptions);
 }
 
-export function buildTunnelDisplayCommand({
-  currentOrigin,
-  defaultRelays,
-  name,
-  nameSeed,
-  os,
-  relayUrls,
-  target,
-  thumbnailURL,
-}: TunnelCommandOptions): string {
-  const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
-    currentOrigin,
-    defaultRelays,
-    name,
-    nameSeed,
-    os,
-    relayUrls,
-    target,
-    thumbnailURL,
-  });
-
-  return joinTunnelCommand(installLine, exposeHead, exposeOptions);
-}
 
 function buildTunnelCommandParts({
   currentOrigin,
   defaultRelays,
+  enableUDP,
   name,
   nameSeed,
   os,
   relayUrls,
   target,
   thumbnailURL,
+  udpAddr,
 }: TunnelCommandOptions): {
   installLine: string;
   exposeHead: string;
@@ -114,6 +77,12 @@ function buildTunnelCommandParts({
     exposeArgs.push(`--thumbnail ${formatToken(normalizedThumbnailURL, os)}`);
   }
 
+  if (enableUDP) {
+    exposeArgs.push("--udp");
+    const udpAddrValue = udpAddr.trim() || targetValue;
+    exposeArgs.push(`--udp-addr ${formatToken(udpAddrValue, os)}`);
+  }
+
   if (os === "windows") {
     return {
       installLine: [
@@ -139,7 +108,7 @@ export function buildTunnelPreviewURL(
   target: string,
   nameSeed: string
 ): string {
-  const baseHost = getTunnelBaseHost(origin);
+  const baseHost = getRelayOriginHost(origin);
   const subdomain = resolveExposeName(name, target, nameSeed);
   return `https://${subdomain}.${baseHost}`;
 }
@@ -173,11 +142,6 @@ export function normalizeAbsoluteHTTPURL(raw: string): string {
   } catch {
     return "";
   }
-}
-
-function getTunnelBaseHost(origin: string): string {
-  const relayHost = getRelayOriginHost(origin);
-  return relayHost;
 }
 
 function getRelayOriginHost(origin: string): string {

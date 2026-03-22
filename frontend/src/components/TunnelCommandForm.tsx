@@ -14,12 +14,14 @@ import { cn } from "@/lib/utils";
 import {
   buildDefaultTunnelName,
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
   buildTunnelStatusHostname,
   normalizeAbsoluteHTTPURL,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
+
+const TUNNEL_STATUS_POLL_MS = 3000;
+const DEFAULT_NAME_SEED = "web_portal";
 
 interface TunnelCommandFormProps {
   className?: string;
@@ -54,7 +56,7 @@ export function TunnelCommandForm({
   });
   const [nameSeed] = useState(() => {
     if (typeof window === "undefined") {
-      return "web_portal";
+      return DEFAULT_NAME_SEED;
     }
 
     try {
@@ -71,7 +73,7 @@ export function TunnelCommandForm({
       window.localStorage.setItem(tunnelNameSeedStorageKey, next);
       return next;
     } catch {
-      return "web_portal";
+      return DEFAULT_NAME_SEED;
     }
   });
 
@@ -85,6 +87,8 @@ export function TunnelCommandForm({
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [thumbnailURL, setThumbnailURL] = useState("");
+  const [enableUDP, setEnableUDP] = useState(false);
+  const [udpPort, setUdpPort] = useState("");
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus>("waiting");
 
   const resolvedNameSeed = useMemo(
@@ -113,6 +117,8 @@ export function TunnelCommandForm({
   );
   const includeDefaultRelays = isHero || defaultRelays;
   const resolvedThumbnailURL = isHero ? "" : normalizedThumbnailURL;
+  const resolvedEnableUDP = isHero ? false : enableUDP;
+  const resolvedUdpAddr = isHero ? "" : udpPort;
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
@@ -122,6 +128,8 @@ export function TunnelCommandForm({
       relayUrls: resolvedRelayUrls,
       defaultRelays: includeDefaultRelays,
       thumbnailURL: resolvedThumbnailURL,
+      enableUDP: resolvedEnableUDP,
+      udpAddr: resolvedUdpAddr,
       os,
     }),
     [
@@ -130,18 +138,16 @@ export function TunnelCommandForm({
       includeDefaultRelays,
       nameSeed,
       os,
+      resolvedEnableUDP,
       resolvedRelayUrls,
       resolvedThumbnailURL,
+      resolvedUdpAddr,
       target,
     ]
   );
 
   const copyCommand = useMemo(
     () => buildTunnelCommand(commandOptions),
-    [commandOptions]
-  );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
     [commandOptions]
   );
   const previewURL = useMemo(
@@ -174,6 +180,7 @@ export function TunnelCommandForm({
     }
 
     let cancelled = false;
+    let intervalId: number | undefined;
 
     const poll = async () => {
       try {
@@ -198,15 +205,37 @@ export function TunnelCommandForm({
       }
     };
 
-    setTunnelStatus("waiting");
-    void poll();
-    const interval = window.setInterval(() => {
+    const startPolling = () => {
+      stopPolling();
       void poll();
-    }, 1500);
+      intervalId = window.setInterval(() => {
+        void poll();
+      }, TUNNEL_STATUS_POLL_MS);
+    };
+
+    const stopPolling = () => {
+      if (intervalId !== undefined) {
+        window.clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    setTunnelStatus("waiting");
+    startPolling();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [isHero, statusHostname]);
 
@@ -274,221 +303,416 @@ export function TunnelCommandForm({
     setNameShuffleKey(next);
   };
 
-  const tunnelStatusTone = {
-    alive: isTerminal ? "bg-green-400" : "bg-green-600",
-    registered: isTerminal ? "bg-sky-400" : "bg-sky-600",
-    waiting: isTerminal ? "bg-slate-500" : "bg-slate-400",
-  }[tunnelStatus];
-  const tunnelStatusHeadline = {
-    alive: "This URL is live now",
-    registered: "URL reserved",
-    waiting: "Waiting",
-  }[tunnelStatus];
-  const isPreviewURLDisabled = tunnelStatus === "waiting";
-  const heroSectionLabelClass = cn(
-    "text-xs font-semibold uppercase tracking-[0.24em]",
-    isTerminal ? "text-slate-400" : "text-text-muted"
+  const nameInputValue = isAutoName ? generatedName : name;
+
+  // ── Hero mode (terminal layout) ──────────────────────────────────────
+
+  if (isHero) {
+    const commandLines = copyCommand.split("\n");
+
+    const tunnelStatusDot = {
+      alive: "bg-green-status animate-pulse",
+      registered: "bg-primary",
+      waiting: "bg-text-muted",
+    }[tunnelStatus];
+    const tunnelStatusLabel = {
+      alive: "Tunnelling Active",
+      registered: "URL Reserved",
+      waiting: "Waiting for connection",
+    }[tunnelStatus];
+    const isLive = tunnelStatus !== "waiting";
+
+    return (
+      <div className={className}>
+        {/* Top bar: inputs + OS toggle */}
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
+          <div className="flex items-center gap-4">
+            <div className="flex flex-col">
+              <label
+                htmlFor={`${inputId}-host`}
+                className="text-[10px] font-bold uppercase tracking-widest text-primary"
+              >
+                Port
+              </label>
+              <input
+                id={`${inputId}-host`}
+                type="text"
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                className="w-12 border-none bg-transparent p-0 font-mono text-sm focus:ring-0"
+                style={{ color: "var(--hero-terminal-foreground)" }}
+              />
+            </div>
+            <div className="h-8 w-px bg-white/10" />
+            <div className="flex flex-col">
+              <label
+                htmlFor={`${inputId}-name`}
+                className="text-[10px] font-bold uppercase tracking-widest text-primary"
+              >
+                Public Name
+              </label>
+              <div className="flex items-center gap-1">
+                <input
+                  id={`${inputId}-name`}
+                  type="text"
+                  value={nameInputValue}
+                  onChange={handleNameChange}
+                  className="w-36 border-none bg-transparent p-0 font-mono text-sm focus:ring-0"
+                  style={{ color: "var(--hero-terminal-foreground)" }}
+                />
+                <button
+                  type="button"
+                  onClick={handleShuffleName}
+                  className="rounded p-0.5 text-text-muted transition-colors hover:text-primary"
+                  aria-label="Shuffle public name"
+                  title="Shuffle public name"
+                >
+                  <RefreshCw className="h-3 w-3" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* OS toggle */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setOs("unix")}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-xs font-bold transition-colors",
+                os === "unix"
+                  ? "bg-secondary text-primary"
+                  : "text-text-muted hover:bg-white/5"
+              )}
+            >
+              Linux / macOS
+            </button>
+            <button
+              type="button"
+              onClick={() => setOs("windows")}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-xs font-bold transition-colors",
+                os === "windows"
+                  ? "bg-secondary text-primary"
+                  : "text-text-muted hover:bg-white/5"
+              )}
+            >
+              Windows (PowerShell)
+            </button>
+          </div>
+        </div>
+
+        {/* Command area */}
+        <div className="relative min-h-[240px] p-6 font-mono text-sm leading-relaxed">
+          {commandLines.map((line, i) => (
+            <div key={i} className="mb-4 flex items-start gap-3">
+              <span className="shrink-0 text-primary">~</span>
+              <code className="text-text-muted">{line}</code>
+            </div>
+          ))}
+
+          {/* Status card */}
+          <div className="mt-4 rounded-xl border border-primary/20 bg-card/10 p-4">
+            <div className="mb-2 flex items-center gap-3">
+              <span
+                className={cn("h-2 w-2 rounded-full", tunnelStatusDot)}
+                aria-hidden="true"
+              />
+              <span className="text-xs font-bold uppercase tracking-wider text-green-status">
+                {tunnelStatusLabel}
+              </span>
+            </div>
+            <p style={{ color: "var(--hero-terminal-foreground)" }}>
+              Public URL:{" "}
+              {isLive ? (
+                <a
+                  href={previewURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline underline-offset-4 decoration-primary/30"
+                >
+                  {previewURL}
+                </a>
+              ) : (
+                <span className="text-text-muted opacity-60">
+                  {previewURL}
+                </span>
+              )}
+            </p>
+          </div>
+
+          {/* Copy button */}
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="absolute right-6 top-6 rounded-lg bg-secondary p-2 text-text-muted transition-colors hover:text-primary"
+            aria-label="Copy command"
+          >
+            {copied ? (
+              <Check className="h-4 w-4 text-green-status" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Full mode (dialog/modal layout) ──────────────────────────────────
+
+  const shuffleButtonClass = cn(
+    "inline-flex shrink-0 items-center justify-center border px-3 text-xs font-semibold transition-colors h-12 rounded-lg",
+    isTerminal
+      ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
+      : "border-border bg-white text-text-muted hover:text-foreground"
   );
 
   const commandSection = (
-    <div className={cn("space-y-2", isHero && "space-y-3")}>
-      {isHero ? (
-        <label className={heroSectionLabelClass}>Command</label>
-      ) : (
-        <label
-          className={cn(
-            "text-sm font-medium",
-            isTerminal ? "text-slate-200" : "text-foreground"
-          )}
-        >
-          Generated Command
-        </label>
-      )}
+    <div className="space-y-2">
+      <label
+        className={cn(
+          "text-sm font-medium",
+          isTerminal ? "text-slate-200" : "text-foreground"
+        )}
+      >
+        Generated Command
+      </label>
       <div className="relative">
         <pre
           className={cn(
             "overflow-x-auto whitespace-pre-wrap break-all font-mono",
             isTerminal
-              ? isHero
-                ? "min-h-[104px] rounded-xl border border-green-status/20 bg-black/45 p-4 text-sm leading-7 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                : "rounded-xl border border-white/10 bg-black/30 p-4 pr-12 text-sm leading-7 text-white"
+              ? "rounded-xl border border-white/10 bg-black/30 p-4 pr-12 text-sm leading-7 text-white"
               : "rounded-xl bg-border p-4 pr-12 text-sm leading-7 text-foreground"
           )}
         >
-          {displayCommand}
+          {copyCommand}
         </pre>
-        {!isHero && (
-          <button
-            type="button"
-            onClick={handleCopy}
-            className={cn(
-              "absolute right-2 top-2 rounded-md p-2 transition-colors",
-              isTerminal ? "hover:bg-white/10" : "hover:bg-background/70"
-            )}
-            aria-label="Copy command"
-          >
-            {copied ? (
-              <Check className="h-4 w-4 text-green-600" />
-            ) : (
-              <Copy className="h-4 w-4 text-text-muted" />
-            )}
-          </button>
-        )}
-      </div>
-      {isHero && (
         <button
           type="button"
           onClick={handleCopy}
           className={cn(
-            "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors",
-            copied
-              ? "bg-white text-slate-950"
-              : "bg-green-status text-slate-950 hover:bg-green-300"
+            "absolute right-2 top-2 rounded-md p-2 transition-colors",
+            isTerminal ? "hover:bg-white/10" : "hover:bg-background/70"
           )}
           aria-label="Copy command"
         >
-          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-          <span>{copied ? "Copied" : "Copy command"}</span>
+          {copied ? (
+            <Check className="h-4 w-4 text-green-600" />
+          ) : (
+            <Copy className="h-4 w-4 text-text-muted" />
+          )}
         </button>
-      )}
-
-      {isHero && (
-        <div className="space-y-1.5 pt-1">
-          <p className={heroSectionLabelClass}>Public URL</p>
-          <div
-            className={cn(
-              "space-y-4 rounded-xl border px-4 py-3",
-              isTerminal ? "border-white/10 bg-white/5" : "border-border bg-white"
-            )}
-          >
-            <div
-              className={cn(
-                "flex items-center gap-2 text-sm font-semibold",
-                isTerminal ? "text-slate-200" : "text-foreground"
-              )}
-            >
-              <span
-                className={cn("h-2 w-2 rounded-full", tunnelStatusTone)}
-                aria-hidden="true"
-              />
-              <span>{tunnelStatusHeadline}</span>
-            </div>
-            {isPreviewURLDisabled ? (
-              <span
-                aria-disabled="true"
-                className={cn(
-                  "block cursor-not-allowed overflow-x-auto whitespace-nowrap font-mono text-base font-medium opacity-60 sm:text-lg",
-                  isTerminal ? "text-green-status" : "text-primary"
-                )}
-              >
-                {previewURL}
-              </span>
-            ) : (
-              <a
-                href={previewURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={cn(
-                  "block overflow-x-auto whitespace-nowrap font-mono text-base font-medium underline-offset-4 hover:underline sm:text-lg",
-                  isTerminal ? "text-green-status" : "text-primary"
-                )}
-              >
-                {previewURL}
-              </a>
-            )}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
-
-  const heroFieldLabelClass = cn(
-    "text-[11px] font-semibold uppercase tracking-[0.2em]",
-    isTerminal ? "text-slate-400" : "text-text-muted"
-  );
-  const heroInputClass = cn(
-    "h-12 rounded-xl border px-4 text-[15px] shadow-none",
-    isTerminal
-      ? "border-white/8 bg-black/20 text-slate-100 placeholder:text-slate-500"
-      : "border-border bg-white"
-  );
-  const nameInputValue = isAutoName ? generatedName : name;
-  const shuffleButtonClass = cn(
-    "inline-flex shrink-0 items-center justify-center border px-3 text-xs font-semibold transition-colors",
-    isHero ? "h-12 rounded-xl px-4" : "h-12 rounded-lg",
-    isTerminal
-      ? "border-white/8 bg-black/20 text-slate-300 hover:text-white"
-      : "border-border bg-white text-text-muted hover:text-foreground"
-  );
-  const optionSectionLabel = isHero ? (
-    <div className="pt-1">
-      <p className={heroSectionLabelClass}>OPTIONS</p>
-    </div>
-  ) : null;
 
   return (
     <div className={cn("space-y-5", className)}>
-      {isHero && commandSection}
-      {optionSectionLabel}
+      <div className="space-y-2">
+        <label
+          htmlFor={`${inputId}-host`}
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          Host
+        </label>
+        <Input
+          id={`${inputId}-host`}
+          type="text"
+          value={target}
+          onChange={(event) => setTarget(event.target.value)}
+          placeholder={defaultHost}
+          className={cn(
+            "h-12 rounded-xl",
+            isTerminal
+              ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+              : "border-border bg-white"
+          )}
+        />
+      </div>
 
-      {isHero ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <label htmlFor={`${inputId}-host`} className={heroFieldLabelClass}>
-              Host
-            </label>
-            <Input
-              id={`${inputId}-host`}
-              type="text"
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              placeholder={defaultHost}
-              className={heroInputClass}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor={`${inputId}-name`} className={heroFieldLabelClass}>
-              Public Name
-            </label>
-            <div className="flex items-center gap-2">
-              <Input
-                id={`${inputId}-name`}
-                type="text"
-                value={nameInputValue}
-                onChange={handleNameChange}
-                className={cn(heroInputClass, "flex-1")}
-              />
-              <button
-                type="button"
-                onClick={handleShuffleName}
-                className={shuffleButtonClass}
-                aria-label="Shuffle public name"
-                title="Shuffle public name"
-              >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
+      <div className="space-y-2">
+        <label
+          htmlFor={`${inputId}-name`}
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          Service Name
+        </label>
+        <div className="flex items-center gap-2">
+          <Input
+            id={`${inputId}-name`}
+            type="text"
+            value={nameInputValue}
+            onChange={handleNameChange}
+            className={cn(
+              "h-12 flex-1 rounded-xl",
+              isTerminal
+                ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+                : "border-border bg-white"
+            )}
+          />
+          <button
+            type="button"
+            onClick={handleShuffleName}
+            className={shuffleButtonClass}
+            aria-label="Shuffle public name"
+            title="Shuffle public name"
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          </button>
         </div>
-      ) : (
-        <>
-          <div className="space-y-2">
-            <label
-              htmlFor={`${inputId}-host`}
+      </div>
+
+      <div className="space-y-2">
+        <p
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          Relay URLs
+        </p>
+
+        <div className="flex items-center justify-between gap-3">
+          <label
+            className={cn(
+              "ml-auto flex items-center gap-2 text-xs",
+              isTerminal ? "text-slate-400" : "text-text-muted"
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={defaultRelays}
+              onChange={(event) => setDefaultRelays(event.target.checked)}
+              className="h-4 w-4"
+            />
+            <span>Include default registry</span>
+          </label>
+        </div>
+
+        <div
+          className={cn(
+            "flex min-h-12 flex-wrap items-center gap-2 rounded-xl px-2.5 py-2",
+            isTerminal
+              ? "border border-white/10 bg-white/5"
+              : "border border-border bg-white"
+          )}
+        >
+          {relayUrls.map((url) => (
+            <span
+              key={url}
               className={cn(
-                "text-sm font-medium",
-                isTerminal ? "text-slate-200" : "text-foreground"
+                "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium",
+                isTerminal
+                  ? "bg-white/10 text-slate-100"
+                  : "bg-secondary text-secondary-foreground"
               )}
             >
-              Host
-            </label>
+              {url}
+              <button
+                type="button"
+                onClick={() => removeRelayURL(url)}
+                className={cn(
+                  "ml-1 rounded-sm p-0.5",
+                  isTerminal ? "hover:bg-white/10" : "hover:bg-destructive/15"
+                )}
+                aria-label={`Remove ${url}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+
+          <input
+            type="text"
+            value={urlInput}
+            onChange={(event) => setUrlInput(event.target.value)}
+            onKeyDown={handleURLKeyDown}
+            placeholder="Add relay URL..."
+            className={cn(
+              "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
+              isTerminal
+                ? "text-white placeholder:text-slate-500"
+                : "text-foreground placeholder:text-muted-foreground"
+            )}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label
+          htmlFor={`${inputId}-thumbnail`}
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          Thumbnail URL
+        </label>
+        <Input
+          id={`${inputId}-thumbnail`}
+          type="url"
+          value={thumbnailURL}
+          onChange={(event) => setThumbnailURL(event.target.value)}
+          placeholder="https://cdn.example.com/thumb.png"
+          className={cn(
+            "h-12 rounded-xl",
+            isTerminal
+              ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
+              : "border-border bg-white"
+          )}
+        />
+        {thumbnailError && (
+          <p className="text-xs text-destructive">{thumbnailError}</p>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <p
+          className={cn(
+            "text-sm font-medium",
+            isTerminal ? "text-slate-200" : "text-foreground"
+          )}
+        >
+          UDP Transport
+        </p>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={enableUDP}
+            onChange={(event) => {
+              setEnableUDP(event.target.checked);
+              if (!event.target.checked) {
+                setUdpPort("");
+              }
+            }}
+            className="h-4 w-4"
+          />
+          <span
+            className={cn(
+              "text-sm",
+              isTerminal ? "text-slate-400" : "text-text-muted"
+            )}
+          >
+            Enable UDP transport (for game servers, VoIP, etc.)
+          </span>
+        </label>
+        {enableUDP && (
+          <div className="space-y-1.5">
             <Input
-              id={`${inputId}-host`}
+              id={`${inputId}-udp-port`}
               type="text"
-              value={target}
-              onChange={(event) => setTarget(event.target.value)}
-              placeholder={defaultHost}
+              value={udpPort}
+              onChange={(event) => setUdpPort(event.target.value)}
+              placeholder={target.trim() || "3000"}
+              aria-label="UDP address"
               className={cn(
                 "h-12 rounded-xl",
                 isTerminal
@@ -496,171 +720,30 @@ export function TunnelCommandForm({
                   : "border-border bg-white"
               )}
             />
-          </div>
-
-          <div className="space-y-2">
-            <label
-              htmlFor={`${inputId}-name`}
+            <p
               className={cn(
-                "text-sm font-medium",
-                isTerminal ? "text-slate-200" : "text-foreground"
+                "text-xs",
+                isTerminal ? "text-slate-500" : "text-text-muted"
               )}
             >
-              Service Name
-            </label>
-            <div className="flex items-center gap-2">
-              <Input
-                id={`${inputId}-name`}
-                type="text"
-                value={nameInputValue}
-                onChange={handleNameChange}
-                className={cn(
-                  "h-12 flex-1 rounded-xl",
-                  isTerminal
-                    ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-                    : "border-border bg-white"
-                )}
-              />
-              <button
-                type="button"
-                onClick={handleShuffleName}
-                className={shuffleButtonClass}
-                aria-label="Shuffle public name"
-                title="Shuffle public name"
-              >
-                <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
+              Local UDP address to forward. Defaults to the same as Host.
+            </p>
           </div>
-        </>
-      )}
+        )}
+      </div>
 
-      {!isHero && (
-        <div className="space-y-2">
-          <label
-            className={cn(
-              "text-sm font-medium",
-              isTerminal ? "text-slate-200" : "text-foreground"
-            )}
-          >
-            Relay URLs
-          </label>
-
-          <div className="flex items-center justify-between gap-3">
-            <label
-              className={cn(
-                "ml-auto flex items-center gap-2 text-xs",
-                isTerminal ? "text-slate-400" : "text-text-muted"
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={defaultRelays}
-                onChange={(event) => setDefaultRelays(event.target.checked)}
-                className="h-4 w-4"
-              />
-              <span>Include default registry</span>
-            </label>
-          </div>
-
-          <div
-            className={cn(
-              "flex min-h-12 flex-wrap items-center gap-2 rounded-xl px-2.5 py-2",
-              isTerminal
-                ? "border border-white/10 bg-white/5"
-                : "border border-border bg-white"
-            )}
-          >
-            {relayUrls.map((url) => (
-              <span
-                key={url}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium",
-                  isTerminal
-                    ? "bg-white/10 text-slate-100"
-                    : "bg-secondary text-secondary-foreground"
-                )}
-              >
-                {url}
-                <button
-                  type="button"
-                  onClick={() => removeRelayURL(url)}
-                  className={cn(
-                    "ml-1 rounded-sm p-0.5",
-                    isTerminal ? "hover:bg-white/10" : "hover:bg-destructive/15"
-                  )}
-                  aria-label={`Remove ${url}`}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-
-            <input
-              type="text"
-              value={urlInput}
-              onChange={(event) => setUrlInput(event.target.value)}
-              onKeyDown={handleURLKeyDown}
-              placeholder="Add relay URL..."
-              className={cn(
-                "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
-                isTerminal
-                  ? "text-white placeholder:text-slate-500"
-                  : "text-foreground placeholder:text-muted-foreground"
-              )}
-            />
-          </div>
-        </div>
-      )}
-
-      {!isHero && (
-        <div className="space-y-2">
-          <label
-            htmlFor={`${inputId}-thumbnail`}
-            className={cn(
-              "text-sm font-medium",
-              isTerminal ? "text-slate-200" : "text-foreground"
-            )}
-          >
-            Thumbnail URL
-          </label>
-          <Input
-            id={`${inputId}-thumbnail`}
-            type="url"
-            value={thumbnailURL}
-            onChange={(event) => setThumbnailURL(event.target.value)}
-            placeholder="https://cdn.example.com/thumb.png"
-            className={cn(
-              "h-12 rounded-xl",
-              isTerminal
-                ? "border-white/10 bg-white/5 text-white placeholder:text-slate-500"
-                : "border-border bg-white"
-            )}
-          />
-          {thumbnailError && (
-            <p className="text-xs text-destructive">{thumbnailError}</p>
-          )}
-        </div>
-      )}
-
-      <div className={cn("space-y-2", isHero && "pt-1")}>
+      <div className="space-y-2">
         <div
           className={cn(
-            "flex p-1",
-            isHero ? "rounded-lg" : "rounded-xl",
-            isTerminal
-              ? isHero
-                ? "bg-black/20"
-                : "bg-white/8"
-              : "bg-border"
+            "flex rounded-xl p-1",
+            isTerminal ? "bg-white/8" : "bg-border"
           )}
         >
           <button
             type="button"
             onClick={() => setOs("unix")}
             className={cn(
-              "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
+              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "unix"
                 ? isTerminal
                   ? "bg-white text-slate-950 shadow-sm"
@@ -676,8 +759,7 @@ export function TunnelCommandForm({
             type="button"
             onClick={() => setOs("windows")}
             className={cn(
-              "flex-1 rounded-lg px-3 transition-colors",
-              isHero ? "py-2 text-sm font-semibold" : "py-2 text-sm font-medium",
+              "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "windows"
                 ? isTerminal
                   ? "bg-white text-slate-950 shadow-sm"
@@ -692,7 +774,7 @@ export function TunnelCommandForm({
         </div>
       </div>
 
-      {!isHero && commandSection}
+      {commandSection}
     </div>
   );
 }

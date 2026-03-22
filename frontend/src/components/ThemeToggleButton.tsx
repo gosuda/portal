@@ -1,5 +1,5 @@
 import { Moon, Sun } from "lucide-react";
-import clsx from "clsx";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/components/ThemeProvider";
 
@@ -17,12 +17,12 @@ export function ThemeToggleButton({ className }: ThemeToggleButtonProps) {
       variant="outline"
       size="icon"
       onClick={toggleTheme}
-      className={clsx(
+      className={cn(
         "h-11 w-11 cursor-pointer rounded-full border-border bg-card/95 text-foreground shadow-none hover:bg-secondary",
         className
       )}
       aria-label={`Switch to ${nextTheme} theme`}
-      title={theme === "dark" ? "Light theme" : "Dark theme"}
+      title={`Switch to ${nextTheme} theme`}
     >
       {theme === "dark" ? (
         <Sun className="h-5 w-5" />

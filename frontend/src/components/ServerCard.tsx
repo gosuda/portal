@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ExternalLink } from "lucide-react";
 import clsx from "clsx";
 import {
   Dialog,
@@ -10,6 +11,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+
+interface ServerNavigationState {
+  id: number;
+  name: string;
+  description: string;
+  tags: string[];
+  thumbnail: string;
+  owner: string;
+  online: boolean;
+  serverUrl: string;
+}
 
 interface ServerCardProps {
   serverId: number;
@@ -22,7 +34,7 @@ interface ServerCardProps {
   firstSeen?: string;
   dns: string;
   navigationPath: string;
-  navigationState: any;
+  navigationState: ServerNavigationState;
   isFavorite?: boolean;
   onToggleFavorite?: (serverId: number) => void;
   showAdminControls?: boolean;
@@ -54,7 +66,6 @@ export function ServerCard({
   name,
   description,
   tags,
-  thumbnail,
   owner,
   online,
   firstSeen,
@@ -222,206 +233,199 @@ export function ServerCard({
     return `${seconds}s`;
   }, [firstSeen]);
 
+  const statusText = online
+    ? `ONLINE${formattedDuration ? ` ${formattedDuration}` : ""}`
+    : "OFFLINE";
+
   const cardBody = (
     <article
       data-hero-key={`server-bg-${serverId}`}
-      className={clsx(
-        "group flex h-full flex-col overflow-hidden rounded-[1.75rem] border border-border bg-card shadow-[0_18px_42px_oklch(0%_0_0_/_0.06)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_24px_56px_oklch(0%_0_0_/_0.08)]",
-        showAdminControls ? "min-h-[360px]" : "min-h-[310px]"
-      )}
+      className="group flex h-full flex-col rounded-xl border border-border/5 bg-card p-6 transition-all duration-200 hover:-translate-y-1"
     >
-      <div
-        className="relative h-40 overflow-hidden border-b border-border bg-secondary"
-        style={{
-          backgroundImage: thumbnail
-            ? `linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.08)), url(${thumbnail})`
-            : "linear-gradient(135deg, var(--card-media-fallback-start) 0%, var(--card-media-fallback-end) 100%)",
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-        }}
-      >
-        {!thumbnail && (
-          <div
-            className="absolute inset-0"
-            style={{ background: "var(--card-media-overlay)" }}
-          />
-        )}
-
-        <div className="absolute inset-x-0 top-0 flex items-start justify-between p-4">
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-foreground shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)]">
+      {/* Status row */}
+      <div className="mb-6 flex items-start justify-between">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 rounded-lg bg-green-status/10 px-2 py-1">
             <span
               className={clsx(
-                "h-2.5 w-2.5 rounded-full",
+                "h-1.5 w-1.5 rounded-full",
                 online ? "bg-green-status" : "bg-muted-foreground"
               )}
             />
-            <span>
-              {online ? "Online" : "Offline"}
-              {formattedDuration && online && ` · ${formattedDuration}`}
+            <span className="text-[10px] font-bold uppercase tracking-widest text-green-status">
+              {statusText}
             </span>
           </div>
-          {showAdminControls && transport !== "tcp" && (
-            <span className="rounded-full bg-black/40 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-primary backdrop-blur-sm border border-primary/30">
+          {transport !== "tcp" && (
+            <span className="rounded-lg bg-primary/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-primary">
               {transport}
             </span>
           )}
-
-          {showAdminControls ? (
-            <button
-              onClick={handleSelectClick}
-              className={clsx(
-                "flex size-9 items-center justify-center rounded-full border border-border bg-card/95 text-text-muted shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)] transition-colors cursor-pointer",
-                isSelected
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:text-foreground"
-              )}
-              aria-label={isSelected ? "Deselect" : "Select"}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                className="h-[18px] w-[18px]"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {isSelected && <polyline points="20 6 9 17 4 12" />}
-              </svg>
-            </button>
-          ) : (
-            <button
-              onClick={handleFavoriteClick}
-              className={clsx(
-                "flex size-9 items-center justify-center rounded-full border border-border bg-card/95 text-text-muted shadow-[0_8px_18px_oklch(0%_0_0_/_0.05)] transition-colors cursor-pointer",
-                isFavorite
-                  ? "bg-primary text-primary-foreground"
-                  : "hover:text-foreground"
-              )}
-              aria-label={
-                isFavorite ? "Remove from favorites" : "Add to favorites"
-              }
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                className="h-[18px] w-[18px]"
-                fill={isFavorite ? "currentColor" : "none"}
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-              </svg>
-            </button>
-          )}
         </div>
+
+        {showAdminControls ? (
+          <button
+            onClick={handleSelectClick}
+            className={clsx(
+              "cursor-pointer text-text-muted transition-colors",
+              isSelected
+                ? "text-primary"
+                : "hover:text-foreground"
+            )}
+            aria-label={isSelected ? "Deselect" : "Select"}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {isSelected && <polyline points="20 6 9 17 4 12" />}
+            </svg>
+          </button>
+        ) : (
+          <button
+            onClick={handleFavoriteClick}
+            className={clsx(
+              "cursor-pointer text-text-muted transition-colors",
+              isFavorite ? "text-primary" : "hover:text-foreground"
+            )}
+            aria-label={
+              isFavorite ? "Remove from favorites" : "Add to favorites"
+            }
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill={isFavorite ? "currentColor" : "none"}
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+            </svg>
+          </button>
+        )}
       </div>
 
-      <div className="flex flex-1 flex-col justify-between gap-4 p-5">
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <h3 className="truncate text-2xl font-bold tracking-tight text-foreground">
-              {name}
-            </h3>
-            {description && (
-              <p className="line-clamp-2 text-sm leading-6 text-text-muted">
-                {description}
-              </p>
-            )}
-          </div>
+      {/* Title + Description */}
+      <h3 className="truncate text-xl font-extrabold tracking-tight text-foreground transition-colors group-hover:text-primary">
+        {name}
+      </h3>
+      {description && (
+        <p className="mb-6 mt-2 line-clamp-2 text-sm leading-6 text-text-muted">
+          {description}
+        </p>
+      )}
+      {!description && <div className="mb-6" />}
 
-          {tags.length > 0 && (
-            <div className="w-full overflow-x-auto">
-              <div className="flex min-w-max gap-2 pb-1">
-                {tags.map((tag, index) => (
-                  <span
-                    key={index}
-                    className="whitespace-nowrap rounded-full border border-border bg-secondary px-3 py-1 text-xs font-medium text-text-muted"
-                  >
-                    #{tag}
-                  </span>
-                ))}
-              </div>
+      {/* Tags */}
+      {tags.length > 0 && (
+        <div className="mb-6 flex flex-wrap gap-2">
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-md border border-border/10 bg-secondary px-2 py-1 text-[10px] font-bold text-text-muted"
+            >
+              #{tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Spacer to push bottom row down */}
+      <div className="flex-1" />
+
+      {/* Bottom row: Owner + Visit */}
+      <div className="flex items-center justify-between border-t border-border/10 pt-6">
+        <div className="flex items-center gap-2">
+          {owner && (
+            <span className="text-xs font-bold text-text-muted">
+              by {owner}
+            </span>
+          )}
+          {dns && !owner && (
+            <span className="font-mono text-xs text-text-muted">{dns}</span>
+          )}
+        </div>
+        {!showAdminControls && (
+          <span className="flex items-center gap-1 text-xs font-bold text-primary">
+            Visit
+            <ExternalLink className="h-3.5 w-3.5" />
+          </span>
+        )}
+      </div>
+
+      {/* Admin controls */}
+      {showAdminControls && leaseId && (
+        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-border bg-secondary/70 p-4">
+          {onBPSChange && (
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-xs text-text-muted">
+                BPS: <span className="font-medium text-foreground">{formatBPS(bps)}</span>
+              </span>
+              <button
+                onClick={handleBPSSettingsClick}
+                className="cursor-pointer rounded-full border border-border bg-card px-3 py-1 text-[11px] font-semibold text-foreground transition-colors hover:bg-secondary"
+              >
+                Settings
+              </button>
             </div>
           )}
 
-          <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            {owner && <span>by {owner}</span>}
-            {dns && (
-              <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] text-secondary-foreground">
-                {dns}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {showAdminControls && leaseId && (
-          <div className="flex flex-col gap-3 rounded-[1.5rem] border border-border bg-secondary/70 p-4">
-            {onBPSChange && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="text-xs text-text-muted">
-                  BPS: <span className="font-medium text-foreground">{formatBPS(bps)}</span>
+          {isApproved && ip && (
+            <div className="text-[11px] text-text-muted">
+              IP: <span className="font-mono text-foreground">{ip}</span>
+              {isIPBanned && (
+                <span className="ml-2 font-medium text-destructive">
+                  (Banned)
                 </span>
-                <button
-                  onClick={handleBPSSettingsClick}
-                  className="rounded-full border border-border bg-card px-3 py-1 text-[11px] font-semibold text-foreground transition-colors hover:bg-secondary cursor-pointer"
-                >
-                  Settings
-                </button>
-              </div>
-            )}
+              )}
+            </div>
+          )}
 
-            {isApproved && ip && (
-              <div className="text-[11px] text-text-muted">
-                IP: <span className="font-mono text-foreground">{ip}</span>
-                {isIPBanned && (
-                  <span className="ml-2 font-medium text-destructive">
-                    (Banned)
-                  </span>
-                )}
-              </div>
-            )}
-
-            {!isApproved && !isDenied ? (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleApproveClick}
-                  className="flex-1 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90 cursor-pointer"
-                >
-                  Approve
-                </button>
-                <button
-                  onClick={handleDenyClick}
-                  className="flex-1 rounded-xl bg-destructive px-4 py-2 text-xs font-semibold text-destructive-foreground transition-opacity hover:opacity-90 cursor-pointer"
-                >
-                  Deny
-                </button>
-              </div>
-            ) : (
+          {!isApproved && !isDenied ? (
+            <div className="flex gap-2">
               <button
-                onClick={ip ? handleIPBanClick : handleBanClick}
-                className={clsx(
-                  "w-full rounded-xl px-4 py-2 text-xs font-semibold transition-opacity hover:opacity-90 cursor-pointer",
-                  (ip ? isIPBanned : isBanned)
-                    ? "bg-green-status text-white"
-                    : "bg-destructive text-destructive-foreground"
-                )}
+                onClick={handleApproveClick}
+                className="flex-1 cursor-pointer rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-opacity hover:opacity-90"
               >
-                {ip
-                  ? isIPBanned
-                    ? "Unban IP"
-                    : "Ban IP"
-                  : isBanned
-                    ? "Unban"
-                    : "Ban"}
+                Approve
               </button>
-            )}
-          </div>
-        )}
-      </div>
+              <button
+                onClick={handleDenyClick}
+                className="flex-1 cursor-pointer rounded-xl bg-destructive px-4 py-2 text-xs font-semibold text-destructive-foreground transition-opacity hover:opacity-90"
+              >
+                Deny
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={ip ? handleIPBanClick : handleBanClick}
+              className={clsx(
+                "w-full cursor-pointer rounded-xl px-4 py-2 text-xs font-semibold transition-opacity hover:opacity-90",
+                (ip ? isIPBanned : isBanned)
+                  ? "bg-green-status text-white"
+                  : "bg-destructive text-destructive-foreground"
+              )}
+            >
+              {ip
+                ? isIPBanned
+                  ? "Unban IP"
+                  : "Ban IP"
+                : isBanned
+                  ? "Unban"
+                  : "Ban"}
+            </button>
+          )}
+        </div>
+      )}
     </article>
   );
 

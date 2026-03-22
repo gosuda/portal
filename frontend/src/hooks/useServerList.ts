@@ -23,6 +23,7 @@ function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
       link: hostname ? `https://${hostname}/` : "",
       lastUpdated: row.LastSeenAt || undefined,
       firstSeen: row.FirstSeenAt || undefined,
+      transport: row.Transport || "tcp",
     };
   });
 }

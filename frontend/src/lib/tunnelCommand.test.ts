@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildTunnelCommand,
-  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
 } from "@/lib/tunnelCommand";
 
@@ -16,6 +15,8 @@ describe("tunnelCommand", () => {
       relayUrls: ["https://localhost:4017"],
       defaultRelays: true,
       thumbnailURL: "",
+      enableUDP: false,
+      udpAddr: "",
       os: "unix" as const,
     };
 
@@ -29,21 +30,6 @@ describe("tunnelCommand", () => {
     );
     expect(command).not.toContain(" \\\n");
     expect(command).not.toContain("\n  --name");
-  });
-
-  it("uses the same flat layout for display and copy", () => {
-    const options = {
-      currentOrigin: "https://relay.example.com",
-      target: "localhost:3000",
-      name: "",
-      nameSeed: "web_portal",
-      relayUrls: ["https://relay.example.com"],
-      defaultRelays: false,
-      thumbnailURL: "https://example.com/thumb.png",
-      os: "windows" as const,
-    };
-
-    expect(buildTunnelDisplayCommand(options)).toBe(buildTunnelCommand(options));
   });
 
   it("uses the relay root host for preview URLs instead of a placeholder host", () => {
@@ -64,5 +50,41 @@ describe("tunnelCommand", () => {
         "web_portal"
       )
     ).toBe("https://my-app.portal.example.com");
+  });
+
+  it("includes --udp and --udp-addr when UDP is enabled with an explicit address", () => {
+    const command = buildTunnelCommand({
+      currentOrigin: "https://relay.example.com",
+      target: "3000",
+      name: "game-server",
+      nameSeed: "web_portal",
+      relayUrls: [],
+      defaultRelays: true,
+      thumbnailURL: "",
+      enableUDP: true,
+      udpAddr: "127.0.0.1:7777",
+      os: "unix" as const,
+    });
+
+    expect(command).toContain("--udp");
+    expect(command).toContain("--udp-addr 127.0.0.1:7777");
+  });
+
+  it("defaults --udp-addr to target when UDP is enabled but udpAddr is blank", () => {
+    const command = buildTunnelCommand({
+      currentOrigin: "https://relay.example.com",
+      target: "3000",
+      name: "game-server",
+      nameSeed: "web_portal",
+      relayUrls: [],
+      defaultRelays: true,
+      thumbnailURL: "",
+      enableUDP: true,
+      udpAddr: "",
+      os: "unix" as const,
+    });
+
+    expect(command).toContain("--udp");
+    expect(command).toContain("--udp-addr 3000");
   });
 });

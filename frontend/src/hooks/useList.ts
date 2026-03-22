@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SortOption, StatusFilter } from "@/types/filters";
 
 export interface BaseServer {
@@ -13,6 +13,7 @@ export interface BaseServer {
   link: string;
   lastUpdated?: string;
   firstSeen?: string;
+  transport?: string;
 }
 
 export interface UseListOptions<T extends BaseServer> {
@@ -240,19 +241,19 @@ export function useList<T extends BaseServer>({
     return sorted;
   }, [servers, searchQuery, status, sortBy, selectedTags, favorites, additionalFilter]);
 
-  const handleSearchChange = useCallback((value: string) => {
+  const handleSearchChange = (value: string) => {
     setSearchQuery(value);
-  }, []);
+  };
 
-  const handleStatusChange = useCallback((value: StatusFilter) => {
+  const handleStatusChange = (value: StatusFilter) => {
     setStatus(value);
-  }, []);
+  };
 
-  const handleSortByChange = useCallback((value: SortOption) => {
+  const handleSortByChange = (value: SortOption) => {
     setSortBy(value);
-  }, []);
+  };
 
-  const handleTagToggle = useCallback((tag: string) => {
+  const handleTagToggle = (tag: string) => {
     const normalizedTag = tag.trim().toLowerCase();
     if (!normalizedTag) {
       return;
@@ -263,15 +264,15 @@ export function useList<T extends BaseServer>({
         ? prev.filter((candidate) => candidate !== normalizedTag)
         : [...prev, normalizedTag]
     );
-  }, []);
+  };
 
-  const handleToggleFavorite = useCallback((serverId: number) => {
+  const handleToggleFavorite = (serverId: number) => {
     setFavorites((prev) =>
       prev.includes(serverId)
         ? prev.filter((id) => id !== serverId)
         : [...prev, serverId]
     );
-  }, []);
+  };
 
   return {
     searchQuery,

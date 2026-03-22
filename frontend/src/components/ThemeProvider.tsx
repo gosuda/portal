@@ -1,6 +1,5 @@
 import {
   createContext,
-  startTransition,
   useContext,
   useLayoutEffect,
   useState,
@@ -71,9 +70,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       // Ignore storage failures and still apply the theme locally.
     }
 
-    startTransition(() => {
-      setThemeState(nextTheme);
-    });
+    setThemeState(nextTheme);
   };
 
   const toggleTheme = () => {

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Code, Search } from "lucide-react";
 import { Header } from "@/components/Header";
 import { LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
@@ -275,6 +276,10 @@ export function ServerListView({
     String(udpSettings?.maxLeases ?? 0)
   );
 
+  useEffect(() => {
+    setMaxLeasesInput(String(udpSettings?.maxLeases ?? 0));
+  }, [udpSettings?.maxLeases]);
+
   const handleUDPToggle = (enabled: boolean) => {
     if (onUDPSettingsChange && udpSettings) {
       void onUDPSettingsChange({ ...udpSettings, enabled });
@@ -413,7 +418,7 @@ export function ServerListView({
         onBPSChange={onBPSChange}
         onApproveStatusChange={onApproveStatusChange}
         onDenyStatusChange={onDenyStatusChange}
-        transport={adminServer?.transport}
+        transport={server.transport}
         onIPBanStatusChange={onIPBanStatusChange}
         isSelected={isSelected}
         onToggleSelect={handleToggleSelect}
@@ -458,153 +463,157 @@ export function ServerListView({
   return (
     <div className="relative flex h-auto min-h-screen w-full flex-col">
       <div className="flex h-full grow flex-col">
-        <div className="flex flex-1 justify-center">
-          <div className="flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
-            {isAdmin ? (
-              <>
-                <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
-                  <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1">{searchBar}</div>
+        {isAdmin ? (
+          <div className="flex flex-1 justify-center">
+            <div className="flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
+              <div className="sticky top-0 z-10 bg-background pb-4 pt-5">
+                <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">{searchBar}</div>
+                </div>
+                <div className="hidden sm:flex flex-wrap items-center gap-6 mt-4 px-4 sm:px-6">
+                  {adminFilterControls}
+                </div>
+                {onApprovalModeChange && (
+                  <div className="sm:hidden flex items-center gap-3 mt-4 px-4">
+                    <span className="text-sm font-medium text-text-muted">
+                      Approval
+                    </span>
+                    <ApprovalModeToggle
+                      approvalMode={approvalMode}
+                      onApprovalModeChange={onApprovalModeChange}
+                    />
                   </div>
-                  <div className="hidden sm:flex flex-wrap items-center gap-6 mt-4 px-4 sm:px-6">
-                    {adminFilterControls}
+                )}
+              </div>
+              <main className="z-0 flex-1">{serverGrid}</main>
+            </div>
+          </div>
+        ) : (
+          <>
+            <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
+
+            <main className="pb-20">
+              <LandingHero />
+
+              {/* Live Apps Section — sample.html line 146-284 */}
+              <section className="max-w-7xl mx-auto px-6 mb-32 scroll-mt-24" id="live-servers">
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+                  <div>
+                    <h2 className="text-3xl font-extrabold tracking-tight mb-2">Browse live apps</h2>
+                    <p className="text-text-muted">Explore public tunnels currently active on the network.</p>
                   </div>
-                  {onApprovalModeChange && (
-                    <div className="sm:hidden flex items-center gap-3 mt-4 px-4">
-                      <span className="text-sm font-medium text-text-muted">
-                        Approval
-                      </span>
-                      <ApprovalModeToggle
-                        approvalMode={approvalMode}
-                        onApprovalModeChange={onApprovalModeChange}
+                  <div className="flex flex-wrap gap-3">
+                    {/* search pill — replaces mockup line 153-158 static input */}
+                    <div className="bg-secondary px-4 py-2 rounded-xl flex items-center gap-2 border border-border/10">
+                      <Search className="text-text-muted h-[18px] w-[18px]" />
+                      <input
+                        className="bg-transparent border-none p-0 text-sm w-32 text-foreground outline-none placeholder:text-text-muted"
+                        placeholder="Search apps..."
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => onSearchChange(e.target.value)}
                       />
+                    </div>
+                    {/* status select — replaces mockup line 159-163 static button */}
+                    <StatusSelect
+                      status={status}
+                      onStatusChange={onStatusChange}
+                    />
+                    {/* sort select — replaces mockup line 164-168 static button */}
+                    <SortbySelect
+                      sortBy={sortBy}
+                      onSortByChange={onSortByChange}
+                    />
+                    {/* tag combobox — replaces mockup line 169-173 static button */}
+                    <TagCombobox
+                      availableTags={availableTags}
+                      selectedTags={selectedTags}
+                      onAdd={onTagToggle}
+                      onRemove={onTagToggle}
+                    />
+                  </div>
+                </div>
+                {/* App Grid (Bento Style) — sample.html line 177, cards replaced with dynamic ServerCard */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {serverRows.length > 0 ? (
+                    serverRows.map(renderServerCard)
+                  ) : (
+                    <div className="col-span-full py-12 text-center">
+                      <p className="text-lg text-text-muted">No servers match these filters</p>
                     </div>
                   )}
                 </div>
-                <main className="z-0 flex-1">{serverGrid}</main>
-              </>
-            ) : (
-              <>
-                <div className="sticky top-0 z-20 bg-background/95 pt-5">
-                  <Header title={title} isAdmin={isAdmin} onLogout={onLogout} />
-                </div>
-                <main className="z-0 flex-1 px-4 pb-14 pt-6 sm:px-6">
-                  <LandingHero />
+              </section>
 
-                  <section
-                    id="live-servers"
-                    aria-labelledby="live-servers-title"
-                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
-                  >
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
-                        Live apps
-                      </p>
-                      <h2
-                        id="live-servers-title"
-                        className="text-3xl font-semibold tracking-tight text-foreground"
-                      >
-                        Browse live apps
-                      </h2>
+              {/* Official Registry Section — sample.html line 286-348 그대로 */}
+              <section className="max-w-7xl mx-auto px-6 mb-32 scroll-mt-24" id="official-registry">
+                <div className="bg-secondary rounded-xl p-8 md:p-12 border border-border/10 relative overflow-hidden">
+                  {/* Decoration */}
+                  <div
+                    className="absolute top-0 right-0 w-64 h-64 opacity-10 blur-[100px] pointer-events-none"
+                    style={{ background: "linear-gradient(to right, #00FFFF, #FFA500, #FF00FF)" }}
+                  />
+                  <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8 mb-12">
+                    <div>
+                      <h2 className="text-3xl font-extrabold tracking-tight mb-2">Official registry</h2>
+                      <p className="text-text-muted">Trusted public relays provided by the community.</p>
                     </div>
-
-                    {serverRows.length > 0 ? (
-                      <div className="mt-6 border-t border-border pt-6">
-                        {searchBar}
-                        <div className="px-1 pt-3 text-sm text-text-muted">
-                          {filteredServers.length.toLocaleString()} services
-                          visible
-                        </div>
-                        {serverGrid}
-                      </div>
-                    ) : (
-                      <div className="mt-6">
-                        {searchBar}
-                        <div className="px-1 pt-3 text-sm text-text-muted">
-                          0 services visible
-                        </div>
-                        <div className="py-12 text-center">
-                          <p className="text-lg text-text-muted">
-                            No servers match these filters
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </section>
-
-                  <section
-                    id="official-registry"
-                    aria-labelledby="official-registry-title"
-                    className="mt-8 scroll-mt-24 border-t border-border pt-8"
-                  >
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="space-y-2">
-                        <h2
-                          id="official-registry-title"
-                          className="text-2xl font-semibold tracking-tight text-foreground"
+                    <a
+                      className="flex items-center gap-2 text-sm font-bold text-primary px-4 py-2 rounded-xl bg-primary/10 hover:bg-primary/20 transition-all"
+                      href={officialRegistryURL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Code className="h-[18px] w-[18px]" />
+                      Open registry.json
+                    </a>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-y-4 gap-x-12">
+                    {officialRegistryRelays === null && !officialRegistryFailed ? (
+                      <p className="text-sm text-text-muted">Loading official registry...</p>
+                    ) : officialRegistryAvailable && officialRegistryRelays.length > 0 ? (
+                      officialRegistryRelays.map((relay) => (
+                        <a
+                          key={relay}
+                          href={relay}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between p-4 rounded-lg bg-card border border-border/5 hover:border-primary/30 transition-colors group"
                         >
-                          Official registry
-                        </h2>
-                        <p className="max-w-2xl text-sm leading-6 text-text-muted">
-                          Portal reads default public relays from this registry.
-                        </p>
-                      </div>
-                      <a
-                        href={officialRegistryURL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-11 items-center justify-center rounded-full border border-border px-4 text-sm font-semibold text-foreground transition-colors hover:border-foreground"
-                      >
-                        Open registry.json
-                      </a>
-                    </div>
+                          <span className="text-sm font-mono text-text-muted group-hover:text-primary transition-colors">
+                            {relay}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded bg-green-status/10 text-green-status font-bold">
+                            STABLE
+                          </span>
+                        </a>
+                      ))
+                    ) : (
+                      <p className="text-sm text-text-muted">Registry entries are unavailable right now.</p>
+                    )}
+                  </div>
+                </div>
+              </section>
+            </main>
 
-                    <div className="mt-5">
-                      <div className="rounded-2xl border border-border bg-background px-4 py-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-text-muted">
-                            Relays
-                          </p>
-                          {officialRegistryAvailable && (
-                            <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-semibold text-text-muted">
-                              {officialRegistryRelays.length}
-                            </span>
-                          )}
-                        </div>
-
-                        {officialRegistryRelays === null && !officialRegistryFailed ? (
-                          <p className="mt-3 text-sm text-text-muted">
-                            Loading official registry...
-                          </p>
-                        ) : officialRegistryAvailable &&
-                          officialRegistryRelays.length > 0 ? (
-                          <div className="mt-3 space-y-1.5">
-                            {officialRegistryRelays.map((relay) => (
-                              <a
-                                key={relay}
-                                href={relay}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="block overflow-x-auto whitespace-nowrap font-mono text-sm text-foreground underline-offset-4 hover:underline"
-                              >
-                                {relay}
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="mt-3 text-sm text-text-muted">
-                            Registry entries are unavailable right now.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </section>
-                </main>
-              </>
-            )}
-          </div>
-        </div>
+            {/* Footer — sample.html line 351-365 그대로 */}
+            <footer className="w-full py-12 border-t border-border/15 bg-background">
+              <div className="flex flex-col md:flex-row justify-between items-center px-8 max-w-7xl mx-auto gap-4">
+                <div className="flex flex-col gap-2">
+                  <span className="text-lg font-bold text-primary">{title}</span>
+                  <p className="text-sm text-text-muted">Self-hosted HTTP/TCP/UDP tunneling relay. Open source.</p>
+                </div>
+                <div className="flex gap-8">
+                  <a className="text-sm text-text-muted hover:text-foreground transition-colors" href="https://github.com/gosuda/portal" target="_blank" rel="noopener noreferrer">Documentation</a>
+                  <a className="text-sm text-text-muted hover:text-foreground transition-colors" href="https://github.com/gosuda/portal" target="_blank" rel="noopener noreferrer">Status</a>
+                  <a className="text-sm text-text-muted hover:text-foreground transition-colors" href="https://github.com/gosuda/portal" target="_blank" rel="noopener noreferrer">Privacy</a>
+                  <a className="text-sm text-text-muted hover:text-foreground transition-colors" href="https://github.com/gosuda/portal" target="_blank" rel="noopener noreferrer">Terms</a>
+                </div>
+              </div>
+            </footer>
+          </>
+        )}
       </div>
 
       {isAdmin && (

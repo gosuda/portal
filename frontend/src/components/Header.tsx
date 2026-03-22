@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggleButton } from "@/components/ThemeToggleButton";
 import {
@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/tooltip";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { getReleaseVersion } from "@/lib/releaseVersion";
-import clsx from "clsx";
 
 interface HeaderProps {
   title?: string;
@@ -19,6 +18,7 @@ interface HeaderProps {
 }
 
 const repoURL = "https://github.com/gosuda/portal";
+
 export function Header({
   title = "PORTAL",
   isAdmin,
@@ -27,133 +27,169 @@ export function Header({
   const releaseVersion = getReleaseVersion();
   const logoGradientId = useId();
 
-  return (
-    <header className="flex flex-wrap items-center justify-between gap-4 px-1 py-2 sm:px-2">
-      <div className="flex items-center gap-5 text-foreground">
-        <div className="flex h-12 w-12 items-center justify-center">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="27"
-            height="27"
-            viewBox="0 0 906.26 1457.543"
-          >
-            <defs>
-              <linearGradient
-                id={logoGradientId}
-                x1="0%"
-                y1="0%"
-                x2="100%"
-                y2="100%"
-              >
-                <stop
-                  offset="0%"
-                  style={{ stopColor: "var(--accent-orange)" }}
-                />
-                <stop
-                  offset="55%"
-                  style={{ stopColor: "var(--neon-cyan)" }}
-                />
-                <stop
-                  offset="100%"
-                  style={{ stopColor: "var(--accent-magenta)" }}
-                />
-              </linearGradient>
-            </defs>
-            <path
-              fill={`url(#${logoGradientId})`}
-              d="M254.854 137.158c-34.46 84.407-88.363 149.39-110.934 245.675 90.926-187.569 308.397-483.654 554.729-348.685 135.487 74.216 194.878 270.78 206.058 467.566 21.924 385.996-190.977 853.604-467.585 943.057-174.879 56.543-307.375-86.447-364.527-198.115-176.498-344.82 2.041-910.077 182.259-1109.498zm198.13 7.918C202.61 280.257 4.622 968.542 207.322 1270.414c51.713 77.029 194.535 160.648 285.294 71.318-209.061 31.529-288.389-176.143-301.145-340.765 31.411 147.743 139.396 326.12 309.075 253.588 251.957-107.723 376.778-648.46 269.433-966.817 22.394 134.616 15.572 317.711-47.551 412.087 86.655-230.615 7.903-704.478-269.444-554.749z"
-            />
-          </svg>
-        </div>
-
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
-              {title}
-            </h2>
-            {releaseVersion && (
-              <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-semibold text-text-muted">
-                {releaseVersion}
-              </span>
-            )}
+  if (isAdmin) {
+    return (
+      <header className="flex flex-wrap items-center justify-between gap-4 px-1 py-2 sm:px-2">
+        <div className="flex items-center gap-5 text-foreground">
+          <div className="flex h-12 w-12 items-center justify-center">
+            <LogoSVG gradientId={logoGradientId} />
+          </div>
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-2xl font-extrabold tracking-tight text-foreground">
+                {title}
+              </h2>
+              {releaseVersion && (
+                <span className="rounded-full bg-secondary px-2.5 py-0.5 text-xs font-semibold text-text-muted">
+                  {releaseVersion}
+                </span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
-        {!isAdmin && (
-          <nav className="hidden items-center gap-6 text-[15px] font-medium text-text-muted md:flex">
-            <a
-              href="#live-servers"
-              className="transition-colors hover:text-foreground"
-            >
-              Live apps
-            </a>
-            <a
-              href="#official-registry"
-              className="transition-colors hover:text-foreground"
-            >
-              Official registry
-            </a>
-          </nav>
-        )}
-
-        {isAdmin ? (
+        <div className="flex flex-wrap items-center gap-3 sm:gap-4">
           <TunnelCommandModal
             trigger={
               <Button
-                className={clsx(
-                  "h-11 cursor-pointer rounded-full px-5 text-base font-semibold shadow-none",
-                  "hidden sm:inline-flex"
-                )}
+                className="hidden h-11 cursor-pointer rounded-full px-5 text-base font-semibold shadow-none sm:inline-flex"
               >
                 <span className="truncate">Add Your Server</span>
               </Button>
             }
           />
-        ) : (
+          <ThemeToggleButton />
+          {onLogout && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={onLogout}
+                    className="cursor-pointer rounded-full text-foreground hover:text-destructive"
+                    aria-label="Logout"
+                  >
+                    <LogOut className="h-5 w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Logout</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
+      </header>
+    );
+  }
+
+  return (
+    <header className="fixed top-0 z-50 w-full border-b border-border/15 bg-background/60 shadow-[0_24px_40px_rgba(0,0,0,0.08)] glass-header">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+        <div className="flex items-center gap-8">
+          <a
+            href="#"
+            className="flex items-center gap-3"
+            onClick={(e) => {
+              e.preventDefault();
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+          >
+            <LogoSVG gradientId={logoGradientId} />
+            <span
+              className="bg-clip-text text-xl font-black tracking-tighter text-transparent"
+              style={{
+                backgroundImage:
+                  "linear-gradient(90deg, var(--hero-gradient-start) 0%, var(--hero-gradient-mid) 46%, var(--hero-gradient-end) 100%)",
+              }}
+            >
+              {title}
+            </span>
+          </a>
+          <nav className="hidden items-center gap-6 md:flex">
+            <a
+              href="#live-servers"
+              className="text-sm font-bold tracking-tight text-text-muted transition-colors hover:text-primary"
+            >
+              Live Apps
+            </a>
+            <a
+              href="#official-registry"
+              className="text-sm font-bold tracking-tight text-text-muted transition-colors hover:text-primary"
+            >
+              Official Registry
+            </a>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <TunnelCommandModal
+            trigger={
+              <button
+                type="button"
+                className="cursor-pointer rounded-xl p-2 text-text-muted transition-all hover:bg-secondary active:scale-95"
+                aria-label="Open tunnel command"
+              >
+                <Terminal className="h-5 w-5" />
+              </button>
+            }
+          />
+
+          <ThemeToggleButton />
+
           <a
             href={repoURL}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-foreground transition-colors hover:text-primary"
-            aria-label="View source on GitHub"
+            className="ml-2 rounded-xl px-4 py-1.5 text-sm font-bold transition-all hover:brightness-110 active:scale-95"
+            style={{
+              background:
+                "linear-gradient(90deg, var(--hero-gradient-start) 0%, var(--hero-gradient-mid) 46%, var(--hero-gradient-end) 100%)",
+              color: "var(--primary-foreground)",
+            }}
           >
-            <svg
-              height="32"
-              width="32"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              className="opacity-80 hover:opacity-100"
-            >
-              <path d="M12 1C5.923 1 1 5.923 1 12c0 4.867 3.149 8.979 7.521 10.436.55.096.756-.233.756-.522 0-.262-.013-1.128-.013-2.049-2.764.509-3.479-.674-3.699-1.292-.124-.317-.66-1.293-1.127-1.554-.385-.207-.936-.715-.014-.729.866-.014 1.485.797 1.691 1.128.99 1.663 2.571 1.196 3.204.907.096-.715.385-1.196.701-1.471-2.448-.275-5.005-1.224-5.005-5.432 0-1.196.426-2.186 1.128-2.956-.111-.275-.496-1.402.11-2.915 0 0 .921-.288 3.024 1.128a10.193 10.193 0 0 1 2.75-.371c.936 0 1.871.123 2.75.371 2.104-1.43 3.025-1.128 3.025-1.128.605 1.513.221 2.64.111 2.915.701.77 1.127 1.747 1.127 2.956 0 4.222-2.571 5.157-5.019 5.432.399.344.743 1.004.743 2.035 0 1.471-.014 2.654-.014 3.025 0 .289.206.632.756.522C19.851 20.979 23 16.854 23 12c0-6.077-4.922-11-11-11Z" />
-            </svg>
+            GitHub
           </a>
-        )}
-
-        <ThemeToggleButton />
-
-        {isAdmin && onLogout && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={onLogout}
-                  className="cursor-pointer rounded-full text-foreground hover:text-destructive"
-                  aria-label="Logout"
-                >
-                  <LogOut className="h-5 w-5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Logout</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
+        </div>
       </div>
     </header>
+  );
+}
+
+function LogoSVG({ gradientId }: { gradientId: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="27"
+      height="27"
+      viewBox="0 0 906.26 1457.543"
+    >
+      <defs>
+        <linearGradient
+          id={gradientId}
+          x1="0%"
+          y1="0%"
+          x2="100%"
+          y2="100%"
+        >
+          <stop
+            offset="0%"
+            style={{ stopColor: "var(--accent-orange)" }}
+          />
+          <stop
+            offset="55%"
+            style={{ stopColor: "var(--neon-cyan)" }}
+          />
+          <stop
+            offset="100%"
+            style={{ stopColor: "var(--accent-magenta)" }}
+          />
+        </linearGradient>
+      </defs>
+      <path
+        fill={`url(#${gradientId})`}
+        d="M254.854 137.158c-34.46 84.407-88.363 149.39-110.934 245.675 90.926-187.569 308.397-483.654 554.729-348.685 135.487 74.216 194.878 270.78 206.058 467.566 21.924 385.996-190.977 853.604-467.585 943.057-174.879 56.543-307.375-86.447-364.527-198.115-176.498-344.82 2.041-910.077 182.259-1109.498zm198.13 7.918C202.61 280.257 4.622 968.542 207.322 1270.414c51.713 77.029 194.535 160.648 285.294 71.318-209.061 31.529-288.389-176.143-301.145-340.765 31.411 147.743 139.396 326.12 309.075 253.588 251.957-107.723 376.778-648.46 269.433-966.817 22.394 134.616 15.572 317.711-47.551 412.087 86.655-230.615 7.903-704.478-269.444-554.749z"
+      />
+    </svg>
   );
 }

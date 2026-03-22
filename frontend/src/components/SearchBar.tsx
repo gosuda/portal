@@ -36,26 +36,26 @@ export function SearchBar({
   setShowFilterModal,
 }: SearchBarProps) {
   return (
-    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-4 sm:px-6">
+    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3">
       <div className="flex gap-2 items-center w-full">
         <label className="flex min-w-[220px] flex-1 items-stretch h-10 relative">
-          <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
+          <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-xl bg-secondary border border-border/10">
             <Search className="w-4 h-4" />
           </div>
           <Input
             placeholder="Search live apps..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="h-10 pl-12 border border-border rounded-md"
+            className="h-10 pl-12 rounded-xl border-border/10 bg-secondary"
           />
         </label>
         {hideFiltersOnMobile && setShowFilterModal && (
           <button
             onClick={() => setShowFilterModal(true)}
-            className="sm:hidden flex items-center justify-center w-10 h-10 rounded-lg bg-secondary hover:bg-secondary/80 transition-colors"
+            className="sm:hidden flex items-center justify-center w-10 h-10 rounded-xl bg-secondary border border-border/10 hover:bg-secondary/80 transition-colors"
             aria-label="Filter settings"
           >
-            <Settings className="w-5 h-5 text-secondary-foreground" />
+            <Settings className="w-5 h-5 text-text-muted" />
           </button>
         )}
       </div>

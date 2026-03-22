@@ -30,6 +30,7 @@ type Lease struct {
 	ClientIP    string
 	Hostname    string
 	UDPEnabled  bool
+	Transport   string
 	Metadata    LeaseMetadata
 	Ready       int
 	UDPPort     int

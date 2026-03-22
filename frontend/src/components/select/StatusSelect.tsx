@@ -24,7 +24,7 @@ export const StatusSelect = ({
   <Select value={status} onValueChange={onStatusChange}>
     <SelectTrigger
       className={clsx(
-        "w-[130px] h-10 border-border!",
+        "w-[130px] h-10 rounded-xl bg-secondary border-border/10!",
         hideFiltersOnMobile && "hidden sm:flex",
         className
       )}

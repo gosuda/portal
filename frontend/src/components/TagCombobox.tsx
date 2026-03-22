@@ -98,7 +98,7 @@ export function TagCombobox({
       ref={containerRef}
       className="flex w-full sm:w-auto sm:min-w-[320px] flex-1 items-center gap-2 overflow-visible"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-background px-2 py-1.5 min-h-10">
+      <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-border/10 bg-secondary px-2 py-1.5 min-h-10">
         <div className="flex flex-1 flex-wrap items-center gap-2 overflow-hidden">
           {selectedTags.map((tag) => (
             <Button
