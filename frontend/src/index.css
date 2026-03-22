@@ -42,7 +42,7 @@
     --card-foreground: oklch(22.6% 0.033 98);
     --popover: oklch(100% 0 0);
     --popover-foreground: oklch(22.6% 0.033 98);
-    --primary: oklch(61% 0.214 257);
+    --primary: oklch(51.1% 0.278 277);
     --primary-foreground: oklch(100% 0 0);
     --secondary: oklch(93.1% 0.042 92);
     --secondary-foreground: oklch(22.6% 0.033 98);
@@ -54,7 +54,7 @@
     --destructive-foreground: oklch(100% 0 0);
     --border: oklch(83% 0.031 294);
     --input: oklch(96.4% 0.042 92);
-    --ring: oklch(61% 0.214 257);
+    --ring: oklch(51.1% 0.278 277);
 
     --green-status: oklch(57.1% 0.095 263);
     --text-muted: oklch(57% 0.014 271);
@@ -87,8 +87,8 @@
     --card-foreground: oklch(91.5% 0.007 295);
     --popover: oklch(26.5% 0.008 275);
     --popover-foreground: oklch(91.5% 0.007 295);
-    --primary: oklch(58.7% 0.092 179);
-    --primary-foreground: oklch(100% 0 0);
+    --primary: oklch(71.5% 0.103 179);
+    --primary-foreground: oklch(15% 0 0);
     --secondary: oklch(23.6% 0.008 275);
     --secondary-foreground: oklch(91.5% 0.007 295);
     --muted: oklch(26.5% 0.008 275);
@@ -99,7 +99,7 @@
     --destructive-foreground: oklch(98% 0 0);
     --border: oklch(36.9% 0.009 277);
     --input: oklch(23.6% 0.008 275);
-    --ring: oklch(58.7% 0.092 179);
+    --ring: oklch(71.5% 0.103 179);
 
     --green-status: oklch(96.7% 0.065 137);
     --text-muted: oklch(69% 0.007 277);
@@ -113,7 +113,7 @@
     --hero-gradient-end: var(--accent-orange);
     --hero-terminal-bg:
       linear-gradient(160deg, oklch(19% 0 0 / 0.78), oklch(12% 0.01 250 / 0.88));
-    --hero-terminal-border: oklch(58.7% 0.092 179 / 0.3);
+    --hero-terminal-border: oklch(71.5% 0.103 179 / 0.3);
     --hero-terminal-foreground: oklch(91.5% 0.007 295);
     --hero-terminal-accent: var(--neon-cyan);
     --hero-terminal-shadow: oklch(0% 0 0 / 0.28);
@@ -121,7 +121,7 @@
     --card-media-fallback-start: oklch(26% 0.03 235);
     --card-media-fallback-end: oklch(18% 0.02 260);
     --card-media-overlay:
-      radial-gradient(circle at top left, oklch(58.7% 0.092 179 / 0.26), transparent 36%),
+      radial-gradient(circle at top left, oklch(71.5% 0.103 179 / 0.26), transparent 36%),
       linear-gradient(180deg, transparent, oklch(10% 0 0 / 0.78));
   }
 

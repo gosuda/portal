@@ -125,7 +125,7 @@ export function TagCombobox({
             onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             placeholder="Add tag…"
-            className="min-w-[120px] flex-1 bg-transparent text-sm outline-none placeholder:text-text-muted"
+            className="min-w-30 flex-1 bg-transparent text-sm outline-none placeholder:text-text-muted"
             role="combobox"
             aria-expanded={open}
             aria-controls={listId}

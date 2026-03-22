@@ -498,40 +498,44 @@ export function ServerListView({
 
               {/* Live Apps Section — sample.html line 146-284 */}
               <section className="max-w-7xl mx-auto px-6 mb-32 scroll-mt-24" id="live-servers">
-                <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
-                  <div>
-                    <h2 className="text-3xl font-extrabold tracking-tight mb-2">Browse live apps</h2>
-                    <p className="text-text-muted">Explore public tunnels currently active on the network.</p>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    {/* search pill — replaces mockup line 153-158 static input */}
-                    <div className="bg-secondary px-4 py-2 rounded-xl flex items-center gap-2 border border-border/10">
-                      <Search className="text-text-muted h-[18px] w-[18px]" />
-                      <input
-                        className="bg-transparent border-none p-0 text-sm w-32 text-foreground outline-none placeholder:text-text-muted"
-                        placeholder="Search apps..."
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => onSearchChange(e.target.value)}
+                <div className="mb-12 space-y-4">
+                  <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                    <div>
+                      <h2 className="text-3xl font-extrabold tracking-tight mb-2">Browse live apps</h2>
+                      <p className="text-text-muted">Explore public tunnels currently active on the network.</p>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-wrap gap-3">
+                        {/* search pill — replaces mockup line 153-158 static input */}
+                        <div className="bg-secondary px-4 py-2 rounded-xl flex items-center gap-2 border border-border/10">
+                          <Search className="text-text-muted h-4.5 w-4.5" />
+                          <input
+                            className="bg-transparent border-none p-0 text-sm w-32 text-foreground outline-none placeholder:text-text-muted"
+                            placeholder="Search apps..."
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => onSearchChange(e.target.value)}
+                          />
+                        </div>
+                        {/* status select — replaces mockup line 159-163 static button */}
+                        <StatusSelect
+                          status={status}
+                          onStatusChange={onStatusChange}
+                        />
+                        {/* sort select — replaces mockup line 164-168 static button */}
+                        <SortbySelect
+                          sortBy={sortBy}
+                          onSortByChange={onSortByChange}
+                        />
+                      </div>
+                      {/* tag combobox — replaces mockup line 169-173 static button */}
+                      <TagCombobox
+                        availableTags={availableTags}
+                        selectedTags={selectedTags}
+                        onAdd={onTagToggle}
+                        onRemove={onTagToggle}
                       />
                     </div>
-                    {/* status select — replaces mockup line 159-163 static button */}
-                    <StatusSelect
-                      status={status}
-                      onStatusChange={onStatusChange}
-                    />
-                    {/* sort select — replaces mockup line 164-168 static button */}
-                    <SortbySelect
-                      sortBy={sortBy}
-                      onSortByChange={onSortByChange}
-                    />
-                    {/* tag combobox — replaces mockup line 169-173 static button */}
-                    <TagCombobox
-                      availableTags={availableTags}
-                      selectedTags={selectedTags}
-                      onAdd={onTagToggle}
-                      onRemove={onTagToggle}
-                    />
                   </div>
                 </div>
                 {/* App Grid (Bento Style) — sample.html line 177, cards replaced with dynamic ServerCard */}
@@ -565,7 +569,7 @@ export function ServerListView({
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      <Code className="h-[18px] w-[18px]" />
+                      <Code className="h-4.5 w-4.5" />
                       Open registry.json
                     </a>
                   </div>
