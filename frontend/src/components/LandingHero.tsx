@@ -64,7 +64,6 @@ export function LandingHero() {
   const carouselLoopBoundaryIndex = carouselCardCount + 1;
   const carouselTransitionDurationMs = 700;
   const [reduceMotion, setReduceMotion] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [trackIndex, setTrackIndex] = useState(1);
   const [transitionEnabled, setTransitionEnabled] = useState(true);
@@ -141,7 +140,7 @@ export function LandingHero() {
   }, []);
 
   useEffect(() => {
-    if (reduceMotion || isHovered || isDragging) {
+    if (reduceMotion || isDragging) {
       return;
     }
 
@@ -159,7 +158,7 @@ export function LandingHero() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [carouselLoopBoundaryIndex, isDragging, isHovered, reduceMotion]);
+  }, [carouselLoopBoundaryIndex, isDragging, reduceMotion]);
 
   useEffect(() => {
     if (transitionEnabled) {
@@ -324,13 +323,7 @@ export function LandingHero() {
 
       <div className="relative mt-10 -mx-4 w-auto sm:-mx-6 md:-mx-8">
         <div className="overflow-hidden border-b border-border/80 bg-transparent">
-          <div
-            className="relative mx-auto max-w-7xl px-3 py-6 sm:px-6 sm:py-8"
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
-            onFocusCapture={() => setIsHovered(true)}
-            onBlurCapture={() => setIsHovered(false)}
-          >
+          <div className="relative mx-auto max-w-7xl px-3 py-6 sm:px-6 sm:py-8">
             <div className="pointer-events-none absolute inset-x-0 top-6 flex justify-center sm:top-8">
               <div className="h-28 w-28 rounded-full bg-primary/16 blur-3xl dark:bg-primary/22" />
             </div>
