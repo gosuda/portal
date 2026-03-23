@@ -39,7 +39,7 @@ type Frontend struct {
 	landingPageEnabled   atomic.Bool
 }
 
-func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string) (*Frontend, error) {
+func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string, defaultLandingPageEnabled bool) (*Frontend, error) {
 	if server == nil {
 		return nil, errors.New("frontend requires portal server")
 	}
@@ -58,7 +58,7 @@ func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath st
 		auth:              newAdminAuth(adminSecret),
 		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
 	}
-	frontend.setLandingPageEnabled(state.landingPageEnabled())
+	frontend.setLandingPageEnabled(state.landingPageEnabled(defaultLandingPageEnabled))
 	return frontend, nil
 }
 
@@ -243,7 +243,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description string) stri
 
 func (f *Frontend) isLandingPageEnabled() bool {
 	if f == nil {
-		return true
+		return false
 	}
 	return f.landingPageEnabled.Load()
 }

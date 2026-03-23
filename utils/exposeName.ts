@@ -60,13 +60,20 @@ export function buildDefaultExposeName(
 }
 
 export function normalizeExposeName(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, 63);
+  const cleaned = sanitizeExposeNameInput(value);
+  if (cleaned === "") {
+    return "";
+  }
+
+  if (/^[a-z0-9-]+$/.test(cleaned)) {
+    return cleaned.slice(0, 63);
+  }
+
+  const ascii = toASCIILabel(cleaned);
+  if (ascii === "" || ascii.length > 63) {
+    return "";
+  }
+  return ascii;
 }
 
 export function normalizeExposeTarget(raw: string): string {
@@ -114,6 +121,45 @@ function normalizeSeed(clientSeed: string): string {
     return trimmed.slice(4) || "portal";
   }
   return trimmed;
+}
+
+function sanitizeExposeNameInput(value: string): string {
+  const input = value.trim().toLowerCase().normalize("NFC");
+  if (input === "") {
+    return "";
+  }
+
+  let output = "";
+  let previousHyphen = false;
+
+  for (const char of input) {
+    if (char === "-" || /[\p{L}\p{N}]/u.test(char)) {
+      output += char;
+      previousHyphen = false;
+      continue;
+    }
+
+    if (!previousHyphen) {
+      output += "-";
+      previousHyphen = true;
+    }
+  }
+
+  return output.replace(/^-+|-+$/g, "");
+}
+
+function toASCIILabel(label: string): string {
+  const suffix = ".example.test";
+
+  try {
+    const hostname = new URL(`https://${label}${suffix}`).hostname;
+    if (!hostname.endsWith(suffix)) {
+      return "";
+    }
+    return hostname.slice(0, -suffix.length);
+  } catch {
+    return "";
+  }
 }
 
 function pickNameIndexes(input: string): [number, number, number] {

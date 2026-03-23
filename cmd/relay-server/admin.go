@@ -465,8 +465,11 @@ func persistedStateFromRuntime(runtime *policy.Runtime, landingPageEnabled bool)
 	}
 }
 
-func (s persistedAdminState) landingPageEnabled() bool {
-	return s.LandingPageEnabled == nil || *s.LandingPageEnabled
+func (s persistedAdminState) landingPageEnabled(defaultEnabled bool) bool {
+	if s.LandingPageEnabled == nil {
+		return defaultEnabled
+	}
+	return *s.LandingPageEnabled
 }
 
 func (s persistedAdminState) apply(runtime *policy.Runtime) error {

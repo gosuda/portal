@@ -1,6 +1,7 @@
 import { API_PATHS } from "@/lib/apiPaths";
 import {
   buildDefaultExposeName,
+  normalizeExposeName,
   resolveExposeName,
 } from "../../../utils/exposeName";
 
@@ -24,6 +25,10 @@ export function buildDefaultTunnelName(
   nameSeed: string
 ): string {
   return buildDefaultExposeName(target, nameSeed);
+}
+
+export function normalizeTunnelCommandName(value: string): string {
+  return normalizeExposeName(value);
 }
 
 export function buildTunnelCommand({
@@ -267,5 +272,5 @@ function joinTunnelDisplayCommand(
     exposeOptions.slice(relayIndex).join(" "),
   ];
 
-  return [installLine, ...exposeLines].join("\n");
+  return [installLine, exposeLines.join("\n")].join("\n");
 }

@@ -14,6 +14,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
+
+	"golang.org/x/net/idna"
 )
 
 // Input parsing and normalization.
@@ -57,9 +60,17 @@ func ParseCIDRs(raw string) ([]*net.IPNet, error) {
 }
 
 func NormalizeDNSLabel(raw string) (string, error) {
-	label := NormalizeHostname(raw)
+	label := sanitizeDNSLabelInput(raw)
 	if label == "" {
 		return "", errors.New("name is required")
+	}
+
+	if !isPlainDNSLabel(label) {
+		ascii, err := idna.Lookup.ToASCII(label)
+		if err != nil {
+			return "", errors.New("name is invalid")
+		}
+		label = NormalizeHostname(ascii)
 	}
 	if strings.Contains(label, ".") {
 		return "", errors.New("name must be a single dns label")
@@ -77,6 +88,42 @@ func NormalizeDNSLabel(raw string) (string, error) {
 		return "", errors.New("name must contain only letters, numbers, or hyphen")
 	}
 	return label, nil
+}
+
+func sanitizeDNSLabelInput(raw string) string {
+	input := strings.TrimSpace(strings.ToLower(raw))
+	if input == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.Grow(len(input))
+	previousHyphen := false
+
+	for _, r := range input {
+		if r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			previousHyphen = false
+			continue
+		}
+		if previousHyphen {
+			continue
+		}
+		b.WriteByte('-')
+		previousHyphen = true
+	}
+
+	return strings.Trim(b.String(), "-")
+}
+
+func isPlainDNSLabel(label string) bool {
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func NormalizeRelayURL(raw string) (string, error) {

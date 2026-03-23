@@ -19,7 +19,11 @@ function readLandingPageEnabled(doc?: Document): boolean {
       ?.content.trim()
       .toLowerCase() || "";
 
-  return value !== "false" && value !== "0" && value !== "no";
+  if (value === "" || value === "[%landing_page_enabled%]") {
+    return true;
+  }
+
+  return value === "true" || value === "1" || value === "yes";
 }
 
 export function ServerList() {

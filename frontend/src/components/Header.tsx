@@ -8,9 +8,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import { getReleaseVersion } from "@/lib/releaseVersion";
-import clsx from "clsx";
 
 interface HeaderProps {
   title?: string;
@@ -54,16 +52,6 @@ export function Header({
   const releaseVersion = getReleaseVersion();
   const serverOwnerAddress = getServerOwnerAddress();
   const [ownerAddressCopied, setOwnerAddressCopied] = useState(false);
-  const addYourServerTrigger = (
-    <Button
-      className={clsx(
-        "h-11 cursor-pointer rounded-full px-5 text-base font-semibold shadow-none",
-        "hidden sm:inline-flex"
-      )}
-    >
-      <span className="truncate">Add Your Server</span>
-    </Button>
-  );
   const displayOwnerAddress = formatOwnerAddress(serverOwnerAddress);
 
   useEffect(() => {
@@ -126,7 +114,13 @@ export function Header({
           </div>
         </div>
         {!isAdmin && (
-          <nav className="hidden items-center gap-6 pl-2 text-base font-semibold text-text-muted md:flex lg:pl-3">
+          <nav className="hidden items-center gap-6 pl-2 text-base font-semibold text-text-muted xl:flex xl:pl-3">
+            <a
+              href="#quick-start"
+              className="transition-colors hover:text-foreground"
+            >
+              Quick Start
+            </a>
             <a
               href="#live-servers"
               className="transition-colors hover:text-foreground"
@@ -147,7 +141,7 @@ export function Header({
         {serverOwnerAddress && (
           <div
             title={serverOwnerAddress}
-            className="hidden h-11 items-center gap-2 rounded-full border border-sky-500/20 bg-background/85 pl-1.5 pr-1 shadow-[0_10px_28px_rgba(15,23,42,0.08)] backdrop-blur lg:inline-flex"
+            className="inline-flex h-11 max-w-full items-center gap-2 rounded-full border border-sky-500/20 bg-background/85 pl-1.5 pr-1 shadow-[0_10px_28px_rgba(15,23,42,0.08)] backdrop-blur"
           >
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-linear-to-br from-sky-400 via-cyan-300 to-blue-500 shadow-[0_8px_20px_rgba(56,189,248,0.28)]">
               <svg
@@ -164,10 +158,7 @@ export function Header({
               </svg>
             </div>
 
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-600 dark:text-sky-300">
-              Address
-            </span>
-            <span className="max-w-[8.5rem] truncate font-mono text-[13px] font-semibold tracking-tight text-foreground">
+            <span className="max-w-[6.75rem] truncate font-mono text-[13px] font-semibold tracking-tight text-foreground sm:max-w-[8.5rem]">
               {displayOwnerAddress}
             </span>
 
@@ -187,15 +178,12 @@ export function Header({
             </button>
           </div>
         )}
-
-        <TunnelCommandModal trigger={addYourServerTrigger} />
-
         {!isAdmin && (
           <a
             href={repoURL}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-border bg-card/95 text-foreground transition-colors hover:bg-secondary hover:text-primary"
+            className="hidden h-11 w-11 items-center justify-center text-foreground transition-transform transition-colors hover:-translate-y-0.5 hover:text-primary xl:inline-flex"
             aria-label="View source on GitHub"
           >
             <svg
@@ -210,7 +198,7 @@ export function Header({
           </a>
         )}
 
-        <ThemeToggleButton />
+        <ThemeToggleButton className="hidden xl:inline-flex" />
 
         {isAdmin && onLogout && (
           <TooltipProvider>

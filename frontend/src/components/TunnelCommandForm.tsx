@@ -17,6 +17,7 @@ import {
   buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
   buildTunnelStatusHostname,
+  normalizeTunnelCommandName,
   normalizeAbsoluteHTTPURL,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
@@ -81,6 +82,16 @@ function nextTunnelNameShuffleKey(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
+function splitDisplayCommand(command: string, os: TunnelCommandOS) {
+  const lines = command.split("\n");
+  const installLineCount = os === "windows" ? 2 : 1;
+
+  return {
+    installBlock: lines.slice(0, installLineCount).join("\n"),
+    runBlock: lines.slice(installLineCount).join("\n"),
+  };
+}
+
 export function TunnelCommandForm({
   className,
   theme = "light",
@@ -98,14 +109,12 @@ function HeroTunnelCommandForm({
   theme,
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
   Pick<TunnelCommandFormProps, "className">) {
-  const inputId = useId();
   const isTerminal = theme === "terminal";
   const currentOrigin = useMemo(readCurrentOrigin, []);
   const nameSeed = useMemo(readTunnelNameSeed, []);
 
   const [target, setTarget] = useState(DEFAULT_HOST);
   const [name, setName] = useState("");
-  const [isAutoName, setIsAutoName] = useState(true);
   const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
@@ -119,7 +128,11 @@ function HeroTunnelCommandForm({
     () => buildDefaultTunnelName(target, resolvedNameSeed),
     [resolvedNameSeed, target]
   );
-  const effectiveName = isAutoName ? generatedName : name;
+  const normalizedName = useMemo(
+    () => normalizeTunnelCommandName(name),
+    [name]
+  );
+  const effectiveName = normalizedName === "" ? generatedName : normalizedName;
   const commandOptions = useMemo(
     () => ({
       currentOrigin,
@@ -142,6 +155,10 @@ function HeroTunnelCommandForm({
   const displayCommand = useMemo(
     () => buildTunnelDisplayCommand(commandOptions),
     [commandOptions]
+  );
+  const { installBlock, runBlock } = useMemo(
+    () => splitDisplayCommand(displayCommand, os),
+    [displayCommand, os]
   );
   const previewURL = useMemo(
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
@@ -219,20 +236,11 @@ function HeroTunnelCommandForm({
   };
 
   const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.value;
-    if (next.trim() === "") {
-      setName("");
-      setIsAutoName(true);
-      return;
-    }
-
-    setName(next);
-    setIsAutoName(false);
+    setName(event.target.value);
   };
 
   const handleShuffleName = () => {
     setName("");
-    setIsAutoName(true);
     setNameShuffleKey(nextTunnelNameShuffleKey());
   };
 
@@ -244,196 +252,220 @@ function HeroTunnelCommandForm({
   const tunnelStatusHeadline = {
     alive: "This URL is live now",
     registered: "URL reserved",
-    waiting: "Waiting",
+    waiting: "Waiting for Connection",
   }[tunnelStatus];
   const isPreviewURLDisabled = tunnelStatus === "waiting";
   const heroSectionLabelClass = cn(
-    "text-xs font-semibold uppercase tracking-[0.24em]",
-    isTerminal ? "text-slate-400" : "text-text-muted"
+    "text-[13px] font-semibold tracking-[0.04em] sm:text-sm",
+    isTerminal ? "text-slate-100" : "text-foreground/85"
+  );
+  const heroCommandTitleClass = cn(
+    "min-w-0 text-[15px] font-bold tracking-tight sm:text-base",
+    isTerminal ? "text-slate-50" : "text-foreground"
   );
   const heroURLClass = cn(
     "block overflow-x-auto whitespace-nowrap font-mono text-[15px] font-medium sm:text-base",
     isTerminal ? "text-sky-300" : "text-primary"
   );
-  const heroInputClass = cn(
-    "h-10 rounded-lg border px-3 text-sm shadow-none",
+  const platformButtonGroupClass = cn(
+    "flex shrink-0 rounded-lg border p-0.5",
     isTerminal
-      ? "border-white/6 bg-white/[0.035] text-slate-200 placeholder:text-slate-500"
-      : "border-border bg-white"
+      ? "border-white/6 bg-white/[0.035]"
+      : "border-border bg-border"
   );
-  const nameInputValue = isAutoName ? generatedName : name;
-  const shuffleButtonClass = cn(
-    "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border px-0 text-xs font-semibold transition-colors",
+  const platformButtonClass = (selected: boolean) =>
+    cn(
+      "min-w-[72px] whitespace-nowrap rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-colors",
+      selected
+        ? isTerminal
+          ? "bg-white/[0.08] text-slate-200"
+          : "bg-background text-foreground/85"
+        : isTerminal
+          ? "text-slate-500 hover:text-slate-300"
+          : "text-text-muted hover:text-foreground"
+    );
+  const heroControlLabelClass = cn(
+    "shrink-0 text-[9px] font-semibold uppercase tracking-[0.16em]",
+    isTerminal ? "text-slate-500" : "text-text-muted"
+  );
+  const heroControlInputClass = cn(
+    "h-auto border-0 bg-transparent px-0 py-0 text-[13px] shadow-none focus-visible:ring-0",
     isTerminal
-      ? "border-white/6 bg-white/[0.035] text-slate-400 hover:bg-white/5 hover:text-white"
-      : "border-border bg-white text-text-muted hover:text-foreground"
+      ? "text-slate-200 placeholder:text-slate-600"
+      : "text-foreground/85 placeholder:text-muted-foreground"
   );
-
+  const heroShuffleButtonClass = cn(
+    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors",
+    isTerminal
+      ? "text-slate-500 hover:bg-white/[0.06] hover:text-slate-200"
+      : "text-text-muted hover:bg-foreground/5 hover:text-foreground"
+  );
   return (
-    <div className={cn("space-y-4", className)}>
-      <div className="space-y-4">
-        <label className={heroSectionLabelClass}>Command</label>
-        <div className="relative">
-          <pre
-            className={cn(
-              "min-h-[148px] overflow-x-auto whitespace-pre-wrap break-all rounded-xl border px-4 py-4 font-mono text-sm leading-7",
-              isTerminal
-                ? "border-primary/20 bg-black/50 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-                : "bg-border text-foreground"
-            )}
-          >
-            {displayCommand}
-          </pre>
-        </div>
-
-        <button
-          type="button"
-          onClick={handleCopy}
-          className={cn(
-            "inline-flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all duration-200",
-            copied
-              ? "border-sky-400/45 bg-linear-to-r from-sky-400 via-cyan-300 to-blue-400 text-slate-950 shadow-[0_10px_24px_rgba(37,99,235,0.18)]"
-              : "border-sky-400/45 bg-linear-to-r from-sky-500 via-cyan-400 to-blue-500 text-slate-950 shadow-[0_12px_30px_rgba(37,99,235,0.22)] hover:brightness-105 hover:saturate-125"
-          )}
-          aria-label="Copy command"
-        >
-          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-          <span>{copied ? "Copied" : "Copy command"}</span>
-        </button>
-
-        <div className="space-y-1.5 pt-0.5">
-          <p className={heroSectionLabelClass}>Public URL</p>
-          <div
-            className={cn(
-              "space-y-3 rounded-xl border px-3.5 py-3",
-              isTerminal
-                ? "border-white/8 bg-white/[0.045]"
-                : "border-border bg-white"
-            )}
-          >
-            <div
+    <div className={cn("space-y-5", className)}>
+      <div className="space-y-2">
+        <div className="space-y-1.5">
+          <p className={heroSectionLabelClass}>
+            1. Start your local app
+            <span
               className={cn(
-                "flex items-center gap-2 text-[13px] font-semibold",
-                isTerminal ? "text-slate-300" : "text-foreground"
+                "ml-1 normal-case tracking-normal",
+                isTerminal ? "text-slate-400" : "text-text-muted"
               )}
             >
+              (e.g.
               <span
-                className={cn("h-2 w-2 rounded-full", tunnelStatusTone)}
-                aria-hidden="true"
-              />
-              <span>{tunnelStatusHeadline}</span>
-            </div>
-            {isPreviewURLDisabled ? (
-              <span
-                aria-disabled="true"
-                className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
+                className={cn(
+                  "mx-1 font-mono",
+                  isTerminal ? "text-slate-200" : "text-foreground"
+                )}
               >
-                {previewURL}
+                localhost:3000
               </span>
-            ) : (
-              <a
-                href={previewURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={cn(heroURLClass, "underline-offset-4 hover:underline")}
-              >
-                {previewURL}
-              </a>
-            )}
-          </div>
+              )
+            </span>
+          </p>
         </div>
       </div>
 
-      <div
-        className={cn(
-          "space-y-1.5 border-t pt-3",
-          isTerminal ? "border-white/6" : "border-border/80"
-        )}
-      >
-        <div
-          className={cn(
-            "grid grid-cols-[62px_minmax(0,1fr)_140px] gap-2 px-1 text-[9px] font-semibold uppercase tracking-[0.16em]",
-            isTerminal ? "text-slate-500" : "text-text-muted"
-          )}
-        >
-          <span>Port</span>
-          <span>Name</span>
-          <span>Platform</span>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden="true"
+              className={cn(
+                "shrink-0 font-mono text-lg leading-none",
+                !isTerminal && "text-primary"
+              )}
+              style={isTerminal ? { color: "var(--hero-terminal-accent)" } : undefined}
+            >
+              {">"}
+            </span>
+            <h3 id="tunnel-preview" className={heroCommandTitleClass}>
+              2. Run this command
+            </h3>
+          </div>
+          <div className={platformButtonGroupClass}>
+            <button
+              type="button"
+              onClick={() => setOs("unix")}
+              className={platformButtonClass(os === "unix")}
+            >
+              Linux
+            </button>
+            <button
+              type="button"
+              onClick={() => setOs("windows")}
+              className={platformButtonClass(os === "windows")}
+            >
+              Windows
+            </button>
+          </div>
         </div>
-        <div className="grid grid-cols-[62px_minmax(0,1fr)_140px] items-center gap-2">
-          <Input
-            id={`${inputId}-host`}
-            type="text"
-            value={target}
-            onChange={(event) => setTarget(event.target.value)}
-            placeholder={DEFAULT_HOST}
-            aria-label="Port"
-            className={cn(heroInputClass, "w-full px-2.5 text-[13px] font-mono")}
-          />
-
-          <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:flex-nowrap">
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={heroControlLabelClass}>Port</span>
             <Input
-              id={`${inputId}-name`}
               type="text"
-              value={nameInputValue}
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+              placeholder={DEFAULT_HOST}
+              aria-label="Local port or address"
+              className={cn(heroControlInputClass, "w-[4.75rem] font-mono")}
+            />
+          </div>
+          <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-[22rem]">
+            <span className={heroControlLabelClass}>Name</span>
+            <Input
+              type="text"
+              value={name}
               onChange={handleNameChange}
+              placeholder={generatedName}
               aria-label="Public name"
-              className={cn(heroInputClass, "min-w-0 flex-1 px-2.5 text-[13px]")}
+              className={cn(heroControlInputClass, "min-w-0 flex-1")}
             />
             <button
               type="button"
               onClick={handleShuffleName}
-              className={shuffleButtonClass}
+              className={heroShuffleButtonClass}
               aria-label="Shuffle public name"
               title="Shuffle public name"
             >
               <RefreshCw className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
+        </div>
+        <div
+          className={cn(
+            "relative min-h-[148px] rounded-xl border px-4 py-4 pr-14 font-mono text-sm leading-7",
+            isTerminal
+              ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+              : "border-border/80 bg-border/90 text-foreground"
+          )}
+        >
+          <button
+            type="button"
+            onClick={handleCopy}
+            className={cn(
+              "absolute top-4 right-4 inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors",
+              isTerminal
+                ? "text-emerald-300/75 hover:bg-emerald-400/10 hover:text-emerald-200"
+                : "text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700"
+            )}
+            aria-label="Copy command"
+            title={copied ? "Copied" : "Copy"}
+          >
+            {copied ? (
+              <Check className="h-4 w-4" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-all">
+            <span className="block">{installBlock}</span>
+            <span className="mt-2 block">{runBlock}</span>
+          </pre>
+        </div>
+      </div>
 
+      <div className="space-y-2 pt-1">
+        <p className={heroSectionLabelClass}>3. Open this public URL</p>
+        <div
+          className={cn(
+            "space-y-3 rounded-xl border px-3.5 py-3",
+            isTerminal
+              ? "border-white/8 bg-white/[0.045]"
+              : "border-border bg-white"
+          )}
+        >
           <div
             className={cn(
-              "flex w-full shrink-0 rounded-lg border p-0.5",
-              isTerminal
-                ? "border-white/6 bg-white/[0.035]"
-                : "border-border bg-border"
+              "flex items-center gap-2 text-[13px] font-semibold",
+              isTerminal ? "text-slate-300" : "text-foreground"
             )}
           >
-            <div className="flex w-full">
-              <button
-                type="button"
-                onClick={() => setOs("unix")}
-                className={cn(
-                  "flex-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors",
-                  os === "unix"
-                    ? isTerminal
-                      ? "bg-white text-slate-950 shadow-sm"
-                      : "bg-background text-foreground shadow-sm"
-                    : isTerminal
-                      ? "text-slate-500 hover:text-white"
-                      : "text-text-muted hover:text-foreground"
-                )}
-              >
-                Linux
-              </button>
-              <button
-                type="button"
-                onClick={() => setOs("windows")}
-                className={cn(
-                  "flex-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-[11px] font-semibold transition-colors",
-                  os === "windows"
-                    ? isTerminal
-                      ? "bg-white text-slate-950 shadow-sm"
-                      : "bg-background text-foreground shadow-sm"
-                    : isTerminal
-                      ? "text-slate-500 hover:text-white"
-                      : "text-text-muted hover:text-foreground"
-                )}
-              >
-                Windows
-              </button>
-            </div>
+            <span
+              className={cn("h-2 w-2 rounded-full", tunnelStatusTone)}
+              aria-hidden="true"
+            />
+            <span>{tunnelStatusHeadline}</span>
           </div>
+          {isPreviewURLDisabled ? (
+            <span
+              aria-disabled="true"
+              className={cn(heroURLClass, "cursor-not-allowed opacity-70")}
+            >
+              {previewURL}
+            </span>
+          ) : (
+            <a
+              href={previewURL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(heroURLClass, "underline-offset-4 hover:underline")}
+            >
+              {previewURL}
+            </a>
+          )}
         </div>
       </div>
     </div>
@@ -452,7 +484,6 @@ function FullTunnelCommandForm({
 
   const [target, setTarget] = useState(DEFAULT_HOST);
   const [name, setName] = useState("");
-  const [isAutoName, setIsAutoName] = useState(true);
   const [nameShuffleKey, setNameShuffleKey] = useState("default");
   const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
   const [defaultRelays, setDefaultRelays] = useState(true);
@@ -471,7 +502,11 @@ function FullTunnelCommandForm({
     () => buildDefaultTunnelName(target, resolvedNameSeed),
     [resolvedNameSeed, target]
   );
-  const effectiveName = isAutoName ? generatedName : name;
+  const normalizedName = useMemo(
+    () => normalizeTunnelCommandName(name),
+    [name]
+  );
+  const effectiveName = normalizedName === "" ? generatedName : normalizedName;
   const normalizedThumbnailURL = useMemo(
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
     [thumbnailURL]
@@ -516,6 +551,10 @@ function FullTunnelCommandForm({
   const displayCommand = useMemo(
     () => buildTunnelDisplayCommand(commandOptions),
     [commandOptions]
+  );
+  const { installBlock, runBlock } = useMemo(
+    () => splitDisplayCommand(displayCommand, os),
+    [displayCommand, os]
   );
 
   useEffect(() => {
@@ -573,24 +612,14 @@ function FullTunnelCommandForm({
   };
 
   const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const next = event.target.value;
-    if (next.trim() === "") {
-      setName("");
-      setIsAutoName(true);
-      return;
-    }
-
-    setName(next);
-    setIsAutoName(false);
+    setName(event.target.value);
   };
 
   const handleShuffleName = () => {
     setName("");
-    setIsAutoName(true);
     setNameShuffleKey(nextTunnelNameShuffleKey());
   };
 
-  const nameInputValue = isAutoName ? generatedName : name;
   const shuffleButtonClass = cn(
     "inline-flex h-12 shrink-0 items-center justify-center rounded-lg border px-3 text-xs font-semibold transition-colors",
     isTerminal
@@ -601,6 +630,22 @@ function FullTunnelCommandForm({
   return (
     <div className={cn("space-y-5", className)}>
       <div className="space-y-2">
+        <p
+          className={cn(
+            "text-sm leading-6",
+            isTerminal ? "text-slate-300" : "text-text-muted"
+          )}
+        >
+          Start your local app, then point Portal at it with a port like
+          <span className={cn("mx-1 font-mono", isTerminal ? "text-white" : "text-foreground")}>
+            3000
+          </span>
+          or an address like
+          <span className={cn("mx-1 font-mono", isTerminal ? "text-white" : "text-foreground")}>
+            localhost:3000
+          </span>
+          .
+        </p>
         <label
           htmlFor={`${inputId}-host`}
           className={cn(
@@ -608,7 +653,7 @@ function FullTunnelCommandForm({
             isTerminal ? "text-slate-200" : "text-foreground"
           )}
         >
-          Host
+          Local App
         </label>
         <Input
           id={`${inputId}-host`}
@@ -623,6 +668,14 @@ function FullTunnelCommandForm({
               : "border-border bg-white"
           )}
         />
+        <p
+          className={cn(
+            "text-xs",
+            isTerminal ? "text-slate-400" : "text-muted-foreground"
+          )}
+        >
+          Use a local port or address that is already running.
+        </p>
       </div>
 
       <div className="space-y-2">
@@ -639,8 +692,9 @@ function FullTunnelCommandForm({
           <Input
             id={`${inputId}-name`}
             type="text"
-            value={nameInputValue}
+            value={name}
             onChange={handleNameChange}
+            placeholder={generatedName}
             className={cn(
               "h-12 flex-1 rounded-xl",
               isTerminal
@@ -849,10 +903,10 @@ function FullTunnelCommandForm({
               "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "unix"
                 ? isTerminal
-                  ? "bg-white text-slate-950 shadow-sm"
-                  : "bg-background text-foreground shadow-sm"
+                  ? "bg-white/[0.08] text-slate-200"
+                  : "bg-background text-foreground/85"
                 : isTerminal
-                  ? "text-slate-400 hover:text-white"
+                  ? "text-slate-400 hover:text-slate-300"
                   : "text-text-muted hover:text-foreground"
             )}
           >
@@ -865,10 +919,10 @@ function FullTunnelCommandForm({
               "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "windows"
                 ? isTerminal
-                  ? "bg-white text-slate-950 shadow-sm"
-                  : "bg-background text-foreground shadow-sm"
+                  ? "bg-white/[0.08] text-slate-200"
+                  : "bg-background text-foreground/85"
                 : isTerminal
-                  ? "text-slate-400 hover:text-white"
+                  ? "text-slate-400 hover:text-slate-300"
                   : "text-text-muted hover:text-foreground"
             )}
           >
@@ -895,7 +949,8 @@ function FullTunnelCommandForm({
                 : "bg-border text-foreground"
             )}
           >
-            {displayCommand}
+            <span className="block">{installBlock}</span>
+            <span className="mt-2 block">{runBlock}</span>
           </pre>
           <button
             type="button"

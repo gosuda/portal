@@ -69,6 +69,12 @@ For architecture decisions, see [docs/adr/README.md](docs/adr/README.md).
 
 ## Public Relay Registry
 
+Portal's official public relay registry is:
+
+`https://raw.githubusercontent.com/gosuda/portal/main/registry.json`
+
+Portal tunnel clients can include this registry by default, and the relay UI also reads from the same path to show the official relay list.
+
 If you operate a public Portal relay, open a Pull Request to add your relay URL to `registry.json`. Keeping the registry updated makes public relays easier for the community to discover.
 
 ## Contributing

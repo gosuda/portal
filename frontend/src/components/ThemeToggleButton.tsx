@@ -14,11 +14,11 @@ export function ThemeToggleButton({ className }: ThemeToggleButtonProps) {
   return (
     <Button
       type="button"
-      variant="outline"
+      variant="ghost"
       size="icon"
       onClick={toggleTheme}
       className={clsx(
-        "h-11 w-11 cursor-pointer rounded-full border-border bg-card/95 text-foreground shadow-none hover:bg-secondary",
+        "h-11 w-11 cursor-pointer rounded-full text-foreground shadow-none hover:bg-transparent hover:-translate-y-0.5 hover:text-primary",
         className
       )}
       aria-label={`Switch to ${nextTheme} theme`}

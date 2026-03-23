@@ -4,6 +4,7 @@ import { LandingHero } from "@/components/LandingHero";
 import { SearchBar } from "@/components/SearchBar";
 import { ServerCard } from "@/components/ServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
+import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import type { ClientServer } from "@/hooks/useServerList";
 import type { AdminServer, ApprovalMode, UDPSettings } from "@/hooks/useAdmin";
 import type { SortOption, StatusFilter } from "@/types/filters";
@@ -655,16 +656,19 @@ export function ServerListView({
                   aria-labelledby="live-servers-title"
                   className="scroll-mt-24 min-h-[34rem] border-b border-border/80 px-4 py-8 sm:min-h-[36rem] sm:px-6 md:px-8"
                 >
-                  <div className="space-y-2">
-                    <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
-                      Live apps
-                    </p>
-                    <h2
-                      id="live-servers-title"
-                      className="text-3xl font-semibold tracking-tight text-foreground"
-                    >
-                      Browse live apps
-                    </h2>
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
+                        Live apps
+                      </p>
+                      <h2
+                        id="live-servers-title"
+                        className="text-3xl font-semibold tracking-tight text-foreground"
+                      >
+                        Browse live apps
+                      </h2>
+                    </div>
+                    <TunnelCommandModal />
                   </div>
 
                   {serverRows.length > 0 ? (
@@ -693,35 +697,35 @@ export function ServerListView({
                   aria-labelledby="official-registry-title"
                   className="scroll-mt-24 px-4 py-8 sm:px-6 md:px-8"
                 >
-                  <div className="rounded-[1.75rem] border border-border/80 bg-secondary/35 p-5 sm:p-6">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="space-y-1.5">
-                        <h2
-                          id="official-registry-title"
-                          className="text-2xl font-semibold tracking-tight text-foreground"
-                        >
-                          Official registry
-                        </h2>
-                        <p className="max-w-2xl text-sm leading-6 text-text-muted">
-                          Trusted public relays provided by the community.
-                        </p>
-                      </div>
-                      <a
-                        href={OFFICIAL_REGISTRY_SOURCE_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
+                        Official registry
+                      </p>
+                      <h2
+                        id="official-registry-title"
+                        className="text-3xl font-semibold tracking-tight text-foreground"
                       >
-                        Open registry.json
-                      </a>
+                        Public relays
+                      </h2>
                     </div>
+                    <a
+                      href={OFFICIAL_REGISTRY_SOURCE_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-10 items-center justify-center rounded-full bg-primary/12 px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/20"
+                    >
+                      Open registry.json
+                    </a>
+                  </div>
 
+                  <div className="mt-6 rounded-[1.75rem] border border-border/80 bg-secondary/35 p-5 sm:p-6">
                     {officialRegistryRelays === null ? (
-                      <p className="mt-6 text-sm text-text-muted">
+                      <p className="text-sm text-text-muted">
                         Loading official registry...
                       </p>
                     ) : officialRegistryAvailable ? (
-                      <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {officialRegistryRelays.map((relay) => {
                           return (
                             <div
@@ -752,7 +756,7 @@ export function ServerListView({
                         })}
                       </div>
                     ) : (
-                      <p className="mt-6 text-sm text-text-muted">
+                      <p className="text-sm text-text-muted">
                         Registry entries are unavailable right now.
                       </p>
                     )}
