@@ -259,10 +259,6 @@ function HeroTunnelCommandForm({
     "text-[13px] font-semibold tracking-[0.04em] sm:text-sm",
     isTerminal ? "text-slate-100" : "text-foreground/85"
   );
-  const heroCommandTitleClass = cn(
-    "min-w-0 text-[15px] font-bold tracking-tight sm:text-base",
-    isTerminal ? "text-slate-50" : "text-foreground"
-  );
   const heroURLClass = cn(
     "block overflow-x-auto whitespace-nowrap font-mono text-[15px] font-medium sm:text-base",
     isTerminal ? "text-sky-300" : "text-primary"
@@ -329,21 +325,7 @@ function HeroTunnelCommandForm({
 
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <span
-              aria-hidden="true"
-              className={cn(
-                "shrink-0 font-mono text-lg leading-none",
-                !isTerminal && "text-primary"
-              )}
-              style={isTerminal ? { color: "var(--hero-terminal-accent)" } : undefined}
-            >
-              {">"}
-            </span>
-            <h3 id="tunnel-preview" className={heroCommandTitleClass}>
-              2. Run this command
-            </h3>
-          </div>
+          <p className={heroSectionLabelClass}>2. Run this command</p>
           <div className={platformButtonGroupClass}>
             <button
               type="button"

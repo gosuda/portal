@@ -454,6 +454,21 @@ export function LandingHero() {
               boxShadow: "0 30px 72px var(--hero-terminal-shadow)",
             }}
           >
+            <div className="mb-5 flex min-w-0 items-center gap-3">
+              <span
+                aria-hidden="true"
+                className="shrink-0 font-mono text-lg leading-none"
+                style={{ color: "var(--hero-terminal-accent)" }}
+              >
+                {">"}
+              </span>
+              <h3
+                id="tunnel-preview"
+                className="min-w-0 text-xl font-bold tracking-tight sm:text-2xl"
+              >
+                Run this command
+              </h3>
+            </div>
             <TunnelCommandForm theme="terminal" mode="hero" />
           </div>
         </div>
