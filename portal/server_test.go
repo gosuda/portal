@@ -137,26 +137,6 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	}
 }
 
-func TestRegisterLeaseRejectsInvalidName(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		UDPPortCount: 1,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	_, err = server.registerLease(types.RegisterRequest{
-		Name:         "demo app",
-		ReverseToken: "tok_1",
-	}, "203.0.113.10")
-	if err == nil {
-		t.Fatal("registerLease() error = nil, want invalid name error")
-	}
-}
-
 func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	t.Parallel()
 

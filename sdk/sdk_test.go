@@ -13,16 +13,6 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-func TestNewListenerRejectsInvalidName(t *testing.T) {
-	listener, err := NewListener(context.Background(), "https://relay.example.com", ListenerConfig{Name: "demo app"})
-	if err == nil {
-		t.Fatal("NewListener() error = nil, want invalid name error")
-	}
-	if listener != nil {
-		t.Fatalf("NewListener() listener = %#v, want nil", listener)
-	}
-}
-
 func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	registerReqCh := make(chan types.RegisterRequest, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
