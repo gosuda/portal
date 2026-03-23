@@ -640,6 +640,7 @@ export function ServerListView({
                   title={title}
                   isAdmin={isAdmin}
                   onLogout={onLogout}
+                  showQuickStartLink={landingPageEnabled}
                 />
               </div>
             </div>

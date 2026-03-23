@@ -235,7 +235,6 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description string) stri
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
 		"[%LANDING_PAGE_ENABLED%]", html.EscapeString(strconv.FormatBool(f.isLandingPageEnabled())),
-		"[%SERVER_OWNER_ADDRESS%]", html.EscapeString(f.server.OwnerAddress()),
 		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
 	return replacer.Replace(htmlContent)

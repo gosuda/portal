@@ -14,20 +14,20 @@ export function ThemeToggleButton({ className }: ThemeToggleButtonProps) {
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="outline"
       size="icon"
       onClick={toggleTheme}
       className={clsx(
-        "h-11 w-11 cursor-pointer rounded-full text-foreground shadow-none hover:bg-transparent hover:-translate-y-0.5 hover:text-primary",
+        "h-12 w-12 cursor-pointer rounded-full border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:bg-background hover:text-primary",
         className
       )}
       aria-label={`Switch to ${nextTheme} theme`}
       title={theme === "dark" ? "Light theme" : "Dark theme"}
     >
       {theme === "dark" ? (
-        <Sun className="h-5 w-5" />
+        <Sun className="h-[22px] w-[22px]" />
       ) : (
-        <Moon className="h-5 w-5" />
+        <Moon className="h-[22px] w-[22px]" />
       )}
     </Button>
   );
