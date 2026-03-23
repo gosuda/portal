@@ -160,8 +160,8 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 		}
 		return fmt.Errorf("%w: %w", errRelayIncompatible, err)
 	}
-	if strings.TrimSpace(resp.Version) != types.SDKProtocolVersion {
-		return fmt.Errorf("%w: relay sdk version mismatch: relay=%q client=%q", errRelayIncompatible, strings.TrimSpace(resp.Version), types.SDKProtocolVersion)
+	if strings.TrimSpace(resp.SDKVersion) != types.SDKProtocolVersion {
+		return fmt.Errorf("%w: relay sdk version mismatch: relay=%q client=%q", errRelayIncompatible, strings.TrimSpace(resp.SDKVersion), types.SDKProtocolVersion)
 	}
 	return nil
 }

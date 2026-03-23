@@ -5,6 +5,7 @@ import { API_PATHS, adminLeasePath, encodeLeaseID } from "@/lib/apiPaths";
 describe("API_PATHS contract alignment", () => {
   it("keeps admin snapshot path aligned", () => {
     expect(API_PATHS.admin.snapshot).toBe("/admin/snapshot");
+    expect(API_PATHS.admin.landingPage).toBe("/admin/settings/landing-page");
   });
 
   it("keeps sdk endpoint paths aligned", () => {

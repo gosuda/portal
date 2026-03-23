@@ -49,7 +49,7 @@
         "portal.defaultName": {
           "type": "string",
           "default": "",
-          "description": "Default tunnel service name suggestion. Leave empty to start with a blank prompt."
+          "description": "Default tunnel service name suggestion. Leave empty to omit --name."
         }
       }
     }

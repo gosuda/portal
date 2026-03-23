@@ -117,7 +117,7 @@ async function promptName(): Promise<string | undefined> {
   const defaultName = config.get<string>("defaultName") ?? "";
   return vscode.window.showInputBox({
     title: "Portal: Service Name",
-    prompt: "Optional public hostname prefix. Leave empty to let the CLI auto-generate one.",
+    prompt: "Optional public hostname prefix. Leave empty to omit --name.",
     value: defaultName,
   });
 }

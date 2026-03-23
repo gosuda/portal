@@ -21,7 +21,7 @@ suite("Extension Test Suite", () => {
 
     assert.match(command, /curl -fsSL https:\/\/relay\.example\.com\/install\.sh \| bash/);
     assert.match(command, /PORTAL_BIN="\$\(command -v portal 2>\/dev\/null \|\| true\)"/);
-    assert.match(command, /"\$PORTAL_BIN" expose --relays https:\/\/relay\.example\.com localhost:3000/);
+    assert.match(command, /"\$PORTAL_BIN" expose localhost:3000 --relays https:\/\/relay\.example\.com/);
     assert.ok(!command.includes("--name"));
   });
 
@@ -37,6 +37,7 @@ suite("Extension Test Suite", () => {
 
     assert.ok(!command.includes("/install.sh"));
     assert.ok(!command.includes("--relays"));
+    assert.ok(!command.includes("--name"));
     assert.match(command, /portal CLI not found\. Install from a relay first or configure portal\.relayUrls\./);
     assert.match(command, /"\$PORTAL_BIN" expose localhost:3000/);
   });
@@ -53,6 +54,6 @@ suite("Extension Test Suite", () => {
 
     assert.match(command, /irm https:\/\/relay\.example\.com\/install\.ps1 \| iex/);
     assert.match(command, /\$PortalBin = Join-Path \$env:LOCALAPPDATA 'portal\\bin\\portal\.exe'/);
-    assert.match(command, /& \$PortalBin expose --name my-app --relays https:\/\/relay\.example\.com --thumbnail https:\/\/example\.com\/thumb\.png localhost:3000/);
+    assert.match(command, /& \$PortalBin expose localhost:3000 --name my-app --relays https:\/\/relay\.example\.com --thumbnail https:\/\/example\.com\/thumb\.png/);
   });
 });

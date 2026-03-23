@@ -239,8 +239,8 @@ func printRootUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
-			"portal expose --name my-app localhost:8080",
-			"portal expose --udp --udp-addr 127.0.0.1:5353 3000",
+			"portal expose localhost:8080 --name my-app",
+			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
 		},
 	)
@@ -253,9 +253,9 @@ func printExposeUsage(w io.Writer) {
 		},
 		[]string{
 			"portal expose 3000",
-			"portal expose --name my-app localhost:8080",
-			"portal expose --udp --udp-addr 127.0.0.1:5353 3000",
-			"portal expose --relays https://portal.example.com --default-relays=false 3000",
+			"portal expose localhost:8080 --name my-app",
+			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
+			"portal expose 3000 --relays https://portal.example.com --default-relays=false",
 		},
 	)
 }

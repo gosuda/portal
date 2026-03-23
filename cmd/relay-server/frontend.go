@@ -9,12 +9,15 @@ import (
 	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/portal/v2/portal"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 type readDirFileFS interface {
@@ -33,9 +36,10 @@ type Frontend struct {
 
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
+	landingPageEnabled   atomic.Bool
 }
 
-func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string) (*Frontend, error) {
+func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string, defaultLandingPageEnabled bool) (*Frontend, error) {
 	if server == nil {
 		return nil, errors.New("frontend requires portal server")
 	}
@@ -43,16 +47,19 @@ func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath st
 	if runtime == nil {
 		return nil, errors.New("frontend requires policy runtime")
 	}
-	if err := loadAdminState(adminSettingsPath, runtime); err != nil {
+	state, err := loadAdminState(adminSettingsPath, runtime)
+	if err != nil {
 		return nil, err
 	}
 
-	return &Frontend{
+	frontend := &Frontend{
 		distFS:            embeddedDistFS,
 		server:            server,
 		auth:              newAdminAuth(adminSecret),
 		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
-	}, nil
+	}
+	frontend.setLandingPageEnabled(state.landingPageEnabled(defaultLandingPageEnabled))
+	return frontend, nil
 }
 
 func (f *Frontend) Handler() *http.ServeMux {
@@ -78,6 +85,7 @@ func (f *Frontend) Handler() *http.ServeMux {
 
 	mux.HandleFunc(types.PathAdmin, f.serveAdmin)
 	mux.HandleFunc(types.PathAdminPrefix, f.serveAdmin)
+	mux.HandleFunc(types.PathTunnelStatus, f.serveTunnelStatus)
 	mux.HandleFunc(types.PathInstallShell, func(w http.ResponseWriter, r *http.Request) {
 		serveInstallScript(w, r, f.server.PortalURL(), false)
 	})
@@ -171,7 +179,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 
 	htmlContent := string(f.cachedPortalHTML)
 	htmlContent = f.injectServerData(htmlContent)
-	htmlContent = f.injectOGMetadata(htmlContent, "", "", "")
+	htmlContent = f.injectOGMetadata(htmlContent, "", "")
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -192,28 +200,58 @@ func (f *Frontend) injectServerData(htmlContent string) string {
 	return strings.Replace(htmlContent, "</head>", ssrScript+"\n</head>", 1)
 }
 
-func (f *Frontend) injectOGMetadata(htmlContent, title, description, imageURL string) string {
+func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
+	if hostname == "" {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
+		return
+	}
+
+	resp := types.TunnelStatusResponse{
+		Hostname: hostname,
+	}
+	if snapshot, ok := f.server.LeaseSnapshotByHostname(hostname); ok {
+		resp.Hostname = snapshot.Hostname
+		resp.Registered = true
+		resp.ServiceAlive = snapshot.Ready > 0
+	}
+	utils.WriteAPIData(w, http.StatusOK, resp)
+}
+
+func (f *Frontend) injectOGMetadata(htmlContent, title, description string) string {
 	if title == "" {
 		title = "Portal Proxy Gateway"
 	}
 	if description == "" {
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
-	if imageURL == "" {
-		base := strings.TrimSuffix(f.server.PortalURL(), "/")
-		if !strings.HasPrefix(base, "http") {
-			base = "https://" + base
-		}
-		imageURL = base + "/portal.jpg"
-	}
 
 	replacer := strings.NewReplacer(
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
-		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
+		"[%LANDING_PAGE_ENABLED%]", html.EscapeString(strconv.FormatBool(f.isLandingPageEnabled())),
 		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
 	return replacer.Replace(htmlContent)
+}
+
+func (f *Frontend) isLandingPageEnabled() bool {
+	if f == nil {
+		return false
+	}
+	return f.landingPageEnabled.Load()
+}
+
+func (f *Frontend) setLandingPageEnabled(enabled bool) {
+	if f == nil {
+		return
+	}
+	f.landingPageEnabled.Store(enabled)
 }
 
 func (f *Frontend) adminLeaseSnapshots() []types.Lease {
@@ -303,6 +341,5 @@ func frontendRootAssetPaths() []string {
 		"/apple-touch-icon.png",
 		"/web-app-manifest-192x192.png",
 		"/web-app-manifest-512x512.png",
-		"/portal.jpg",
 	}
 }

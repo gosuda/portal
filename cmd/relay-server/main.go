@@ -35,6 +35,7 @@ type relayServerConfig struct {
 	APIPort            int
 	SNIPort            int
 	UDPPortCount       int
+	LandingPageEnabled bool
 	Bootstraps         string
 	DiscoveryEnabled   bool
 	OwnerPrivateKey    string
@@ -60,6 +61,7 @@ func runServeCommand(args []string) error {
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
 	utils.IntFlagEnv(fs, &cfg.UDPPortCount, "udp-port-count", 0, utils.ParseNonNegativeInt, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled)", "UDP_PORT_COUNT")
+	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.OwnerPrivateKey, "owner-private-key", "", "relay owner private key used to derive a discovery address", "OWNER_PRIVATE_KEY")
@@ -92,6 +94,7 @@ func runServeCommand(args []string) error {
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
 		Str("admin_settings_path", cfg.AdminSettingsPath).
+		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
@@ -128,7 +131,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		return fmt.Errorf("create relay server: %w", err)
 	}
 
-	frontend, err := NewFrontend(server, cfg.AdminSecretKey, cfg.AdminSettingsPath)
+	frontend, err := NewFrontend(server, cfg.AdminSecretKey, cfg.AdminSettingsPath, cfg.LandingPageEnabled)
 	if err != nil {
 		return fmt.Errorf("create frontend: %w", err)
 	}
@@ -186,6 +189,7 @@ func printRootUsage(w io.Writer) {
 			"relay-server serve",
 			"relay-server --portal-url https://portal.example.com",
 			"relay-server --discovery --udp-port-count 100",
+			"relay-server --landing-page-enabled",
 			"relay-server help",
 		},
 	)

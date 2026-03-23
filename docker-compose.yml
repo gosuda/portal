@@ -24,6 +24,7 @@ services:
 
       # Admin/auth configuration
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
 

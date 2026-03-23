@@ -78,7 +78,7 @@ export const FloatingActionBar = ({
               value={selectedAction}
               onValueChange={(v) => setSelectedAction(v as BulkAction)}
             >
-              <SelectTrigger className="w-[100px] h-10">
+              <SelectTrigger className="w-25 h-10">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

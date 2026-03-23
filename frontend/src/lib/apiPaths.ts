@@ -8,6 +8,7 @@ export const API_PATHS = {
     leases: "/admin/leases",
     stats: "/admin/stats",
     approvalMode: "/admin/settings/approval-mode",
+    landingPage: "/admin/settings/landing-page",
     udpSettings: "/admin/settings/udp",
   },
   sdk: {
@@ -17,6 +18,9 @@ export const API_PATHS = {
     renew: "/sdk/renew",
     domain: "/sdk/domain",
     connect: "/sdk/connect",
+  },
+  tunnel: {
+    status: "/tunnel/status",
   },
   healthz: "/healthz",
   install: {
