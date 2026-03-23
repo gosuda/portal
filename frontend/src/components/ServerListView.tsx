@@ -647,7 +647,7 @@ export function ServerListView({
             <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col border-x border-border/80">
               <main className="z-0 flex-1 pb-14">
                 {showLandingHero && (
-                  <section className="border-b border-border/80 px-4 pt-6 sm:px-6 md:px-8">
+                  <section className="border-b border-border/80 px-4 pt-6 pb-8 sm:px-6 sm:pb-10 md:px-8">
                     <LandingHero />
                   </section>
                 )}
