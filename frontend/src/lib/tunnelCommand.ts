@@ -3,7 +3,7 @@ import {
   buildDefaultExposeName,
   normalizeExposeName,
   resolveExposeName,
-} from "../../../utils/exposeName";
+} from "@/lib/exposeName";
 
 export type TunnelCommandOS = "unix" | "windows";
 
