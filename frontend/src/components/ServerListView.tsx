@@ -634,7 +634,7 @@ export function ServerListView({
           </>
         ) : (
           <>
-            <div className="sticky top-0 z-20 w-full bg-background/95 py-5 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <div className="sticky top-0 z-20 w-full bg-background/95 py-5 backdrop-blur supports-backdrop-filter:bg-background/80">
               <div className="flex w-full flex-col px-6 sm:px-8 lg:px-10">
                 <Header
                   title={title}
@@ -655,7 +655,7 @@ export function ServerListView({
                 <section
                   id="live-servers"
                   aria-labelledby="live-servers-title"
-                  className="scroll-mt-24 min-h-[34rem] border-b border-border/80 px-4 py-8 sm:min-h-[36rem] sm:px-6 md:px-8"
+                  className="scroll-mt-24 min-h-136 border-b border-border/80 px-4 py-8 sm:min-h-144 sm:px-6 md:px-8"
                 >
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="space-y-2">
@@ -681,7 +681,7 @@ export function ServerListView({
                       {serverGrid}
                     </div>
                   ) : (
-                    <div className="mt-6 flex min-h-[22rem] flex-col">
+                    <div className="mt-6 flex min-h-88 flex-col">
                       {searchBar}
                       <div className="px-1 pt-3 text-sm text-text-muted">
                         0 services visible
@@ -720,7 +720,7 @@ export function ServerListView({
                     </a>
                   </div>
 
-                  <div className="mt-6 rounded-[1.75rem] border border-border/80 bg-secondary/35 p-5 sm:p-6">
+                  <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
                     {officialRegistryRelays === null ? (
                       <p className="text-sm text-text-muted">
                         Loading official registry...

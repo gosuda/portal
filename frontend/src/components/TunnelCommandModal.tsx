@@ -20,7 +20,7 @@ export function TunnelCommandModal() {
           Add Your Server
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto rounded-[1.5rem] border border-border bg-card p-0">
+      <DialogContent className="sm:max-w-140 max-h-[85vh] overflow-y-auto rounded-3xl border border-border bg-card p-0">
         <DialogHeader className="border-b border-border px-5 py-4 text-left">
           <DialogTitle className="text-xl font-bold">Add Your Server</DialogTitle>
           <DialogDescription className="pt-1 leading-6">

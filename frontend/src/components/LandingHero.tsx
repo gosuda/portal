@@ -287,7 +287,7 @@ export function LandingHero() {
         className="pointer-events-none absolute inset-0"
       >
         <div
-          className="absolute inset-0 opacity-45 [background-size:14px_14px] [mask-image:linear-gradient(to_bottom,white,transparent_82%)]"
+          className="absolute inset-0 opacity-45 bg-size-[14px_14px] mask-[linear-gradient(to_bottom,white,transparent_82%)]"
           style={{
             backgroundImage:
               "radial-gradient(var(--hero-grid-dot) 0.8px, transparent 0.8px)",
@@ -327,10 +327,10 @@ export function LandingHero() {
             <div className="pointer-events-none absolute inset-x-0 top-6 flex justify-center sm:top-8">
               <div className="h-28 w-28 rounded-full bg-primary/16 blur-3xl dark:bg-primary/22" />
             </div>
-            <div className="pointer-events-none absolute inset-y-0 left-0 z-40 w-12 bg-gradient-to-r from-background via-background/74 to-transparent dark:from-background dark:via-background/60 sm:w-24" />
-            <div className="pointer-events-none absolute inset-y-0 right-0 z-40 w-12 bg-gradient-to-l from-background via-background/74 to-transparent dark:from-background dark:via-background/60 sm:w-24" />
+            <div className="pointer-events-none absolute inset-y-0 left-0 z-40 w-12 bg-linear-to-r from-background via-background/74 to-transparent dark:from-background dark:via-background/60 sm:w-24" />
+            <div className="pointer-events-none absolute inset-y-0 right-0 z-40 w-12 bg-linear-to-l from-background via-background/74 to-transparent dark:from-background dark:via-background/60 sm:w-24" />
 
-            <div className="relative h-[328px] sm:h-[360px]">
+            <div className="relative h-82 sm:h-90">
               <div
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
@@ -353,12 +353,12 @@ export function LandingHero() {
                   return (
                     <article
                       key={`${card.key}-${index}`}
-                      className={`relative h-[244px] shrink-0 overflow-hidden rounded-[1.65rem] border px-5 py-5 text-left transition-[opacity,transform,box-shadow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] sm:h-[268px] sm:px-7 sm:py-6 ${
+                      className={`relative h-61 shrink-0 overflow-hidden rounded-[1.65rem] border px-5 py-5 text-left transition-[opacity,transform,box-shadow] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] sm:h-67 sm:px-7 sm:py-6 ${
                         isActive
-                          ? "border-primary/24 bg-white/92 opacity-100 shadow-[0_24px_54px_rgba(15,23,42,0.08)] dark:bg-white/[0.08] dark:shadow-[0_26px_60px_rgba(0,0,0,0.22)]"
+                          ? "border-primary/24 bg-white/92 opacity-100 shadow-[0_24px_54px_rgba(15,23,42,0.08)] dark:bg-white/8 dark:shadow-[0_26px_60px_rgba(0,0,0,0.22)]"
                           : distance === 1
-                            ? "border-border/70 bg-background/78 opacity-62 shadow-[0_14px_32px_rgba(15,23,42,0.04)] dark:bg-white/[0.04]"
-                            : "border-border/60 bg-background/70 opacity-30 shadow-none dark:bg-white/[0.03]"
+                            ? "border-border/70 bg-background/78 opacity-62 shadow-[0_14px_32px_rgba(15,23,42,0.04)] dark:bg-white/4"
+                            : "border-border/60 bg-background/70 opacity-30 shadow-none dark:bg-white/3"
                       } ${isActive ? "translate-y-0 scale-100" : "translate-y-5 scale-[0.95]"}`}
                       style={{ width: `${slideSize}px` }}
                       aria-hidden={!isActive}
@@ -379,7 +379,7 @@ export function LandingHero() {
                           </p>
                         </div>
                         <div className="mt-auto pt-8">
-                          <div className="h-px w-16 bg-gradient-to-r from-primary/55 to-transparent" />
+                          <div className="h-px w-16 bg-linear-to-r from-primary/55 to-transparent" />
                         </div>
                       </div>
                     </article>
@@ -394,7 +394,7 @@ export function LandingHero() {
       <div className="relative -mx-4 w-auto sm:-mx-6 md:-mx-8">
         <div className="overflow-hidden border-t border-border/80 bg-border/70">
           <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-3">
-            <div className="flex min-h-[184px] bg-background/88 p-6 text-left sm:min-h-[196px] sm:p-7">
+            <div className="flex min-h-46 bg-background/88 p-6 text-left sm:min-h-49 sm:p-7">
               <div className="space-y-2">
                 <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
                   Core features
@@ -411,7 +411,7 @@ export function LandingHero() {
             {heroFeatures.map(({ title, description }) => (
               <article
                 key={title}
-                className="flex min-h-[184px] bg-background/88 p-6 text-left transition-colors duration-200 hover:bg-background/92 sm:min-h-[196px] sm:p-7"
+                className="flex min-h-46 bg-background/88 p-6 text-left transition-colors duration-200 hover:bg-background/92 sm:min-h-49 sm:p-7"
               >
                 <div className="space-y-2">
                   <h3 className="whitespace-nowrap text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-none">
@@ -439,7 +439,7 @@ export function LandingHero() {
           </div>
 
           <div
-            className="relative mx-auto mt-4 w-full max-w-[520px] rounded-[1.75rem] border px-4 py-5 sm:px-5 sm:py-6"
+            className="relative mx-auto mt-4 w-full max-w-130 rounded-xl border px-4 py-5 sm:px-5 sm:py-6"
             style={{
               background: "var(--hero-terminal-bg)",
               borderColor: "var(--hero-terminal-border)",

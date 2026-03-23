@@ -3,7 +3,6 @@ import {
   useId,
   useMemo,
   useState,
-  type ChangeEvent,
   type KeyboardEvent,
 } from "react";
 import { Check, Copy, RefreshCw, X } from "lucide-react";
@@ -12,15 +11,15 @@ import { apiClient } from "@/lib/apiClient";
 import { API_PATHS } from "@/lib/apiPaths";
 import { cn } from "@/lib/utils";
 import {
-  buildDefaultTunnelName,
-  buildTunnelCommand,
-  buildTunnelDisplayCommand,
   buildTunnelPreviewURL,
   buildTunnelStatusHostname,
-  normalizeTunnelCommandName,
   normalizeAbsoluteHTTPURL,
-  type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
+import {
+  DEFAULT_HOST,
+  readCurrentOrigin,
+  useTunnelCommand,
+} from "@/hooks/useTunnelCommand";
 
 interface TunnelCommandFormProps {
   className?: string;
@@ -34,62 +33,6 @@ interface TunnelStatusResponse {
   hostname: string;
   registered: boolean;
   service_alive: boolean;
-}
-
-const DEFAULT_HOST = "3000";
-const FALLBACK_ORIGIN = "https://localhost:4017";
-const TUNNEL_NAME_SEED_STORAGE_KEY = "portal:tunnel-name-seed";
-
-function readCurrentOrigin(): string {
-  if (typeof window !== "undefined") {
-    return window.location.origin;
-  }
-
-  return FALLBACK_ORIGIN;
-}
-
-function readTunnelNameSeed(): string {
-  if (typeof window === "undefined") {
-    return "web_portal";
-  }
-
-  try {
-    const existing = window.localStorage.getItem(TUNNEL_NAME_SEED_STORAGE_KEY);
-    if (existing && existing.trim() !== "") {
-      return existing;
-    }
-
-    const next =
-      typeof window.crypto?.randomUUID === "function"
-        ? `web_${window.crypto.randomUUID()}`
-        : `web_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-
-    window.localStorage.setItem(TUNNEL_NAME_SEED_STORAGE_KEY, next);
-    return next;
-  } catch {
-    return "web_portal";
-  }
-}
-
-function nextTunnelNameShuffleKey(): string {
-  if (
-    typeof window !== "undefined" &&
-    typeof window.crypto?.randomUUID === "function"
-  ) {
-    return window.crypto.randomUUID();
-  }
-
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-}
-
-function splitDisplayCommand(command: string, os: TunnelCommandOS) {
-  const lines = command.split("\n");
-  const installLineCount = os === "windows" ? 2 : 1;
-
-  return {
-    installBlock: lines.slice(0, installLineCount).join("\n"),
-    runBlock: lines.slice(installLineCount).join("\n"),
-  };
 }
 
 export function TunnelCommandForm({
@@ -110,56 +53,25 @@ function HeroTunnelCommandForm({
 }: Required<Pick<TunnelCommandFormProps, "theme">> &
   Pick<TunnelCommandFormProps, "className">) {
   const isTerminal = theme === "terminal";
-  const currentOrigin = useMemo(readCurrentOrigin, []);
-  const nameSeed = useMemo(readTunnelNameSeed, []);
+  const {
+    currentOrigin,
+    nameSeed,
+    target,
+    setTarget,
+    copied,
+    os,
+    setOs,
+    generatedName,
+    effectiveName,
+    installBlock,
+    runBlock,
+    handleCopy,
+    handleNameChange,
+    handleShuffleName,
+  } = useTunnelCommand();
 
-  const [target, setTarget] = useState(DEFAULT_HOST);
-  const [name, setName] = useState("");
-  const [nameShuffleKey, setNameShuffleKey] = useState("default");
-  const [copied, setCopied] = useState(false);
-  const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [tunnelStatus, setTunnelStatus] = useState<TunnelStatus>("waiting");
 
-  const resolvedNameSeed = useMemo(
-    () => `${nameSeed}:${nameShuffleKey}`,
-    [nameSeed, nameShuffleKey]
-  );
-  const generatedName = useMemo(
-    () => buildDefaultTunnelName(target, resolvedNameSeed),
-    [resolvedNameSeed, target]
-  );
-  const normalizedName = useMemo(
-    () => normalizeTunnelCommandName(name),
-    [name]
-  );
-  const effectiveName = normalizedName === "" ? generatedName : normalizedName;
-  const commandOptions = useMemo(
-    () => ({
-      currentOrigin,
-      target,
-      name: effectiveName,
-      nameSeed,
-      relayUrls: [currentOrigin],
-      defaultRelays: true,
-      thumbnailURL: "",
-      enableUDP: false,
-      udpPort: "",
-      os,
-    }),
-    [currentOrigin, effectiveName, nameSeed, os, target]
-  );
-  const copyCommand = useMemo(
-    () => buildTunnelCommand(commandOptions),
-    [commandOptions]
-  );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
-    [commandOptions]
-  );
-  const { installBlock, runBlock } = useMemo(
-    () => splitDisplayCommand(displayCommand, os),
-    [displayCommand, os]
-  );
   const previewURL = useMemo(
     () => buildTunnelPreviewURL(currentOrigin, effectiveName, target, nameSeed),
     [currentOrigin, effectiveName, nameSeed, target]
@@ -169,20 +81,6 @@ function HeroTunnelCommandForm({
       buildTunnelStatusHostname(currentOrigin, effectiveName, target, nameSeed),
     [currentOrigin, effectiveName, nameSeed, target]
   );
-
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setCopied(false);
-    }, 2000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [copied]);
 
   useEffect(() => {
     if (statusHostname === "") {
@@ -225,24 +123,6 @@ function HeroTunnelCommandForm({
       window.clearInterval(interval);
     };
   }, [statusHostname]);
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(copyCommand);
-      setCopied(true);
-    } catch (error) {
-      console.error("Failed to copy tunnel command", error);
-    }
-  };
-
-  const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
-    setName(event.target.value);
-  };
-
-  const handleShuffleName = () => {
-    setName("");
-    setNameShuffleKey(nextTunnelNameShuffleKey());
-  };
 
   const tunnelStatusTone = {
     alive: isTerminal ? "bg-green-400" : "bg-green-600",
@@ -352,14 +232,13 @@ function HeroTunnelCommandForm({
               onChange={(event) => setTarget(event.target.value)}
               placeholder={DEFAULT_HOST}
               aria-label="Local port or address"
-              className={cn(heroControlInputClass, "w-[4.75rem] font-mono")}
+              className={cn(heroControlInputClass, "w-[19 font-mono")}
             />
           </div>
-          <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-[22rem]">
+          <div className="ml-auto flex min-w-0 items-center justify-end gap-2 sm:w-88">
             <span className={heroControlLabelClass}>Name</span>
             <Input
               type="text"
-              value={name}
               onChange={handleNameChange}
               placeholder={generatedName}
               aria-label="Public name"
@@ -378,7 +257,7 @@ function HeroTunnelCommandForm({
         </div>
         <div
           className={cn(
-            "relative min-h-[148px] rounded-xl border px-4 py-4 pr-14 font-mono text-sm leading-7",
+            "relative min-h-37 rounded-xl border px-4 py-4 pr-14 font-mono text-sm leading-7",
             isTerminal
               ? "border-white/10 bg-black/55 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
               : "border-border/80 bg-border/90 text-foreground"
@@ -415,7 +294,7 @@ function HeroTunnelCommandForm({
           className={cn(
             "space-y-3 rounded-xl border px-3.5 py-3",
             isTerminal
-              ? "border-white/8 bg-white/[0.045]"
+              ? "border-white/8 bg-white/4.5"
               : "border-border bg-white"
           )}
         >
@@ -461,34 +340,16 @@ function FullTunnelCommandForm({
   Pick<TunnelCommandFormProps, "className">) {
   const inputId = useId();
   const isTerminal = theme === "terminal";
-  const currentOrigin = useMemo(readCurrentOrigin, []);
-  const nameSeed = useMemo(readTunnelNameSeed, []);
 
-  const [target, setTarget] = useState(DEFAULT_HOST);
-  const [name, setName] = useState("");
-  const [nameShuffleKey, setNameShuffleKey] = useState("default");
-  const [relayUrls, setRelayUrls] = useState<string[]>([currentOrigin]);
+  const [relayUrls, setRelayUrls] = useState<string[]>(() => [
+    readCurrentOrigin(),
+  ]);
   const [defaultRelays, setDefaultRelays] = useState(true);
   const [urlInput, setUrlInput] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [os, setOs] = useState<TunnelCommandOS>("unix");
   const [enableUDP, setEnableUDP] = useState(false);
   const [udpPort, setUDPPort] = useState("");
   const [thumbnailURL, setThumbnailURL] = useState("");
 
-  const resolvedNameSeed = useMemo(
-    () => `${nameSeed}:${nameShuffleKey}`,
-    [nameSeed, nameShuffleKey]
-  );
-  const generatedName = useMemo(
-    () => buildDefaultTunnelName(target, resolvedNameSeed),
-    [resolvedNameSeed, target]
-  );
-  const normalizedName = useMemo(
-    () => normalizeTunnelCommandName(name),
-    [name]
-  );
-  const effectiveName = normalizedName === "" ? generatedName : normalizedName;
   const normalizedThumbnailURL = useMemo(
     () => normalizeAbsoluteHTTPURL(thumbnailURL),
     [thumbnailURL]
@@ -500,58 +361,26 @@ function FullTunnelCommandForm({
 
     return "Thumbnail must be an absolute http:// or https:// URL.";
   }, [normalizedThumbnailURL, thumbnailURL]);
-  const commandOptions = useMemo(
-    () => ({
-      currentOrigin,
-      target,
-      name: effectiveName,
-      nameSeed,
-      relayUrls,
-      defaultRelays,
-      thumbnailURL: normalizedThumbnailURL,
-      enableUDP,
-      udpPort,
-      os,
-    }),
-    [
-      currentOrigin,
-      defaultRelays,
-      effectiveName,
-      enableUDP,
-      nameSeed,
-      normalizedThumbnailURL,
-      os,
-      relayUrls,
-      target,
-      udpPort,
-    ]
-  );
-  const copyCommand = useMemo(
-    () => buildTunnelCommand(commandOptions),
-    [commandOptions]
-  );
-  const displayCommand = useMemo(
-    () => buildTunnelDisplayCommand(commandOptions),
-    [commandOptions]
-  );
-  const { installBlock, runBlock } = useMemo(
-    () => splitDisplayCommand(displayCommand, os),
-    [displayCommand, os]
-  );
 
-  useEffect(() => {
-    if (!copied) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      setCopied(false);
-    }, 2000);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [copied]);
+  const {
+    target,
+    setTarget,
+    copied,
+    os,
+    setOs,
+    generatedName,
+    installBlock,
+    runBlock,
+    handleCopy,
+    handleNameChange,
+    handleShuffleName,
+  } = useTunnelCommand({
+    relayUrls,
+    defaultRelays,
+    thumbnailURL: normalizedThumbnailURL,
+    enableUDP,
+    udpPort,
+  });
 
   const addRelayURL = (url: string) => {
     const trimmed = url.trim();
@@ -582,24 +411,6 @@ function FullTunnelCommandForm({
     if (event.key === "Backspace" && urlInput === "" && relayUrls.length > 0) {
       setRelayUrls((prev) => prev.slice(0, -1));
     }
-  };
-
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(copyCommand);
-      setCopied(true);
-    } catch (error) {
-      console.error("Failed to copy tunnel command", error);
-    }
-  };
-
-  const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
-    setName(event.target.value);
-  };
-
-  const handleShuffleName = () => {
-    setName("");
-    setNameShuffleKey(nextTunnelNameShuffleKey());
   };
 
   const shuffleButtonClass = cn(
@@ -674,7 +485,6 @@ function FullTunnelCommandForm({
           <Input
             id={`${inputId}-name`}
             type="text"
-            value={name}
             onChange={handleNameChange}
             placeholder={generatedName}
             className={cn(
@@ -763,7 +573,7 @@ function FullTunnelCommandForm({
             onKeyDown={handleURLKeyDown}
             placeholder="Add relay URL..."
             className={cn(
-              "min-w-[140px] flex-1 bg-transparent text-sm outline-none",
+              "min-w-35 flex-1 bg-transparent text-sm outline-none",
               isTerminal
                 ? "text-white placeholder:text-slate-500"
                 : "text-foreground placeholder:text-muted-foreground"
@@ -885,7 +695,7 @@ function FullTunnelCommandForm({
               "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "unix"
                 ? isTerminal
-                  ? "bg-white/[0.08] text-slate-200"
+                  ? "bg-white/8 text-slate-200"
                   : "bg-background text-foreground/85"
                 : isTerminal
                   ? "text-slate-400 hover:text-slate-300"
@@ -901,7 +711,7 @@ function FullTunnelCommandForm({
               "flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
               os === "windows"
                 ? isTerminal
-                  ? "bg-white/[0.08] text-slate-200"
+                  ? "bg-white/8 text-slate-200"
                   : "bg-background text-foreground/85"
                 : isTerminal
                   ? "text-slate-400 hover:text-slate-300"

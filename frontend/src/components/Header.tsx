@@ -47,7 +47,7 @@ export function Header({
             </div>
 
             <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-              <h2 className="min-w-0 break-words text-xl leading-none font-extrabold tracking-tight text-foreground sm:text-2xl">
+              <h2 className="min-w-0 wrap-break-word text-xl leading-none font-extrabold tracking-tight text-foreground sm:text-2xl">
                 {title}
               </h2>
               {releaseVersion && (
@@ -118,7 +118,7 @@ export function Header({
                   className="h-12 w-12 cursor-pointer rounded-full border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-destructive/40 hover:bg-background hover:text-destructive"
                   aria-label="Logout"
                 >
-                  <LogOut className="h-[22px] w-[22px]" />
+                  <LogOut className="h-5.5 w-5.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
