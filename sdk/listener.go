@@ -113,11 +113,11 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
 	if cfg.UDPEnabled {
 		l.datagram = transport.NewClientDatagram(func(err error) {
-			log.Warn().
+			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
 				Str("lease_id", l.LeaseID()).
-				Msg("quic receive loop ended")
+				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
 	}
 

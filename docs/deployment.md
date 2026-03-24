@@ -178,6 +178,8 @@ Navigate to `/admin`, toggle UDP transport to "Enabled", and optionally set a ma
 
 ```bash
 PORTAL_URL=https://example.com
+BOOTSTRAPS=
+DISCOVERY=true
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs

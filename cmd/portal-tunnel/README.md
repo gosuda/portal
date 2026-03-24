@@ -36,13 +36,13 @@ portal expose localhost:8080 \
 - Bare ports resolve to `127.0.0.1:<port>`.
 - `--name` is optional. When omitted, the CLI generates a name for that run.
 - `--relays` sets the relay API URLs for that run.
-- `--default-relays=false` disables the public registry list for that run.
+- `--discovery=false` disables the public registry seed list and the discovery expansion loop for that run.
 
 Flags:
 
 ```text
 --relays          Portal relay API URLs (comma-separated, https only)
---default-relays  Include public registry relays
+--discovery       Include public registry relays and discover additional relay bootstraps
 --name            Public hostname prefix (single DNS label); auto-generated when omitted
 --description     Service description metadata
 --tags            Service tags metadata (comma-separated)
@@ -54,7 +54,7 @@ Flags:
 ### `portal list [flags]`
 
 - Prints the relay URLs that the CLI will use for the current invocation.
-- `--relays` and `--default-relays=false` follow the same semantics as `portal expose`.
+- `--relays` adds explicit relay URLs, and `--default-relays=false` disables the public registry list for the current listing run.
 
 Legacy execution compatibility has been removed:
 
@@ -67,7 +67,7 @@ Legacy execution compatibility has been removed:
 - `install.sh` installs the downloaded binary as `portal`.
 - `install.ps1` installs `portal.exe` for the current Windows user and updates the user `PATH`.
 - The installer does not write a config file.
-- `portal expose 3000` still works after install because default relays are enabled.
+- `portal expose 3000` still works after install because discovery is enabled by default.
 - Use `--relays https://portal.example.com` only when you want to target a specific relay explicitly.
 
 ## Notes
@@ -77,7 +77,7 @@ Legacy execution compatibility has been removed:
 - The tunnel consumes one aggregate SDK listener, so the CLI no longer manages per-relay listener loops itself.
 - Relay startup and reconnect failures are retried independently in the background. A relay that is down does not stop healthy relays from continuing to serve traffic.
 - The tunnel starts once relay URLs pass local validation. Remote compatibility checks, lease registration, and reconnects continue in the background until each relay becomes ready.
-- The configured relay list is either `public registry + --relays values` or, with `--default-relays=false`, just the explicit relay URLs. Published public URLs appear only for relays that have registered successfully.
+- With discovery enabled, the configured relay list starts with `public registry + --relays values` and can expand through relay discovery. With `--discovery=false`, only the explicit relay URLs are used. Published public URLs appear only for relays that have registered successfully.
 - SDK callers that do not set `ListenerConfig.RetryCount` use infinite retry semantics for each relay.
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.

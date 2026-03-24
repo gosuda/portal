@@ -32,19 +32,18 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV         string
-	defaultRelays    bool
-	discoveryEnabled bool
-	privateKey       string
-	name             string
-	desc             string
-	tags             string
-	owner            string
-	thumbnail        string
-	hide             bool
-	targetAddr       string
-	udp              bool
-	udpAddr          string
+	relayCSV   string
+	discovery  bool
+	privateKey string
+	name       string
+	desc       string
+	tags       string
+	owner      string
+	thumbnail  string
+	hide       bool
+	targetAddr string
+	udp        bool
+	udpAddr    string
 }
 
 func runExposeCommand(args []string) error {
@@ -52,8 +51,7 @@ func runExposeCommand(args []string) error {
 	fs := utils.NewFlagSet("expose", printExposeUsage)
 
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
-	utils.BoolFlag(fs, &flags.defaultRelays, "default-relays", true, "Include public registry relays")
-	utils.BoolFlag(fs, &flags.discoveryEnabled, "discovery", false, "Advertise known relay URLs and discover additional relay bootstraps")
+	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include public registry relays and discover additional relay bootstraps")
 	utils.StringFlag(fs, &flags.privateKey, "private-key", "", "Owner private key used to derive a discovery address")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
@@ -92,13 +90,12 @@ func runExposeCommand(args []string) error {
 	defer stop()
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:           utils.SplitCSV(flags.relayCSV),
-		DefaultRelayEnabled: flags.defaultRelays,
-		Name:                flags.name,
-		TargetAddr:          flags.targetAddr,
-		UDPAddr:             flags.udpAddr,
-		UDPEnabled:          flags.udp,
-		Discovery:           flags.discoveryEnabled,
+		RelayURLs:  utils.SplitCSV(flags.relayCSV),
+		Name:       flags.name,
+		TargetAddr: flags.targetAddr,
+		UDPAddr:    flags.udpAddr,
+		UDPEnabled: flags.udp,
+		Discovery:  flags.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),
@@ -142,7 +139,7 @@ func runListCommand(args []string) error {
 
 	relayInputs := utils.SplitCSV(flags.relayCSV)
 
-	relayURLs, err := sdk.ResolveRelayURLs(ctx, relayInputs, flags.defaultRelays)
+	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, relayInputs, flags.defaultRelays)
 	if err != nil {
 		return fmt.Errorf("resolve relay urls: %w", err)
 	}
@@ -255,7 +252,7 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
-			"portal expose 3000 --relays https://portal.example.com --default-relays=false",
+			"portal expose 3000 --relays https://portal.example.com --discovery=false",
 		},
 	)
 }

@@ -2,7 +2,6 @@ package sdk
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -49,23 +48,22 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs           []string
-	DefaultRelayEnabled bool
-	Name                string
-	TargetAddr          string
-	UDPAddr             string
-	ReverseToken        string
-	UDPEnabled          bool
-	Discovery           bool
-	Metadata            types.LeaseMetadata
-	OwnerPrivateKey     string
-	RootCAPEM           []byte
+	RelayURLs       []string
+	Name            string
+	TargetAddr      string
+	UDPAddr         string
+	ReverseToken    string
+	UDPEnabled      bool
+	Discovery       bool
+	Metadata        types.LeaseMetadata
+	OwnerPrivateKey string
+	RootCAPEM       []byte
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
-	relayURLs, err := ResolveRelayURLs(ctx, cfg.RelayURLs, cfg.DefaultRelayEnabled)
+	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, cfg.Discovery)
 	if err != nil {
 		return nil, err
 	}
@@ -132,50 +130,6 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 
 	return exposure, nil
-}
-
-const defaultDiscoveryInterval = 30 * time.Second
-
-func ResolveRelayURLs(ctx context.Context, explicit []string, includeDefaults bool) ([]string, error) {
-	explicit, err := utils.NormalizeRelayURLs(explicit...)
-	if err != nil {
-		return nil, err
-	}
-	if !includeDefaults {
-		return explicit, nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, types.PortalRelayRegistryURL, nil)
-	if err != nil {
-		return explicit, nil
-	}
-
-	client := &http.Client{Timeout: defaultRequestTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return explicit, nil
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return explicit, nil
-	}
-
-	var registry struct {
-		Relays []string `json:"relays"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
-		return explicit, nil
-	}
-
-	defaults, err := utils.NormalizeRelayURLs(registry.Relays...)
-	if err != nil {
-		return explicit, nil
-	}
-	if len(defaults) == 0 {
-		return explicit, nil
-	}
-	return utils.MergeRelayURLs(defaults, nil, explicit)
 }
 
 func (e *Exposure) KnownRelayURLs() []string {
@@ -801,9 +755,12 @@ func (e *Exposure) monitorStartupCounts() {
 	}
 }
 
+const defaultDiscoveryInterval = 30 * time.Second
+
 func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
 	ticker := time.NewTicker(defaultDiscoveryInterval)
 	defer ticker.Stop()
+	discoveryFailed := false
 
 	for {
 		peers := e.KnownRelayURLs()
@@ -811,6 +768,12 @@ func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
 			relayURLs, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, e.rootCAPEM)
 			switch {
 			case err == nil:
+				if discoveryFailed {
+					log.Info().
+						Int("peer_count", len(peers)).
+						Msg("relay discovery recovered")
+				}
+				discoveryFailed = false
 				added, err := e.applyRelayURLs(relayURLs, false)
 				if err != nil {
 					log.Warn().
@@ -828,10 +791,13 @@ func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
 			case ctx.Err() != nil:
 				return
 			default:
-				log.Warn().
-					Err(err).
-					Int("relay_count", len(peers)).
-					Msg("discover relay urls failed")
+				if !discoveryFailed {
+					log.Debug().
+						Err(err).
+						Int("relay_count", len(peers)).
+						Msg("discover relay urls failed")
+				}
+				discoveryFailed = true
 			}
 		}
 
