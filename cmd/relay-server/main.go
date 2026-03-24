@@ -63,7 +63,7 @@ func runServeCommand(args []string) error {
 	utils.IntFlagEnv(fs, &cfg.UDPPortCount, "udp-port-count", 0, utils.ParseNonNegativeInt, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled)", "UDP_PORT_COUNT")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
-	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.StringFlagEnv(fs, &cfg.OwnerPrivateKey, "owner-private-key", "", "relay owner private key used to derive a discovery address", "OWNER_PRIVATE_KEY")
 	utils.StringFlagEnv(fs, &cfg.AdminSecretKey, "admin-secret-key", "", "admin auth secret", "ADMIN_SECRET_KEY")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
@@ -106,10 +106,15 @@ func runServeCommand(args []string) error {
 }
 
 func runServer(ctx context.Context, cfg relayServerConfig) error {
+	bootstraps, err := utils.ResolvePortalRelayURLs(ctx, utils.SplitCSV(cfg.Bootstraps), cfg.DiscoveryEnabled)
+	if err != nil {
+		return fmt.Errorf("resolve discovery bootstraps: %w", err)
+	}
+
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:       cfg.PortalURL,
 		OwnerPrivateKey: cfg.OwnerPrivateKey,
-		Bootstraps:      []string{cfg.Bootstraps},
+		Bootstraps:      bootstraps,
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,

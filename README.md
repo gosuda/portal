@@ -46,10 +46,22 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
 
-1. Run your local service.
-2. Open the Portal relay site.
-3. Click `Add your server` button.
-4. Use the generated command to connect your local service.
+For a local relay started with `docker compose up`:
+
+```bash
+curl -ksSL https://localhost:4017/install.sh | bash
+portal expose 3000 --relays https://localhost:4017
+```
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+irm https://localhost:4017/install.ps1 | iex 
+portal expose 3000 --relays https://localhost:4017
+```
+
+Replace `https://localhost:4017` with your relay URL when using a hosted relay.
+The relay landing page also generates the exact install command for the current relay.
+For CLI usage and install details, see [cmd/portal-tunnel/README.md](cmd/portal-tunnel/README.md).
 
 ### Use the Go SDK (Advanced)
 

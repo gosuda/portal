@@ -79,7 +79,7 @@ func proxyExposure(ctx context.Context, exposure *sdk.Exposure, serviceName stri
 		log.Error().Err(udpErr).Msg("udp proxy exited with error")
 	}
 	if closeErr != nil {
-		log.Error().Err(closeErr).Msg("relay shutdown failed")
+		log.Warn().Err(closeErr).Msg("relay shutdown completed with cleanup errors")
 	}
 
 	if ctx.Err() != nil {
@@ -126,7 +126,7 @@ func proxyRelayConnections(ctx context.Context, exposure *sdk.Exposure, localAdd
 		go func(connID int64, relayConn net.Conn) {
 			defer connWG.Done()
 			if err := proxyConnection(ctx, localAddr, relayConn); err != nil {
-				log.Error().Err(err).Int64("conn_id", connID).Msg("proxy connection failed")
+				log.Debug().Err(err).Int64("conn_id", connID).Msg("proxy connection closed with an I/O error")
 			}
 			log.Info().Int64("conn_id", connID).Msg("proxy connection closed")
 		}(connID, relayConn)

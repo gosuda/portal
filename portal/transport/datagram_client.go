@@ -51,11 +51,11 @@ func (d *ClientDatagram) RunLoop(
 
 		conn, err := open(ctx, state)
 		if err != nil {
-			log.Warn().
+			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
 				Str("lease_id", state.LeaseID).
-				Msg("quic session open failed, retrying")
+				Msg("quic datagram plane unavailable; retrying")
 			if !utils.SleepOrDone(ctx, 2*time.Second) {
 				d.session.Stop("listener context closed")
 				return
@@ -74,11 +74,11 @@ func (d *ClientDatagram) RunLoop(
 			if ctx.Err() != nil {
 				return
 			}
-			log.Warn().
+			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
 				Str("lease_id", state.LeaseID).
-				Msg("quic session bind failed")
+				Msg("quic datagram plane did not bind cleanly; retrying")
 			if !utils.SleepOrDone(ctx, time.Second) {
 				return
 			}

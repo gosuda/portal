@@ -31,23 +31,23 @@ func main() {
 }
 
 type demoConfig struct {
-	relayURLs     string
-	defaultRelays bool
-	addr          string
-	name          string
-	desc          string
-	tags          string
-	owner         string
-	hide          bool
-	thumbnail     string
+	relayURLs string
+	discovery bool
+	addr      string
+	name      string
+	desc      string
+	tags      string
+	owner     string
+	hide      bool
+	thumbnail string
 }
 
 func runTCPCommand(args []string) error {
 	cfg := demoConfig{}
 
 	fs := utils.NewFlagSet("demo-app", printTCPUsage)
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.defaultRelays, "default-relays", true, "include public registry relays", "DEFAULT_RELAYS")
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://gosunuts.xyz", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
@@ -77,8 +77,8 @@ func runUDPCommand(args []string) error {
 	cfg := demoConfig{}
 	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
 
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays unless --default-relays=false is set)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.defaultRelays, "default-relays", false, "include public registry relays", "DEFAULT_RELAYS")
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
+	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
@@ -131,9 +131,9 @@ func runHelpCommand(args []string) error {
 
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:           utils.SplitCSV(cfg.relayURLs),
-		DefaultRelayEnabled: cfg.defaultRelays,
-		Name:                cfg.name,
+		RelayURLs: utils.SplitCSV(cfg.relayURLs),
+		Name:      cfg.name,
+		Discovery: cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
@@ -170,10 +170,10 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:           utils.SplitCSV(cfg.relayURLs),
-		DefaultRelayEnabled: cfg.defaultRelays,
-		Name:                cfg.name,
-		UDPEnabled:          true,
+		RelayURLs:  utils.SplitCSV(cfg.relayURLs),
+		Name:       cfg.name,
+		UDPEnabled: true,
+		Discovery:  cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
@@ -273,7 +273,7 @@ func printUDPUsage(w io.Writer) {
 		[]string{
 			"demo-app udp",
 			"demo-app udp --name my-udp-demo",
-			"demo-app udp --default-relays=true",
+			"demo-app udp --discovery=true",
 		},
 	)
 }
