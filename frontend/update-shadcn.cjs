@@ -2,7 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 /**
  * shadcn 컴포넌트를 자동으로 업데이트하는 스크립트
@@ -69,12 +69,19 @@ function main() {
       try {
         console.log(`🔄 업데이트 중: ${componentName}...`);
 
-        const command = `npx shadcn@latest add -o -y ${componentName}`;
-        execSync(command, {
+        if (!/^[a-z0-9_-]+$/i.test(componentName)) {
+          throw new Error(`invalid component name: ${componentName}`);
+        }
+
+        execFileSync(
+          "npx",
+          ["shadcn@latest", "add", "-o", "-y", componentName],
+          {
           stdio: "pipe",
           encoding: "utf8",
           env: { ...process.env, npm_config_legacy_peer_deps: "true" },
-        });
+          }
+        );
 
         console.log(`✅ ${componentName} 업데이트 완료`);
         successCount++;

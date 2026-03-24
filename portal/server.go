@@ -396,7 +396,11 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
 	clientHello, wrappedConn, err := l4.InspectClientHello(conn, s.cfg.ClientHelloTimeout)
 	if err != nil {
-		_ = wrappedConn.Close()
+		if wrappedConn != nil {
+			_ = wrappedConn.Close()
+		} else {
+			_ = conn.Close()
+		}
 		return
 	}
 
