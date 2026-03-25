@@ -446,7 +446,7 @@ func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 		Name:               e.name,
 		ReverseToken:       e.reverseToken,
 		UDPEnabled:         e.udpEnabled,
-		BanMITM:           e.banMITM,
+		BanMITM:            e.banMITM,
 		RegisterBootstraps: bootstraps,
 		Metadata:           e.metadata.Copy(),
 		RootCAPEM:          append([]byte(nil), e.rootCAPEM...),
