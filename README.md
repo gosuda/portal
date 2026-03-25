@@ -34,7 +34,7 @@ Portal is designed so that tenant TLS terminates on your side rather than at the
 5. Session keys are derived entirely on your side. The relay provides certificate signatures only and does not receive tenant traffic secrets.
 6. After the handshake, the relay continues forwarding ciphertext without needing tenant TLS plaintext to keep routing traffic.
 
-Portal also checks that the relay is preserving TLS passthrough. The Portal client connects to its own public endpoint and compares TLS exporter values observed on both client-controlled ends. If they differ, Portal treats the relay as a suspected TLS terminator, closes the listener, and bans that relay for the current exposure.
+Portal also checks that the relay is preserving TLS passthrough. The Portal client connects to its own public endpoint and compares TLS exporter values observed on both client-controlled ends. If they differ, Portal logs suspected TLS termination by default. You can switch to strict enforcement with `portal expose --ban-mitm`.
 
 ## Components
 

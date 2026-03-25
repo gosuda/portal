@@ -241,13 +241,18 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 			Str("lease_id", report.LeaseID).
 			Msg("tls self-probe timed out before passthrough could be verified")
 	case report.Detected:
-		log.Warn().
+		event := log.Warn().
+			Bool("ban_mitm", l.BanMITM()).
 			Str("reason", report.Reason).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
-			Str("lease_id", report.LeaseID).
-			Msg("tls termination suspected by self-probe")
-		l.ban()
+			Str("lease_id", report.LeaseID)
+		if l.BanMITM() {
+			event.Msg("tls termination suspected by self-probe; banning relay")
+			l.ban()
+			return
+		}
+		event.Msg("tls termination suspected by self-probe")
 	default:
 		log.Debug().
 			Str("relay_url", report.RelayURL).

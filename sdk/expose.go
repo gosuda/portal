@@ -29,6 +29,7 @@ type Exposure struct {
 	UDPAddr          string
 	reverseToken     string
 	udpEnabled       bool
+	banMITM          bool
 	metadata         types.LeaseMetadata
 	ownerAddress     string
 	rootCAPEM        []byte
@@ -54,6 +55,7 @@ type ExposeConfig struct {
 	UDPAddr         string
 	ReverseToken    string
 	UDPEnabled      bool
+	BanMITM         bool
 	Discovery       bool
 	Metadata        types.LeaseMetadata
 	OwnerPrivateKey string
@@ -93,6 +95,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		UDPAddr:          udpAddr,
 		reverseToken:     cfg.ReverseToken,
 		udpEnabled:       cfg.UDPEnabled,
+		banMITM:          cfg.BanMITM,
 		metadata:         cfg.Metadata.Copy(),
 		ownerAddress:     identity.Address,
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
@@ -443,6 +446,7 @@ func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 		Name:               e.name,
 		ReverseToken:       e.reverseToken,
 		UDPEnabled:         e.udpEnabled,
+		BanMITM:           e.banMITM,
 		RegisterBootstraps: bootstraps,
 		Metadata:           e.metadata.Copy(),
 		RootCAPEM:          append([]byte(nil), e.rootCAPEM...),

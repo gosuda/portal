@@ -25,6 +25,7 @@ type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
 	UDPEnabled       bool
+	BanMITM          bool
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -67,6 +68,7 @@ type Listener struct {
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
+	banMITM       bool
 	mu            sync.Mutex
 	startupStatus listenerStatus
 	leaseID       string
@@ -111,6 +113,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		renewBefore:        renewBefore,
 		registerBootstraps: initialBootstraps,
 		metadata:           cfg.Metadata.Copy(),
+		banMITM:            cfg.BanMITM,
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
@@ -555,4 +558,11 @@ func (l *Listener) StartupStatus() listenerStatus {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.startupStatus
+}
+
+func (l *Listener) BanMITM() bool {
+	if l == nil {
+		return false
+	}
+	return l.banMITM
 }

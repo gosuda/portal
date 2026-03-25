@@ -121,7 +121,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
 - `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
 - `api_client.go`: internal relay client for control-plane requests, reverse session dialing, and internal QUIC tunnel setup
-- `mitm.go`: tenant-side TLS passthrough self-probe. The SDK opens a probe connection to its own public URL, compares TLS exporter values on both SDK-controlled ends, and logs suspected relay-side TLS termination on mismatch
+- `mitm.go`: tenant-side TLS passthrough self-probe. The SDK opens a probe connection to its own public URL, compares TLS exporter values on both SDK-controlled ends, and logs suspected relay-side TLS termination on mismatch; strict callers can opt into relay banning instead
 - `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
 - `NewListener` callers provide explicit normalized relay URLs
 - Default exposure flow is `Expose{Discovery: true} -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
@@ -149,6 +149,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Returns an HTTP 503 response when the local target is unavailable
 - `--udp` flag (bool, default `false`): enables UDP relay in addition to TCP
 - `--udp-addr` flag (string): local UDP target address (`host:port` or port only); required when `--udp` is enabled
+- `--ban-mitm` flag (bool, default `false`): when enabled, TLS self-probe mismatches ban the relay for the current exposure instead of only logging
 - `runUDPBestEffort`: waits for datagram readiness, then calls `proxyExposureDatagrams`
 - `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `Exposure.SendDatagram()` for the return path
 - Best-effort UDP — failures logged but do not terminate the TCP tunnel
@@ -178,7 +179,7 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 6. If those bytes match a pending nonce, the SDK exports keying material on the server side and compares it with the client-side exporter value.
 7. Matching exporter values mean the probe observed passthrough for that connection. A mismatch is logged as suspected relay-side TLS termination. A timeout is logged as probe failure, not proof of MITM.
 
-Result: this is a detect-only signal. It raises the cost of adaptive relay-side TLS termination, but it does not prove passthrough for every user connection.
+Result: this is a detect-only signal by default. It raises the cost of adaptive relay-side TLS termination, but it does not prove passthrough for every user connection. Callers that need stricter behavior can opt into relay banning.
 
 ### UDP/QUIC Datagram Transport
 

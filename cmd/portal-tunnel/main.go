@@ -34,6 +34,7 @@ func main() {
 type exposeFlags struct {
 	relayCSV   string
 	discovery  bool
+	banMITM    bool
 	privateKey string
 	name       string
 	desc       string
@@ -52,6 +53,7 @@ func runExposeCommand(args []string) error {
 
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include public registry relays and discover additional relay bootstraps")
+	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", true, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlag(fs, &flags.privateKey, "private-key", "", "Owner private key used to derive a discovery address")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
@@ -95,6 +97,7 @@ func runExposeCommand(args []string) error {
 		TargetAddr: flags.targetAddr,
 		UDPAddr:    flags.udpAddr,
 		UDPEnabled: flags.udp,
+		BanMITM:    flags.banMITM,
 		Discovery:  flags.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
@@ -252,6 +255,7 @@ func printExposeUsage(w io.Writer) {
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
+			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",
 		},
 	)
