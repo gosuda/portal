@@ -108,16 +108,16 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	report.PublicURL = publicURL
 	report.LeaseID = l.LeaseID()
 
-	parsedURL, err := url.Parse(publicURL)
+	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
-		return report, fmt.Errorf("parse public url: %w", err)
+		return report, err
 	}
 
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: l.api.dialTimeout},
 		Config:    m.clientTLSConfig(hostname),
 	}
-	conn, err := dialer.DialContext(probeCtx, "tcp", utils.EnsurePort(parsedURL.Host))
+	conn, err := dialer.DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
 		return report, fmt.Errorf("dial mitm probe: %w", err)
 	}
@@ -167,6 +167,20 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 		}
 		return report, probeCtx.Err()
 	}
+}
+
+func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
+	parsedURL, err := url.Parse(publicURL)
+	if err != nil {
+		return "", fmt.Errorf("parse public url: %w", err)
+	}
+
+	dialHost := parsedURL.Host
+	l := m.listener
+	if l != nil && l.api != nil && l.api.baseURL != nil && utils.IsLocalRelayHost(l.api.baseURL.Hostname()) {
+		dialHost = l.api.baseURL.Host
+	}
+	return utils.EnsurePort(dialHost), nil
 }
 
 func (m *mitmManager) clientTLSConfig(hostname string) *tls.Config {

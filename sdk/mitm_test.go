@@ -235,6 +235,46 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	}
 }
 
+func TestMITMProbeDialAddressUsesRelayHostForLocalRelay(t *testing.T) {
+	relayURL, err := url.Parse("https://localhost:4017")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	listener := &Listener{
+		api: &apiClient{baseURL: relayURL},
+	}
+	listener.mitmManager = newMITMManager(context.Background(), listener)
+
+	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.localhost:4017")
+	if err != nil {
+		t.Fatalf("probeDialAddress() error = %v", err)
+	}
+	if got != "localhost:4017" {
+		t.Fatalf("probeDialAddress() = %q, want %q", got, "localhost:4017")
+	}
+}
+
+func TestMITMProbeDialAddressUsesPublicURLForRemoteRelay(t *testing.T) {
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	listener := &Listener{
+		api: &apiClient{baseURL: relayURL},
+	}
+	listener.mitmManager = newMITMManager(context.Background(), listener)
+
+	got, err := listener.mitmManager.probeDialAddress("https://bravo-gecko-disco.example")
+	if err != nil {
+		t.Fatalf("probeDialAddress() error = %v", err)
+	}
+	if got != "bravo-gecko-disco.example:443" {
+		t.Fatalf("probeDialAddress() = %q, want %q", got, "bravo-gecko-disco.example:443")
+	}
+}
+
 func newMITMProbeTLSPair(t *testing.T) (*tls.Conn, *tls.Conn) {
 	t.Helper()
 
