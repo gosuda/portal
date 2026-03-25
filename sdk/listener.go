@@ -73,6 +73,8 @@ type Listener struct {
 	metadata      types.LeaseMetadata
 	tlsConfig     *tls.Config
 	tlsCloser     io.Closer
+
+	mitmManager *mitmManager
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -110,6 +112,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		registerBootstraps: append([]string(nil), initialBootstraps...),
 		metadata:           cfg.Metadata.Copy(),
 	}
+	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
 	if cfg.UDPEnabled {
 		l.datagram = transport.NewClientDatagram(func(err error) {
@@ -211,6 +214,10 @@ func (l *Listener) Close() error {
 		l.tlsCloser = nil
 		l.mu.Unlock()
 
+		if l.mitmManager != nil {
+			l.mitmManager.reset()
+		}
+
 		if stream != nil {
 			stream.Drain()
 		}
@@ -237,7 +244,25 @@ func (l *Listener) Accept() (net.Conn, error) {
 	if l.stream == nil {
 		return nil, net.ErrClosed
 	}
-	return l.stream.Accept(l.doneCh)
+	for {
+		conn, err := l.stream.Accept(l.doneCh)
+		if err != nil {
+			return nil, err
+		}
+
+		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
+		if handleErr != nil {
+			log.Debug().
+				Err(handleErr).
+				Str("relay_url", l.api.baseURL.String()).
+				Str("lease_id", l.LeaseID()).
+				Msg("mitm self-probe handling failed")
+		}
+		if handled {
+			continue
+		}
+		return wrapMITMProbeConn(l.mitmManager, nextConn), nil
+	}
 }
 
 func (l *Listener) Addr() net.Addr {

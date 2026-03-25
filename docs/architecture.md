@@ -34,8 +34,10 @@ UDP client
 ### TLS and Identity
 
 - Relay terminates admin/API TLS on the root host and exposes `/v1/sign` for tenant-side keyless signing.
+- Control-plane HTTP (`/sdk/*`), reverse-session establishment (`/sdk/connect`), and tenant TLS are separate connections with different trust boundaries.
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
+- In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
 - `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus reverse token.
 - `/sdk/register` requires the caller to supply the reverse token that later authorizes the lease lifecycle, but registration itself is not separately authenticated by that token.
 - Relay URLs must use `https://`.
@@ -119,6 +121,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
 - `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
 - `api_client.go`: internal relay client for control-plane requests, reverse session dialing, and internal QUIC tunnel setup
+- `mitm.go`: tenant-side TLS passthrough self-probe. The SDK opens a probe connection to its own public URL, compares TLS exporter values on both SDK-controlled ends, and logs suspected relay-side TLS termination on mismatch
 - `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
 - `NewListener` callers provide explicit normalized relay URLs
 - Default exposure flow is `Expose{Discovery: true} -> PublicURLs -> http.Server.Serve(exposure)`, with an opt-out path for explicit relay inputs only
@@ -127,6 +130,8 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `Exposure.RelayURLs()` returns the configured normalized relay URLs, while `Exposure.PublicURLs()` returns only relays that are currently registered and ready
 - Relay-aware entry inspection is reserved for advanced callers such as `portal-tunnel`
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
+- MITM self-probes are traffic-triggered, not periodic. A listener triggers at most one asynchronous probe per 30-second cooldown, and only after real tenant traffic performs I/O on an accepted connection
+- Probe identification does not use a dedicated ALPN or fixed plaintext marker. The first encrypted probe payload is `nonce + random padding`, and inbound probe matching is only attempted while a probe is in flight
 - `Listener` embeds a `datagram.Session` for QUIC datagram transport (no separate UDP listener type)
 - `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the session
 - `Listener.WaitDatagramReady()`: blocks until relay publishes `udp_addr` and `quic_addr`
@@ -162,6 +167,18 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 8. SDK/tunnel receives `0x02`, starts tenant TLS locally using the relay-backed keyless signer, and the relay bridges raw encrypted bytes end-to-end.
 
 Result: the relay decides routing, but tenant TLS termination still happens at the SDK/tunnel side.
+
+### Tenant TLS Self-Probe Detection
+
+1. After a real tenant connection begins I/O, the SDK may start one asynchronous self-probe for that listener if no probe is in flight and the 30-second cooldown has expired.
+2. The SDK opens a new TLS connection to its own public URL using the same tenant-facing TLS characteristics as normal traffic.
+3. The probe client exports TLS keying material (`ExportKeyingMaterial`) from that probe connection and stores it under a random nonce.
+4. The first encrypted probe payload is `16-byte nonce + random padding`; there is no fixed probe magic or dedicated ALPN.
+5. When the probe connection comes back through the relay and reaches the SDK-side tenant TLS terminator, the SDK peeks only the first 16 encrypted application bytes while a probe is pending.
+6. If those bytes match a pending nonce, the SDK exports keying material on the server side and compares it with the client-side exporter value.
+7. Matching exporter values mean the probe observed passthrough for that connection. A mismatch is logged as suspected relay-side TLS termination. A timeout is logged as probe failure, not proof of MITM.
+
+Result: this is a detect-only signal. It raises the cost of adaptive relay-side TLS termination, but it does not prove passthrough for every user connection.
 
 ### UDP/QUIC Datagram Transport
 
@@ -267,6 +284,9 @@ Cross-package public contract lives in:
   - API envelope
   - shared request/response DTOs
   - lease metadata
+- `types/error.go`
+  - shared API error codes
+  - shared MITM self-probe reason codes
 - `types/types.go`
   - shared headers
   - reverse marker constants
@@ -289,7 +309,9 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
   - root host A record
   - wildcard host A record
   - relay certificate renewal
-- SDK/tunnel fetches the relay certificate chain, verifies it covers tenant hostnames, and uses `/v1/sign` for remote signatures during tenant TLS handshakes
+- SDK/tunnel fetches the relay certificate chain from the relay root host, verifies that the leaf covers tenant hostnames, and builds a tenant-side `tls.Config` with a remote signer backed by `/v1/sign`
+- During tenant TLS handshake, the SDK/tunnel endpoint acts as the TLS server and derives tenant session keys locally; the relay only signs handshake digests and does not receive tenant TLS traffic secrets
+- Relay control-plane TLS and reverse-session setup still terminate on the relay's admin/API listener and are not protected by the tenant keyless TLS path
 
 ## Design Properties
 
@@ -298,6 +320,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Raw public UDP exposure with an internal QUIC datagram backhaul
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
+- Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination
 - Per-lease reverse token authorization for reverse session lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
