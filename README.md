@@ -1,12 +1,8 @@
 # PORTAL — Public Open Relay To Access Localhost
 
-<p align="center">
-  <img src="/portal.png" alt="Portal logo" width="540" />
-</p>
+<p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
 
 <p align="center">Expose your local application to the public internet — no port forwarding, no NAT, no DNS setup.<br />Portal is a self-hosted relay network. You can connect to any relay or run your own.</p><br />
-
-<p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
 
 ## Why Portal?
 
