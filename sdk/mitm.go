@@ -35,7 +35,6 @@ type MITMProbeReport struct {
 	RelayURL  string
 	PublicURL string
 	LeaseID   string
-	CheckedAt time.Time
 	Detected  bool
 	Reason    string
 }
@@ -77,22 +76,25 @@ func (m *mitmManager) reset() {
 }
 
 func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport, error) {
-	report := MITMProbeReport{
-		CheckedAt: time.Now(),
-	}
 	l := m.listener
 	if l == nil || l.api == nil || l.api.baseURL == nil {
-		return report, errors.New("listener is not ready")
+		return MITMProbeReport{}, errors.New("listener is not ready")
 	}
 
 	publicURL := l.PublicURL()
 	if publicURL == "" {
-		return report, errors.New("listener is not registered")
+		return MITMProbeReport{}, errors.New("listener is not registered")
 	}
 
 	hostname := l.Hostname()
 	if hostname == "" {
-		return report, errors.New("listener hostname is unavailable")
+		return MITMProbeReport{}, errors.New("listener hostname is unavailable")
+	}
+
+	report := MITMProbeReport{
+		RelayURL:  l.api.baseURL.String(),
+		PublicURL: publicURL,
+		LeaseID:   l.LeaseID(),
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
@@ -104,18 +106,28 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	}
 	nonceHex := hex.EncodeToString(nonceRaw)
 
-	report.RelayURL = l.api.baseURL.String()
-	report.PublicURL = publicURL
-	report.LeaseID = l.LeaseID()
-
 	dialAddr, err := m.probeDialAddress(publicURL)
 	if err != nil {
 		return report, err
 	}
 
+	probeTLSConf := &tls.Config{
+		ServerName:         hostname,
+		InsecureSkipVerify: true,
+	}
+	l.mu.Lock()
+	if tlsConfig := l.tlsConfig; tlsConfig != nil {
+		probeTLSConf.MinVersion = tlsConfig.MinVersion
+		probeTLSConf.MaxVersion = tlsConfig.MaxVersion
+		if len(tlsConfig.NextProtos) > 0 {
+			probeTLSConf.NextProtos = append([]string(nil), tlsConfig.NextProtos...)
+		}
+	}
+	l.mu.Unlock()
+
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: l.api.dialTimeout},
-		Config:    m.clientTLSConfig(hostname),
+		Config:    probeTLSConf,
 	}
 	conn, err := dialer.DialContext(probeCtx, "tcp", dialAddr)
 	if err != nil {
@@ -137,19 +149,19 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	defer cleanupProbe()
 
 	paddingLen := mitmProbePaddingMin
-	if mitmProbePaddingMax > mitmProbePaddingMin {
+	if paddingRange := mitmProbePaddingMax - mitmProbePaddingMin; paddingRange > 0 {
 		var paddingSeed [1]byte
 		if _, err := io.ReadFull(rand.Reader, paddingSeed[:]); err != nil {
 			return report, fmt.Errorf("generate probe padding length: %w", err)
 		}
-		paddingLen += int(paddingSeed[0]) % (mitmProbePaddingMax - mitmProbePaddingMin + 1)
+		paddingLen += int(paddingSeed[0]) % (paddingRange + 1)
 	}
 
 	frame := make([]byte, len(nonceRaw)+paddingLen)
-	copy(frame, nonceRaw)
-	if _, err := io.ReadFull(rand.Reader, frame[len(nonceRaw):]); err != nil {
-		return report, fmt.Errorf("generate probe padding: %w", err)
+	if _, err := io.ReadFull(rand.Reader, frame); err != nil {
+		return report, fmt.Errorf("generate probe frame: %w", err)
 	}
+	copy(frame, nonceRaw)
 	if _, err := conn.Write(frame); err != nil {
 		return report, fmt.Errorf("write mitm probe: %w", err)
 	}
@@ -158,15 +170,13 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	case result := <-resultCh:
 		report.Detected = !result.matched
 		report.Reason = result.reason
-		return report, nil
 	case <-probeCtx.Done():
-		report.Detected = false
 		report.Reason = types.MITMProbeReasonProbeTimeout
-		if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
-			return report, nil
+		if !errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+			return report, probeCtx.Err()
 		}
-		return report, probeCtx.Err()
 	}
+	return report, nil
 }
 
 func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
@@ -181,26 +191,6 @@ func (m *mitmManager) probeDialAddress(publicURL string) (string, error) {
 		dialHost = l.api.baseURL.Host
 	}
 	return utils.EnsurePort(dialHost), nil
-}
-
-func (m *mitmManager) clientTLSConfig(hostname string) *tls.Config {
-	probeTLSConf := &tls.Config{
-		ServerName:         hostname,
-		InsecureSkipVerify: true,
-	}
-
-	l := m.listener
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.tlsConfig != nil {
-		probeTLSConf.MinVersion = l.tlsConfig.MinVersion
-		probeTLSConf.MaxVersion = l.tlsConfig.MaxVersion
-		if len(l.tlsConfig.NextProtos) > 0 {
-			probeTLSConf.NextProtos = append([]string(nil), l.tlsConfig.NextProtos...)
-		}
-	}
-	return probeTLSConf
 }
 
 func (m *mitmManager) maybeStart() {
@@ -219,18 +209,15 @@ func (m *mitmManager) maybeStart() {
 
 	go func() {
 		report, err := m.probeTLSPassthrough(m.ctx)
-		m.finish(err == nil && report.Reason != types.MITMProbeReasonProbeTimeout)
+		success := err == nil && report.Reason != types.MITMProbeReasonProbeTimeout
+		m.mu.Lock()
+		m.inFlight = false
+		if success {
+			m.lastAt = time.Now()
+		}
+		m.mu.Unlock()
 		m.logResult(report, err)
 	}()
-}
-
-func (m *mitmManager) finish(success bool) {
-	m.mu.Lock()
-	m.inFlight = false
-	if success {
-		m.lastAt = time.Now()
-	}
-	m.mu.Unlock()
 }
 
 func (m *mitmManager) logResult(report MITMProbeReport, err error) {

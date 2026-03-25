@@ -42,7 +42,6 @@ type Exposure struct {
 	activeRelayURLs []string
 	bannedRelayURLs []string
 	listeners       map[string]*Listener
-	starting        map[string]struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -101,7 +100,6 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:        make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
 		listeners:        make(map[string]*Listener, len(relayURLs)),
-		starting:         make(map[string]struct{}, len(relayURLs)),
 	}
 
 	if len(relayURLs) > 0 {
@@ -401,7 +399,6 @@ func (e *Exposure) banRelayURL(relayURL string) {
 	e.activeRelayURLs = utils.RemoveRelayURL(e.activeRelayURLs, relayURL)
 	e.bannedRelayURLs = utils.AppendUniqueRelayURL(e.bannedRelayURLs, relayURL)
 	delete(e.listeners, relayURL)
-	delete(e.starting, relayURL)
 	bannedRelayURLs := append([]string(nil), e.bannedRelayURLs...)
 	e.mu.Unlock()
 
@@ -418,10 +415,6 @@ func (e *Exposure) syncListeners(failOnError bool) error {
 		if _, ok := e.listeners[relayURL]; ok {
 			continue
 		}
-		if _, ok := e.starting[relayURL]; ok {
-			continue
-		}
-		e.starting[relayURL] = struct{}{}
 		missing = append(missing, relayURL)
 	}
 	e.mu.Unlock()
@@ -429,9 +422,6 @@ func (e *Exposure) syncListeners(failOnError bool) error {
 	for _, relayURL := range missing {
 		listener, err := e.newListener(relayURL)
 		if err != nil {
-			e.mu.Lock()
-			delete(e.starting, relayURL)
-			e.mu.Unlock()
 			if failOnError {
 				return fmt.Errorf("listen %q: %w", relayURL, err)
 			}
@@ -468,7 +458,6 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 
 	shouldClose := false
 	e.mu.Lock()
-	delete(e.starting, relayURL)
 	if e.closed() {
 		shouldClose = true
 	} else if _, exists := e.listeners[relayURL]; exists {

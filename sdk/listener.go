@@ -59,11 +59,11 @@ type Listener struct {
 	renewBefore        time.Duration
 	registerBootstraps []string
 
-	stream   *transport.ClientStream
-	datagram *transport.ClientDatagram
+	stream      *transport.ClientStream
+	datagram    *transport.ClientDatagram
+	mitmManager *mitmManager
 
 	registered   chan struct{}
-	banOnce      sync.Once
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
@@ -75,8 +75,6 @@ type Listener struct {
 	metadata      types.LeaseMetadata
 	tlsConfig     *tls.Config
 	tlsCloser     io.Closer
-
-	mitmManager *mitmManager
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -111,7 +109,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		retryWait:          retryWait,
 		leaseTTL:           leaseTTL,
 		renewBefore:        renewBefore,
-		registerBootstraps: append([]string(nil), initialBootstraps...),
+		registerBootstraps: initialBootstraps,
 		metadata:           cfg.Metadata.Copy(),
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
@@ -124,9 +122,6 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 				Str("lease_id", l.LeaseID()).
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
-	}
-
-	if l.datagram != nil {
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
 			return l.api.openQUICSession(ctx, state.LeaseID, state.ReverseToken)
 		})
@@ -548,11 +543,8 @@ func (l *Listener) ban() {
 	if l == nil {
 		return
 	}
-
-	l.banOnce.Do(func() {
-		l.setStartupStatus(listenerStatusBanned)
-		_ = l.Close()
-	})
+	l.setStartupStatus(listenerStatusBanned)
+	_ = l.Close()
 }
 
 func (l *Listener) StartupStatus() listenerStatus {

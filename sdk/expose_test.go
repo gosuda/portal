@@ -29,9 +29,6 @@ func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 			relayA: listener,
 			relayB: {},
 		},
-		starting: map[string]struct{}{
-			relayA: {},
-		},
 	}
 
 	exposure.banRelayURL(relayA)
@@ -48,13 +45,9 @@ func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 
 	exposure.mu.RLock()
 	_, listenerExists := exposure.listeners[relayA]
-	_, startingExists := exposure.starting[relayA]
 	exposure.mu.RUnlock()
 	if listenerExists {
 		t.Fatal("banned relay listener still exists in exposure.listeners")
-	}
-	if startingExists {
-		t.Fatal("banned relay still exists in exposure.starting")
 	}
 }
 
@@ -69,7 +62,6 @@ func TestExposureApplyRelayURLsSkipsBannedRelay(t *testing.T) {
 		listeners: map[string]*Listener{
 			relayA: {},
 		},
-		starting: make(map[string]struct{}),
 	}
 
 	added, err := exposure.applyRelayURLs([]string{relayA, relayB}, false)
