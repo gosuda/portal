@@ -28,6 +28,52 @@ func TestNormalizeRelayURLs(t *testing.T) {
 	}
 }
 
+func TestFilterRelayURLs(t *testing.T) {
+	t.Parallel()
+
+	got := FilterRelayURLs(
+		[]string{"https://relay-a.example", "https://relay-b.example"},
+		[]string{"https://relay-b.example"},
+	)
+
+	want := []string{"https://relay-a.example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FilterRelayURLs() = %v, want %v", got, want)
+	}
+}
+
+func TestRemoveRelayURL(t *testing.T) {
+	t.Parallel()
+
+	got := RemoveRelayURL(
+		[]string{"https://relay-a.example", "https://relay-b.example"},
+		"https://relay-a.example",
+	)
+
+	want := []string{"https://relay-b.example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("RemoveRelayURL() = %v, want %v", got, want)
+	}
+}
+
+func TestAppendUniqueRelayURL(t *testing.T) {
+	t.Parallel()
+
+	got := AppendUniqueRelayURL(
+		[]string{"https://relay-a.example"},
+		"https://relay-b.example",
+	)
+	want := []string{"https://relay-a.example", "https://relay-b.example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendUniqueRelayURL() = %v, want %v", got, want)
+	}
+
+	got = AppendUniqueRelayURL(got, "https://relay-b.example")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AppendUniqueRelayURL() dedupe = %v, want %v", got, want)
+	}
+}
+
 func TestParseCIDRs(t *testing.T) {
 	t.Parallel()
 

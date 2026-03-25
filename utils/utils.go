@@ -191,6 +191,78 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 	return uniqueURLs(out), nil
 }
 
+func FilterRelayURLs(inputs, excluded []string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	if len(excluded) == 0 {
+		return append([]string(nil), inputs...)
+	}
+
+	skip := make(map[string]struct{}, len(excluded))
+	for _, input := range excluded {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		skip[input] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		if _, ok := skip[input]; ok {
+			continue
+		}
+		filtered = append(filtered, input)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func RemoveRelayURL(inputs []string, target string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return append([]string(nil), inputs...)
+	}
+
+	filtered := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		input = strings.TrimSpace(input)
+		if input == "" || input == target {
+			continue
+		}
+		filtered = append(filtered, input)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func AppendUniqueRelayURL(inputs []string, target string) []string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return append([]string(nil), inputs...)
+	}
+
+	for _, input := range inputs {
+		if strings.TrimSpace(input) == target {
+			return append([]string(nil), inputs...)
+		}
+	}
+	return append(append([]string(nil), inputs...), target)
+}
+
 func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...)...)
 	if err != nil {
@@ -205,19 +277,7 @@ func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 		return nil, err
 	}
 
-	skip := make(map[string]struct{}, len(excluded))
-	for _, input := range excluded {
-		skip[input] = struct{}{}
-	}
-
-	filtered := make([]string, 0, len(merged))
-	for _, input := range merged {
-		if _, ok := skip[input]; ok {
-			continue
-		}
-		filtered = append(filtered, input)
-	}
-	return filtered, nil
+	return FilterRelayURLs(merged, excluded), nil
 }
 
 func uniqueURLs(inputs []string) []string {

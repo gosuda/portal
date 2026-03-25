@@ -45,6 +45,7 @@ type listenerStatus string
 const (
 	listenerStatusInactive listenerStatus = "inactive"
 	listenerStatusReady    listenerStatus = "ready"
+	listenerStatusBanned   listenerStatus = "banned"
 )
 
 type Listener struct {
@@ -62,6 +63,7 @@ type Listener struct {
 	datagram *transport.ClientDatagram
 
 	registered   chan struct{}
+	banOnce      sync.Once
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
@@ -534,8 +536,23 @@ func (l *Listener) setStartupStatus(status listenerStatus) {
 		return
 	}
 	l.mu.Lock()
+	if l.startupStatus == listenerStatusBanned && status != listenerStatusBanned {
+		l.mu.Unlock()
+		return
+	}
 	l.startupStatus = status
 	l.mu.Unlock()
+}
+
+func (l *Listener) ban() {
+	if l == nil {
+		return
+	}
+
+	l.banOnce.Do(func() {
+		l.setStartupStatus(listenerStatusBanned)
+		_ = l.Close()
+	})
 }
 
 func (l *Listener) StartupStatus() listenerStatus {

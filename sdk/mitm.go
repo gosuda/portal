@@ -246,6 +246,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 			Str("public_url", report.PublicURL).
 			Str("lease_id", report.LeaseID).
 			Msg("tls termination suspected by self-probe")
+		l.ban()
 	default:
 		log.Debug().
 			Str("relay_url", report.RelayURL).

@@ -40,6 +40,7 @@ type Exposure struct {
 	mu              sync.RWMutex
 	knownRelayURLs  []string
 	activeRelayURLs []string
+	bannedRelayURLs []string
 	listeners       map[string]*Listener
 	starting        map[string]struct{}
 
@@ -152,6 +153,17 @@ func (e *Exposure) ActiveRelayURLs() []string {
 	}
 
 	return append([]string(nil), e.activeRelayURLs...)
+}
+
+func (e *Exposure) BannedRelayURLs() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if len(e.bannedRelayURLs) == 0 {
+		return nil
+	}
+
+	return append([]string(nil), e.bannedRelayURLs...)
 }
 
 func (e *Exposure) Accept() (net.Conn, error) {
@@ -356,6 +368,7 @@ func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]strin
 	snapshot := append([]string(nil), relayURLs...)
 
 	e.mu.Lock()
+	snapshot = utils.FilterRelayURLs(snapshot, e.bannedRelayURLs)
 	existing := make(map[string]struct{}, len(e.knownRelayURLs))
 	for _, relayURL := range e.knownRelayURLs {
 		existing[relayURL] = struct{}{}
@@ -380,6 +393,22 @@ func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]strin
 		return nil, err
 	}
 	return added, nil
+}
+
+func (e *Exposure) banRelayURL(relayURL string) {
+	e.mu.Lock()
+	e.knownRelayURLs = utils.RemoveRelayURL(e.knownRelayURLs, relayURL)
+	e.activeRelayURLs = utils.RemoveRelayURL(e.activeRelayURLs, relayURL)
+	e.bannedRelayURLs = utils.AppendUniqueRelayURL(e.bannedRelayURLs, relayURL)
+	delete(e.listeners, relayURL)
+	delete(e.starting, relayURL)
+	bannedRelayURLs := append([]string(nil), e.bannedRelayURLs...)
+	e.mu.Unlock()
+
+	log.Warn().
+		Str("relay_url", relayURL).
+		Strs("banned_relays", bannedRelayURLs).
+		Msg("relay banned by mitm detection")
 }
 
 func (e *Exposure) syncListeners(failOnError bool) error {
@@ -543,6 +572,11 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 
 	relayURL := listener.api.baseURL.String()
 	defer func() {
+		if listener.StartupStatus() == listenerStatusBanned {
+			e.banRelayURL(relayURL)
+			return
+		}
+
 		e.mu.Lock()
 		if current, ok := e.listeners[relayURL]; ok && current == listener {
 			delete(e.listeners, relayURL)
@@ -734,7 +768,9 @@ func (e *Exposure) monitorStartupCounts() {
 		}
 
 		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
+			bannedCount := len(e.BannedRelayURLs())
 			event := log.Info().
+				Int("banned", bannedCount).
 				Int("inactive", inactiveCount).
 				Int("ready", readyCount)
 			if len(activated) > 0 {

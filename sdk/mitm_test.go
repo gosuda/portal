@@ -14,6 +14,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/url"
 	"testing"
 	"time"
 
@@ -195,6 +196,42 @@ func TestMITMProbeConnPassesThroughNormalTraffic(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("passthrough payload = %q, want %q", got, payload)
+	}
+}
+
+func TestMITMProbeDetectionBansListener(t *testing.T) {
+	doneCh := make(chan struct{})
+	relayURL, err := url.Parse("https://relay.example")
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	listener := &Listener{
+		api: &apiClient{baseURL: relayURL},
+		cancel: func() {
+			select {
+			case <-doneCh:
+			default:
+				close(doneCh)
+			}
+		},
+		doneCh:     doneCh,
+		registered: make(chan struct{}),
+	}
+	listener.mitmManager = newMITMManager(context.Background(), listener)
+	listener.setStartupStatus(listenerStatusReady)
+
+	listener.mitmManager.logResult(MITMProbeReport{
+		RelayURL: relayURL.String(),
+		Detected: true,
+		Reason:   types.MITMProbeReasonExporterMismatch,
+	}, nil)
+
+	if status := listener.StartupStatus(); status != listenerStatusBanned {
+		t.Fatalf("listener status = %q, want %q", status, listenerStatusBanned)
+	}
+	if !listener.closed() {
+		t.Fatal("listener.closed() = false, want true")
 	}
 }
 
