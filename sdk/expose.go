@@ -29,6 +29,7 @@ type Exposure struct {
 	UDPAddr          string
 	reverseToken     string
 	udpEnabled       bool
+	banMITM          bool
 	metadata         types.LeaseMetadata
 	ownerAddress     string
 	rootCAPEM        []byte
@@ -40,8 +41,8 @@ type Exposure struct {
 	mu              sync.RWMutex
 	knownRelayURLs  []string
 	activeRelayURLs []string
+	bannedRelayURLs []string
 	listeners       map[string]*Listener
-	starting        map[string]struct{}
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
@@ -54,6 +55,7 @@ type ExposeConfig struct {
 	UDPAddr         string
 	ReverseToken    string
 	UDPEnabled      bool
+	BanMITM         bool
 	Discovery       bool
 	Metadata        types.LeaseMetadata
 	OwnerPrivateKey string
@@ -93,6 +95,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		UDPAddr:          udpAddr,
 		reverseToken:     cfg.ReverseToken,
 		udpEnabled:       cfg.UDPEnabled,
+		banMITM:          cfg.BanMITM,
 		metadata:         cfg.Metadata.Copy(),
 		ownerAddress:     identity.Address,
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
@@ -100,7 +103,6 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:        make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
 		listeners:        make(map[string]*Listener, len(relayURLs)),
-		starting:         make(map[string]struct{}, len(relayURLs)),
 	}
 
 	if len(relayURLs) > 0 {
@@ -152,6 +154,17 @@ func (e *Exposure) ActiveRelayURLs() []string {
 	}
 
 	return append([]string(nil), e.activeRelayURLs...)
+}
+
+func (e *Exposure) BannedRelayURLs() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if len(e.bannedRelayURLs) == 0 {
+		return nil
+	}
+
+	return append([]string(nil), e.bannedRelayURLs...)
 }
 
 func (e *Exposure) Accept() (net.Conn, error) {
@@ -356,6 +369,7 @@ func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]strin
 	snapshot := append([]string(nil), relayURLs...)
 
 	e.mu.Lock()
+	snapshot = utils.FilterRelayURLs(snapshot, e.bannedRelayURLs)
 	existing := make(map[string]struct{}, len(e.knownRelayURLs))
 	for _, relayURL := range e.knownRelayURLs {
 		existing[relayURL] = struct{}{}
@@ -382,6 +396,21 @@ func (e *Exposure) applyRelayURLs(relayURLs []string, failOnError bool) ([]strin
 	return added, nil
 }
 
+func (e *Exposure) banRelayURL(relayURL string) {
+	e.mu.Lock()
+	e.knownRelayURLs = utils.RemoveRelayURL(e.knownRelayURLs, relayURL)
+	e.activeRelayURLs = utils.RemoveRelayURL(e.activeRelayURLs, relayURL)
+	e.bannedRelayURLs = utils.AppendUniqueRelayURL(e.bannedRelayURLs, relayURL)
+	delete(e.listeners, relayURL)
+	bannedRelayURLs := append([]string(nil), e.bannedRelayURLs...)
+	e.mu.Unlock()
+
+	log.Warn().
+		Str("relay_url", relayURL).
+		Strs("banned_relays", bannedRelayURLs).
+		Msg("relay banned by mitm detection")
+}
+
 func (e *Exposure) syncListeners(failOnError bool) error {
 	e.mu.Lock()
 	missing := make([]string, 0)
@@ -389,10 +418,6 @@ func (e *Exposure) syncListeners(failOnError bool) error {
 		if _, ok := e.listeners[relayURL]; ok {
 			continue
 		}
-		if _, ok := e.starting[relayURL]; ok {
-			continue
-		}
-		e.starting[relayURL] = struct{}{}
 		missing = append(missing, relayURL)
 	}
 	e.mu.Unlock()
@@ -400,9 +425,6 @@ func (e *Exposure) syncListeners(failOnError bool) error {
 	for _, relayURL := range missing {
 		listener, err := e.newListener(relayURL)
 		if err != nil {
-			e.mu.Lock()
-			delete(e.starting, relayURL)
-			e.mu.Unlock()
 			if failOnError {
 				return fmt.Errorf("listen %q: %w", relayURL, err)
 			}
@@ -424,6 +446,7 @@ func (e *Exposure) newListener(relayURL string) (*Listener, error) {
 		Name:               e.name,
 		ReverseToken:       e.reverseToken,
 		UDPEnabled:         e.udpEnabled,
+		BanMITM:            e.banMITM,
 		RegisterBootstraps: bootstraps,
 		Metadata:           e.metadata.Copy(),
 		RootCAPEM:          append([]byte(nil), e.rootCAPEM...),
@@ -439,7 +462,6 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 
 	shouldClose := false
 	e.mu.Lock()
-	delete(e.starting, relayURL)
 	if e.closed() {
 		shouldClose = true
 	} else if _, exists := e.listeners[relayURL]; exists {
@@ -543,6 +565,11 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 
 	relayURL := listener.api.baseURL.String()
 	defer func() {
+		if listener.StartupStatus() == listenerStatusBanned {
+			e.banRelayURL(relayURL)
+			return
+		}
+
 		e.mu.Lock()
 		if current, ok := e.listeners[relayURL]; ok && current == listener {
 			delete(e.listeners, relayURL)
@@ -734,7 +761,9 @@ func (e *Exposure) monitorStartupCounts() {
 		}
 
 		if firstRun || len(activated) > 0 || len(deactivated) > 0 {
+			bannedCount := len(e.BannedRelayURLs())
 			event := log.Info().
+				Int("banned", bannedCount).
 				Int("inactive", inactiveCount).
 				Int("ready", readyCount)
 			if len(activated) > 0 {

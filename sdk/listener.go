@@ -25,6 +25,7 @@ type ListenerConfig struct {
 	Name             string
 	ReverseToken     string
 	UDPEnabled       bool
+	BanMITM          bool
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -45,6 +46,7 @@ type listenerStatus string
 const (
 	listenerStatusInactive listenerStatus = "inactive"
 	listenerStatusReady    listenerStatus = "ready"
+	listenerStatusBanned   listenerStatus = "banned"
 )
 
 type Listener struct {
@@ -58,13 +60,15 @@ type Listener struct {
 	renewBefore        time.Duration
 	registerBootstraps []string
 
-	stream   *transport.ClientStream
-	datagram *transport.ClientDatagram
+	stream      *transport.ClientStream
+	datagram    *transport.ClientDatagram
+	mitmManager *mitmManager
 
 	registered   chan struct{}
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
+	banMITM       bool
 	mu            sync.Mutex
 	startupStatus listenerStatus
 	leaseID       string
@@ -107,9 +111,11 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		retryWait:          retryWait,
 		leaseTTL:           leaseTTL,
 		renewBefore:        renewBefore,
-		registerBootstraps: append([]string(nil), initialBootstraps...),
+		registerBootstraps: initialBootstraps,
 		metadata:           cfg.Metadata.Copy(),
+		banMITM:            cfg.BanMITM,
 	}
+	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
 	if cfg.UDPEnabled {
 		l.datagram = transport.NewClientDatagram(func(err error) {
@@ -119,9 +125,6 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 				Str("lease_id", l.LeaseID()).
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
-	}
-
-	if l.datagram != nil {
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
 			return l.api.openQUICSession(ctx, state.LeaseID, state.ReverseToken)
 		})
@@ -211,6 +214,10 @@ func (l *Listener) Close() error {
 		l.tlsCloser = nil
 		l.mu.Unlock()
 
+		if l.mitmManager != nil {
+			l.mitmManager.reset()
+		}
+
 		if stream != nil {
 			stream.Drain()
 		}
@@ -237,7 +244,25 @@ func (l *Listener) Accept() (net.Conn, error) {
 	if l.stream == nil {
 		return nil, net.ErrClosed
 	}
-	return l.stream.Accept(l.doneCh)
+	for {
+		conn, err := l.stream.Accept(l.doneCh)
+		if err != nil {
+			return nil, err
+		}
+
+		nextConn, handled, handleErr := l.mitmManager.maybeHandleConn(conn)
+		if handleErr != nil {
+			log.Debug().
+				Err(handleErr).
+				Str("relay_url", l.api.baseURL.String()).
+				Str("lease_id", l.LeaseID()).
+				Msg("mitm self-probe handling failed")
+		}
+		if handled {
+			continue
+		}
+		return wrapMITMProbeConn(l.mitmManager, nextConn), nil
+	}
 }
 
 func (l *Listener) Addr() net.Addr {
@@ -509,8 +534,20 @@ func (l *Listener) setStartupStatus(status listenerStatus) {
 		return
 	}
 	l.mu.Lock()
+	if l.startupStatus == listenerStatusBanned && status != listenerStatusBanned {
+		l.mu.Unlock()
+		return
+	}
 	l.startupStatus = status
 	l.mu.Unlock()
+}
+
+func (l *Listener) ban() {
+	if l == nil {
+		return
+	}
+	l.setStartupStatus(listenerStatusBanned)
+	_ = l.Close()
 }
 
 func (l *Listener) StartupStatus() listenerStatus {
@@ -521,4 +558,11 @@ func (l *Listener) StartupStatus() listenerStatus {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.startupStatus
+}
+
+func (l *Listener) BanMITM() bool {
+	if l == nil {
+		return false
+	}
+	return l.banMITM
 }

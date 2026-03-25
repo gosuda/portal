@@ -24,4 +24,7 @@ const (
 	APIErrorCodeUDPDisabled         = "udp_disabled"
 	APIErrorCodeUDPCapacityExceeded = "udp_capacity_exceeded"
 	APIErrorCodeTransportMismatch   = "transport_mismatch"
+
+	MITMProbeReasonExporterMismatch = "tls_exporter_mismatch"
+	MITMProbeReasonProbeTimeout     = "probe_timeout"
 )
