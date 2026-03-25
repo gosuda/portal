@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -256,11 +257,40 @@ func TestServerStartServesOptionalDiscoveryRoutes(t *testing.T) {
 	if envelope.Data.Hostname != "demo.localhost" {
 		t.Fatalf("resolve hostname = %q, want %q", envelope.Data.Hostname, "demo.localhost")
 	}
-	if len(envelope.Data.Bootstraps) != 3 || envelope.Data.Bootstraps[0] != "https://localhost:4017" || envelope.Data.Bootstraps[1] != "https://bootstrap.example.com" || envelope.Data.Bootstraps[2] != "https://relay-a.example.com" {
-		t.Fatalf("resolve bootstraps = %v, want [%q %q %q]", envelope.Data.Bootstraps, "https://localhost:4017", "https://bootstrap.example.com", "https://relay-a.example.com")
+	if !reflect.DeepEqual(envelope.Data.Bootstraps, []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
+		t.Fatalf("resolve bootstraps = %v, want [%q %q]", envelope.Data.Bootstraps, "https://bootstrap.example.com", "https://relay-a.example.com")
 	}
 	if !server.DiscoveryEnabled() {
 		t.Fatal("DiscoveryEnabled() = false, want true")
+	}
+}
+
+func TestServerMergeDiscoveryBootstrapsSkipsLocalRelayHosts(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:        "https://portal.example.com",
+		Bootstraps:       []string{"https://bootstrap.example.com"},
+		DiscoveryEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	added, err := server.mergeDiscoveryBootstraps([]string{
+		"https://localhost:4017",
+		"https://relay-a.example.com",
+		"https://127.0.0.1:4017",
+	})
+	if err != nil {
+		t.Fatalf("mergeDiscoveryBootstraps() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(added, []string{"https://relay-a.example.com"}) {
+		t.Fatalf("mergeDiscoveryBootstraps() added = %v, want [%q]", added, "https://relay-a.example.com")
+	}
+	if !reflect.DeepEqual(server.discoveryBootstrapsSnapshot(), []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
+		t.Fatalf("discoveryBootstrapsSnapshot() = %v, want [%q %q]", server.discoveryBootstrapsSnapshot(), "https://bootstrap.example.com", "https://relay-a.example.com")
 	}
 }
 

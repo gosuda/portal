@@ -28,6 +28,28 @@ func TestNormalizeRelayURLs(t *testing.T) {
 	}
 }
 
+func TestNormalizeURLPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: "/"},
+		{input: " ", want: "/"},
+		{input: "api", want: "/api"},
+		{input: "/api/", want: "/api"},
+		{input: "/api/../v1//", want: "/v1"},
+		{input: "/", want: "/"},
+	}
+
+	for _, tc := range cases {
+		if got := NormalizeURLPath(tc.input); got != tc.want {
+			t.Fatalf("NormalizeURLPath(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestFilterRelayURLs(t *testing.T) {
 	t.Parallel()
 
@@ -71,6 +93,25 @@ func TestAppendUniqueRelayURL(t *testing.T) {
 	got = AppendUniqueRelayURL(got, "https://relay-b.example")
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("AppendUniqueRelayURL() dedupe = %v, want %v", got, want)
+	}
+}
+
+func TestExcludeLocalRelayURLs(t *testing.T) {
+	t.Parallel()
+
+	got, err := ExcludeLocalRelayURLs(
+		"https://localhost:4017",
+		"https://127.0.0.1:4017",
+		"https://relay.example.com/base",
+		"https://demo.localhost",
+	)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() error = %v", err)
+	}
+
+	want := []string{"https://relay.example.com/base"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExcludeLocalRelayURLs() = %v, want %v", got, want)
 	}
 }
 

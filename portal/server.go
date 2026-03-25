@@ -150,6 +150,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		bootstraps, err = utils.ExcludeLocalRelayURLs(bootstraps...)
+		if err != nil {
+			return nil, err
+		}
 		s.discoveryBootstraps = bootstraps
 	}
 
@@ -593,6 +597,10 @@ func (s *Server) mergeDiscoveryBootstraps(inputs []string) ([]string, error) {
 	defer s.discoveryMu.Unlock()
 
 	next, err := utils.MergeRelayURLs(s.discoveryBootstraps, []string{s.cfg.PortalURL}, inputs)
+	if err != nil {
+		return nil, err
+	}
+	next, err = utils.ExcludeLocalRelayURLs(next...)
 	if err != nil {
 		return nil, err
 	}

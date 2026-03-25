@@ -20,7 +20,7 @@ type Resolver func(context.Context, types.DiscoverRequest) (types.DiscoverRespon
 const defaultRequestTimeout = 15 * time.Second
 
 func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverRequest, rootCAPEM []byte) ([]string, error) {
-	peers, err := utils.NormalizeRelayURLs(peers...)
+	peers, err := utils.ExcludeLocalRelayURLs(peers...)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +44,12 @@ func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverR
 			continue
 		}
 
-		bootstraps, err = utils.MergeRelayURLs(bootstraps, nil, resp.Bootstraps)
+		discoveredBootstraps, err := utils.ExcludeLocalRelayURLs(resp.Bootstraps...)
+		if err != nil {
+			discoverErr = errors.Join(discoverErr, fmt.Errorf("filter %q bootstraps: %w", peer, err))
+			continue
+		}
+		bootstraps, err = utils.MergeRelayURLs(bootstraps, nil, discoveredBootstraps)
 		if err != nil {
 			discoverErr = errors.Join(discoverErr, fmt.Errorf("merge %q bootstraps: %w", peer, err))
 			continue
@@ -190,7 +195,7 @@ func buildResponseBootstraps(selfURLs, bootstraps, extra []string) ([]string, er
 		return nil, err
 	}
 	if len(selfURLs) == 0 {
-		return merged, nil
+		return utils.ExcludeLocalRelayURLs(merged...)
 	}
 
 	normalizedSelf, err := utils.NormalizeRelayURLs(selfURLs...)
@@ -201,5 +206,5 @@ func buildResponseBootstraps(selfURLs, bootstraps, extra []string) ([]string, er
 	if err != nil {
 		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}
-	return resolvedBootstraps, nil
+	return utils.ExcludeLocalRelayURLs(resolvedBootstraps...)
 }

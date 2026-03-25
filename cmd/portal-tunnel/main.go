@@ -43,6 +43,7 @@ type exposeFlags struct {
 	thumbnail  string
 	hide       bool
 	targetAddr string
+	httpRoutes []string
 	udp        bool
 	udpAddr    string
 }
@@ -61,6 +62,7 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.owner, "owner", "", "Service owner metadata")
 	utils.StringFlag(fs, &flags.thumbnail, "thumbnail", "", "Service thumbnail URL metadata")
 	utils.BoolFlag(fs, &flags.hide, "hide", false, "Hide service from discovery")
+	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM form; repeat to aggregate multiple local HTTP services behind one public URL")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 
@@ -77,12 +79,23 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return err
 	}
-	if flags.targetAddr == "" {
+	switch {
+	case flags.targetAddr == "" && len(flags.httpRoutes) == 0:
 		printExposeUsage(os.Stderr)
-		return errors.New("target is required")
+		return errors.New("target or at least one --http-route is required")
+	case flags.targetAddr != "" && len(flags.httpRoutes) > 0:
+		printExposeUsage(os.Stderr)
+		return errors.New("target cannot be combined with --http-route")
+	case len(flags.httpRoutes) > 0 && flags.udp:
+		printExposeUsage(os.Stderr)
+		return errors.New("--udp cannot be combined with --http-route")
 	}
 	if flags.name == "" {
-		flags.name, err = defaultExposeName(flags.targetAddr, utils.RandomID("cli_"))
+		defaultTarget := flags.targetAddr
+		if defaultTarget == "" && len(flags.httpRoutes) > 0 {
+			defaultTarget = strings.Join(flags.httpRoutes, ",")
+		}
+		flags.name, err = defaultExposeName(defaultTarget, utils.RandomID("cli_"))
 		if err != nil {
 			return fmt.Errorf("derive service name: %w", err)
 		}
@@ -110,6 +123,15 @@ func runExposeCommand(args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to start relays: %w", flags.name, err)
+	}
+	if len(flags.httpRoutes) > 0 {
+		handler, err := newHTTPRouteHandler(flags.httpRoutes)
+		if err != nil {
+			_ = exposure.Close()
+			return err
+		}
+		defer exposure.Close()
+		return exposure.RunHTTP(ctx, handler, "")
 	}
 	return proxyExposure(ctx, exposure, flags.name)
 }
@@ -235,11 +257,13 @@ func printRootUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
+			"portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]",
 			"portal list [flags]",
 		},
 		[]string{
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
+			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal list",
 		},
@@ -250,10 +274,12 @@ func printExposeUsage(w io.Writer) {
 	utils.WriteCommandUsage(w,
 		[]string{
 			"portal expose [flags] <target>",
+			"portal expose [flags] --http-route PATH=UPSTREAM [--http-route PATH=UPSTREAM]",
 		},
 		[]string{
 			"portal expose 3000",
 			"portal expose localhost:8080 --name my-app",
+			"portal expose --http-route /api=http://127.0.0.1:3001 --http-route /=http://127.0.0.1:5173 --name my-app",
 			"portal expose 3000 --udp --udp-addr 127.0.0.1:5353",
 			"portal expose 3000 --ban-mitm",
 			"portal expose 3000 --relays https://portal.example.com --discovery=false",

@@ -28,12 +28,23 @@ portal expose localhost:8080 \
   --owner "Portal Operator"
 ```
 
+Multi-port HTTP aggregation example:
+
+```text
+portal expose --name myapp \
+  --http-route /api=http://127.0.0.1:3001 \
+  --http-route /=http://127.0.0.1:5173
+```
+
 ## Commands
 
 ### `portal expose [flags] <target>`
 
 - `<target>` accepts a bare port like `3000`, a `host:port`, or an `http(s)://host:port` URL.
 - Bare ports resolve to `127.0.0.1:<port>`.
+- Instead of `<target>`, you can repeat `--http-route PATH=UPSTREAM` to aggregate multiple local HTTP services behind one public URL.
+- Route matching is longest-prefix-first. `/api=http://127.0.0.1:3001` matches `/api/*` and strips the `/api` prefix before proxying to the upstream.
+- Routed HTTP mode automatically forwards `X-Forwarded-*`, rewrites upstream `Location` redirects back to the public route path, and strips loopback cookie domains while remapping cookie paths to the mounted route prefix.
 - `--name` is optional. When omitted, the CLI generates a name for that run.
 - `--relays` sets the relay API URLs for that run.
 - `--discovery=false` disables the public registry seed list and the discovery expansion loop for that run.
@@ -51,6 +62,7 @@ Flags:
 --thumbnail       Service thumbnail URL metadata
 --owner           Service owner metadata
 --hide            Hide service from discovery
+--http-route      HTTP route mapping in PATH=UPSTREAM form; repeat for multiple routes
 ```
 
 ### `portal list [flags]`
@@ -62,7 +74,7 @@ Legacy execution compatibility has been removed:
 
 - Use `portal expose ...` explicitly; bare `portal [flags]` is no longer accepted.
 - Runtime `APP_*`, `RELAYS`, and `DEFAULT_RELAYS` environment variable fallbacks are no longer used.
-- Pass the local target as the required positional `<target>` argument.
+- Pass either the local target as the positional `<target>` argument or repeat `--http-route` for routed HTTP mode.
 
 ## Install Behavior
 
@@ -84,3 +96,4 @@ Legacy execution compatibility has been removed:
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - TLS self-probe mismatches log warnings by default. Use `--ban-mitm` to reject relays that terminate tenant TLS.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.
+- `--http-route` mode is HTTP-only and cannot be combined with `--udp`.
