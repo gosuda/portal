@@ -185,6 +185,10 @@ func NormalizeURLPath(raw string) string {
 	if !strings.HasPrefix(clean, "/") {
 		clean = "/" + clean
 	}
+	// Prevent scheme-relative or otherwise ambiguous paths like "//example" or "/\example".
+	if len(clean) > 1 && (clean[1] == '/' || clean[1] == '\\') {
+		clean = "/"
+	}
 	if clean != "/" {
 		clean = strings.TrimSuffix(clean, "/")
 	}
