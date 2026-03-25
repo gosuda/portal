@@ -193,7 +193,7 @@ func (r *httpRoute) rewriteLocation(header http.Header, publicHost, publicScheme
 		}
 		parsed.Scheme = publicScheme
 		parsed.Host = publicHost
-	case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || location[1] != '\\'):
+	case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || (location[1] != '\\' && location[1] != '/')):
 		// server-relative redirect
 	default:
 		return
