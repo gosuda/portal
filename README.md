@@ -18,10 +18,23 @@ Unlike other tunneling services, Portal is self-hosted and permissionless. You c
 
 - **NAT-friendly connectivity**: Works behind NAT or firewalls without opening inbound ports
 - **Automatic subdomain routing**: Gives each app its own subdomain (`your-app.<base-domain>`)
-- **End-to-end encryption**: Supports TLS passthrough with relay keyless certificates
+- **End-to-end tenant TLS**: Relay routes by SNI, while tenant TLS terminates on your side with relay-backed keyless signing
 - **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
 - **One-Command Setup**: Expose any local app with a single command
 - **UDP Relay (Experimental)**: Supports raw UDP relay use cases, but the transport model and operational behavior may still change
+
+## How Portal Provides End-to-End Encryption
+
+Portal is designed so that tenant TLS terminates on your side rather than at the relay. In the normal data path, the relay forwards encrypted traffic without access to tenant TLS plaintext.
+
+1. The relay accepts the public connection and reads only the TLS ClientHello required for SNI-based routing.
+2. It forwards the tenant connection as raw encrypted bytes over the reverse session without terminating tenant TLS.
+3. The Portal client on your side acts as the TLS server and completes the tenant handshake locally.
+4. For relay-hosted domains, the Portal client obtains certificate signatures via `/v1/sign`, using the relay only as a keyless signing oracle.
+5. Session keys are derived entirely on your side. The relay provides certificate signatures only and does not receive tenant traffic secrets.
+6. After the handshake, the relay continues forwarding ciphertext without needing tenant TLS plaintext to keep routing traffic.
+
+Portal also checks that the relay is preserving TLS passthrough. The Portal client connects to its own public endpoint and compares TLS exporter values observed on both client-controlled ends. If they differ, Portal treats the relay as a suspected TLS terminator, closes the listener, and bans that relay for the current exposure.
 
 ## Components
 
