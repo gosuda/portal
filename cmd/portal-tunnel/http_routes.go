@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -22,13 +21,6 @@ type httpRoute struct {
 	proxy    *httputil.ReverseProxy
 }
 
-type httpRouteMeta struct {
-	publicHost   string
-	publicScheme string
-}
-
-type httpRouteMetaKey struct{}
-
 func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 	if len(rawRoutes) == 0 {
 		return nil, errors.New("at least one --http-route is required")
@@ -36,8 +28,8 @@ func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 
 	routes := make([]*httpRoute, 0, len(rawRoutes))
 	seen := make(map[string]struct{}, len(rawRoutes))
-	for _, rawRoute := range rawRoutes {
-		route, err := parseHTTPRoute(rawRoute)
+	for _, raw := range rawRoutes {
+		route, err := parseHTTPRoute(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -49,6 +41,7 @@ func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 		routes = append(routes, route)
 	}
 
+	// longest-prefix-first
 	sort.Slice(routes, func(i, j int) bool {
 		if len(routes[i].prefix) == len(routes[j].prefix) {
 			return routes[i].prefix < routes[j].prefix
@@ -57,12 +50,12 @@ func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 	})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestPath := r.URL.Path
-		if requestPath == "" {
-			requestPath = "/"
+		p := r.URL.Path
+		if p == "" {
+			p = "/"
 		}
 		for _, route := range routes {
-			if route.prefix == "/" || requestPath == route.prefix || strings.HasPrefix(requestPath, route.prefix+"/") {
+			if route.prefix == "/" || p == route.prefix || strings.HasPrefix(p, route.prefix+"/") {
 				route.proxy.ServeHTTP(w, r)
 				return
 			}
@@ -74,62 +67,66 @@ func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 func parseHTTPRoute(raw string) (*httpRoute, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.New("invalid --http-route: expected PATH=UPSTREAM")
+		return nil, errors.New("--http-route: expected PATH=UPSTREAM")
 	}
 
 	prefixRaw, upstreamRaw, ok := strings.Cut(raw, "=")
 	if !ok {
-		return nil, fmt.Errorf("invalid --http-route %q: expected PATH=UPSTREAM", raw)
+		return nil, fmt.Errorf("--http-route %q: expected PATH=UPSTREAM", raw)
 	}
 
 	prefix := strings.TrimSpace(prefixRaw)
-	switch {
-	case prefix == "":
-		return nil, fmt.Errorf("invalid --http-route prefix %q: %w", strings.TrimSpace(prefixRaw), errors.New("prefix is required"))
-	case !strings.HasPrefix(prefix, "/"):
-		return nil, fmt.Errorf("invalid --http-route prefix %q: %w", strings.TrimSpace(prefixRaw), errors.New("prefix must start with /"))
+	if prefix == "" {
+		return nil, fmt.Errorf("--http-route %q: prefix is required", raw)
+	}
+	if !strings.HasPrefix(prefix, "/") {
+		return nil, fmt.Errorf("--http-route %q: prefix must start with /", raw)
 	}
 	prefix = utils.NormalizeURLPath(prefix)
 
 	upstreamInput := strings.TrimSpace(upstreamRaw)
 	if upstreamInput == "" {
-		return nil, fmt.Errorf("invalid --http-route upstream %q: %w", strings.TrimSpace(upstreamRaw), errors.New("upstream is required"))
+		return nil, fmt.Errorf("--http-route %q: upstream is required", raw)
 	}
-
 	if !strings.Contains(upstreamInput, "://") {
 		target, err := utils.NormalizeLoopbackTarget(upstreamInput)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --http-route upstream %q: %w", strings.TrimSpace(upstreamRaw), err)
+			return nil, fmt.Errorf("--http-route %q: %w", raw, err)
 		}
 		upstreamInput = "http://" + target
 	}
 
 	upstream, err := url.Parse(upstreamInput)
 	if err != nil {
-		return nil, fmt.Errorf("invalid --http-route upstream %q: %w", strings.TrimSpace(upstreamRaw), err)
+		return nil, fmt.Errorf("--http-route %q: %w", raw, err)
 	}
 	if upstream.Host == "" {
-		return nil, fmt.Errorf("invalid --http-route upstream %q: %w", strings.TrimSpace(upstreamRaw), errors.New("upstream host is required"))
+		return nil, fmt.Errorf("--http-route %q: upstream host is required", raw)
 	}
 	if upstream.Scheme != "http" && upstream.Scheme != "https" {
-		return nil, fmt.Errorf("invalid --http-route upstream %q: %w", strings.TrimSpace(upstreamRaw), errors.New("upstream scheme must be http or https"))
+		return nil, fmt.Errorf("--http-route %q: scheme must be http or https", raw)
 	}
 	upstream.Fragment = ""
 	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
-	return &httpRoute{
-		prefix:   prefix,
-		upstream: upstream,
-	}, nil
+	return &httpRoute{prefix: prefix, upstream: upstream}, nil
 }
 
 func (r *httpRoute) newReverseProxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		Rewrite:        r.rewriteRequest,
-		ModifyResponse: r.modifyResponse,
+		Rewrite: r.rewriteRequest,
+		ModifyResponse: func(resp *http.Response) error {
+			if resp == nil || resp.Request == nil {
+				return nil
+			}
+			publicHost := resp.Request.Header.Get("X-Forwarded-Host")
+			publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
+			r.rewriteLocation(resp.Header, publicHost, publicScheme)
+			r.rewriteSetCookies(resp.Header, publicHost)
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
-			log.Error().
-				Err(err).
+			log.Error().Err(err).
 				Str("route_prefix", r.prefix).
 				Str("upstream", r.upstream.String()).
 				Msg("http route proxy failed")
@@ -139,101 +136,74 @@ func (r *httpRoute) newReverseProxy() *httputil.ReverseProxy {
 }
 
 func (r *httpRoute) rewriteRequest(pr *httputil.ProxyRequest) {
-	outboundPath, outboundRawPath := r.stripPrefix(pr.In.URL.Path, pr.In.URL.RawPath)
-	pr.Out.URL.Path = outboundPath
-	pr.Out.URL.RawPath = outboundRawPath
+	// strip route prefix from the path before forwarding
+	reqPath := utils.NormalizeURLPath(pr.In.URL.Path)
+	rawPath := pr.In.URL.RawPath
+	if r.prefix != "/" {
+		if reqPath == r.prefix {
+			reqPath = "/"
+			rawPath = ""
+		} else {
+			reqPath = strings.TrimPrefix(reqPath, r.prefix)
+			if reqPath == "" {
+				reqPath = "/"
+			}
+			if rawPath == r.prefix {
+				rawPath = "/"
+			} else if strings.HasPrefix(rawPath, r.prefix+"/") {
+				rawPath = strings.TrimPrefix(rawPath, r.prefix)
+			}
+		}
+	}
+
+	pr.Out.URL.Path = reqPath
+	pr.Out.URL.RawPath = rawPath
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
 	pr.SetXForwarded()
+
+	// SetXForwarded checks pr.In.TLS, but behind a TLS-terminating proxy
+	// the inbound X-Forwarded-Proto carries the real client scheme.
+	if pr.In.TLS == nil {
+		proto, _, _ := strings.Cut(pr.In.Header.Get("X-Forwarded-Proto"), ",")
+		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
+			pr.Out.Header.Set("X-Forwarded-Proto", proto)
+		}
+	}
+
 	if r.prefix != "/" {
 		pr.Out.Header.Set("X-Forwarded-Prefix", r.prefix)
 	}
-
-	publicScheme := "http"
-	if pr.In.TLS != nil {
-		publicScheme = "https"
-	} else {
-		proto := strings.TrimSpace(pr.In.Header.Get("X-Forwarded-Proto"))
-		if first, _, ok := strings.Cut(proto, ","); ok {
-			proto = first
-		}
-		if proto = strings.ToLower(strings.TrimSpace(proto)); proto != "" {
-			publicScheme = proto
-		}
-	}
-
-	meta := httpRouteMeta{
-		publicHost:   pr.In.Host,
-		publicScheme: publicScheme,
-	}
-	pr.Out = pr.Out.WithContext(context.WithValue(pr.Out.Context(), httpRouteMetaKey{}, meta))
 }
 
-func (r *httpRoute) modifyResponse(resp *http.Response) error {
-	if resp == nil || resp.Request == nil {
-		return nil
-	}
-
-	meta, _ := resp.Request.Context().Value(httpRouteMetaKey{}).(httpRouteMeta)
-	r.rewriteLocation(resp.Header, meta)
-	r.rewriteSetCookies(resp.Header, meta.publicHost)
-	return nil
-}
-
-func (r *httpRoute) stripPrefix(requestPath, rawPath string) (string, string) {
-	requestPath = utils.NormalizeURLPath(requestPath)
-	if r.prefix == "/" {
-		return requestPath, rawPath
-	}
-	if requestPath == r.prefix {
-		return "/", ""
-	}
-
-	trimmedPath := strings.TrimPrefix(requestPath, r.prefix)
-	if trimmedPath == "" {
-		trimmedPath = "/"
-	}
-
-	trimmedRawPath := rawPath
-	if trimmedRawPath != "" {
-		if trimmedRawPath == r.prefix {
-			trimmedRawPath = "/"
-		} else if strings.HasPrefix(trimmedRawPath, r.prefix+"/") {
-			trimmedRawPath = strings.TrimPrefix(trimmedRawPath, r.prefix)
-		}
-	}
-	return trimmedPath, trimmedRawPath
-}
-
-func (r *httpRoute) rewriteLocation(header http.Header, meta httpRouteMeta) {
-	location := strings.TrimSpace(header.Get("Location"))
+func (r *httpRoute) rewriteLocation(header http.Header, publicHost, publicScheme string) {
+	location := header.Get("Location")
 	if location == "" {
 		return
 	}
-
 	parsed, err := url.Parse(location)
 	if err != nil {
 		return
 	}
 
-	var mappedPath string
 	switch {
 	case parsed.IsAbs():
 		if !strings.EqualFold(parsed.Scheme, r.upstream.Scheme) || !strings.EqualFold(parsed.Host, r.upstream.Host) {
 			return
 		}
-		parsed.Scheme = meta.publicScheme
-		parsed.Host = meta.publicHost
-	case strings.HasPrefix(location, "/") && (len(location) == 1 || (location[1] != '/' && location[1] != '\\')):
+		parsed.Scheme = publicScheme
+		parsed.Host = publicHost
+	case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || location[1] != '\\'):
+		// server-relative redirect
 	default:
 		return
 	}
 
-	mappedPath = r.mapUpstreamPathToPublic(parsed.Path)
-	if !strings.HasPrefix(mappedPath, "/") || (len(mappedPath) > 1 && (mappedPath[1] == '/' || mappedPath[1] == '\\')) {
+	mapped := r.mapUpstreamPathToPublic(parsed.Path)
+	if !strings.HasPrefix(mapped, "/") || (len(mapped) > 1 && (mapped[1] == '/' || mapped[1] == '\\')) {
 		return
 	}
-	parsed.Path = mappedPath
+	parsed.Path = mapped
 	parsed.RawPath = ""
 	header.Set("Location", parsed.String())
 }
@@ -244,12 +214,13 @@ func (r *httpRoute) rewriteSetCookies(header http.Header, publicHost string) {
 		return
 	}
 
-	publicDomain := strings.ToLower(strings.TrimSpace(publicHost))
+	publicDomain := publicHost
 	if host, port, err := net.SplitHostPort(publicDomain); err == nil && port != "" {
 		publicDomain = host
 	}
-	publicDomain = strings.Trim(publicDomain, "[]")
-	upstreamDomain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(r.upstream.Hostname()), "."))
+	publicDomain = strings.ToLower(strings.Trim(publicDomain, "[]"))
+	upstreamDomain := strings.ToLower(r.upstream.Hostname())
+
 	header.Del("Set-Cookie")
 	for _, value := range values {
 		cookie, err := http.ParseSetCookie(value)
@@ -259,26 +230,25 @@ func (r *httpRoute) rewriteSetCookies(header http.Header, publicHost string) {
 		}
 
 		changed := false
-		if strings.TrimSpace(cookie.Path) != "" {
-			rewrittenPath := r.mapUpstreamPathToPublic(cookie.Path)
-			if rewrittenPath != cookie.Path {
-				cookie.Path = rewrittenPath
+		if cookie.Path != "" {
+			if rewritten := r.mapUpstreamPathToPublic(cookie.Path); rewritten != cookie.Path {
+				cookie.Path = rewritten
 				changed = true
 			}
 		}
 
-		currentDomain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(cookie.Domain), "."))
-		if currentDomain != "" && currentDomain != publicDomain &&
-			(currentDomain == upstreamDomain || utils.IsLocalRelayHost(currentDomain)) {
+		domain := strings.ToLower(strings.TrimPrefix(cookie.Domain, "."))
+		if domain != "" && domain != publicDomain &&
+			(domain == upstreamDomain || utils.IsLocalRelayHost(domain)) {
 			cookie.Domain = ""
 			changed = true
 		}
 
 		if changed {
 			header.Add("Set-Cookie", cookie.String())
-			continue
+		} else {
+			header.Add("Set-Cookie", value)
 		}
-		header.Add("Set-Cookie", value)
 	}
 }
 
@@ -289,23 +259,20 @@ func (r *httpRoute) mapUpstreamPathToPublic(raw string) string {
 	}
 
 	base := utils.NormalizeURLPath(r.upstream.Path)
-	publicRest := raw
-	switch {
-	case base == "/":
-	case raw == base:
-		publicRest = "/"
-	case strings.HasPrefix(raw, base+"/"):
-		publicRest = strings.TrimPrefix(raw, base)
+	rest := raw
+	if base != "/" {
+		if raw == base {
+			rest = "/"
+		} else if strings.HasPrefix(raw, base+"/") {
+			rest = strings.TrimPrefix(raw, base)
+		}
 	}
 
 	if r.prefix == "/" {
-		return publicRest
+		return rest
 	}
-	if publicRest == "/" {
+	if rest == "/" {
 		return r.prefix
 	}
-	if strings.HasPrefix(publicRest, "/") {
-		return r.prefix + publicRest
-	}
-	return r.prefix + "/" + publicRest
+	return r.prefix + rest
 }
