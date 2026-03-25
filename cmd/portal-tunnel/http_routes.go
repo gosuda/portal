@@ -216,6 +216,7 @@ func (r *httpRoute) rewriteLocation(header http.Header, meta httpRouteMeta) {
 		return
 	}
 
+	var mappedPath string
 	switch {
 	case parsed.IsAbs():
 		if !strings.EqualFold(parsed.Scheme, r.upstream.Scheme) || !strings.EqualFold(parsed.Host, r.upstream.Host) {
@@ -223,14 +224,18 @@ func (r *httpRoute) rewriteLocation(header http.Header, meta httpRouteMeta) {
 		}
 		parsed.Scheme = meta.publicScheme
 		parsed.Host = meta.publicHost
-		parsed.Path = r.mapUpstreamPathToPublic(parsed.Path)
-		parsed.RawPath = ""
-		header.Set("Location", parsed.String())
-	case strings.HasPrefix(location, "/"):
-		parsed.Path = r.mapUpstreamPathToPublic(parsed.Path)
-		parsed.RawPath = ""
-		header.Set("Location", parsed.String())
+	case strings.HasPrefix(location, "/") && (len(location) == 1 || (location[1] != '/' && location[1] != '\\')):
+	default:
+		return
 	}
+
+	mappedPath = r.mapUpstreamPathToPublic(parsed.Path)
+	if !strings.HasPrefix(mappedPath, "/") || (len(mappedPath) > 1 && (mappedPath[1] == '/' || mappedPath[1] == '\\')) {
+		return
+	}
+	parsed.Path = mappedPath
+	parsed.RawPath = ""
+	header.Set("Location", parsed.String())
 }
 
 func (r *httpRoute) rewriteSetCookies(header http.Header, publicHost string) {

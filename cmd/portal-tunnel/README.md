@@ -94,6 +94,6 @@ Legacy execution compatibility has been removed:
 - With discovery enabled, the configured relay list starts with `public registry + --relays values` and can expand through relay discovery. With `--discovery=false`, only the explicit relay URLs are used. Published public URLs appear only for relays that have registered successfully.
 - SDK callers that do not set `ListenerConfig.RetryCount` use infinite retry semantics for each relay.
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
-- TLS self-probe mismatches log warnings by default. Use `--ban-mitm` to reject relays that terminate tenant TLS.
+- `portal expose` enables MITM strict enforcement by default. Use `--ban-mitm=false` to keep warning-only behavior when the TLS self-probe suspects relay termination.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.
 - `--http-route` mode is HTTP-only and cannot be combined with `--udp`.
