@@ -60,3 +60,49 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,mode=max
           cache-to: type=gha,mode=max
+
+  release-binaries:
+    name: Build and Release Tunnel Binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build tunnel binaries
+        shell: bash
+        run: |
+          make build-tunnel
+          mkdir -p release
+          cp cmd/relay-server/dist/tunnel/portal-* release/
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+          while read -r sum file; do
+            printf '%s  %s\n' "$sum" "$file" > "${file}.sha256"
+          done < checksums.txt
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* \
+              --generate-notes \
+              --title "${GITHUB_REF_NAME}"
+          fi
