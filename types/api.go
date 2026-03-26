@@ -61,6 +61,7 @@ type RegisterRequest struct {
 	TTL          int           `json:"ttl,omitempty"`
 	Bootstraps   []string      `json:"bootstraps,omitempty"`
 	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
+	ReportedIP   string        `json:"reported_ip,omitempty"`
 }
 
 type RegisterResponse struct {
@@ -102,6 +103,7 @@ type RenewRequest struct {
 	LeaseID      string `json:"lease_id"`
 	ReverseToken string `json:"reverse_token"`
 	TTL          int    `json:"ttl,omitempty"`
+	ReportedIP   string `json:"reported_ip,omitempty"`
 }
 
 type RenewResponse struct {

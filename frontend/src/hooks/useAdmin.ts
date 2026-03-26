@@ -39,6 +39,7 @@ export interface AdminServer extends BaseServer {
   isApproved: boolean;
   isDenied: boolean;
   ip: string;
+  displayIP: string;
   isIPBanned: boolean;
   transport: string;
   udpPort: number;
@@ -109,6 +110,7 @@ function toAdminServer(
     isApproved: row.IsApproved || false,
     isDenied: row.IsDenied || false,
     ip: row.ClientIP || "",
+    displayIP: row.ReportedIP || row.ClientIP || "",
     isIPBanned: row.IsIPBanned || false,
     transport: row.Transport || "tcp",
     udpPort: row.UDPPort || 0,

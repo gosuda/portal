@@ -121,7 +121,7 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	return nil
 }
 
-func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, clientIP string) (*leaseRecord, error) {
+func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -139,6 +139,9 @@ func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, c
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
 		r.policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
+	}
+	if strings.TrimSpace(reportedIP) != "" {
+		record.ReportedIP = reportedIP
 	}
 	return record, nil
 }

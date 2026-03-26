@@ -28,6 +28,7 @@ type Lease struct {
 	Name         string
 	BPS          int64
 	ClientIP     string
+	ReportedIP   string
 	Hostname     string
 	Bootstraps   []string
 	UDPEnabled   bool

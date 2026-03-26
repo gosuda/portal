@@ -432,6 +432,17 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		Msg("quic tunnel connected")
 }
 
+func sanitizeReportedIP(raw string) string {
+	candidate := strings.TrimSpace(raw)
+	if candidate == "" {
+		return ""
+	}
+	if net.ParseIP(candidate) == nil {
+		return ""
+	}
+	return candidate
+}
+
 func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
 	name, err := utils.NormalizeDNSLabel(req.Name)
 	if err != nil {
@@ -492,6 +503,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			FirstSeenAt:  now,
 			LastSeenAt:   now,
 			ClientIP:     clientIP,
+			ReportedIP:   sanitizeReportedIP(req.ReportedIP),
 			UDPEnabled:   req.UDPEnabled,
 		},
 		ReverseToken: req.ReverseToken,
@@ -568,7 +580,7 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP)
+	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP, sanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
