@@ -627,7 +627,13 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 				advertisedURLs = append(advertisedURLs, apiURL)
 			}
 		}
-		responseBootstraps, err = utils.ExcludeLocalRelayURLs(append(responseBootstraps, advertisedURLs...)...)
+		advertisedURLs, err = utils.ExcludeLocalRelayURLs(advertisedURLs...)
+		if err != nil {
+			record.Close()
+			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+			return types.RegisterResponse{}, err
+		}
+		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, advertisedURLs...)...)
 		if err != nil {
 			record.Close()
 			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
