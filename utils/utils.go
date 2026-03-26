@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"path"
 	"strings"
@@ -535,4 +536,29 @@ func RandomID(prefix string) string {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(buf)
+}
+
+func NormalizeIPPrefixes(inputs []string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(inputs))
+	out := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(input)
+		if err != nil {
+			continue
+		}
+		normalized := prefix.String()
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
 }

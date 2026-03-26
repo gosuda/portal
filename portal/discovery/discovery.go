@@ -19,6 +19,54 @@ type Resolver func(context.Context, types.DiscoverRequest) (types.DiscoverRespon
 
 const defaultRequestTimeout = 15 * time.Second
 
+func Discover(ctx context.Context, relayURL string, req types.DiscoverRequest, rootCAPEM []byte) (types.DiscoverResponse, error) {
+	return discoverPeer(ctx, relayURL, req, rootCAPEM)
+}
+
+func RelayAPIURLs(descriptors []types.RelayDescriptor) ([]string, error) {
+	urls := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			urls = append(urls, apiURL)
+		}
+	}
+	if len(urls) == 0 {
+		return nil, nil
+	}
+
+	normalized, err := utils.NormalizeRelayURLs(urls...)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ExcludeLocalRelayURLs(normalized...)
+}
+
+func ResolvePeerResponse(resp types.DiscoverResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	self, err := ValidateDescriptor(resp.Self, now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("validate self descriptor: %w", err)
+	}
+
+	seen := map[string]struct{}{self.RelayID: {}}
+	peers := make([]types.RelayDescriptor, 0, len(resp.Peers))
+	var resolveErr error
+
+	for _, descriptor := range resp.Peers {
+		verified, err := ValidateDescriptor(descriptor, now)
+		if err != nil {
+			resolveErr = errors.Join(resolveErr, fmt.Errorf("validate peer %q: %w", descriptor.RelayID, err))
+			continue
+		}
+		if _, ok := seen[verified.RelayID]; ok {
+			continue
+		}
+		seen[verified.RelayID] = struct{}{}
+		peers = append(peers, verified)
+	}
+
+	return self, peers, resolveErr
+}
+
 func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverRequest, rootCAPEM []byte) ([]string, error) {
 	peers, err := utils.ExcludeLocalRelayURLs(peers...)
 	if err != nil {
@@ -38,15 +86,25 @@ func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverR
 	discovered := false
 
 	for _, peer := range peers {
-		resp, err := discoverPeer(ctx, peer, req, rootCAPEM)
+		resp, err := Discover(ctx, peer, req, rootCAPEM)
 		if err != nil {
 			discoverErr = errors.Join(discoverErr, fmt.Errorf("discover %q: %w", peer, err))
 			continue
 		}
 
-		discoveredBootstraps, err := utils.ExcludeLocalRelayURLs(resp.Bootstraps...)
+		self, advertised, resolveErr := ResolvePeerResponse(resp, time.Now().UTC())
+		if strings.TrimSpace(self.RelayID) == "" {
+			discoverErr = errors.Join(discoverErr, fmt.Errorf("resolve %q self descriptor: %w", peer, resolveErr))
+			continue
+		}
+		if resolveErr != nil {
+			discoverErr = errors.Join(discoverErr, fmt.Errorf("resolve %q descriptors: %w", peer, resolveErr))
+		}
+
+		descriptors := append([]types.RelayDescriptor{self}, advertised...)
+		discoveredBootstraps, err := RelayAPIURLs(descriptors)
 		if err != nil {
-			discoverErr = errors.Join(discoverErr, fmt.Errorf("filter %q bootstraps: %w", peer, err))
+			discoverErr = errors.Join(discoverErr, fmt.Errorf("extract %q relay urls: %w", peer, err))
 			continue
 		}
 		bootstraps, err = utils.MergeRelayURLs(bootstraps, nil, discoveredBootstraps)
@@ -60,10 +118,10 @@ func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverR
 	if !discovered {
 		return bootstraps, discoverErr
 	}
-	return bootstraps, nil
+	return bootstraps, discoverErr
 }
 
-func ServeHTTP(w http.ResponseWriter, r *http.Request, selfURLs, bootstraps []string, resolver Resolver) {
+func ServeHTTP(w http.ResponseWriter, r *http.Request, resolver Resolver) {
 	if r.Method != http.MethodGet {
 		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
 		return
@@ -77,34 +135,17 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request, selfURLs, bootstraps []st
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
-
-	resolvedBootstraps, err := buildResponseBootstraps(selfURLs, bootstraps, nil)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-
-	resp := types.DiscoverResponse{
-		Found:      false,
-		Bootstraps: resolvedBootstraps,
-	}
 	if resolver == nil {
-		utils.WriteAPIData(w, http.StatusOK, resp)
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery resolver is not configured")
 		return
 	}
 
-	localResp, err := resolver(r.Context(), req)
+	resp, err := resolver(r.Context(), req)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}
-
-	localResp.Bootstraps, err = buildResponseBootstraps(selfURLs, bootstraps, localResp.Bootstraps)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-	utils.WriteAPIData(w, http.StatusOK, localResp)
+	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
 func normalizeRequest(req types.DiscoverRequest) (types.DiscoverRequest, error) {
@@ -187,24 +228,4 @@ func discoverPeer(ctx context.Context, relayURL string, req types.DiscoverReques
 		return types.DiscoverResponse{}, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
 	}
 	return envelope.Data, nil
-}
-
-func buildResponseBootstraps(selfURLs, bootstraps, extra []string) ([]string, error) {
-	merged, err := utils.MergeRelayURLs(bootstraps, selfURLs, extra)
-	if err != nil {
-		return nil, err
-	}
-	if len(selfURLs) == 0 {
-		return utils.ExcludeLocalRelayURLs(merged...)
-	}
-
-	normalizedSelf, err := utils.NormalizeRelayURLs(selfURLs...)
-	if err != nil {
-		return nil, fmt.Errorf("normalize self urls: %w", err)
-	}
-	resolvedBootstraps, err := utils.NormalizeRelayURLs(append(normalizedSelf, merged...)...)
-	if err != nil {
-		return nil, fmt.Errorf("normalize bootstraps: %w", err)
-	}
-	return utils.ExcludeLocalRelayURLs(resolvedBootstraps...)
 }

@@ -13,7 +13,39 @@ import (
 type Identity struct {
 	Generated  bool   `json:"generated,omitempty"`
 	Address    string `json:"address"`
+	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key"`
+}
+
+func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
+	publicKeyHex := strings.TrimSpace(rawPublicKey)
+	if publicKeyHex == "" {
+		return "", errors.New("public key is required")
+	}
+	if strings.HasPrefix(strings.ToLower(publicKeyHex), "0x") {
+		publicKeyHex = publicKeyHex[2:]
+	}
+
+	decoded, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return "", errors.New("public key must be hex encoded")
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(decoded)
+	if err != nil {
+		return "", errors.New("invalid secp256k1 public key")
+	}
+
+	uncompressed := publicKey.SerializeUncompressed()
+	if len(uncompressed) != 65 || uncompressed[0] != 0x04 {
+		return "", errors.New("invalid uncompressed secp256k1 public key")
+	}
+
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(uncompressed[1:])
+	hash := hasher.Sum(nil)
+
+	return NormalizeEVMAddress("0x" + hex.EncodeToString(hash[len(hash)-20:]))
 }
 
 func NormalizeEVMAddress(raw string) (string, error) {
@@ -105,16 +137,8 @@ func ResolveIdentity(rawPrivateKey string) (Identity, error) {
 		return Identity{}, errors.New("invalid secp256k1 private key")
 	}
 
-	uncompressed := privateKey.PubKey().SerializeUncompressed()
-	if len(uncompressed) != 65 || uncompressed[0] != 0x04 {
-		return Identity{}, errors.New("invalid uncompressed secp256k1 public key")
-	}
-
-	hasher := sha3.NewLegacyKeccak256()
-	_, _ = hasher.Write(uncompressed[1:])
-	hash := hasher.Sum(nil)
-
-	address, err := NormalizeEVMAddress("0x" + hex.EncodeToString(hash[len(hash)-20:]))
+	publicKeyHex := hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
+	address, err := AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -122,6 +146,7 @@ func ResolveIdentity(rawPrivateKey string) (Identity, error) {
 	return Identity{
 		Generated:  generated,
 		Address:    address,
+		PublicKey:  publicKeyHex,
 		PrivateKey: privateKeyHex,
 	}, nil
 }

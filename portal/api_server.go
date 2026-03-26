@@ -80,7 +80,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				base.ServeHTTP(w, r)
 				return
 			}
-			discovery.ServeHTTP(w, r, []string{s.cfg.PortalURL}, s.discoveryBootstrapsSnapshot(), s.discover)
+			discovery.ServeHTTP(w, r, s.discover)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -105,8 +105,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.DiscoverResponse, error) {
+	self, err := s.discoverySelfDescriptor()
+	if err != nil {
+		return types.DiscoverResponse{}, err
+	}
 	resp := types.DiscoverResponse{
-		OwnerAddress: s.ownerIdentity.Address,
+		ProtocolVersion: 1,
+		GeneratedAt:     time.Now().UTC(),
+		Self:            self,
+		Peers:           s.discoveryAdvertisedPeerDescriptors(nil),
 	}
 	if req.RootHost != "" && req.RootHost != s.rootHost {
 		return resp, nil
@@ -145,14 +152,85 @@ func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.D
 		ownerAddress = s.ownerIdentity.Address
 	}
 
-	return types.DiscoverResponse{
+	resp.Peers = s.discoveryAdvertisedPeerDescriptors(lease.Bootstraps)
+	resp.Service = &types.DiscoveredService{
 		Found:        true,
 		Name:         lease.Name,
 		Hostname:     lease.Hostname,
 		ExpiresAt:    lease.ExpiresAt,
 		OwnerAddress: ownerAddress,
-		Bootstraps:   lease.Bootstraps,
-	}, nil
+		RelayID:      self.RelayID,
+	}
+	return resp, nil
+}
+
+func (s *Server) discoverySelfDescriptor() (types.RelayDescriptor, error) {
+	now := time.Now().UTC()
+	ingressAddr := s.rootHost
+	if s.cfg.SNIPort != 0 && s.cfg.SNIPort != 443 {
+		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
+	}
+
+	supportsOverlayPeer := strings.TrimSpace(s.cfg.WireGuardPublicKey) != "" &&
+		strings.TrimSpace(s.cfg.WireGuardEndpoint) != "" &&
+		strings.TrimSpace(s.cfg.OverlayIPv4) != ""
+
+	descriptor := types.RelayDescriptor{
+		RelayID:             s.cfg.PortalURL,
+		OwnerAddress:        s.ownerIdentity.Address,
+		SignerPublicKey:     s.ownerIdentity.PublicKey,
+		Sequence:            uint64(now.UnixMilli()),
+		Version:             1,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(2 * defaultDiscoveryInterval),
+		APIHTTPSAddr:        s.cfg.PortalURL,
+		IngressTLSAddr:      ingressAddr,
+		SupportsTCP:         true,
+		SupportsUDP:         s.cfg.UDPPortCount > 0,
+		SupportsOverlayPeer: supportsOverlayPeer,
+		SupportsWitness:     false,
+		SupportsVPNExit:     false,
+		StatusState:         "healthy",
+	}
+	if supportsOverlayPeer {
+		descriptor.WireGuardPublicKey = strings.TrimSpace(s.cfg.WireGuardPublicKey)
+		descriptor.WireGuardEndpoint = strings.TrimSpace(s.cfg.WireGuardEndpoint)
+		descriptor.OverlayIPv4 = strings.TrimSpace(s.cfg.OverlayIPv4)
+		descriptor.OverlayCIDRs = append([]string(nil), s.cfg.OverlayCIDRs...)
+	}
+	return discovery.SignedDescriptor(descriptor, s.ownerIdentity.PrivateKey)
+}
+
+func (s *Server) discoveryAdvertisedPeerDescriptors(urls []string) []types.RelayDescriptor {
+	advertised := s.discoveryCache.AdvertisedDescriptors()
+	if len(advertised) == 0 {
+		return nil
+	}
+	if len(urls) == 0 {
+		return advertised
+	}
+
+	allowed := make(map[string]struct{}, len(urls))
+	for _, relayURL := range urls {
+		relayURL = strings.TrimSpace(relayURL)
+		if relayURL == "" {
+			continue
+		}
+		normalized, err := utils.NormalizeRelayURL(relayURL)
+		if err != nil {
+			continue
+		}
+		allowed[normalized] = struct{}{}
+	}
+
+	records := make([]types.RelayDescriptor, 0, len(advertised))
+	for _, descriptor := range advertised {
+		if _, ok := allowed[descriptor.APIHTTPSAddr]; !ok {
+			continue
+		}
+		records = append(records, descriptor)
+	}
+	return records
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
@@ -520,7 +598,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		return types.RegisterResponse{}, err
 	}
 	if s.DiscoveryEnabled() {
-		if _, err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
+		if _, err := s.discoveryCache.UpsertSeedURLs(bootstraps); err != nil {
 			record.Close()
 			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
 			return types.RegisterResponse{}, err
@@ -534,7 +612,13 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		return types.RegisterResponse{}, err
 	}
 	if s.DiscoveryEnabled() {
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, s.discoveryBootstrapsSnapshot()...)...)
+		advertisedURLs, relayURLErr := discovery.RelayAPIURLs(s.discoveryCache.AdvertisedDescriptors())
+		if relayURLErr != nil {
+			record.Close()
+			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
+			return types.RegisterResponse{}, relayURLErr
+		}
+		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, advertisedURLs...)...)
 	} else {
 		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, append(s.cfg.Bootstraps, record.Bootstraps...)...)...)
 	}
