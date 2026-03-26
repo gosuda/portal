@@ -147,7 +147,7 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 	a.rawTLSConfig = rawTLSConfig
 
 	if a.resolvedPublicIP == "" {
-		a.resolvedPublicIP = resolvePublicIP(ctx)
+		a.resolvedPublicIP = utils.ResolvePublicIP(ctx)
 	}
 
 	return nil
