@@ -36,16 +36,17 @@ const (
 var errRelayIncompatible = errors.New("relay is incompatible")
 
 type apiClient struct {
-	baseURL        *url.URL
-	httpClient     *http.Client
-	rawTLSConfig   *tls.Config
-	dialTimeout    time.Duration
-	requestTimeout time.Duration
-	rootCAPEM      []byte
-	name           string
-	reverseToken   string
-	metadata       types.LeaseMetadata
-	ownerAddress   string
+	baseURL          *url.URL
+	httpClient       *http.Client
+	rawTLSConfig     *tls.Config
+	dialTimeout      time.Duration
+	requestTimeout   time.Duration
+	rootCAPEM        []byte
+	name             string
+	reverseToken     string
+	metadata         types.LeaseMetadata
+	ownerAddress     string
+	resolvedPublicIP string
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
@@ -103,6 +104,7 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		TTL:          int(ttl / time.Second),
 		Bootstraps:   bootstraps,
 		UDPEnabled:   udpEnabled,
+		ReportedIP:   a.resolvedPublicIP,
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -143,6 +145,11 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 	a.close()
 	a.httpClient = httpClient
 	a.rawTLSConfig = rawTLSConfig
+
+	if a.resolvedPublicIP == "" {
+		a.resolvedPublicIP = utils.ResolvePublicIP(ctx)
+	}
+
 	return nil
 }
 
@@ -171,6 +178,7 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
+		ReportedIP:   a.resolvedPublicIP,
 	}, &types.RenewResponse{})
 }
 

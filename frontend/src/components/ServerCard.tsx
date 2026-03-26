@@ -32,6 +32,7 @@ interface ServerCardProps {
   isDenied?: boolean;
   bps?: number;
   ip?: string;
+  displayIP?: string;
   isIPBanned?: boolean;
   onBanStatusChange?: (
     leaseId: string,
@@ -70,6 +71,7 @@ export function ServerCard({
   isDenied = false,
   bps = 0,
   ip = "",
+  displayIP,
   isIPBanned = false,
   onBanStatusChange,
   onBPSChange,
@@ -376,7 +378,7 @@ export function ServerCard({
 
             {isApproved && ip && (
               <div className="text-[11px] text-text-muted">
-                IP: <span className="font-mono text-foreground">{ip}</span>
+                IP: <span className="font-mono text-foreground">{displayIP || ip}</span>
                 {isIPBanned && (
                   <span className="ml-2 font-medium text-destructive">
                     (Banned)

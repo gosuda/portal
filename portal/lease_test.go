@@ -36,7 +36,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(record.ID, record.ReverseToken, time.Minute, "203.0.113.10")
+	renewed, err := registry.Renew(record.ID, record.ReverseToken, time.Minute, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}

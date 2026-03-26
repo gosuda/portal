@@ -16,6 +16,7 @@ export interface ServerData {
   Name: string;
   BPS?: number;
   ClientIP: string;
+  ReportedIP?: string;
   Hostname: string;
   Metadata: unknown;
   Ready: number;

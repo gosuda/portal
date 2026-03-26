@@ -491,6 +491,7 @@ export function ServerListView({
         isDenied={adminServer?.isDenied}
         bps={adminServer?.bps}
         ip={adminServer?.ip}
+        displayIP={adminServer?.displayIP}
         isIPBanned={adminServer?.isIPBanned}
         transport={adminServer?.transport}
         onBanStatusChange={onBanStatusChange}

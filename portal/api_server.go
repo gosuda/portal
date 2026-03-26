@@ -492,6 +492,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			FirstSeenAt:  now,
 			LastSeenAt:   now,
 			ClientIP:     clientIP,
+			ReportedIP:   utils.SanitizeReportedIP(req.ReportedIP),
 			UDPEnabled:   req.UDPEnabled,
 		},
 		ReverseToken: req.ReverseToken,
@@ -568,7 +569,7 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP)
+	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
