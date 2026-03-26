@@ -21,7 +21,7 @@ Unlike other tunneling services, Portal is self-hosted and permissionless. You c
 - **End-to-end tenant TLS**: Relay routes by SNI, while tenant TLS terminates on your side with relay-backed keyless signing
 - **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
 - **One-Command Setup**: Expose any local app with a single command
-- **UDP Relay (Experimental)**: Supports raw UDP relay use cases, but the transport model and operational behavior may still change
+- **UDP Relay (Experimental)**: Supports raw UDP relay
 
 ## How Portal Provides End-to-End Encryption
 
@@ -34,7 +34,7 @@ Portal is designed so that tenant TLS terminates on your side rather than at the
 5. Session keys are derived entirely on your side. The relay provides certificate signatures only and does not receive tenant traffic secrets.
 6. After the handshake, the relay continues forwarding ciphertext without needing tenant TLS plaintext to keep routing traffic.
 
-Portal also checks that the relay is preserving TLS passthrough. The Portal client connects to its own public endpoint and compares TLS exporter values observed on both client-controlled ends. If they differ, Portal logs suspected TLS termination by default. You can switch to strict enforcement with `portal expose --ban-mitm`.
+Portal also checks that the relay is preserving TLS passthrough. The Portal client connects to its own public endpoint and compares TLS exporter values observed on both client-controlled ends. If they differ, `portal expose` rejects the relay by default.
 
 ## Components
 

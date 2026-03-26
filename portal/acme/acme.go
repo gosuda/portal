@@ -26,6 +26,8 @@ import (
 	lego "github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 	"github.com/rs/zerolog/log"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -94,7 +96,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.BaseDomain == "" {
 		return nil, errors.New("acme base domain is required")
 	}
-	if isLocalhost(cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(cfg.BaseDomain) {
 		return &Manager{
 			cfg:    cfg,
 			stopCh: make(chan struct{}),
@@ -126,7 +128,7 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		return "", "", errors.New("acme manager is nil")
 	}
 
-	if isLocalhost(m.cfg.BaseDomain) {
+	if utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		if err := ensureLocalDevelopmentCertificate(m.cfg.KeyDir, m.cfg.BaseDomain); err != nil {
 			return "", "", err
 		}
@@ -169,7 +171,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || isLocalhost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return
 	}
 
@@ -282,7 +284,7 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 }
 
 func (m *Manager) syncDNS(ctx context.Context) error {
-	if m == nil || isLocalhost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 	if m.dns == nil {
@@ -540,18 +542,6 @@ func normalizeHost(host string) string {
 	host = strings.TrimPrefix(host, "*.")
 	host = strings.TrimSuffix(host, ".")
 	return host
-}
-
-func isLocalhost(host string) bool {
-	host = normalizeHost(host)
-	switch host {
-	case "", "localhost":
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return strings.HasSuffix(host, ".localhost")
 }
 
 func detectPublicIPv4(ctx context.Context) (string, error) {

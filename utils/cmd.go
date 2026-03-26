@@ -138,6 +138,16 @@ func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse 
 	ensureFlagSet(fs).IntVar(target, name, ResolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
 }
 
+func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
+	ensureFlagSet(fs).Func(name, usage, func(value string) error {
+		if target == nil {
+			return nil
+		}
+		*target = append(*target, value)
+		return nil
+	})
+}
+
 func ensureFlagSet(fs *flag.FlagSet) *flag.FlagSet {
 	if fs != nil {
 		return fs

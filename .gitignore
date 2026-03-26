@@ -31,6 +31,9 @@ profile.cov
 # env file
 .env
 
+# oh-my-claudecode state
+.omc/
+
 # Editor/IDE
 # .idea/
 # .vscode/
