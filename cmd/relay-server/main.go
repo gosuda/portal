@@ -44,8 +44,8 @@ type relayServerConfig struct {
 	AdminSecretKey      string
 	TrustProxyHeaders   bool
 	TrustedProxyCIDRs   string
-	KeylessDir          string
 	AdminSettingsPath   string
+	KeylessDir          string
 	ACMEDNSProvider     string
 	CloudflareToken     string
 	AWSAccessKeyID      string

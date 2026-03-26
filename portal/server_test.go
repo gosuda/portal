@@ -20,9 +20,9 @@ import (
 func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) types.RelayDescriptor {
 	t.Helper()
 
-	identity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
 	if err != nil {
-		t.Fatalf("ResolveIdentity() error = %v", err)
+		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
 	}
 
 	now := time.Now().UTC()
@@ -42,16 +42,6 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) t
 		t.Fatalf("SignedDescriptor() error = %v", err)
 	}
 	return desc
-}
-
-func mustRelayAPIURLs(t *testing.T, descriptors []types.RelayDescriptor) []string {
-	t.Helper()
-
-	urls, err := discovery.RelayAPIURLs(descriptors)
-	if err != nil {
-		t.Fatalf("RelayAPIURLs() error = %v", err)
-	}
-	return urls
 }
 
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
@@ -152,31 +142,31 @@ func TestNewServerDerivesWireGuardConfigFromPrivateKey(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	if server.cfg.WireGuardPrivateKey == "" {
+	if server.wgConfig.PrivateKey == "" {
 		t.Fatal("WireGuardPrivateKey = empty, want normalized key")
 	}
-	if server.cfg.WireGuardPublicKey == "" {
+	if server.wgConfig.PublicKey == "" {
 		t.Fatal("WireGuardPublicKey = empty, want derived key")
 	}
-	if server.cfg.WireGuardEndpoint != net.JoinHostPort("portal.example.com", "41011") {
-		t.Fatalf("WireGuardEndpoint = %q, want %q", server.cfg.WireGuardEndpoint, net.JoinHostPort("portal.example.com", "41011"))
+	if server.wgConfig.Endpoint != net.JoinHostPort("portal.example.com", "41011") {
+		t.Fatalf("WireGuardEndpoint = %q, want %q", server.wgConfig.Endpoint, net.JoinHostPort("portal.example.com", "41011"))
 	}
-	if server.cfg.OverlayIPv4 == "" {
+	if server.wgConfig.OverlayIPv4 == "" {
 		t.Fatal("OverlayIPv4 = empty, want derived overlay address")
 	}
-	if err := discovery.ValidateWireGuardEndpoint(server.cfg.WireGuardEndpoint); err != nil {
+	if err := utils.ValidateWireGuardEndpoint(server.wgConfig.Endpoint); err != nil {
 		t.Fatalf("ValidateWireGuardEndpoint() error = %v", err)
 	}
-	if err := discovery.ValidateOverlayIPv4(server.cfg.OverlayIPv4); err != nil {
+	if err := utils.ValidateOverlayIPv4(server.wgConfig.OverlayIPv4); err != nil {
 		t.Fatalf("ValidateOverlayIPv4() error = %v", err)
 	}
 
-	wantOverlay, err := utils.DeriveWireGuardOverlayIPv4(server.cfg.WireGuardPublicKey)
+	wantOverlay, err := utils.DeriveWireGuardOverlayIPv4(server.wgConfig.PublicKey)
 	if err != nil {
 		t.Fatalf("DeriveWireGuardOverlayIPv4() error = %v", err)
 	}
-	if server.cfg.OverlayIPv4 != wantOverlay {
-		t.Fatalf("OverlayIPv4 = %q, want %q", server.cfg.OverlayIPv4, wantOverlay)
+	if server.wgConfig.OverlayIPv4 != wantOverlay {
+		t.Fatalf("OverlayIPv4 = %q, want %q", server.wgConfig.OverlayIPv4, wantOverlay)
 	}
 }
 
@@ -190,8 +180,8 @@ func TestNewServerIgnoresDiscoveryPortWithoutWireGuardKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
-	if server.cfg.WireGuardEndpoint != "" {
-		t.Fatalf("WireGuardEndpoint = %q, want empty without wireguard key", server.cfg.WireGuardEndpoint)
+	if server.wgConfig.Endpoint != "" {
+		t.Fatalf("WireGuardEndpoint = %q, want empty without wireguard key", server.wgConfig.Endpoint)
 	}
 }
 
@@ -254,7 +244,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		if record, ok := server.registry.Get(resp.LeaseID); ok {
-			server.closeLease(record)
+			record.Close()
 		}
 	})
 
@@ -280,9 +270,9 @@ func TestServerStartServesOptionalDiscoveryRoutes(t *testing.T) {
 	t.Parallel()
 
 	ownerPrivateKey := strings.Repeat("11", 32)
-	ownerIdentity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	ownerIdentity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
 	if err != nil {
-		t.Fatalf("ResolveIdentity() error = %v", err)
+		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
 	}
 
 	server, err := NewServer(ServerConfig{
@@ -416,8 +406,22 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 	if !reflect.DeepEqual(added, []string{"https://relay-a.example.com"}) {
 		t.Fatalf("UpsertSeedURLs() added = %v, want [%q]", added, "https://relay-a.example.com")
 	}
-	if !reflect.DeepEqual(mustRelayAPIURLs(t, server.discoveryCache.KnownDescriptors()), []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
-		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", mustRelayAPIURLs(t, server.discoveryCache.KnownDescriptors()), "https://bootstrap.example.com", "https://relay-a.example.com")
+	knownRelayURLs, err := utils.ExcludeLocalRelayURLs("https://bootstrap.example.com", "https://relay-a.example.com")
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() error = %v", err)
+	}
+	knownURLs := make([]string, 0, len(server.discoveryCache.KnownDescriptors()))
+	for _, descriptor := range server.discoveryCache.KnownDescriptors() {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			knownURLs = append(knownURLs, apiURL)
+		}
+	}
+	knownURLs, err = utils.ExcludeLocalRelayURLs(knownURLs...)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() known error = %v", err)
+	}
+	if !reflect.DeepEqual(knownURLs, knownRelayURLs) {
+		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", knownURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
 	}
 	if len(server.discoveryCache.AdvertisedDescriptors()) != 0 {
 		t.Fatalf("AdvertisedDescriptors() = %v, want empty before direct confirmation", server.discoveryCache.AdvertisedDescriptors())
@@ -462,11 +466,31 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	if !changed {
 		t.Fatal("RecordVerified() hinted changed = false, want true")
 	}
-	if !reflect.DeepEqual(mustRelayAPIURLs(t, server.discoveryCache.KnownDescriptors()), []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
-		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", mustRelayAPIURLs(t, server.discoveryCache.KnownDescriptors()), "https://bootstrap.example.com", "https://relay-a.example.com")
+	knownURLs := make([]string, 0, len(server.discoveryCache.KnownDescriptors()))
+	for _, descriptor := range server.discoveryCache.KnownDescriptors() {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			knownURLs = append(knownURLs, apiURL)
+		}
 	}
-	if !reflect.DeepEqual(mustRelayAPIURLs(t, server.discoveryCache.AdvertisedDescriptors()), []string{"https://bootstrap.example.com"}) {
-		t.Fatalf("AdvertisedDescriptors() = %v, want [%q]", mustRelayAPIURLs(t, server.discoveryCache.AdvertisedDescriptors()), "https://bootstrap.example.com")
+	knownURLs, err = utils.ExcludeLocalRelayURLs(knownURLs...)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() known error = %v", err)
+	}
+	if !reflect.DeepEqual(knownURLs, []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
+		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", knownURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
+	}
+	advertisedURLs := make([]string, 0, len(server.discoveryCache.AdvertisedDescriptors()))
+	for _, descriptor := range server.discoveryCache.AdvertisedDescriptors() {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			advertisedURLs = append(advertisedURLs, apiURL)
+		}
+	}
+	advertisedURLs, err = utils.ExcludeLocalRelayURLs(advertisedURLs...)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() advertised error = %v", err)
+	}
+	if !reflect.DeepEqual(advertisedURLs, []string{"https://bootstrap.example.com"}) {
+		t.Fatalf("AdvertisedDescriptors() = %v, want [%q]", advertisedURLs, "https://bootstrap.example.com")
 	}
 
 	snapshot := server.discoveryCache.Snapshot()
@@ -487,8 +511,18 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	if !changed {
 		t.Fatal("RecordVerified() second changed = false, want true")
 	}
-	if !reflect.DeepEqual(mustRelayAPIURLs(t, server.discoveryCache.AdvertisedDescriptors()), []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
-		t.Fatalf("AdvertisedDescriptors() = %v, want [%q %q]", mustRelayAPIURLs(t, server.discoveryCache.AdvertisedDescriptors()), "https://bootstrap.example.com", "https://relay-a.example.com")
+	advertisedURLs = advertisedURLs[:0]
+	for _, descriptor := range server.discoveryCache.AdvertisedDescriptors() {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			advertisedURLs = append(advertisedURLs, apiURL)
+		}
+	}
+	advertisedURLs, err = utils.ExcludeLocalRelayURLs(advertisedURLs...)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() advertised second error = %v", err)
+	}
+	if !reflect.DeepEqual(advertisedURLs, []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
+		t.Fatalf("AdvertisedDescriptors() = %v, want [%q %q]", advertisedURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
 	}
 }
 

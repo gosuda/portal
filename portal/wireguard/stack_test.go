@@ -32,7 +32,7 @@ func TestNormalizePrivateKeyAndPublicKeyFromPrivate(t *testing.T) {
 	}
 }
 
-func TestRuntimeStartAndClose(t *testing.T) {
+func TestStackStartAndClose(t *testing.T) {
 	t.Parallel()
 
 	privateKey, err := utils.NormalizeWireGuardPrivateKey("2222222222222222222222222222222222222222222222222222222222222222")
@@ -41,16 +41,16 @@ func TestRuntimeStartAndClose(t *testing.T) {
 	}
 
 	port := reserveUDPPort(t)
-	runtime, err := NewRuntime(RuntimeConfig{
+	stack, err := newStack(Config{
 		PrivateKey:  privateKey,
 		Endpoint:    net.JoinHostPort("127.0.0.1", port),
 		OverlayIPv4: "10.77.0.1",
 	})
 	if err != nil {
-		t.Fatalf("NewRuntime() error = %v", err)
+		t.Fatalf("newStack() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if err := runtime.Close(); err != nil {
+		if err := stack.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
 	})

@@ -5,13 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -22,21 +19,13 @@ import (
 )
 
 const (
-	DefaultMTU                    = 1420
-	DefaultListenPort             = 51820
-	DefaultPeerAPIHTTPPort        = 7777
-	DefaultPersistentKeepalive    = 25
-	defaultDiscoverRequestTimeout = 15 * time.Second
+	DefaultMTU                 = 1420
+	DefaultListenPort          = 51820
+	DefaultPeerAPIHTTPPort     = 7777
+	DefaultPersistentKeepalive = 25
 )
 
-type RuntimeConfig struct {
-	PrivateKey  string
-	Endpoint    string
-	OverlayIPv4 string
-	MTU         int
-}
-
-type Runtime struct {
+type stack struct {
 	device    *device.Device
 	net       *netstack.Net
 	overlayIP netip.Addr
@@ -45,7 +34,7 @@ type Runtime struct {
 	closed bool
 }
 
-func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
+func newStack(cfg Config) (*stack, error) {
 	canonicalPrivateKey, err := utils.NormalizeWireGuardPrivateKey(cfg.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("normalize wireguard private key: %w", err)
@@ -61,12 +50,7 @@ func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
 		return nil, errors.New("overlay ipv4 must be a valid IPv4 address")
 	}
 
-	mtu := cfg.MTU
-	if mtu <= 0 {
-		mtu = DefaultMTU
-	}
-
-	tunDevice, network, err := netstack.CreateNetTUN([]netip.Addr{overlayIP}, nil, mtu)
+	tunDevice, network, err := netstack.CreateNetTUN([]netip.Addr{overlayIP}, nil, DefaultMTU)
 	if err != nil {
 		return nil, fmt.Errorf("create netstack tun: %w", err)
 	}
@@ -91,26 +75,26 @@ func NewRuntime(cfg RuntimeConfig) (*Runtime, error) {
 		return nil, fmt.Errorf("bring wireguard device up: %w", err)
 	}
 
-	return &Runtime{
+	return &stack{
 		device:    wgDevice,
 		net:       network,
 		overlayIP: overlayIP,
 	}, nil
 }
 
-func (r *Runtime) ListenTCP(port int) (net.Listener, error) {
-	if r == nil || r.net == nil {
-		return nil, errors.New("wireguard runtime is not initialized")
+func (s *stack) ListenTCP(port int) (net.Listener, error) {
+	if s == nil || s.net == nil {
+		return nil, errors.New("wireguard is not initialized")
 	}
-	return r.net.ListenTCP(&net.TCPAddr{
-		IP:   net.ParseIP(r.overlayIP.String()),
+	return s.net.ListenTCP(&net.TCPAddr{
+		IP:   net.ParseIP(s.overlayIP.String()),
 		Port: port,
 	})
 }
 
-func (r *Runtime) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	if r == nil || r.net == nil {
-		return nil, errors.New("wireguard runtime is not initialized")
+func (s *stack) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if s == nil || s.net == nil {
+		return nil, errors.New("wireguard is not initialized")
 	}
 	switch network {
 	case "tcp", "tcp4", "tcp6":
@@ -130,71 +114,12 @@ func (r *Runtime) DialContext(ctx context.Context, network, address string) (net
 	if err != nil || port <= 0 || port > 65535 {
 		return nil, errors.New("invalid tcp port")
 	}
-	return r.net.DialContextTCPAddrPort(ctx, netip.AddrPortFrom(ip, uint16(port)))
+	return s.net.DialContextTCPAddrPort(ctx, netip.AddrPortFrom(ip, uint16(port)))
 }
 
-func (r *Runtime) Discover(ctx context.Context, overlayIPv4 string, port int, req types.DiscoverRequest) (types.DiscoverResponse, error) {
-	if r == nil {
-		return types.DiscoverResponse{}, errors.New("wireguard runtime is not initialized")
-	}
-	if port == 0 {
-		port = DefaultPeerAPIHTTPPort
-	}
-	ip, err := netip.ParseAddr(strings.TrimSpace(overlayIPv4))
-	if err != nil || !ip.Is4() {
-		return types.DiscoverResponse{}, errors.New("overlay ipv4 must be a valid IPv4 address")
-	}
-
-	baseURL := &url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(ip.String(), strconv.Itoa(port)),
-		Path:   types.PathDiscovery,
-	}
-	query := baseURL.Query()
-	if req.RootHost != "" {
-		query.Set("root_host", req.RootHost)
-	}
-	if req.Name != "" {
-		query.Set("name", req.Name)
-	}
-	baseURL.RawQuery = query.Encode()
-
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			DialContext:       r.DialContext,
-			ForceAttemptHTTP2: false,
-		},
-		Timeout: defaultDiscoverRequestTimeout,
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), nil)
-	if err != nil {
-		return types.DiscoverResponse{}, err
-	}
-
-	resp, err := httpClient.Do(httpReq)
-	if err != nil {
-		return types.DiscoverResponse{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return types.DiscoverResponse{}, utils.DecodeAPIRequestError(resp)
-	}
-
-	envelope, err := utils.DecodeAPIEnvelope[types.DiscoverResponse](resp.Body)
-	if err != nil {
-		return types.DiscoverResponse{}, fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		return types.DiscoverResponse{}, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
-	}
-	return envelope.Data, nil
-}
-
-func (r *Runtime) ApplyPeers(peers []types.DesiredPeer) error {
-	if r == nil || r.device == nil {
-		return errors.New("wireguard runtime is not initialized")
+func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
+	if s == nil || s.device == nil {
+		return errors.New("wireguard is not initialized")
 	}
 
 	var builder strings.Builder
@@ -227,22 +152,22 @@ func (r *Runtime) ApplyPeers(peers []types.DesiredPeer) error {
 		}
 	}
 
-	return r.device.IpcSet(builder.String())
+	return s.device.IpcSet(builder.String())
 }
 
-func (r *Runtime) Close() error {
-	if r == nil || r.device == nil {
+func (s *stack) Close() error {
+	if s == nil || s.device == nil {
 		return nil
 	}
 
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
-	r.closed = true
-	device := r.device
-	r.mu.Unlock()
+	s.closed = true
+	device := s.device
+	s.mu.Unlock()
 
 	device.Close()
 	<-device.Wait()

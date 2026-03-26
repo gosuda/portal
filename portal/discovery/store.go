@@ -25,9 +25,9 @@ type Cache struct {
 	peers map[string]peerRecord
 }
 
-func (s *Cache) Lookup(relayID string) (types.PeerState, bool) {
+func (s *Cache) Lookup(relayID string) (types.PeerState, bool, bool) {
 	if strings.TrimSpace(relayID) == "" {
-		return types.PeerState{}, false
+		return types.PeerState{}, false, false
 	}
 
 	s.mu.RLock()
@@ -35,9 +35,9 @@ func (s *Cache) Lookup(relayID string) (types.PeerState, bool) {
 
 	record, ok := s.peers[relayID]
 	if !ok {
-		return types.PeerState{}, false
+		return types.PeerState{}, false, false
 	}
-	return record.state, true
+	return record.state, strings.TrimSpace(record.pinnedSignerPublicKey) != "", true
 }
 
 func NewCache() *Cache {
@@ -126,21 +126,6 @@ func (s *Cache) Snapshot() map[string]types.PeerState {
 	return out
 }
 
-func (s *Cache) SeedURL(relayID string) string {
-	if strings.TrimSpace(relayID) == "" {
-		return ""
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	record, ok := s.peers[relayID]
-	if !ok {
-		return ""
-	}
-	return record.seedURL
-}
-
 func (s *Cache) KnownDescriptors() []types.RelayDescriptor {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -173,18 +158,6 @@ func (s *Cache) AdvertisedDescriptors() []types.RelayDescriptor {
 		return out[i].APIHTTPSAddr < out[j].APIHTTPSAddr
 	})
 	return out
-}
-
-func (s *Cache) HasPinnedIdentity(relayID string) bool {
-	if strings.TrimSpace(relayID) == "" {
-		return false
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	record, ok := s.peers[relayID]
-	return ok && strings.TrimSpace(record.pinnedSignerPublicKey) != ""
 }
 
 func (s *Cache) PinIdentity(relayID, seedURL string, desc types.RelayDescriptor) error {

@@ -51,7 +51,7 @@ func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 	}
 }
 
-func TestExposureApplyRelayURLsSkipsBannedRelay(t *testing.T) {
+func TestExposureSetRelayURLsSkipsBannedRelay(t *testing.T) {
 	const (
 		relayA = "https://relay-a.example"
 		relayB = "https://relay-b.example"
@@ -64,9 +64,9 @@ func TestExposureApplyRelayURLsSkipsBannedRelay(t *testing.T) {
 		},
 	}
 
-	added, err := exposure.applyRelayURLs([]string{relayA, relayB}, false)
+	added, err := exposure.setRelayURLs([]string{relayA, relayB}, false)
 	if err != nil {
-		t.Fatalf("applyRelayURLs() error = %v", err)
+		t.Fatalf("setRelayURLs() error = %v", err)
 	}
 	if len(added) != 1 || added[0] != relayA {
 		t.Fatalf("added relay urls = %v, want [%q]", added, relayA)

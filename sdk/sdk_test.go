@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
 
 func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
@@ -121,9 +121,9 @@ func TestExposeNoRelayInputs(t *testing.T) {
 
 func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 	ownerPrivateKey := strings.Repeat("11", 32)
-	identity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
 	if err != nil {
-		t.Fatalf("ResolveIdentity() error = %v", err)
+		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
 	}
 
 	registerReqCh := make(chan types.RegisterRequest, 1)
@@ -262,7 +262,7 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 	if registerReq.OwnerAddress == "" {
 		t.Fatal("register request OwnerAddress = empty, want generated address")
 	}
-	if _, err := discovery.NormalizeEVMAddress(registerReq.OwnerAddress); err != nil {
+	if _, err := utils.NormalizeEVMAddress(registerReq.OwnerAddress); err != nil {
 		t.Fatalf("register request OwnerAddress = %q, want valid EVM address: %v", registerReq.OwnerAddress, err)
 	}
 }

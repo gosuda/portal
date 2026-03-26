@@ -265,6 +265,65 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
+func (l *Listener) AcceptDatagram() (types.DatagramFrame, error) {
+	if l == nil || l.datagram == nil {
+		return types.DatagramFrame{}, net.ErrClosed
+	}
+
+	frame, err := l.datagram.Accept(l.doneCh)
+	if err != nil {
+		return types.DatagramFrame{}, err
+	}
+
+	frame.Payload = append([]byte(nil), frame.Payload...)
+	l.mu.Lock()
+	frame.LeaseID = l.leaseID
+	frame.UDPAddr = l.udpAddr
+	if l.api != nil && l.api.baseURL != nil {
+		frame.RelayURL = l.api.baseURL.String()
+	}
+	l.mu.Unlock()
+	return frame, nil
+}
+
+func (l *Listener) SendDatagram(frame types.DatagramFrame) error {
+	if l == nil || l.datagram == nil {
+		return net.ErrClosed
+	}
+
+	l.mu.Lock()
+	leaseID := l.leaseID
+	datagram := l.datagram
+	l.mu.Unlock()
+
+	if leaseID == "" || datagram == nil {
+		return net.ErrClosed
+	}
+	if frameLeaseID := strings.TrimSpace(frame.LeaseID); frameLeaseID != "" && frameLeaseID != leaseID {
+		return errors.New("datagram frame targets stale lease")
+	}
+	return datagram.Send(frame.FlowID, frame.Payload)
+}
+
+func (l *Listener) DatagramReady() (string, bool, bool) {
+	if l == nil || l.datagram == nil {
+		return "", false, false
+	}
+
+	l.mu.Lock()
+	udpAddr := l.udpAddr
+	datagram := l.datagram
+	l.mu.Unlock()
+
+	ready := datagram != nil && datagram.Connected() && udpAddr != ""
+	select {
+	case <-l.registered:
+		return udpAddr, ready, udpAddr != "" && !ready
+	default:
+		return udpAddr, ready, !l.closed()
+	}
+}
+
 func (l *Listener) Addr() net.Addr {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -318,12 +377,6 @@ func (l *Listener) PublicURL() string {
 		Scheme: l.api.baseURL.Scheme,
 		Host:   host,
 	}).String()
-}
-
-func (l *Listener) UDPAddr() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.udpAddr
 }
 
 func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) {
@@ -460,18 +513,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps 
 	}
 	l.registerOnce.Do(func() { close(l.registered) })
 	return nil
-}
-
-// WaitRegistered blocks until the first successful lease registration or context cancellation.
-func (l *Listener) WaitRegistered(ctx context.Context) error {
-	select {
-	case <-l.registered:
-		return nil
-	case <-l.doneCh:
-		return net.ErrClosed
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (l *Listener) retryOrClose(ctx context.Context, operation string, err error, retries int) bool {
