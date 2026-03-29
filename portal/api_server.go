@@ -84,7 +84,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				base.ServeHTTP(w, r)
 				return
 			}
-			discovery.ServeHTTP(w, r, s.discover)
+			s.handleRelayDiscovery(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -108,68 +108,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.DiscoverResponse, error) {
-	self, err := s.discoverySelfDescriptor()
-	if err != nil {
-		return types.DiscoverResponse{}, err
-	}
-	resp := types.DiscoverResponse{
-		ProtocolVersion: 1,
-		GeneratedAt:     time.Now().UTC(),
-		Self:            self,
-		Peers:           nil,
-	}
-	if s.peerRegistry != nil {
-		resp.Peers = s.peerRegistry.advertisedPeers()
-	}
-	if req.RootHost != "" && req.RootHost != s.rootHost {
-		return resp, nil
-	}
-	if req.Name == "" {
-		return resp, nil
+func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		return
 	}
 
-	hostname, err := utils.LeaseHostname(req.Name, s.rootHost)
-	if err != nil {
-		return types.DiscoverResponse{}, err
-	}
-
-	now := time.Now()
-	var lease types.Lease
-	ok := false
-
-	s.registry.mu.RLock()
-	if leaseID, found := s.registry.routes.LookupExact(hostname); found {
-		record, found := s.registry.leaseByID[leaseID]
-		if found && record != nil && !now.After(record.ExpiresAt) && !record.Metadata.Hide && s.registry.policy.IsLeaseRoutable(record.ID) {
-			lease = record.Lease
-			lease.Metadata = lease.Metadata.Copy()
-			ok = true
-		}
-	}
-	s.registry.mu.RUnlock()
-
-	if !ok {
-		return resp, nil
-	}
-
-	ownerAddress := lease.OwnerAddress
-	if strings.TrimSpace(ownerAddress) == "" {
-		ownerAddress = s.ownerIdentity.Address
-	}
-
-	resp.Service = &types.DiscoveredService{
-		Found:        true,
-		Name:         lease.Name,
-		Hostname:     lease.Hostname,
-		ExpiresAt:    lease.ExpiresAt,
-		OwnerAddress: ownerAddress,
-		RelayID:      self.RelayID,
-	}
-	return resp, nil
-}
-
-func (s *Server) discoverySelfDescriptor() (types.RelayDescriptor, error) {
 	now := time.Now().UTC()
 	ingressAddr := s.rootHost
 	if s.cfg.SNIPort != 0 && s.cfg.SNIPort != 443 {
@@ -180,7 +124,7 @@ func (s *Server) discoverySelfDescriptor() (types.RelayDescriptor, error) {
 		strings.TrimSpace(s.wgConfig.Endpoint) != "" &&
 		strings.TrimSpace(s.wgConfig.OverlayIPv4) != ""
 
-	descriptor := types.RelayDescriptor{
+	self, err := discovery.SignedDescriptor(types.RelayDescriptor{
 		RelayID:             s.cfg.PortalURL,
 		OwnerAddress:        s.ownerIdentity.Address,
 		SignerPublicKey:     s.ownerIdentity.PublicKey,
@@ -196,14 +140,26 @@ func (s *Server) discoverySelfDescriptor() (types.RelayDescriptor, error) {
 		SupportsWitness:     false,
 		SupportsVPNExit:     false,
 		StatusState:         "healthy",
+		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
+		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
+		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
+		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
+	}, s.ownerIdentity.PrivateKey)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+		return
 	}
-	if supportsOverlayPeer {
-		descriptor.WireGuardPublicKey = strings.TrimSpace(s.wgConfig.PublicKey)
-		descriptor.WireGuardEndpoint = strings.TrimSpace(s.wgConfig.Endpoint)
-		descriptor.OverlayIPv4 = strings.TrimSpace(s.wgConfig.OverlayIPv4)
-		descriptor.OverlayCIDRs = append([]string(nil), s.wgConfig.OverlayCIDRs...)
+
+	resp := types.DiscoveryResponse{
+		ProtocolVersion: 1,
+		GeneratedAt:     now,
+		Self:            self,
+		Relays:          nil,
 	}
-	return discovery.SignedDescriptor(descriptor, s.ownerIdentity.PrivateKey)
+	if s.relaySet != nil {
+		resp.Relays = s.relaySet.AdvertisedDescriptors()
+	}
+	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {

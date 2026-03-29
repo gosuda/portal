@@ -16,9 +16,13 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-type Resolver func(context.Context, types.DiscoverRequest) (types.DiscoverResponse, error)
-
 const defaultRequestTimeout = 15 * time.Second
+
+type RelayIdentity struct {
+	RelayID         string
+	APIHTTPSAddr    string
+	SignerPublicKey string
+}
 
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	desc.RelayID = strings.TrimSpace(desc.RelayID)
@@ -158,59 +162,149 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	return normalized, nil
 }
 
-func ValidateResponse(resp types.DiscoverResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
 	self, err := ValidateDescriptor(resp.Self, now)
 	if err != nil {
 		return types.RelayDescriptor{}, nil, err
 	}
 
 	seen := map[string]struct{}{self.RelayID: {}}
-	peers := make([]types.RelayDescriptor, 0, len(resp.Peers))
+	relays := make([]types.RelayDescriptor, 0, len(resp.Relays))
 	var validateErr error
-	for _, descriptor := range resp.Peers {
+	for _, descriptor := range resp.Relays {
 		verified, err := ValidateDescriptor(descriptor, now)
 		if err != nil {
-			validateErr = errors.Join(validateErr, fmt.Errorf("validate peer %q: %w", descriptor.RelayID, err))
+			if validateErr == nil {
+				validateErr = err
+			}
 			continue
 		}
 		if _, ok := seen[verified.RelayID]; ok {
 			continue
 		}
 		seen[verified.RelayID] = struct{}{}
-		peers = append(peers, verified)
+		relays = append(relays, verified)
 	}
-	return self, peers, validateErr
+	return self, relays, validateErr
 }
 
-func Discover(ctx context.Context, baseURL string, req types.DiscoverRequest, rootCAPEM []byte, httpClient *http.Client) (types.DiscoverResponse, error) {
+func RelayIdentityFromDescriptor(desc types.RelayDescriptor) (RelayIdentity, error) {
+	normalized, err := NormalizeDescriptor(desc)
+	if err != nil {
+		return RelayIdentity{}, err
+	}
+
+	identity := RelayIdentity{
+		RelayID:         strings.TrimSpace(normalized.RelayID),
+		APIHTTPSAddr:    strings.TrimSpace(normalized.APIHTTPSAddr),
+		SignerPublicKey: strings.ToLower(strings.TrimSpace(normalized.SignerPublicKey)),
+	}
+	switch {
+	case identity.RelayID == "":
+		return RelayIdentity{}, errors.New("descriptor relay_id is required")
+	case identity.APIHTTPSAddr == "":
+		return RelayIdentity{}, errors.New("descriptor api_https_addr is required")
+	case identity.SignerPublicKey == "":
+		return RelayIdentity{}, errors.New("descriptor signer_public_key is required")
+	}
+	return identity, nil
+}
+
+func MatchTargetRelayIdentity(identity RelayIdentity, targetRelayID, targetURL string) error {
+	targetRelayID = strings.TrimSpace(targetRelayID)
+	if targetRelayID != "" && identity.RelayID != targetRelayID {
+		return errors.New("descriptor relay_id does not match target relay")
+	}
+
+	targetURL = strings.TrimSpace(targetURL)
+	if targetURL == "" {
+		return nil
+	}
+
+	normalizedTargetURL, err := utils.NormalizeRelayURL(targetURL)
+	if err != nil {
+		return err
+	}
+	if identity.APIHTTPSAddr != normalizedTargetURL {
+		return errors.New("descriptor api_https_addr does not match target url")
+	}
+	return nil
+}
+
+func MatchPinnedRelayIdentity(identity, pinned RelayIdentity) error {
+	if relayID := strings.TrimSpace(pinned.RelayID); relayID != "" && identity.RelayID != relayID {
+		return errors.New("descriptor relay_id does not match pinned relay id")
+	}
+	if apiURL := strings.TrimSpace(pinned.APIHTTPSAddr); apiURL != "" && identity.APIHTTPSAddr != apiURL {
+		return errors.New("descriptor api_https_addr does not match pinned relay url")
+	}
+	if signerPublicKey := strings.ToLower(strings.TrimSpace(pinned.SignerPublicKey)); signerPublicKey != "" && identity.SignerPublicKey != signerPublicKey {
+		return errors.New("descriptor signer_public_key does not match pinned signer")
+	}
+	return nil
+}
+
+func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byte, httpClient *http.Client) (types.DiscoveryResponse, error) {
+	resp, err := doGET[types.DiscoveryResponse](ctx, baseURL, types.PathDiscovery, nil, rootCAPEM, httpClient)
+	if err != nil {
+		return types.DiscoveryResponse{}, err
+	}
+	return resp, nil
+}
+
+func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
+	normalized, err := utils.NormalizeRelayURL(apiURL)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	return types.RelayDescriptor{
+		RelayID:      normalized,
+		APIHTTPSAddr: normalized,
+		Version:      1,
+	}, nil
+}
+
+func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
+	if !desc.SupportsOverlayPeer {
+		return errors.New("descriptor does not support overlay peer")
+	}
+	if strings.TrimSpace(desc.WireGuardPublicKey) == "" {
+		return errors.New("descriptor wireguard public key is required")
+	}
+	if strings.TrimSpace(desc.WireGuardEndpoint) == "" {
+		return errors.New("descriptor wireguard endpoint is required")
+	}
+	if strings.TrimSpace(desc.OverlayIPv4) == "" {
+		return errors.New("descriptor overlay ipv4 is required")
+	}
+	return nil
+}
+
+func doGET[T any](ctx context.Context, baseURL, path string, query url.Values, rootCAPEM []byte, httpClient *http.Client) (T, error) {
+	var zero T
+
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		return types.DiscoverResponse{}, errors.New("discovery base url is required")
+		return zero, errors.New("discovery base url is required")
 	}
-
 	parsedBaseURL, err := url.Parse(baseURL)
 	if err != nil {
-		return types.DiscoverResponse{}, fmt.Errorf("parse discovery base url: %w", err)
+		return zero, fmt.Errorf("parse discovery base url: %w", err)
 	}
 	if parsedBaseURL.Host == "" {
-		return types.DiscoverResponse{}, errors.New("discovery base url host is required")
+		return zero, errors.New("discovery base url host is required")
 	}
 
-	discoverURL := parsedBaseURL.ResolveReference(&url.URL{Path: types.PathDiscovery})
-	query := discoverURL.Query()
-	if req.RootHost != "" {
-		query.Set("root_host", req.RootHost)
+	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: path})
+	if query != nil {
+		requestURL.RawQuery = query.Encode()
 	}
-	if req.Name != "" {
-		query.Set("name", req.Name)
-	}
-	discoverURL.RawQuery = query.Encode()
 
 	client := httpClient
 	if client == nil {
 		rootCAs, err := keyless.RelayRootCAs(ctx, baseURL, parsedBaseURL.Hostname(), rootCAPEM)
 		if err != nil {
-			return types.DiscoverResponse{}, err
+			return zero, err
 		}
 		client = &http.Client{
 			Transport: &http.Transport{
@@ -230,64 +324,27 @@ func Discover(ctx context.Context, baseURL string, req types.DiscoverRequest, ro
 		client = &clone
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, discoverURL.String(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return zero, err
 	}
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return zero, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return types.DiscoverResponse{}, utils.DecodeAPIRequestError(resp)
+		return zero, utils.DecodeAPIRequestError(resp)
 	}
 
-	envelope, err := utils.DecodeAPIEnvelope[types.DiscoverResponse](resp.Body)
+	envelope, err := utils.DecodeAPIEnvelope[T](resp.Body)
 	if err != nil {
-		return types.DiscoverResponse{}, fmt.Errorf("decode response: %w", err)
+		return zero, fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
-		return types.DiscoverResponse{}, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
+		return zero, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
 	}
 	return envelope.Data, nil
-}
-
-func ServeHTTP(w http.ResponseWriter, r *http.Request, resolver Resolver) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	req := types.DiscoverRequest{
-		RootHost: r.URL.Query().Get("root_host"),
-		Name:     r.URL.Query().Get("name"),
-	}
-	req.RootHost = utils.NormalizeHostname(req.RootHost)
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name != "" {
-		if req.RootHost == "" {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "root host is required when name is set")
-			return
-		}
-		name, err := utils.NormalizeDNSLabel(req.Name)
-		if err != nil {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-			return
-		}
-		req.Name = name
-	}
-	if resolver == nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, "discovery resolver is not configured")
-		return
-	}
-
-	resp, err := resolver(r.Context(), req)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-	utils.WriteAPIData(w, http.StatusOK, resp)
 }

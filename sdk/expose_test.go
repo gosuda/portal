@@ -2,10 +2,40 @@ package sdk
 
 import (
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
+	"github.com/gosuda/portal/v2/utils"
 )
+
+func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayID, relayURL string) types.RelayDescriptor {
+	t.Helper()
+
+	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
+	if err != nil {
+		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	desc, err := discovery.SignedDescriptor(types.RelayDescriptor{
+		RelayID:         relayID,
+		OwnerAddress:    identity.Address,
+		SignerPublicKey: identity.PublicKey,
+		Sequence:        uint64(now.UnixMilli()),
+		Version:         1,
+		IssuedAt:        now,
+		ExpiresAt:       now.Add(time.Hour),
+		APIHTTPSAddr:    relayURL,
+		StatusState:     "healthy",
+	}, identity.PrivateKey)
+	if err != nil {
+		t.Fatalf("SignedDescriptor() error = %v", err)
+	}
+	return desc
+}
 
 func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 	const (
@@ -19,35 +49,34 @@ func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 	}
 
 	listener := &Listener{
-		api:           &apiClient{baseURL: relayURL},
-		startupStatus: listenerStatusBanned,
+		api: &apiClient{baseURL: relayURL},
 	}
 
 	exposure := &Exposure{
-		knownRelayURLs:  []string{relayA, relayB},
-		bannedRelayURLs: nil,
-		listeners: map[string]*Listener{
-			relayA: listener,
-			relayB: {},
-		},
+		relaySet:       discovery.NewRelaySet(),
+		relayListeners: make(map[string]*Listener, 2),
+	}
+	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	exposure.relayListeners = map[string]*Listener{
+		relayA: listener,
+		relayB: {},
 	}
 
-	exposure.banRelayURL(relayA)
+	exposure.relaySet.BanRelayURL(relayA, "mitm")
+	exposure.listenerMu.Lock()
+	delete(exposure.relayListeners, relayA)
+	exposure.listenerMu.Unlock()
 
 	if got := exposure.ActiveRelayURLs(); len(got) != 1 || got[0] != relayB {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayB)
 	}
 
-	exposure.mu.RLock()
-	knownRelayURLs := append([]string(nil), exposure.knownRelayURLs...)
-	bannedRelayURLs := append([]string(nil), exposure.bannedRelayURLs...)
-	_, listenerExists := exposure.listeners[relayA]
-	exposure.mu.RUnlock()
+	knownRelayURLs := exposure.relaySet.ActiveRelayURLs()
+	exposure.listenerMu.RLock()
+	_, listenerExists := exposure.relayListeners[relayA]
+	exposure.listenerMu.RUnlock()
 	if len(knownRelayURLs) != 1 || knownRelayURLs[0] != relayB {
 		t.Fatalf("knownRelayURLs = %v, want [%q]", knownRelayURLs, relayB)
-	}
-	if len(bannedRelayURLs) != 1 || bannedRelayURLs[0] != relayA {
-		t.Fatalf("bannedRelayURLs = %v, want [%q]", bannedRelayURLs, relayA)
 	}
 	if listenerExists {
 		t.Fatal("banned relay listener still exists in exposure.listeners")
@@ -61,31 +90,24 @@ func TestExposureSetRelayURLsSkipsBannedRelay(t *testing.T) {
 	)
 
 	exposure := &Exposure{
-		bannedRelayURLs: []string{relayB},
-		listeners: map[string]*Listener{
-			relayA: {},
-		},
+		relaySet:       discovery.NewRelaySet(),
+		relayListeners: make(map[string]*Listener, 1),
+	}
+	exposure.relaySet.BanRelayURL(relayB, "test")
+	exposure.relayListeners = map[string]*Listener{
+		relayA: {},
 	}
 
-	added, err := exposure.setRelayURLs([]string{relayA, relayB}, false)
-	if err != nil {
-		t.Fatalf("setRelayURLs() error = %v", err)
-	}
-	if len(added) != 1 || added[0] != relayA {
-		t.Fatalf("added relay urls = %v, want [%q]", added, relayA)
+	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
 	if got := exposure.ActiveRelayURLs(); len(got) != 1 || got[0] != relayA {
 		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", got, relayA)
 	}
-	exposure.mu.RLock()
-	knownRelayURLs := append([]string(nil), exposure.knownRelayURLs...)
-	bannedRelayURLs := append([]string(nil), exposure.bannedRelayURLs...)
-	exposure.mu.RUnlock()
+	knownRelayURLs := exposure.relaySet.ActiveRelayURLs()
 	if len(knownRelayURLs) != 1 || knownRelayURLs[0] != relayA {
 		t.Fatalf("knownRelayURLs = %v, want [%q]", knownRelayURLs, relayA)
-	}
-	if len(bannedRelayURLs) != 1 || bannedRelayURLs[0] != relayB {
-		t.Fatalf("bannedRelayURLs = %v, want [%q]", bannedRelayURLs, relayB)
 	}
 }
 
@@ -106,25 +128,24 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 
 	relayAClosed := make(chan struct{})
 	exposure := &Exposure{
-		knownRelayURLs: []string{relayA, relayB},
-		listeners: map[string]*Listener{
-			relayA: {
-				api:    &apiClient{baseURL: relayAURL},
-				cancel: func() { close(relayAClosed) },
-				doneCh: relayAClosed,
-			},
-			relayB: {
-				api: &apiClient{baseURL: relayBURL},
-			},
+		relaySet:       discovery.NewRelaySet(),
+		relayListeners: make(map[string]*Listener, 2),
+	}
+	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	exposure.relayListeners = map[string]*Listener{
+		relayA: {
+			api:    &apiClient{baseURL: relayAURL},
+			cancel: func() { close(relayAClosed) },
+			doneCh: relayAClosed,
+		},
+		relayB: {
+			api: &apiClient{baseURL: relayBURL},
 		},
 	}
 
-	added, err := exposure.setRelayURLs([]string{relayB}, false)
-	if err != nil {
-		t.Fatalf("setRelayURLs() error = %v", err)
-	}
-	if len(added) != 0 {
-		t.Fatalf("added relay urls = %v, want empty", added)
+	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayB})
+	if err := exposure.reconcileRelayListeners(false); err != nil {
+		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
 
 	select {
@@ -133,11 +154,11 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 		t.Fatal("stale relay listener was not closed")
 	}
 
-	exposure.mu.RLock()
-	knownRelayURLs := append([]string(nil), exposure.knownRelayURLs...)
-	_, relayAExists := exposure.listeners[relayA]
-	_, relayBExists := exposure.listeners[relayB]
-	exposure.mu.RUnlock()
+	knownRelayURLs := exposure.relaySet.ActiveRelayURLs()
+	exposure.listenerMu.RLock()
+	_, relayAExists := exposure.relayListeners[relayA]
+	_, relayBExists := exposure.relayListeners[relayB]
+	exposure.listenerMu.RUnlock()
 	if len(knownRelayURLs) != 1 || knownRelayURLs[0] != relayB {
 		t.Fatalf("knownRelayURLs = %v, want [%q]", knownRelayURLs, relayB)
 	}
@@ -150,26 +171,22 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 }
 
 func TestExposurePinDiscoveredDescriptorRejectsIdentityChange(t *testing.T) {
-	exposure := &Exposure{}
-	desc := types.RelayDescriptor{
-		RelayID:         "relay-a",
-		APIHTTPSAddr:    "https://relay-a.example",
-		SignerPublicKey: "signer-a",
+	exposure := &Exposure{relaySet: discovery.NewRelaySet()}
+	desc := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), "relay-a", "https://relay-a.example")
+
+	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{Self: desc}, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	if err := exposure.pinDiscoverySelfDescriptor(desc.APIHTTPSAddr, desc); err != nil {
-		t.Fatalf("pinDiscoverySelfDescriptor() error = %v", err)
+	changedSigner := mustSignedRelayDescriptor(t, strings.Repeat("12", 32), desc.RelayID, desc.APIHTTPSAddr)
+	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{Self: changedSigner}, time.Now().UTC())
+	if err == nil {
+		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned signer mismatch")
 	}
 
-	changedSigner := desc
-	changedSigner.SignerPublicKey = "signer-b"
-	if err := exposure.pinDiscoveredDescriptor(changedSigner); err == nil {
-		t.Fatal("pinDiscoveredDescriptor() error = nil, want pinned signer mismatch")
-	}
-
-	changedURL := desc
-	changedURL.APIHTTPSAddr = "https://relay-b.example"
-	if err := exposure.pinDiscoveredDescriptor(changedURL); err == nil {
-		t.Fatal("pinDiscoveredDescriptor() error = nil, want pinned relay url mismatch")
+	changedURL := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), desc.RelayID, "https://relay-b.example")
+	_, _, _, _, err = exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{Self: changedURL}, time.Now().UTC())
+	if err == nil {
+		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned relay url mismatch")
 	}
 }

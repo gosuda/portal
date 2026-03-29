@@ -154,17 +154,17 @@ func (o *Overlay) Client() *http.Client {
 	}
 }
 
-func (o *Overlay) Sync(selfRelayID string, snapshot map[string]types.PeerState) error {
+func (o *Overlay) Sync(selfRelayID string, snapshot map[string]types.RelayState) error {
 	if o == nil || o.stack == nil {
 		return nil
 	}
 	return o.stack.ApplyPeers(peersForSnapshot(selfRelayID, snapshot))
 }
 
-func peersForSnapshot(selfRelayID string, snapshot map[string]types.PeerState) []types.DesiredPeer {
+func peersForSnapshot(selfRelayID string, snapshot map[string]types.RelayState) []types.DesiredPeer {
 	peers := make([]types.DesiredPeer, 0, len(snapshot))
 	for _, state := range snapshot {
-		if state.State != types.PeerStateVerified && state.State != types.PeerStateAdvertised {
+		if state.Expired {
 			continue
 		}
 		desc := state.Descriptor

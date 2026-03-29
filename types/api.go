@@ -72,26 +72,11 @@ type RegisterResponse struct {
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 }
 
-type DiscoverRequest struct {
-	RootHost string `json:"root_host"`
-	Name     string `json:"name"`
-}
-
-type DiscoverResponse struct {
-	ProtocolVersion uint32             `json:"protocol_version"`
-	GeneratedAt     time.Time          `json:"generated_at"`
-	Self            RelayDescriptor    `json:"self"`
-	Peers           []RelayDescriptor  `json:"peers,omitempty"`
-	Service         *DiscoveredService `json:"service,omitempty"`
-}
-
-type DiscoveredService struct {
-	Found        bool      `json:"found"`
-	Name         string    `json:"name,omitempty"`
-	Hostname     string    `json:"hostname,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	OwnerAddress string    `json:"owner_address,omitempty"`
-	RelayID      string    `json:"relay_id,omitempty"`
+type DiscoveryResponse struct {
+	ProtocolVersion uint32            `json:"protocol_version"`
+	GeneratedAt     time.Time         `json:"generated_at"`
+	Self            RelayDescriptor   `json:"self"`
+	Relays          []RelayDescriptor `json:"relays,omitempty"`
 }
 
 type QUICControlMessage struct {

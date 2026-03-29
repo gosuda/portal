@@ -364,10 +364,11 @@ export function ServerListView({
     };
   }, [isAdmin, officialRegistryRelays]);
 
+  const officialRegistryList = officialRegistryRelays ?? [];
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
-  const officialRegistryAvailable = (officialRegistryRelays?.length ?? 0) > 0;
+  const officialRegistryAvailable = officialRegistryList.length > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -809,7 +810,7 @@ export function ServerListView({
                   <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
                     {officialRegistryAvailable ? (
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {officialRegistryRelays.map((relay) => {
+                        {officialRegistryList.map((relay) => {
                           return (
                             <div
                               key={relay.url}

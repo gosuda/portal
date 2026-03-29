@@ -14,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
@@ -36,15 +37,8 @@ type ListenerConfig struct {
 	RetryCount       int
 	RetryWait        time.Duration
 	ownerAddress     string
+	relaySet         *discovery.RelaySet
 }
-
-type listenerStatus string
-
-const (
-	listenerStatusInactive listenerStatus = "inactive"
-	listenerStatusReady    listenerStatus = "ready"
-	listenerStatusBanned   listenerStatus = "banned"
-)
 
 type Listener struct {
 	api    *apiClient
@@ -64,15 +58,15 @@ type Listener struct {
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
-	banMITM       bool
-	mu            sync.Mutex
-	startupStatus listenerStatus
-	leaseID       string
-	hostname      string
-	udpAddr       string
-	metadata      types.LeaseMetadata
-	tlsConfig     *tls.Config
-	tlsCloser     io.Closer
+	banMITM   bool
+	relaySet  *discovery.RelaySet
+	mu        sync.Mutex
+	leaseID   string
+	hostname  string
+	udpAddr   string
+	metadata  types.LeaseMetadata
+	tlsConfig *tls.Config
+	tlsCloser io.Closer
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -92,17 +86,17 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 	}
 
 	l := &Listener{
-		doneCh:        listenerCtx.Done(),
-		cancel:        cancel,
-		api:           api,
-		registered:    make(chan struct{}),
-		startupStatus: listenerStatusInactive,
-		retryCount:    cfg.RetryCount,
-		retryWait:     retryWait,
-		leaseTTL:      leaseTTL,
-		renewBefore:   renewBefore,
-		metadata:      cfg.Metadata.Copy(),
-		banMITM:       cfg.BanMITM,
+		doneCh:      listenerCtx.Done(),
+		cancel:      cancel,
+		api:         api,
+		registered:  make(chan struct{}),
+		retryCount:  cfg.RetryCount,
+		retryWait:   retryWait,
+		leaseTTL:    leaseTTL,
+		renewBefore: renewBefore,
+		metadata:    cfg.Metadata.Copy(),
+		banMITM:     cfg.BanMITM,
+		relaySet:    cfg.relaySet,
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
@@ -144,8 +138,8 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 						defer l.mu.Unlock()
 						return l.tlsConfig
 					},
-					func() { l.setStartupStatus(listenerStatusReady) },
-					func() { l.setStartupStatus(listenerStatusInactive) },
+					func() { l.markReachable() },
+					func() { l.markUnreachable() },
 					l.retryOrClose,
 				)
 			}
@@ -511,7 +505,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 		Logger()
 
 	if operation == "lease registration" {
-		l.setStartupStatus(listenerStatusInactive)
+		l.markUnreachable()
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
@@ -554,35 +548,28 @@ func (l *Listener) closed() bool {
 	}
 }
 
-func (l *Listener) setStartupStatus(status listenerStatus) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	if l.startupStatus == listenerStatusBanned && status != listenerStatusBanned {
-		l.mu.Unlock()
-		return
-	}
-	l.startupStatus = status
-	l.mu.Unlock()
-}
-
 func (l *Listener) ban() {
 	if l == nil {
 		return
 	}
-	l.setStartupStatus(listenerStatusBanned)
+	if l.relaySet != nil && l.api != nil && l.api.baseURL != nil {
+		l.relaySet.BanRelayURL(l.api.baseURL.String(), "mitm")
+	}
 	_ = l.Close()
 }
 
-func (l *Listener) StartupStatus() listenerStatus {
-	if l == nil {
-		return listenerStatusInactive
+func (l *Listener) markReachable() {
+	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
+		return
 	}
+	l.relaySet.MarkRelayReachable(l.api.baseURL.String(), time.Now().UTC())
+}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.startupStatus
+func (l *Listener) markUnreachable() {
+	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
+		return
+	}
+	l.relaySet.MarkRelayUnreachable(l.api.baseURL.String())
 }
 
 func (l *Listener) BanMITM() bool {

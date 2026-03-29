@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -200,6 +201,15 @@ func NormalizeWireGuardPrivateKey(raw string) (string, error) {
 	key, err := decodeWireGuardKey(raw)
 	if err != nil {
 		return "", err
+	}
+	clampWireGuardPrivateKey(&key)
+	return base64.StdEncoding.EncodeToString(key[:]), nil
+}
+
+func GenerateWireGuardPrivateKey() (string, error) {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		return "", fmt.Errorf("generate wireguard private key: %w", err)
 	}
 	clampWireGuardPrivateKey(&key)
 	return base64.StdEncoding.EncodeToString(key[:]), nil

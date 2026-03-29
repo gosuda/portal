@@ -38,20 +38,12 @@ type Exposure struct {
 	accepted  chan net.Conn
 	datagrams chan types.DatagramFrame
 
-	mu                     sync.RWMutex
-	knownRelayURLs         []string
-	bannedRelayURLs        []string
-	discoveryPins          map[string]discoveryIdentity
-	discoveryRelayIDsByURL map[string]string
-	listeners              map[string]*Listener
+	relaySet       *discovery.RelaySet
+	listenerMu     sync.RWMutex
+	relayListeners map[string]*Listener
 
 	closeOnce sync.Once
 	connSeq   atomic.Uint64
-}
-
-type discoveryIdentity struct {
-	apiURL          string
-	signerPublicKey string
 }
 
 type ExposeConfig struct {
@@ -94,96 +86,51 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 
 	exposureCtx, cancel := context.WithCancel(ctx)
 	exposure := &Exposure{
-		cancel:                 cancel,
-		done:                   exposureCtx.Done(),
-		name:                   cfg.Name,
-		TargetAddr:             targetAddr,
-		UDPAddr:                udpAddr,
-		reverseToken:           cfg.ReverseToken,
-		udpEnabled:             cfg.UDPEnabled,
-		banMITM:                cfg.BanMITM,
-		metadata:               cfg.Metadata.Copy(),
-		ownerAddress:           identity.Address,
-		rootCAPEM:              append([]byte(nil), cfg.RootCAPEM...),
-		discoveryEnabled:       cfg.Discovery,
-		accepted:               make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
-		datagrams:              make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
-		discoveryPins:          make(map[string]discoveryIdentity),
-		discoveryRelayIDsByURL: make(map[string]string),
-		listeners:              make(map[string]*Listener, len(relayURLs)),
+		cancel:           cancel,
+		done:             exposureCtx.Done(),
+		name:             cfg.Name,
+		TargetAddr:       targetAddr,
+		UDPAddr:          udpAddr,
+		reverseToken:     cfg.ReverseToken,
+		udpEnabled:       cfg.UDPEnabled,
+		banMITM:          cfg.BanMITM,
+		metadata:         cfg.Metadata.Copy(),
+		ownerAddress:     identity.Address,
+		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
+		discoveryEnabled: cfg.Discovery,
+		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
+		datagrams:        make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
+		relaySet:         discovery.NewRelaySet(),
+		relayListeners:   make(map[string]*Listener, len(relayURLs)),
 	}
 
 	if len(relayURLs) > 0 {
-		if _, err := exposure.setRelayURLs(relayURLs, true); err != nil {
+		exposure.relaySet.ReplaceKnownRelayURLs(relayURLs)
+		if err := exposure.reconcileRelayListeners(true); err != nil {
 			_ = exposure.Close()
 			return nil, err
 		}
 	}
 
-	if len(relayURLs) > 0 {
-		go exposure.monitorStartupCounts()
-	}
 	if exposure.discoveryEnabled {
-		go exposure.runDiscoveryLoop(exposureCtx)
+		go exposure.runRelayDiscoveryLoop(exposureCtx)
 	}
 	go func() {
 		<-exposure.done
 		_ = exposure.Close()
 	}()
 
-	if len(relayURLs) > 0 {
-		exposure.mu.RLock()
-		activeRelayURLs, _ := exposure.activeSnapshotLocked()
-		exposure.mu.RUnlock()
-		log.Info().
-			Str("release_version", types.ReleaseVersion).
-			Int("relay_count", len(activeRelayURLs)).
-			Strs("relays", activeRelayURLs).
-			Msg("exposure relay started")
-	}
-
 	return exposure, nil
 }
 
 func (e *Exposure) ActiveRelayURLs() []string {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	if len(e.knownRelayURLs) == 0 || len(e.listeners) == 0 {
+	if e == nil {
 		return nil
 	}
-
-	activeRelayURLs := make([]string, 0, len(e.listeners))
-	for _, relayURL := range e.knownRelayURLs {
-		if _, ok := e.listeners[relayURL]; ok {
-			activeRelayURLs = append(activeRelayURLs, relayURL)
-		}
-	}
-	if len(activeRelayURLs) == 0 {
+	if e.relaySet == nil {
 		return nil
 	}
-	return activeRelayURLs
-}
-
-func (e *Exposure) activeSnapshotLocked() ([]string, []*Listener) {
-	if len(e.knownRelayURLs) == 0 || len(e.listeners) == 0 {
-		return nil, nil
-	}
-
-	activeRelayURLs := make([]string, 0, len(e.listeners))
-	listeners := make([]*Listener, 0, len(e.listeners))
-	for _, relayURL := range e.knownRelayURLs {
-		listener, ok := e.listeners[relayURL]
-		if !ok {
-			continue
-		}
-		activeRelayURLs = append(activeRelayURLs, relayURL)
-		listeners = append(listeners, listener)
-	}
-	if len(activeRelayURLs) == 0 {
-		return nil, nil
-	}
-	return activeRelayURLs, listeners
+	return e.relaySet.ActiveRelayURLs()
 }
 
 func (e *Exposure) Accept() (net.Conn, error) {
@@ -217,9 +164,16 @@ func (e *Exposure) Addr() net.Addr {
 
 func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
 	var relayListener net.Listener
-	e.mu.RLock()
-	_, activeListeners := e.activeSnapshotLocked()
-	e.mu.RUnlock()
+	e.listenerMu.RLock()
+	activeListeners := make([]*Listener, 0, len(e.relayListeners))
+	for _, relayURL := range e.relaySet.ActiveRelayURLs() {
+		listener, ok := e.relayListeners[relayURL]
+		if !ok {
+			continue
+		}
+		activeListeners = append(activeListeners, listener)
+	}
+	e.listenerMu.RUnlock()
 	if len(activeListeners) > 0 {
 		relayListener = e
 	}
@@ -334,14 +288,14 @@ func (e *Exposure) Close() error {
 			e.cancel()
 		}
 
-		e.mu.RLock()
-		relayURLs := make([]string, 0, len(e.listeners))
-		listeners := make([]*Listener, 0, len(e.listeners))
-		for relayURL, listener := range e.listeners {
+		e.listenerMu.RLock()
+		relayURLs := make([]string, 0, len(e.relayListeners))
+		listeners := make([]*Listener, 0, len(e.relayListeners))
+		for relayURL, listener := range e.relayListeners {
 			relayURLs = append(relayURLs, relayURL)
 			listeners = append(listeners, listener)
 		}
-		e.mu.RUnlock()
+		e.listenerMu.RUnlock()
 
 		for _, listener := range listeners {
 			if listener != nil {
@@ -363,185 +317,88 @@ func (e *Exposure) Close() error {
 	return closeErr
 }
 
-func (e *Exposure) setRelayURLs(relayURLs []string, failOnError bool) ([]string, error) {
-	if len(relayURLs) == 0 {
-		return nil, nil
+func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
+	if e.relaySet == nil {
+		e.relaySet = discovery.NewRelaySet()
 	}
-
-	e.mu.RLock()
-	bannedRelayURLs := append([]string(nil), e.bannedRelayURLs...)
-	e.mu.RUnlock()
-	relayURLs = utils.FilterRelayURLs(append([]string(nil), relayURLs...), bannedRelayURLs)
-
-	e.mu.Lock()
-	existing := make(map[string]struct{}, len(e.knownRelayURLs))
-	for _, relayURL := range e.knownRelayURLs {
-		existing[relayURL] = struct{}{}
+	e.listenerMu.Lock()
+	if e.relayListeners == nil {
+		e.relayListeners = make(map[string]*Listener)
 	}
-	desired := make(map[string]struct{}, len(relayURLs))
-	for _, relayURL := range relayURLs {
-		desired[relayURL] = struct{}{}
+	activeRelayURLs := e.relaySet.ActiveRelayURLs()
+	currentRelayURLs := make([]string, 0, len(e.relayListeners))
+	for relayURL := range e.relayListeners {
+		currentRelayURLs = append(currentRelayURLs, relayURL)
 	}
-
-	added := make([]string, 0, len(relayURLs))
-	missing := make([]string, 0)
-	for _, relayURL := range relayURLs {
-		if _, ok := existing[relayURL]; !ok {
-			added = append(added, relayURL)
-		}
-		if _, ok := e.listeners[relayURL]; !ok {
-			missing = append(missing, relayURL)
-		}
+	missingRelayURLs := utils.FilterRelayURLs(activeRelayURLs, currentRelayURLs)
+	staleRelayURLs := utils.FilterRelayURLs(currentRelayURLs, activeRelayURLs)
+	staleListeners := make([]*Listener, 0, len(staleRelayURLs))
+	for _, relayURL := range staleRelayURLs {
+		staleListeners = append(staleListeners, e.relayListeners[relayURL])
+		delete(e.relayListeners, relayURL)
 	}
-	removed := make([]string, 0)
-	staleListeners := make([]*Listener, 0)
-	for relayURL, listener := range e.listeners {
-		if _, ok := desired[relayURL]; ok {
-			continue
-		}
-		removed = append(removed, relayURL)
-		staleListeners = append(staleListeners, listener)
-		delete(e.listeners, relayURL)
-	}
-	e.knownRelayURLs = append([]string(nil), relayURLs...)
-	e.mu.Unlock()
+	e.listenerMu.Unlock()
 
 	for i, listener := range staleListeners {
 		if listener == nil {
 			continue
 		}
 		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Warn().Err(err).Str("relay_url", removed[i]).Msg("close stale relay listener")
+			log.Warn().Err(err).Str("relay_url", staleRelayURLs[i]).Msg("close stale relay listener")
 		}
 	}
-	if len(removed) > 0 {
-		log.Info().Int("removed_count", len(removed)).Strs("removed_relays", removed).Msg("stale relays removed from exposure")
-	}
-
-	for _, relayURL := range missing {
-		listener, err := e.newListener(relayURL)
+	for _, relayURL := range missingRelayURLs {
+		listener, err := NewListener(context.Background(), relayURL, ListenerConfig{
+			Name:         e.name,
+			ReverseToken: e.reverseToken,
+			UDPEnabled:   e.udpEnabled,
+			BanMITM:      e.banMITM,
+			Metadata:     e.metadata.Copy(),
+			RootCAPEM:    append([]byte(nil), e.rootCAPEM...),
+			ownerAddress: e.ownerAddress,
+			relaySet:     e.relaySet,
+		})
 		if err != nil {
 			if failOnError {
-				return nil, fmt.Errorf("listen %q: %w", relayURL, err)
+				return fmt.Errorf("listen %q: %w", relayURL, err)
 			}
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("add relay listener")
 			continue
 		}
-		e.installListener(relayURL, listener)
-	}
-	return added, nil
-}
 
-func (e *Exposure) pinDiscoverySelfDescriptor(targetURL string, desc types.RelayDescriptor) error {
-	normalizedTargetURL, err := utils.NormalizeRelayURL(targetURL)
-	if err != nil {
-		return err
-	}
-	if desc.APIHTTPSAddr != normalizedTargetURL {
-		return errors.New("descriptor api_https_addr does not match target url")
-	}
-	return e.pinDiscoveredDescriptor(desc)
-}
-
-func (e *Exposure) pinDiscoveredDescriptor(desc types.RelayDescriptor) error {
-	relayID := strings.TrimSpace(desc.RelayID)
-	apiURL := strings.TrimSpace(desc.APIHTTPSAddr)
-	signerPublicKey := strings.TrimSpace(desc.SignerPublicKey)
-	if relayID == "" {
-		return errors.New("descriptor relay_id is required")
-	}
-	if apiURL == "" {
-		return errors.New("descriptor api_https_addr is required")
-	}
-	if signerPublicKey == "" {
-		return errors.New("descriptor signer_public_key is required")
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.discoveryPins == nil {
-		e.discoveryPins = make(map[string]discoveryIdentity)
-	}
-	if e.discoveryRelayIDsByURL == nil {
-		e.discoveryRelayIDsByURL = make(map[string]string)
-	}
-
-	if pinned, ok := e.discoveryPins[relayID]; ok {
-		if pinned.apiURL != apiURL {
-			return errors.New("descriptor api_https_addr does not match pinned relay url")
+		select {
+		case <-e.done:
+			_ = listener.Close()
+			continue
+		default:
 		}
-		if pinned.signerPublicKey != signerPublicKey {
-			return errors.New("descriptor signer_public_key does not match pinned signer")
-		}
-	}
-	if pinnedRelayID, ok := e.discoveryRelayIDsByURL[apiURL]; ok && pinnedRelayID != relayID {
-		return errors.New("descriptor relay_id does not match pinned relay url identity")
-	}
 
-	e.discoveryPins[relayID] = discoveryIdentity{
-		apiURL:          apiURL,
-		signerPublicKey: signerPublicKey,
+		e.listenerMu.Lock()
+		if e.relayListeners == nil {
+			e.relayListeners = make(map[string]*Listener, 1)
+		}
+		e.relaySet.MarkRelayUnreachable(relayURL)
+		if _, exists := e.relayListeners[relayURL]; exists {
+			e.listenerMu.Unlock()
+			_ = listener.Close()
+			continue
+		}
+		e.relayListeners[relayURL] = listener
+		e.listenerMu.Unlock()
+
+		go e.runListenerAcceptLoop(listener)
 	}
-	e.discoveryRelayIDsByURL[apiURL] = relayID
 	return nil
 }
 
-func (e *Exposure) banRelayURL(relayURL string) {
-	e.mu.Lock()
-	e.knownRelayURLs = utils.RemoveRelayURL(e.knownRelayURLs, relayURL)
-	e.bannedRelayURLs = utils.AppendUniqueRelayURL(e.bannedRelayURLs, relayURL)
-	delete(e.listeners, relayURL)
-	bannedRelayURLs := append([]string(nil), e.bannedRelayURLs...)
-	e.mu.Unlock()
-
-	log.Warn().
-		Str("relay_url", relayURL).
-		Strs("banned_relays", bannedRelayURLs).
-		Msg("relay banned by mitm detection")
-}
-
-func (e *Exposure) newListener(relayURL string) (*Listener, error) {
-	cfg := ListenerConfig{
-		Name:         e.name,
-		ReverseToken: e.reverseToken,
-		UDPEnabled:   e.udpEnabled,
-		BanMITM:      e.banMITM,
-		Metadata:     e.metadata.Copy(),
-		RootCAPEM:    append([]byte(nil), e.rootCAPEM...),
-		ownerAddress: e.ownerAddress,
-	}
-	return NewListener(context.Background(), relayURL, cfg)
-}
-
-func (e *Exposure) installListener(relayURL string, listener *Listener) {
+func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 	if listener == nil {
 		return
 	}
 
-	shouldClose := false
-	e.mu.Lock()
-	select {
-	case <-e.done:
-		shouldClose = true
-	default:
-		if _, exists := e.listeners[relayURL]; exists {
-			shouldClose = true
-		} else {
-			e.listeners[relayURL] = listener
-		}
-	}
-	e.mu.Unlock()
-
-	if shouldClose {
-		_ = listener.Close()
-		return
-	}
-
-	log.Info().Str("relay_url", relayURL).Msg("relay added to exposure")
-	go e.runListenerAcceptLoop(listener)
+	relayURL := listener.api.baseURL.String()
 	if e.udpEnabled {
 		go func() {
-			relayURL := listener.api.baseURL.String()
 			for {
 				frame, err := listener.AcceptDatagram()
 				if err != nil {
@@ -569,25 +426,12 @@ func (e *Exposure) installListener(relayURL string, listener *Listener) {
 			}
 		}()
 	}
-}
-
-func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
-	if listener == nil {
-		return
-	}
-
-	relayURL := listener.api.baseURL.String()
 	defer func() {
-		if listener.StartupStatus() == listenerStatusBanned {
-			e.banRelayURL(relayURL)
-			return
+		e.listenerMu.Lock()
+		if current, ok := e.relayListeners[relayURL]; ok && current == listener {
+			delete(e.relayListeners, relayURL)
 		}
-
-		e.mu.Lock()
-		if current, ok := e.listeners[relayURL]; ok && current == listener {
-			delete(e.listeners, relayURL)
-		}
-		e.mu.Unlock()
+		e.listenerMu.Unlock()
 	}()
 
 	for {
@@ -596,6 +440,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 			if listener.closed() || errors.Is(err, net.ErrClosed) {
 				return
 			}
+			e.relaySet.MarkRelayFailure(relayURL, time.Now().UTC())
 			log.Warn().Err(err).Str("relay_url", relayURL).Msg("exposure listener accept failed")
 			return
 		}
@@ -659,9 +504,9 @@ func (e *Exposure) SendDatagram(frame types.DatagramFrame) error {
 		return net.ErrClosed
 	}
 
-	e.mu.RLock()
-	listener := e.listeners[frame.RelayURL]
-	e.mu.RUnlock()
+	e.listenerMu.RLock()
+	listener := e.relayListeners[frame.RelayURL]
+	e.listenerMu.RUnlock()
 	if listener == nil {
 		return net.ErrClosed
 	}
@@ -677,9 +522,12 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 	defer ticker.Stop()
 
 	for {
-		e.mu.RLock()
-		_, listeners := e.activeSnapshotLocked()
-		e.mu.RUnlock()
+		e.listenerMu.RLock()
+		listeners := make([]*Listener, 0, len(e.relayListeners))
+		for _, listener := range e.relayListeners {
+			listeners = append(listeners, listener)
+		}
+		e.listenerMu.RUnlock()
 
 		addrs := make([]string, 0, len(listeners))
 		seen := make(map[string]struct{})
@@ -717,215 +565,49 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 	}
 }
 
-func (e *Exposure) monitorStartupCounts() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	var (
-		lastStatuses    map[string]listenerStatus
-		lastBannedCount = -1
-	)
-
-	for {
-		e.mu.RLock()
-		_, listeners := e.activeSnapshotLocked()
-		bannedCount := len(e.bannedRelayURLs)
-		e.mu.RUnlock()
-
-		currentStatuses := make(map[string]listenerStatus, len(listeners))
-		readyCount := 0
-		activated := make([]string, 0)
-		deactivated := make([]string, 0)
-
-		for _, listener := range listeners {
-			if listener == nil {
-				continue
-			}
-			relayURL := listener.api.baseURL.String()
-
-			status := listener.StartupStatus()
-			currentStatuses[relayURL] = status
-			if status == listenerStatusReady {
-				readyCount++
-			}
-
-			if lastStatuses != nil {
-				if prev, ok := lastStatuses[relayURL]; ok && prev != status {
-					if status == listenerStatusReady {
-						activated = append(activated, relayURL)
-					} else {
-						deactivated = append(deactivated, relayURL)
-					}
-				}
-			}
-		}
-
-		changed := lastStatuses == nil || bannedCount != lastBannedCount || len(currentStatuses) != len(lastStatuses)
-		if !changed {
-			for relayURL, status := range currentStatuses {
-				if lastStatuses[relayURL] != status {
-					changed = true
-					break
-				}
-			}
-		}
-		if changed {
-			inactiveCount := len(currentStatuses) - readyCount
-			for relayURL, status := range lastStatuses {
-				if _, ok := currentStatuses[relayURL]; ok || status != listenerStatusReady {
-					continue
-				}
-				deactivated = append(deactivated, relayURL)
-			}
-
-			event := log.Info().
-				Int("banned", bannedCount).
-				Int("inactive", inactiveCount).
-				Int("ready", readyCount)
-			if len(activated) > 0 {
-				event = event.Strs("activated", activated)
-			}
-			if len(deactivated) > 0 {
-				event = event.Strs("deactivated", deactivated)
-			}
-			event.Msg("relay status")
-			lastStatuses = currentStatuses
-			lastBannedCount = bannedCount
-		}
-
-		select {
-		case <-e.done:
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 const defaultDiscoveryInterval = 30 * time.Second
 
-func (e *Exposure) runDiscoveryLoop(ctx context.Context) {
-	ticker := time.NewTicker(defaultDiscoveryInterval)
-	defer ticker.Stop()
-	discoveryFailed := false
-
+func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
 	for {
-		e.mu.RLock()
-		relayURLs := append([]string(nil), e.knownRelayURLs...)
-		e.mu.RUnlock()
-		if len(relayURLs) == 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				continue
-			}
-		}
+		relayURLs := append([]string(nil), e.relaySet.ActiveRelayURLs()...)
+		if len(relayURLs) > 0 {
+			var discoveredRelayURLs []string
 
-		discoveredRelayURLs := append([]string(nil), relayURLs...)
-		successCount := 0
-		var discoveryErr error
-		var warnErr error
-
-		for _, relayURL := range relayURLs {
-			resp, err := discovery.Discover(ctx, relayURL, types.DiscoverRequest{}, e.rootCAPEM, nil)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				discoveryErr = errors.Join(discoveryErr, fmt.Errorf("discover %q: %w", relayURL, err))
-				continue
-			}
-
-			selfDescriptor, peerDescriptors, validateErr := discovery.ValidateResponse(resp, time.Now().UTC())
-			if selfDescriptor.RelayID == "" || strings.TrimSpace(selfDescriptor.APIHTTPSAddr) == "" {
-				discoveryErr = errors.Join(discoveryErr, fmt.Errorf("discover %q: missing self descriptor", relayURL))
-				continue
-			}
-			if err := e.pinDiscoverySelfDescriptor(relayURL, selfDescriptor); err != nil {
-				discoveryErr = errors.Join(discoveryErr, fmt.Errorf("discover %q: %w", relayURL, err))
-				continue
-			}
-			if validateErr != nil {
-				warnErr = errors.Join(warnErr, fmt.Errorf("discover %q: %w", relayURL, validateErr))
-			}
-
-			descriptorRelayURLs := make([]string, 0, 1+len(peerDescriptors))
-			descriptorRelayURLs = append(descriptorRelayURLs, selfDescriptor.APIHTTPSAddr)
-			for _, descriptor := range peerDescriptors {
-				if err := e.pinDiscoveredDescriptor(descriptor); err != nil {
-					warnErr = errors.Join(warnErr, fmt.Errorf("discover %q peer %q: %w", relayURL, descriptor.RelayID, err))
+			for _, relayURL := range relayURLs {
+				resp, err := discovery.DiscoverRelayDiscovery(ctx, relayURL, e.rootCAPEM, nil)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					continue
 				}
-				if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
-					descriptorRelayURLs = append(descriptorRelayURLs, apiURL)
+
+				now := time.Now().UTC()
+				var descriptorRelayURLs []string
+				descriptorRelayURLs, _, _, _, err = e.relaySet.ApplyRelayDiscoveryResponse(relayURL, relayURL, resp, now)
+				if err != nil {
+					continue
+				}
+
+				if len(discoveredRelayURLs) == 0 {
+					discoveredRelayURLs = append([]string(nil), relayURLs...)
+				}
+				discoveredRelayURLs, err = utils.MergeRelayURLs(discoveredRelayURLs, nil, descriptorRelayURLs)
+				if err != nil {
+					continue
 				}
 			}
 
-			discoveredRelayURLs, err = utils.MergeRelayURLs(discoveredRelayURLs, nil, descriptorRelayURLs)
-			if err != nil {
-				discoveryErr = errors.Join(discoveryErr, fmt.Errorf("merge %q discovery relays: %w", relayURL, err))
-				continue
+			if len(discoveredRelayURLs) > 0 {
+				if e.relaySet == nil {
+					e.relaySet = discovery.NewRelaySet()
+				}
+				e.relaySet.ReplaceKnownRelayURLs(discoveredRelayURLs)
+				_ = e.reconcileRelayListeners(false)
 			}
-			successCount++
 		}
-
-		switch {
-		case successCount > 0:
-			recovered := discoveryFailed
-			discoveryFailed = false
-			added, err := e.setRelayURLs(discoveredRelayURLs, false)
-			if err != nil {
-				log.Warn().
-					Err(err).
-					Int("relay_count", len(relayURLs)).
-					Msg("relay discovery update failed")
-			} else if recovered || len(added) > 0 || warnErr != nil || discoveryErr != nil {
-				e.mu.RLock()
-				totalKnownRelayCount := len(e.knownRelayURLs)
-				e.mu.RUnlock()
-				logErr := errors.Join(warnErr, discoveryErr)
-				event := log.Info().
-					Int("relay_count", len(relayURLs)).
-					Int("discovered_count", successCount).
-					Int("total_known_relay_count", totalKnownRelayCount)
-				if recovered {
-					event = event.Bool("recovered", true)
-				}
-				if len(added) > 0 {
-					event = event.Int("added_count", len(added)).
-						Strs("added_relays", added)
-				}
-				if logErr != nil {
-					event = log.Warn().
-						Err(logErr).
-						Int("relay_count", len(relayURLs)).
-						Int("discovered_count", successCount).
-						Int("total_known_relay_count", totalKnownRelayCount)
-					if recovered {
-						event = event.Bool("recovered", true)
-					}
-					if len(added) > 0 {
-						event = event.Int("added_count", len(added)).
-							Strs("added_relays", added)
-					}
-				}
-				event.Msg("relay discovery updated")
-			}
-		case ctx.Err() != nil:
+		if !utils.SleepOrDone(ctx, defaultDiscoveryInterval) {
 			return
-		default:
-			if !discoveryFailed {
-				log.Debug().
-					Err(discoveryErr).
-					Int("relay_count", len(relayURLs)).
-					Msg("relay discovery failed")
-			}
-			discoveryFailed = true
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
 		}
 	}
 }

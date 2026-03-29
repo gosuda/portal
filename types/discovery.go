@@ -42,21 +42,14 @@ type RelayDescriptor struct {
 	DescriptorSignature string `json:"descriptor_signature"`
 }
 
-type PeerLifecycleState string
-
-const (
-	PeerStateKnown      PeerLifecycleState = "known"
-	PeerStateVerified   PeerLifecycleState = "verified"
-	PeerStateAdvertised PeerLifecycleState = "advertised"
-	PeerStateExpired    PeerLifecycleState = "expired"
-)
-
-type PeerState struct {
-	Descriptor          RelayDescriptor    `json:"descriptor"`
-	State               PeerLifecycleState `json:"state"`
-	FirstSeenAt         time.Time          `json:"first_seen_at"`
-	LastSeenAt          time.Time          `json:"last_seen_at"`
-	ConsecutiveFailures int                `json:"consecutive_failures,omitempty"`
+type RelayState struct {
+	Descriptor          RelayDescriptor `json:"descriptor"`
+	Bootstrap           bool            `json:"bootstrap,omitempty"`
+	Advertised          bool            `json:"advertised,omitempty"`
+	Expired             bool            `json:"expired,omitempty"`
+	FirstSeenAt         time.Time       `json:"first_seen_at"`
+	LastSeenAt          time.Time       `json:"last_seen_at"`
+	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
 }
 
 type DesiredPeer struct {

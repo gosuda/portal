@@ -83,7 +83,7 @@ type Server struct {
 	cfg               ServerConfig
 	rootHost          string
 	trustedProxyCIDRs []*net.IPNet
-	peerRegistry      *peerRegistry
+	relaySet          *discovery.RelaySet
 	shutdownOnce      sync.Once
 }
 
@@ -112,6 +112,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}
 	cfg.Bootstraps = bootstraps
+	generatedWireGuardPrivateKey := ""
+	if cfg.DiscoveryEnabled && strings.TrimSpace(cfg.WireGuardPrivateKey) == "" {
+		generatedWireGuardPrivateKey, err = utils.GenerateWireGuardPrivateKey()
+		if err != nil {
+			return nil, err
+		}
+		cfg.WireGuardPrivateKey = generatedWireGuardPrivateKey
+	}
 	wgConfig, err := wireguard.NormalizeConfig(rootHost, wireguard.Config{
 		PrivateKey:   cfg.WireGuardPrivateKey,
 		PublicKey:    cfg.WireGuardPublicKey,
@@ -123,8 +131,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.DiscoveryEnabled && strings.TrimSpace(wgConfig.PrivateKey) == "" {
-		return nil, errors.New("wireguard private key is required when discovery is enabled")
+	if generatedWireGuardPrivateKey != "" {
+		log.Warn().
+			Str("wireguard_public_key", wgConfig.PublicKey).
+			Str("wireguard_private_key", generatedWireGuardPrivateKey).
+			Msg("generated wireguard private key; set WIREGUARD_PRIVATE_KEY to preserve relay identity")
 	}
 
 	portMin, portMax := 0, 0
@@ -164,16 +175,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		trustedProxyCIDRs: trustedProxyCIDRs,
 	}
 
-	// Tear down all lease resources when leases expire via TTL janitor.
-	registry.onExpired = func(record *leaseRecord) {
-		if record != nil {
-			record.Close()
-		}
-	}
-
 	if cfg.DiscoveryEnabled {
-		s.peerRegistry = newPeerRegistry()
-		if _, err := s.peerRegistry.registerBootstrapURLs(cfg.Bootstraps); err != nil {
+		s.relaySet = discovery.NewRelaySet()
+		_, err = s.relaySet.RegisterBootstrapRelayURLs(cfg.Bootstraps, time.Now().UTC())
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -226,9 +231,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.group = group
 
 	if s.wgConfig.PrivateKey != "" {
-		var snapshot map[string]types.PeerState
-		if s.peerRegistry != nil {
-			snapshot = s.peerRegistry.snapshot()
+		var snapshot map[string]types.RelayState
+		if s.relaySet != nil {
+			snapshot = s.relaySet.Snapshot()
 		}
 		peerMux := http.NewServeMux()
 		peerMux.HandleFunc(types.PathRoot, s.handleRoot)
@@ -238,7 +243,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 				http.NotFound(w, r)
 				return
 			}
-			discovery.ServeHTTP(w, r, s.discover)
+			s.handleRelayDiscovery(w, r)
 		})
 		overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
 		if err != nil {
@@ -268,14 +273,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
 	if s.DiscoveryEnabled() {
-		group.Go(func() error { return s.runDiscoveryLoop(groupCtx) })
+		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
-	group.Go(func() error {
-		<-groupCtx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return s.Shutdown(shutdownCtx)
-	})
 	s.acmeManager.Start(serverCtx)
 
 	if s.cfg.UDPPortCount > 0 {
@@ -283,6 +282,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			log.Warn().Err(err).Msg("quic tunnel listener disabled")
 		}
 	}
+	group.Go(func() error {
+		<-groupCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.Shutdown(shutdownCtx)
+	})
 
 	return nil
 }
@@ -559,183 +564,125 @@ func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
 	}
 }
 
-func (s *Server) applyDiscoveryResponse(targetRelayID, targetURL string, resp types.DiscoverResponse, requireSelfOverlay bool) (updated bool, addedHintCount int, warnErr error, err error) {
-	if strings.TrimSpace(targetRelayID) == "" {
-		return false, 0, nil, errors.New("target relay id is required")
-	}
-
-	now := time.Now().UTC()
-	selfDescriptor, peerDescriptors, warnErr := discovery.ValidateResponse(resp, now)
-	if selfDescriptor.RelayID == "" {
-		return false, 0, nil, errors.Join(warnErr, errors.New("discover response is missing self descriptor"))
-	}
-	if selfDescriptor.RelayID != targetRelayID {
-		return false, 0, nil, errors.Join(warnErr, errors.New("discover response relay_id mismatch"))
-	}
-	if requireSelfOverlay {
-		if err := requireOverlayPeerDescriptor(selfDescriptor); err != nil {
-			return false, 0, nil, errors.Join(warnErr, err)
-		}
-	}
-
-	filteredPeerDescriptors := make([]types.RelayDescriptor, 0, len(peerDescriptors))
-
-	for _, peerDescriptor := range peerDescriptors {
-		if err := requireOverlayPeerDescriptor(peerDescriptor); err != nil {
-			warnErr = errors.Join(warnErr, fmt.Errorf("record hint %q: %w", peerDescriptor.RelayID, err))
-			continue
-		}
-		filteredPeerDescriptors = append(filteredPeerDescriptors, peerDescriptor)
-	}
-
-	result, err := s.peerRegistry.registerDiscoveredPeers(targetRelayID, targetURL, selfDescriptor, filteredPeerDescriptors)
-	if err != nil {
-		return false, 0, nil, errors.Join(warnErr, err)
-	}
-	updated = result.updated
-	addedHintCount = result.addedHintCount
-
-	if result.peerSetChanged && s.overlay != nil {
-		if err := s.overlay.Sync(s.cfg.PortalURL, s.peerRegistry.snapshot()); err != nil {
-			warnErr = errors.Join(warnErr, err)
-		}
-	}
-
-	return updated, addedHintCount, warnErr, nil
-}
-
-func (s *Server) runBootstrapDiscoveryPass(ctx context.Context) {
-	for _, bootstrap := range s.peerRegistry.bootstrapPeers() {
-		resp, err := discovery.Discover(ctx, bootstrap.APIHTTPSAddr, types.DiscoverRequest{}, nil, nil)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			s.peerRegistry.fail(bootstrap.RelayID)
-			log.Warn().
-				Err(err).
-				Str("peer", bootstrap.APIHTTPSAddr).
-				Msg("bootstrap discovery failed")
-			continue
-		}
-
-		updated, addedHintCount, warnErr, err := s.applyDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, false)
-		if err != nil {
-			s.peerRegistry.fail(bootstrap.RelayID)
-			log.Warn().
-				Err(err).
-				Str("peer", bootstrap.APIHTTPSAddr).
-				Msg("bootstrap discovery failed")
-			continue
-		}
-
-		if updated || warnErr != nil {
-			event := log.Info()
-			if warnErr != nil {
-				event = log.Warn().Err(warnErr)
-			}
-			event = event.
-				Str("peer", bootstrap.APIHTTPSAddr).
-				Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
-				Int("peer_count", len(s.peerRegistry.syncablePeers())).
-				Int("advertised_count", len(s.peerRegistry.advertisedPeers()))
-			if addedHintCount > 0 {
-				event = event.Int("added_hint_count", addedHintCount)
-			}
-			if warnErr != nil {
-				event.Msg("bootstrap discovery completed with warnings")
-			} else {
-				event.Msg("bootstrap discovery updated")
-			}
-		}
-	}
-}
-
-func (s *Server) runOverlayPeerDiscoveryPass(ctx context.Context) {
-	if s.overlay == nil {
-		return
-	}
-	overlayClient := s.overlay.Client()
-	if overlayClient == nil {
-		return
-	}
-
-	for _, peer := range s.peerRegistry.syncablePeers() {
-		var failureErr error
-
-		if err := requireOverlayPeerDescriptor(peer); err != nil {
-			failureErr = err
-		} else {
-			discoverURL := "http://" + net.JoinHostPort(peer.OverlayIPv4, fmt.Sprintf("%d", wireguard.DefaultPeerAPIHTTPPort))
-			resp, err := discovery.Discover(ctx, discoverURL, types.DiscoverRequest{}, nil, overlayClient)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				failureErr = err
-			} else {
-				updated, addedHintCount, warnErr, err := s.applyDiscoveryResponse(peer.RelayID, peer.APIHTTPSAddr, resp, true)
-				if err != nil {
-					failureErr = err
-				} else {
-					if warnErr != nil {
-						log.Warn().
-							Err(warnErr).
-							Str("peer", peer.APIHTTPSAddr).
-							Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
-							Int("peer_count", len(s.peerRegistry.syncablePeers())).
-							Int("advertised_count", len(s.peerRegistry.advertisedPeers())).
-							Int("added_hint_count", addedHintCount).
-							Msg("overlay peer discovery completed with warnings")
-						continue
-					}
-
-					if updated {
-						event := log.Info().
-							Str("peer", peer.APIHTTPSAddr).
-							Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
-							Int("peer_count", len(s.peerRegistry.syncablePeers())).
-							Int("advertised_count", len(s.peerRegistry.advertisedPeers()))
-						if addedHintCount > 0 {
-							event = event.Int("added_hint_count", addedHintCount)
-						}
-						event.Msg("overlay peer discovery updated")
-					}
-					continue
-				}
-			}
-		}
-
-		result := s.peerRegistry.recordFailure(peer.RelayID, failureErr, defaultWGRecoveryFailures)
-		if result.expired && s.overlay != nil {
-			failureErr = errors.Join(failureErr, s.overlay.Sync(s.cfg.PortalURL, s.peerRegistry.snapshot()))
-		}
-
-		event := log.Warn().
-			Err(failureErr).
-			Str("peer", peer.APIHTTPSAddr)
-		if result.expired {
-			event = event.
-				Bool("expired", true).
-				Str("reason", result.expireReason)
-			if result.consecutiveFailures > 0 {
-				event = event.Int("consecutive_failures", result.consecutiveFailures)
-			}
-		}
-		event.Msg("overlay peer discovery failed")
-	}
-}
-
-func (s *Server) runDiscoveryLoop(ctx context.Context) error {
+func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(defaultDiscoveryInterval)
 	defer ticker.Stop()
 
 	for {
-		s.runBootstrapDiscoveryPass(ctx)
+		bootstraps := s.relaySet.BootstrapDescriptors()
+
+		for _, bootstrap := range bootstraps {
+			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, nil)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				s.relaySet.MarkRelayFailure(bootstrap.APIHTTPSAddr, time.Now().UTC())
+				log.Warn().
+					Err(err).
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery failed")
+				continue
+			}
+
+			now := time.Now().UTC()
+			var relaySetChanged bool
+			var warnErr error
+			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, now)
+			if relaySetChanged && s.overlay != nil {
+				if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
+					if warnErr == nil {
+						warnErr = syncErr
+					}
+				}
+			}
+			if err != nil {
+				s.relaySet.MarkRelayFailure(bootstrap.APIHTTPSAddr, time.Now().UTC())
+				log.Warn().
+					Err(err).
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery failed")
+				continue
+			}
+
+			if warnErr != nil {
+				log.Warn().
+					Err(warnErr).
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery completed with warnings")
+			}
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
-		s.runOverlayPeerDiscoveryPass(ctx)
+
+		if s.overlay != nil {
+			overlayClient := s.overlay.Client()
+			syncableRelays := s.relaySet.SyncableDescriptors()
+
+			for _, relay := range syncableRelays {
+				var failureErr error
+
+				if err := discovery.RequireOverlayRelayDescriptor(relay); err != nil {
+					failureErr = err
+				} else {
+					discoverURL := "http://" + net.JoinHostPort(relay.OverlayIPv4, fmt.Sprintf("%d", wireguard.DefaultPeerAPIHTTPPort))
+					resp, err := discovery.DiscoverRelayDiscovery(ctx, discoverURL, nil, overlayClient)
+					if err != nil {
+						if ctx.Err() != nil {
+							return nil
+						}
+						failureErr = err
+					} else {
+						now := time.Now().UTC()
+						var relaySetChanged bool
+						var warnErr error
+						var snapshot map[string]types.RelayState
+						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.RelayID, relay.APIHTTPSAddr, resp, now)
+						if relaySetChanged {
+							snapshot = s.relaySet.Snapshot()
+							if syncErr := s.overlay.Sync(s.cfg.PortalURL, snapshot); syncErr != nil {
+								if warnErr == nil {
+									warnErr = syncErr
+								}
+							}
+						}
+						if err != nil {
+							failureErr = err
+						} else {
+							if warnErr != nil {
+								log.Warn().
+									Err(warnErr).
+									Str("relay", relay.APIHTTPSAddr).
+									Msg("overlay relay discovery completed with warnings")
+								continue
+							}
+
+							continue
+						}
+					}
+				}
+				expired, expireReason, consecutiveFailures := s.relaySet.RecordDiscoveryFailure(relay.RelayID, relay.APIHTTPSAddr, failureErr, defaultWGRecoveryFailures, time.Now().UTC())
+				if expired {
+					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
+						failureErr = syncErr
+					}
+				}
+
+				event := log.Warn().
+					Err(failureErr).
+					Str("relay", relay.APIHTTPSAddr)
+				if expired {
+					event = event.
+						Bool("expired", true).
+						Str("reason", expireReason)
+					if consecutiveFailures > 0 {
+						event = event.Int("consecutive_failures", consecutiveFailures)
+					}
+				}
+				event.Msg("overlay relay discovery failed")
+			}
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
