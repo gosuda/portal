@@ -18,12 +18,6 @@ import (
 
 const defaultRequestTimeout = 15 * time.Second
 
-type RelayIdentity struct {
-	RelayID         string
-	APIHTTPSAddr    string
-	SignerPublicKey string
-}
-
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	desc.RelayID = strings.TrimSpace(desc.RelayID)
 	desc.SignerPublicKey = strings.ToLower(strings.TrimSpace(desc.SignerPublicKey))
@@ -188,57 +182,44 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 	return self, relays, validateErr
 }
 
-func RelayIdentityFromDescriptor(desc types.RelayDescriptor) (RelayIdentity, error) {
+// ValidateDescriptorTarget checks if a descriptor matches expected target identity.
+func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetURL string) error {
 	normalized, err := NormalizeDescriptor(desc)
-	if err != nil {
-		return RelayIdentity{}, err
-	}
-
-	identity := RelayIdentity{
-		RelayID:         strings.TrimSpace(normalized.RelayID),
-		APIHTTPSAddr:    strings.TrimSpace(normalized.APIHTTPSAddr),
-		SignerPublicKey: strings.ToLower(strings.TrimSpace(normalized.SignerPublicKey)),
-	}
-	switch {
-	case identity.RelayID == "":
-		return RelayIdentity{}, errors.New("descriptor relay_id is required")
-	case identity.APIHTTPSAddr == "":
-		return RelayIdentity{}, errors.New("descriptor api_https_addr is required")
-	case identity.SignerPublicKey == "":
-		return RelayIdentity{}, errors.New("descriptor signer_public_key is required")
-	}
-	return identity, nil
-}
-
-func MatchTargetRelayIdentity(identity RelayIdentity, targetRelayID, targetURL string) error {
-	targetRelayID = strings.TrimSpace(targetRelayID)
-	if targetRelayID != "" && identity.RelayID != targetRelayID {
-		return errors.New("descriptor relay_id does not match target relay")
-	}
-
-	targetURL = strings.TrimSpace(targetURL)
-	if targetURL == "" {
-		return nil
-	}
-
-	normalizedTargetURL, err := utils.NormalizeRelayURL(targetURL)
 	if err != nil {
 		return err
 	}
-	if identity.APIHTTPSAddr != normalizedTargetURL {
-		return errors.New("descriptor api_https_addr does not match target url")
+
+	relayID := strings.TrimSpace(normalized.RelayID)
+	if targetRelayID != "" && relayID != targetRelayID {
+		return errors.New("descriptor relay_id does not match target relay")
+	}
+
+	if targetURL != "" {
+		normalizedTargetURL, err := utils.NormalizeRelayURL(targetURL)
+		if err != nil {
+			return err
+		}
+		if normalized.APIHTTPSAddr != normalizedTargetURL {
+			return errors.New("descriptor api_https_addr does not match target url")
+		}
 	}
 	return nil
 }
 
-func MatchPinnedRelayIdentity(identity, pinned RelayIdentity) error {
-	if relayID := strings.TrimSpace(pinned.RelayID); relayID != "" && identity.RelayID != relayID {
+// ValidateDescriptorMatch checks if a descriptor matches a pinned descriptor.
+func ValidateDescriptorMatch(desc, pinned types.RelayDescriptor) error {
+	normalized, err := NormalizeDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	if relayID := strings.TrimSpace(pinned.RelayID); relayID != "" && normalized.RelayID != relayID {
 		return errors.New("descriptor relay_id does not match pinned relay id")
 	}
-	if apiURL := strings.TrimSpace(pinned.APIHTTPSAddr); apiURL != "" && identity.APIHTTPSAddr != apiURL {
+	if apiURL := strings.TrimSpace(pinned.APIHTTPSAddr); apiURL != "" && normalized.APIHTTPSAddr != apiURL {
 		return errors.New("descriptor api_https_addr does not match pinned relay url")
 	}
-	if signerPublicKey := strings.ToLower(strings.TrimSpace(pinned.SignerPublicKey)); signerPublicKey != "" && identity.SignerPublicKey != signerPublicKey {
+	if signerKey := strings.ToLower(strings.TrimSpace(pinned.SignerPublicKey)); signerKey != "" && normalized.SignerPublicKey != signerKey {
 		return errors.New("descriptor signer_public_key does not match pinned signer")
 	}
 	return nil

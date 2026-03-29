@@ -390,7 +390,7 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	if strings.TrimSpace(msg.LeaseID) == "" || strings.TrimSpace(msg.ReverseToken) == "" {
+	if msg.LeaseID == "" || msg.ReverseToken == "" {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
@@ -550,7 +550,7 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
+	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
@@ -559,7 +559,7 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 }
 
 func (s *Server) unregisterLease(req types.UnregisterRequest) error {
-	record, err := s.registry.Unregister(req.LeaseID, req.ReverseToken)
+	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID), req.ReverseToken)
 	if err != nil {
 		return err
 	}

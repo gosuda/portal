@@ -2,7 +2,6 @@ package policy
 
 import (
 	"maps"
-	"strings"
 	"sync"
 )
 
@@ -18,22 +17,17 @@ func NewBPSManager() *BPSManager {
 }
 
 func (m *BPSManager) LeaseBPS(leaseID string) int64 {
-	if m == nil {
+	if m == nil || leaseID == "" {
 		return 0
 	}
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.leaseBPS[strings.TrimSpace(leaseID)]
+	return m.leaseBPS[leaseID]
 }
 
 func (m *BPSManager) SetLeaseBPS(leaseID string, bps int64) {
-	if m == nil {
-		return
-	}
-
-	leaseID = strings.TrimSpace(leaseID)
-	if leaseID == "" {
+	if m == nil || leaseID == "" {
 		return
 	}
 
@@ -47,13 +41,13 @@ func (m *BPSManager) SetLeaseBPS(leaseID string, bps int64) {
 }
 
 func (m *BPSManager) DeleteLeaseBPS(leaseID string) {
-	if m == nil {
+	if m == nil || leaseID == "" {
 		return
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.leaseBPS, strings.TrimSpace(leaseID))
+	delete(m.leaseBPS, leaseID)
 }
 
 func (m *BPSManager) LeaseBPSLimits() map[string]int64 {
@@ -76,7 +70,6 @@ func (m *BPSManager) SetLeaseBPSLimits(limits map[string]int64) {
 
 	next := make(map[string]int64, len(limits))
 	for leaseID, bps := range limits {
-		leaseID = strings.TrimSpace(leaseID)
 		if leaseID == "" || bps <= 0 {
 			continue
 		}

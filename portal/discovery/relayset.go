@@ -45,7 +45,7 @@ type RelaySummary struct {
 }
 
 // RelaySet owns the shared relay discovery view: known relay URLs, pinned relay
-// identities, the latest validated descriptor seen for each relay, and common
+// descriptors, the latest validated descriptor seen for each relay, and common
 // process-local relay state such as ban/reachability/failure tracking.
 //
 // Runtime-specific policy such as bootstrap classification, relay lifecycle, or
@@ -53,7 +53,7 @@ type RelaySummary struct {
 type RelaySet struct {
 	mu                  sync.RWMutex
 	knownRelayURLs      []string
-	pinnedByRelayID     map[string]RelayIdentity
+	pinnedByRelayID     map[string]types.RelayDescriptor
 	relayIDsByURL       map[string]string
 	relays              map[string]RelayView
 	localByURL          map[string]RelayLocalState
@@ -64,7 +64,7 @@ type RelaySet struct {
 
 func NewRelaySet() *RelaySet {
 	return &RelaySet{
-		pinnedByRelayID: make(map[string]RelayIdentity),
+		pinnedByRelayID: make(map[string]types.RelayDescriptor),
 		relayIDsByURL:   make(map[string]string),
 		relays:          make(map[string]RelayView),
 		localByURL:      make(map[string]RelayLocalState),
@@ -448,17 +448,13 @@ func (s *RelaySet) pinTarget(targetRelayID, targetURL string, desc types.RelayDe
 	if s == nil {
 		return nil
 	}
-	identity, err := RelayIdentityFromDescriptor(desc)
-	if err != nil {
+	if err := ValidateDescriptorTarget(desc, targetRelayID, targetURL); err != nil {
 		return err
 	}
-	if err := MatchTargetRelayIdentity(identity, targetRelayID, targetURL); err != nil {
+	if err := s.matchPinned(desc); err != nil {
 		return err
 	}
-	if err := s.matchPinned(identity); err != nil {
-		return err
-	}
-	s.pin(identity)
+	s.pin(desc)
 	return nil
 }
 
@@ -466,20 +462,21 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 	if s == nil {
 		return "", false, false, nil
 	}
-	identity, err := RelayIdentityFromDescriptor(desc)
+	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
 		return "", false, false, err
 	}
-	if err := s.matchPinned(identity); err != nil {
+	if err := s.matchPinned(normalized); err != nil {
 		return "", false, false, err
 	}
-	s.pin(identity)
+	s.pin(normalized)
 
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 
-	view, ok := s.relays[identity.RelayID]
+	relayID := normalized.RelayID
+	view, ok := s.relays[relayID]
 	added := !ok
 	if !ok {
 		view.FirstSeenAt = now
@@ -487,10 +484,10 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 	previousDescriptor := view.Descriptor
 	view.Descriptor = desc
 	view.LastSeenAt = now
-	s.relays[identity.RelayID] = view
+	s.relays[relayID] = view
 
 	changed := added || !reflect.DeepEqual(previousDescriptor, desc)
-	return identity.RelayID, added, changed, nil
+	return relayID, added, changed, nil
 }
 
 func relayDiscoveryURLs(selfDescriptor types.RelayDescriptor, relayDescriptors []types.RelayDescriptor) []string {
@@ -719,29 +716,28 @@ func (s *RelaySet) RecordDiscoveryFailure(relayID, relayURL string, err error, r
 	return false, "", localState.ConsecutiveFailures
 }
 
-func (s *RelaySet) matchPinned(identity RelayIdentity) error {
+func (s *RelaySet) matchPinned(desc types.RelayDescriptor) error {
 	if s == nil {
 		return nil
 	}
-	if pinned, ok := s.pinnedByRelayID[identity.RelayID]; ok {
-		if err := MatchPinnedRelayIdentity(identity, pinned); err != nil {
+	if pinned, ok := s.pinnedByRelayID[desc.RelayID]; ok {
+		if err := ValidateDescriptorMatch(desc, pinned); err != nil {
 			return err
 		}
 	}
-	if pinnedRelayID, ok := s.relayIDsByURL[identity.APIHTTPSAddr]; ok && pinnedRelayID != identity.RelayID {
-		return MatchPinnedRelayIdentity(identity, RelayIdentity{
-			RelayID:         pinnedRelayID,
-			APIHTTPSAddr:    identity.APIHTTPSAddr,
-			SignerPublicKey: "",
+	if pinnedRelayID, ok := s.relayIDsByURL[desc.APIHTTPSAddr]; ok && pinnedRelayID != desc.RelayID {
+		return ValidateDescriptorMatch(desc, types.RelayDescriptor{
+			RelayID:      pinnedRelayID,
+			APIHTTPSAddr: desc.APIHTTPSAddr,
 		})
 	}
 	return nil
 }
 
-func (s *RelaySet) pin(identity RelayIdentity) {
+func (s *RelaySet) pin(desc types.RelayDescriptor) {
 	if s == nil {
 		return
 	}
-	s.pinnedByRelayID[identity.RelayID] = identity
-	s.relayIDsByURL[identity.APIHTTPSAddr] = identity.RelayID
+	s.pinnedByRelayID[desc.RelayID] = desc
+	s.relayIDsByURL[desc.APIHTTPSAddr] = desc.RelayID
 }

@@ -2,7 +2,6 @@ package policy
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 )
 
@@ -111,7 +110,6 @@ func (a *Approver) SetDecisions(approvedLeases, deniedLeases []string) {
 
 	approved := make(map[string]struct{}, len(approvedLeases))
 	for _, leaseID := range approvedLeases {
-		leaseID = strings.TrimSpace(leaseID)
 		if leaseID == "" {
 			continue
 		}
@@ -120,7 +118,6 @@ func (a *Approver) SetDecisions(approvedLeases, deniedLeases []string) {
 
 	denied := make(map[string]struct{}, len(deniedLeases))
 	for _, leaseID := range deniedLeases {
-		leaseID = strings.TrimSpace(leaseID)
 		if leaseID == "" {
 			continue
 		}
