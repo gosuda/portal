@@ -231,39 +231,14 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.group = group
 
 	if s.wgConfig.PrivateKey != "" {
-		var snapshot map[string]types.RelayState
-		if s.relaySet != nil {
-			snapshot = s.relaySet.Snapshot()
-		}
-		peerMux := http.NewServeMux()
-		peerMux.HandleFunc(types.PathRoot, s.handleRoot)
-		peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
-		peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
-			if !s.DiscoveryEnabled() {
-				http.NotFound(w, r)
-				return
-			}
-			s.handleRelayDiscovery(w, r)
-		})
-		overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
-		if err != nil {
+		if err := s.startOverlay(); err != nil {
 			acmeManager.Stop()
 			_ = apiServer.Close()
 			_ = apiCloser.Close()
 			_ = sniListener.Close()
 			cancel()
-			return fmt.Errorf("start wireguard overlay: %w", err)
+			return err
 		}
-		if err := overlay.Sync(s.cfg.PortalURL, snapshot); err != nil {
-			acmeManager.Stop()
-			_ = apiServer.Close()
-			_ = apiCloser.Close()
-			_ = sniListener.Close()
-			_ = overlay.Shutdown(context.Background())
-			cancel()
-			return fmt.Errorf("sync wireguard peers: %w", err)
-		}
-		s.overlay = overlay
 	}
 
 	group.Go(s.runAPIServer)
@@ -514,6 +489,32 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (s *Server) startOverlay() error {
+	peerMux := http.NewServeMux()
+	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
+	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
+	peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
+		if !s.DiscoveryEnabled() {
+			http.NotFound(w, r)
+			return
+		}
+		s.handleRelayDiscovery(w, r)
+	})
+
+	overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
+	if err != nil {
+		return fmt.Errorf("start wireguard overlay: %w", err)
+	}
+
+	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+		_ = overlay.Shutdown(context.Background())
+		return fmt.Errorf("sync wireguard peers: %w", err)
+	}
+
+	s.overlay = overlay
+	return nil
 }
 
 func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error {
