@@ -30,7 +30,6 @@ type Lease struct {
 	ClientIP     string
 	ReportedIP   string
 	Hostname     string
-	Bootstraps   []string
 	UDPEnabled   bool
 	Metadata     LeaseMetadata
 	OwnerAddress string

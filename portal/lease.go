@@ -234,7 +234,6 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	}
 
 	snapshot := record.Lease
-	snapshot.Bootstraps = append([]string(nil), snapshot.Bootstraps...)
 	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
 	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)

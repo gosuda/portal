@@ -59,7 +59,6 @@ type RegisterRequest struct {
 	Metadata     LeaseMetadata `json:"metadata"`
 	OwnerAddress string        `json:"owner_address,omitempty"`
 	TTL          int           `json:"ttl,omitempty"`
-	Bootstraps   []string      `json:"bootstraps,omitempty"`
 	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
 	ReportedIP   string        `json:"reported_ip,omitempty"`
 }
@@ -67,10 +66,8 @@ type RegisterRequest struct {
 type RegisterResponse struct {
 	ExpiresAt  time.Time     `json:"expires_at"`
 	LeaseID    string        `json:"lease_id"`
-	ConnectURL string        `json:"connect_url"`
 	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
-	Bootstraps []string      `json:"bootstraps,omitempty"`
 	UDPAddr    string        `json:"udp_addr,omitempty"`
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 }

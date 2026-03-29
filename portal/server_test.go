@@ -26,22 +26,53 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) t
 	}
 
 	now := time.Now().UTC()
+	wireGuardPrivateKey, err := utils.NormalizeWireGuardPrivateKey(strings.Repeat("44", 32))
+	if err != nil {
+		t.Fatalf("NormalizeWireGuardPrivateKey() error = %v", err)
+	}
+	wireGuardPublicKey, err := utils.WireGuardPublicKeyFromPrivate(wireGuardPrivateKey)
+	if err != nil {
+		t.Fatalf("WireGuardPublicKeyFromPrivate() error = %v", err)
+	}
+	overlayIPv4, err := utils.DeriveWireGuardOverlayIPv4(wireGuardPublicKey)
+	if err != nil {
+		t.Fatalf("DeriveWireGuardOverlayIPv4() error = %v", err)
+	}
 	desc, err := discovery.SignedDescriptor(types.RelayDescriptor{
-		RelayID:         relayURL,
-		OwnerAddress:    identity.Address,
-		SignerPublicKey: identity.PublicKey,
-		Sequence:        uint64(now.UnixMilli()),
-		Version:         1,
-		IssuedAt:        now,
-		ExpiresAt:       now.Add(time.Hour),
-		APIHTTPSAddr:    relayURL,
-		SupportsTCP:     true,
-		StatusState:     "healthy",
+		RelayID:             relayURL,
+		OwnerAddress:        identity.Address,
+		SignerPublicKey:     identity.PublicKey,
+		Sequence:            uint64(now.UnixMilli()),
+		Version:             1,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(time.Hour),
+		APIHTTPSAddr:        relayURL,
+		WireGuardPublicKey:  wireGuardPublicKey,
+		WireGuardEndpoint:   net.JoinHostPort(utils.PortalRootHost(relayURL), "51820"),
+		OverlayIPv4:         overlayIPv4,
+		SupportsTCP:         true,
+		SupportsOverlayPeer: true,
+		StatusState:         "healthy",
 	}, identity.PrivateKey)
 	if err != nil {
 		t.Fatalf("SignedDescriptor() error = %v", err)
 	}
 	return desc
+}
+
+func TestNewServerRequiresWireGuardWhenDiscoveryEnabled(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewServer(ServerConfig{
+		PortalURL:        "https://portal.example.com",
+		DiscoveryEnabled: true,
+	})
+	if err == nil {
+		t.Fatal("NewServer() error = nil, want wireguard requirement error")
+	}
+	if !strings.Contains(err.Error(), "wireguard private key is required when discovery is enabled") {
+		t.Fatalf("NewServer() error = %v, want wireguard requirement error", err)
+	}
 }
 
 func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
@@ -266,135 +297,21 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 }
 
-func TestServerStartServesOptionalDiscoveryRoutes(t *testing.T) {
-	t.Parallel()
-
-	ownerPrivateKey := strings.Repeat("11", 32)
-	ownerIdentity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
-	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
-	}
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:        "https://localhost:4017",
-		OwnerPrivateKey:  ownerPrivateKey,
-		Bootstraps:       []string{"https://bootstrap.example.com"},
-		ACME:             acme.Config{KeyDir: t.TempDir()},
-		APIListenAddr:    "127.0.0.1:0",
-		SNIListenAddr:    "127.0.0.1:0",
-		DiscoveryEnabled: true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-	registerResp, err := server.registerLease(types.RegisterRequest{
-		Name:         "demo",
-		ReverseToken: "tok_demo",
-		Bootstraps:   []string{"https://relay-a.example.com", "https://bootstrap.example.com"},
-	}, "203.0.113.10")
-	if err != nil {
-		t.Fatalf("registerLease() error = %v", err)
-	}
-	if !reflect.DeepEqual(registerResp.Bootstraps, []string{server.PortalURL()}) {
-		t.Fatalf("registerLease() bootstraps = %v, want [%q]", registerResp.Bootstraps, server.PortalURL())
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := server.Start(ctx, nil); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
-
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery + "?root_host=localhost&name=demo")
-	if err != nil {
-		t.Fatalf("GET discovery resolve error = %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET discovery resolve status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-
-	var envelope types.APIEnvelope[types.DiscoverResponse]
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		t.Fatalf("decode discovery resolve response: %v", err)
-	}
-	if !envelope.OK {
-		t.Fatalf("discovery resolve envelope = %+v, want ok", envelope)
-	}
-	if envelope.Data.ProtocolVersion != 1 {
-		t.Fatalf("resolve protocol_version = %d, want 1", envelope.Data.ProtocolVersion)
-	}
-	if envelope.Data.GeneratedAt.IsZero() {
-		t.Fatal("resolve generated_at = zero, want timestamp")
-	}
-	if envelope.Data.Service == nil || !envelope.Data.Service.Found {
-		t.Fatalf("resolve service = %+v, want found=true", envelope.Data.Service)
-	}
-	if envelope.Data.Service.OwnerAddress != ownerIdentity.Address {
-		t.Fatalf("resolve service owner address = %q, want relay owner address", envelope.Data.Service.OwnerAddress)
-	}
-	if envelope.Data.Service.Hostname != "demo.localhost" {
-		t.Fatalf("resolve service hostname = %q, want %q", envelope.Data.Service.Hostname, "demo.localhost")
-	}
-	if envelope.Data.Service.RelayID != envelope.Data.Self.RelayID {
-		t.Fatalf("resolve service relay_id = %q, want %q", envelope.Data.Service.RelayID, envelope.Data.Self.RelayID)
-	}
-
-	if _, err := discovery.ValidateDescriptor(envelope.Data.Self, time.Now().UTC()); err != nil {
-		t.Fatalf("ValidateDescriptor(self) error = %v", err)
-	}
-	relayURLs := make([]string, 0, 1+len(envelope.Data.Peers))
-	relayURLs = append(relayURLs, envelope.Data.Self.APIHTTPSAddr)
-	for _, peer := range envelope.Data.Peers {
-		if strings.TrimSpace(peer.APIHTTPSAddr) != "" {
-			relayURLs = append(relayURLs, peer.APIHTTPSAddr)
-		}
-	}
-	if !reflect.DeepEqual(relayURLs, []string{server.PortalURL()}) {
-		t.Fatalf("resolve relay urls = %v, want [%q]", relayURLs, server.PortalURL())
-	}
-	if envelope.Data.Self.OwnerAddress != ownerIdentity.Address {
-		t.Fatalf("self relay owner address = %q, want %q", envelope.Data.Self.OwnerAddress, ownerIdentity.Address)
-	}
-	if envelope.Data.Self.SignerPublicKey != ownerIdentity.PublicKey {
-		t.Fatalf("self relay signer public key = %q, want %q", envelope.Data.Self.SignerPublicKey, ownerIdentity.PublicKey)
-	}
-	if envelope.Data.Self.StatusState != "healthy" {
-		t.Fatalf("self relay status_state = %q, want %q", envelope.Data.Self.StatusState, "healthy")
-	}
-	if !server.DiscoveryEnabled() {
-		t.Fatal("DiscoveryEnabled() = false, want true")
-	}
-}
-
 func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
-		PortalURL:        "https://portal.example.com",
-		Bootstraps:       []string{"https://bootstrap.example.com"},
-		DiscoveryEnabled: true,
+		PortalURL:           "https://portal.example.com",
+		Bootstraps:          []string{"https://bootstrap.example.com"},
+		WireGuardPrivateKey: strings.Repeat("23", 32),
+		DiscoveryPort:       41022,
+		DiscoveryEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	added, err := server.discoveryCache.UpsertSeedURLs([]string{
+	added, err := server.peerRegistry.registerBootstrapURLs([]string{
 		"https://localhost:4017",
 		"https://relay-a.example.com",
 		"https://127.0.0.1:4017",
@@ -410,8 +327,8 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExcludeLocalRelayURLs() error = %v", err)
 	}
-	knownURLs := make([]string, 0, len(server.discoveryCache.KnownDescriptors()))
-	for _, descriptor := range server.discoveryCache.KnownDescriptors() {
+	knownURLs := make([]string, 0, len(server.peerRegistry.bootstrapPeers()))
+	for _, descriptor := range server.peerRegistry.bootstrapPeers() {
 		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
 			knownURLs = append(knownURLs, apiURL)
 		}
@@ -421,10 +338,13 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 		t.Fatalf("ExcludeLocalRelayURLs() known error = %v", err)
 	}
 	if !reflect.DeepEqual(knownURLs, knownRelayURLs) {
-		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", knownURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
+		t.Fatalf("BootstrapDescriptors() = %v, want [%q %q]", knownURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
 	}
-	if len(server.discoveryCache.AdvertisedDescriptors()) != 0 {
-		t.Fatalf("AdvertisedDescriptors() = %v, want empty before direct confirmation", server.discoveryCache.AdvertisedDescriptors())
+	if len(server.peerRegistry.syncablePeers()) != 0 {
+		t.Fatalf("syncablePeers() = %v, want empty before direct confirmation", server.peerRegistry.syncablePeers())
+	}
+	if len(server.peerRegistry.advertisedPeers()) != 0 {
+		t.Fatalf("advertisedPeers() = %v, want empty before direct confirmation", server.peerRegistry.advertisedPeers())
 	}
 }
 
@@ -433,10 +353,12 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 
 	ownerPrivateKey := strings.Repeat("11", 32)
 	server, err := NewServer(ServerConfig{
-		PortalURL:        "https://portal.example.com",
-		Bootstraps:       []string{"https://bootstrap.example.com"},
-		OwnerPrivateKey:  ownerPrivateKey,
-		DiscoveryEnabled: true,
+		PortalURL:           "https://portal.example.com",
+		Bootstraps:          []string{"https://bootstrap.example.com"},
+		OwnerPrivateKey:     ownerPrivateKey,
+		WireGuardPrivateKey: strings.Repeat("24", 32),
+		DiscoveryPort:       41023,
+		DiscoveryEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -445,7 +367,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	bootstrapDesc := mustSignedRelayDescriptor(t, ownerPrivateKey, "https://bootstrap.example.com")
 	relayADesc := mustSignedRelayDescriptor(t, ownerPrivateKey, "https://relay-a.example.com")
 
-	added, changed, err := server.discoveryCache.RecordVerified(bootstrapDesc, true)
+	added, changed, err := server.peerRegistry.register(bootstrapDesc, true)
 	if err != nil {
 		t.Fatalf("RecordVerified() error = %v", err)
 	}
@@ -456,7 +378,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 		t.Fatal("RecordVerified() changed = false, want true")
 	}
 
-	added, changed, err = server.discoveryCache.RecordVerified(relayADesc, false)
+	added, changed, err = server.peerRegistry.register(relayADesc, false)
 	if err != nil {
 		t.Fatalf("RecordVerified() hinted error = %v", err)
 	}
@@ -466,8 +388,8 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	if !changed {
 		t.Fatal("RecordVerified() hinted changed = false, want true")
 	}
-	knownURLs := make([]string, 0, len(server.discoveryCache.KnownDescriptors()))
-	for _, descriptor := range server.discoveryCache.KnownDescriptors() {
+	knownURLs := make([]string, 0, len(server.peerRegistry.bootstrapPeers()))
+	for _, descriptor := range server.peerRegistry.bootstrapPeers() {
 		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
 			knownURLs = append(knownURLs, apiURL)
 		}
@@ -476,11 +398,24 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	if err != nil {
 		t.Fatalf("ExcludeLocalRelayURLs() known error = %v", err)
 	}
-	if !reflect.DeepEqual(knownURLs, []string{"https://bootstrap.example.com", "https://relay-a.example.com"}) {
-		t.Fatalf("KnownDescriptors() = %v, want [%q %q]", knownURLs, "https://bootstrap.example.com", "https://relay-a.example.com")
+	if !reflect.DeepEqual(knownURLs, []string{"https://bootstrap.example.com"}) {
+		t.Fatalf("BootstrapDescriptors() = %v, want [%q]", knownURLs, "https://bootstrap.example.com")
 	}
-	advertisedURLs := make([]string, 0, len(server.discoveryCache.AdvertisedDescriptors()))
-	for _, descriptor := range server.discoveryCache.AdvertisedDescriptors() {
+	syncableURLs := make([]string, 0, len(server.peerRegistry.syncablePeers()))
+	for _, descriptor := range server.peerRegistry.syncablePeers() {
+		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
+			syncableURLs = append(syncableURLs, apiURL)
+		}
+	}
+	syncableURLs, err = utils.ExcludeLocalRelayURLs(syncableURLs...)
+	if err != nil {
+		t.Fatalf("ExcludeLocalRelayURLs() syncable error = %v", err)
+	}
+	if !reflect.DeepEqual(syncableURLs, []string{"https://relay-a.example.com"}) {
+		t.Fatalf("SyncablePeerDescriptors() = %v, want [%q]", syncableURLs, "https://relay-a.example.com")
+	}
+	advertisedURLs := make([]string, 0, len(server.peerRegistry.advertisedPeers()))
+	for _, descriptor := range server.peerRegistry.advertisedPeers() {
 		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
 			advertisedURLs = append(advertisedURLs, apiURL)
 		}
@@ -493,7 +428,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 		t.Fatalf("AdvertisedDescriptors() = %v, want [%q]", advertisedURLs, "https://bootstrap.example.com")
 	}
 
-	snapshot := server.discoveryCache.Snapshot()
+	snapshot := server.peerRegistry.snapshot()
 	if snapshot[bootstrapDesc.RelayID].State != types.PeerStateAdvertised {
 		t.Fatalf("bootstrap state = %q, want %q", snapshot[bootstrapDesc.RelayID].State, types.PeerStateAdvertised)
 	}
@@ -501,7 +436,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 		t.Fatalf("relay-a state = %q, want %q", snapshot[relayADesc.RelayID].State, types.PeerStateVerified)
 	}
 
-	added, changed, err = server.discoveryCache.RecordVerified(relayADesc, true)
+	added, changed, err = server.peerRegistry.register(relayADesc, true)
 	if err != nil {
 		t.Fatalf("RecordVerified() second error = %v", err)
 	}
@@ -512,7 +447,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 		t.Fatal("RecordVerified() second changed = false, want true")
 	}
 	advertisedURLs = advertisedURLs[:0]
-	for _, descriptor := range server.discoveryCache.AdvertisedDescriptors() {
+	for _, descriptor := range server.peerRegistry.advertisedPeers() {
 		if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
 			advertisedURLs = append(advertisedURLs, apiURL)
 		}

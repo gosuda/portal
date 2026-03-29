@@ -117,7 +117,10 @@ func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.D
 		ProtocolVersion: 1,
 		GeneratedAt:     time.Now().UTC(),
 		Self:            self,
-		Peers:           s.discoveryAdvertisedPeerDescriptors(nil),
+		Peers:           nil,
+	}
+	if s.peerRegistry != nil {
+		resp.Peers = s.peerRegistry.advertisedPeers()
 	}
 	if req.RootHost != "" && req.RootHost != s.rootHost {
 		return resp, nil
@@ -140,7 +143,6 @@ func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.D
 		record, found := s.registry.leaseByID[leaseID]
 		if found && record != nil && !now.After(record.ExpiresAt) && !record.Metadata.Hide && s.registry.policy.IsLeaseRoutable(record.ID) {
 			lease = record.Lease
-			lease.Bootstraps = append([]string(nil), lease.Bootstraps...)
 			lease.Metadata = lease.Metadata.Copy()
 			ok = true
 		}
@@ -156,7 +158,6 @@ func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.D
 		ownerAddress = s.ownerIdentity.Address
 	}
 
-	resp.Peers = s.discoveryAdvertisedPeerDescriptors(lease.Bootstraps)
 	resp.Service = &types.DiscoveredService{
 		Found:        true,
 		Name:         lease.Name,
@@ -203,38 +204,6 @@ func (s *Server) discoverySelfDescriptor() (types.RelayDescriptor, error) {
 		descriptor.OverlayCIDRs = append([]string(nil), s.wgConfig.OverlayCIDRs...)
 	}
 	return discovery.SignedDescriptor(descriptor, s.ownerIdentity.PrivateKey)
-}
-
-func (s *Server) discoveryAdvertisedPeerDescriptors(urls []string) []types.RelayDescriptor {
-	advertised := s.discoveryCache.AdvertisedDescriptors()
-	if len(advertised) == 0 {
-		return nil
-	}
-	if len(urls) == 0 {
-		return advertised
-	}
-
-	allowed := make(map[string]struct{}, len(urls))
-	for _, relayURL := range urls {
-		relayURL = strings.TrimSpace(relayURL)
-		if relayURL == "" {
-			continue
-		}
-		normalized, err := utils.NormalizeRelayURL(relayURL)
-		if err != nil {
-			continue
-		}
-		allowed[normalized] = struct{}{}
-	}
-
-	records := make([]types.RelayDescriptor, 0, len(advertised))
-	for _, descriptor := range advertised {
-		if _, ok := allowed[descriptor.APIHTTPSAddr]; !ok {
-			continue
-		}
-		records = append(records, descriptor)
-	}
-	return records
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
@@ -540,10 +509,6 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	bootstraps, err := utils.NormalizeRelayURLs(req.Bootstraps...)
-	if err != nil {
-		return types.RegisterResponse{}, fmt.Errorf("normalize bootstraps: %w", err)
-	}
 	ownerAddress := strings.TrimSpace(req.OwnerAddress)
 	if ownerAddress != "" {
 		ownerAddress, err = utils.NormalizeEVMAddress(ownerAddress)
@@ -572,7 +537,6 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			ID:           leaseID,
 			Name:         name,
 			Hostname:     hostname,
-			Bootstraps:   append([]string(nil), bootstraps...),
 			Metadata:     req.Metadata,
 			OwnerAddress: ownerAddress,
 			ExpiresAt:    expiresAt,
@@ -606,57 +570,14 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		record.Close()
 		return types.RegisterResponse{}, err
 	}
-	if s.DiscoveryEnabled() {
-		if _, err := s.discoveryCache.UpsertSeedURLs(bootstraps); err != nil {
-			record.Close()
-			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-			return types.RegisterResponse{}, err
-		}
-	}
-
-	responseBootstraps, err := utils.NormalizeRelayURLs(s.cfg.PortalURL)
-	if err != nil {
-		record.Close()
-		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-		return types.RegisterResponse{}, err
-	}
-	if s.DiscoveryEnabled() {
-		advertisedURLs := make([]string, 0, len(s.discoveryCache.AdvertisedDescriptors()))
-		for _, descriptor := range s.discoveryCache.AdvertisedDescriptors() {
-			if apiURL := strings.TrimSpace(descriptor.APIHTTPSAddr); apiURL != "" {
-				advertisedURLs = append(advertisedURLs, apiURL)
-			}
-		}
-		advertisedURLs, err = utils.ExcludeLocalRelayURLs(advertisedURLs...)
-		if err != nil {
-			record.Close()
-			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-			return types.RegisterResponse{}, err
-		}
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, advertisedURLs...)...)
-		if err != nil {
-			record.Close()
-			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-			return types.RegisterResponse{}, err
-		}
-	} else {
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, append(s.cfg.Bootstraps, record.Bootstraps...)...)...)
-	}
-	if err != nil {
-		record.Close()
-		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-		return types.RegisterResponse{}, err
-	}
 
 	resp := types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
-		Bootstraps: responseBootstraps,
 		UDPEnabled: record.UDPEnabled,
 	}
-	resp.ConnectURL = strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.datagram.UDPPort())
 	}

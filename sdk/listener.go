@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -36,9 +35,7 @@ type ListenerConfig struct {
 	ReadyTarget      int
 	RetryCount       int
 	RetryWait        time.Duration
-
-	RegisterBootstraps []string
-	ownerAddress       string
+	ownerAddress     string
 }
 
 type listenerStatus string
@@ -54,11 +51,10 @@ type Listener struct {
 	cancel context.CancelFunc
 	doneCh <-chan struct{}
 
-	retryCount         int
-	retryWait          time.Duration
-	leaseTTL           time.Duration
-	renewBefore        time.Duration
-	registerBootstraps []string
+	retryCount  int
+	retryWait   time.Duration
+	leaseTTL    time.Duration
+	renewBefore time.Duration
 
 	stream      *transport.ClientStream
 	datagram    *transport.ClientDatagram
@@ -95,25 +91,18 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		return nil, err
 	}
 
-	initialBootstraps, err := utils.NormalizeRelayURLs(cfg.RegisterBootstraps...)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("normalize bootstraps: %w", err)
-	}
-
 	l := &Listener{
-		doneCh:             listenerCtx.Done(),
-		cancel:             cancel,
-		api:                api,
-		registered:         make(chan struct{}),
-		startupStatus:      listenerStatusInactive,
-		retryCount:         cfg.RetryCount,
-		retryWait:          retryWait,
-		leaseTTL:           leaseTTL,
-		renewBefore:        renewBefore,
-		registerBootstraps: initialBootstraps,
-		metadata:           cfg.Metadata.Copy(),
-		banMITM:            cfg.BanMITM,
+		doneCh:        listenerCtx.Done(),
+		cancel:        cancel,
+		api:           api,
+		registered:    make(chan struct{}),
+		startupStatus: listenerStatusInactive,
+		retryCount:    cfg.RetryCount,
+		retryWait:     retryWait,
+		leaseTTL:      leaseTTL,
+		renewBefore:   renewBefore,
+		metadata:      cfg.Metadata.Copy(),
+		banMITM:       cfg.BanMITM,
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
@@ -138,7 +127,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 	var retries int
 
 	for {
-		err := l.registerAndConfigure(ctx, l.registerBootstraps)
+		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
 			for range readyTarget {
@@ -449,18 +438,14 @@ func (l *Listener) renewLease(ctx context.Context) error {
 
 	requestCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := l.registerAndConfigure(requestCtx, l.registerBootstraps); err != nil {
+	if err := l.registerAndConfigure(requestCtx); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps []string) error {
-	if err := l.api.ensureReady(ctx); err != nil {
-		return err
-	}
-
-	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil, registerBootstraps)
+func (l *Listener) registerAndConfigure(ctx context.Context) error {
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil)
 	if err != nil {
 		return err
 	}
@@ -471,7 +456,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps 
 			Message: "relay did not enable required udp support",
 		}
 	}
-
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)

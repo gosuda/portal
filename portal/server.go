@@ -14,7 +14,6 @@ import (
 
 	"github.com/gosuda/keyless_tls/relay/l4"
 	"github.com/quic-go/quic-go"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
@@ -84,7 +83,7 @@ type Server struct {
 	cfg               ServerConfig
 	rootHost          string
 	trustedProxyCIDRs []*net.IPNet
-	discoveryCache    *discovery.Cache
+	peerRegistry      *peerRegistry
 	shutdownOnce      sync.Once
 }
 
@@ -123,6 +122,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cfg.DiscoveryEnabled && strings.TrimSpace(wgConfig.PrivateKey) == "" {
+		return nil, errors.New("wireguard private key is required when discovery is enabled")
 	}
 
 	portMin, portMax := 0, 0
@@ -170,8 +172,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	if cfg.DiscoveryEnabled {
-		s.discoveryCache = discovery.NewCache()
-		if _, err := s.discoveryCache.UpsertSeedURLs(cfg.Bootstraps); err != nil {
+		s.peerRegistry = newPeerRegistry()
+		if _, err := s.peerRegistry.registerBootstrapURLs(cfg.Bootstraps); err != nil {
 			return nil, err
 		}
 	}
@@ -225,8 +227,8 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 
 	if s.wgConfig.PrivateKey != "" {
 		var snapshot map[string]types.PeerState
-		if s.discoveryCache != nil {
-			snapshot = s.discoveryCache.Snapshot()
+		if s.peerRegistry != nil {
+			snapshot = s.peerRegistry.snapshot()
 		}
 		peerMux := http.NewServeMux()
 		peerMux.HandleFunc(types.PathRoot, s.handleRoot)
@@ -318,8 +320,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
-		if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
-			shutdownErr = err
+		if s.overlay != nil {
+			if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
 		}
 		if s.apiTLSClose != nil {
 			_ = s.apiTLSClose.Close()
@@ -555,140 +559,185 @@ func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
 	}
 }
 
+func (s *Server) applyDiscoveryResponse(targetRelayID, targetURL string, resp types.DiscoverResponse, requireSelfOverlay bool) (updated bool, addedHintCount int, warnErr error, err error) {
+	if strings.TrimSpace(targetRelayID) == "" {
+		return false, 0, nil, errors.New("target relay id is required")
+	}
+
+	now := time.Now().UTC()
+	selfDescriptor, peerDescriptors, warnErr := discovery.ValidateResponse(resp, now)
+	if selfDescriptor.RelayID == "" {
+		return false, 0, nil, errors.Join(warnErr, errors.New("discover response is missing self descriptor"))
+	}
+	if selfDescriptor.RelayID != targetRelayID {
+		return false, 0, nil, errors.Join(warnErr, errors.New("discover response relay_id mismatch"))
+	}
+	if requireSelfOverlay {
+		if err := requireOverlayPeerDescriptor(selfDescriptor); err != nil {
+			return false, 0, nil, errors.Join(warnErr, err)
+		}
+	}
+
+	filteredPeerDescriptors := make([]types.RelayDescriptor, 0, len(peerDescriptors))
+
+	for _, peerDescriptor := range peerDescriptors {
+		if err := requireOverlayPeerDescriptor(peerDescriptor); err != nil {
+			warnErr = errors.Join(warnErr, fmt.Errorf("record hint %q: %w", peerDescriptor.RelayID, err))
+			continue
+		}
+		filteredPeerDescriptors = append(filteredPeerDescriptors, peerDescriptor)
+	}
+
+	result, err := s.peerRegistry.registerDiscoveredPeers(targetRelayID, targetURL, selfDescriptor, filteredPeerDescriptors)
+	if err != nil {
+		return false, 0, nil, errors.Join(warnErr, err)
+	}
+	updated = result.updated
+	addedHintCount = result.addedHintCount
+
+	if result.peerSetChanged && s.overlay != nil {
+		if err := s.overlay.Sync(s.cfg.PortalURL, s.peerRegistry.snapshot()); err != nil {
+			warnErr = errors.Join(warnErr, err)
+		}
+	}
+
+	return updated, addedHintCount, warnErr, nil
+}
+
+func (s *Server) runBootstrapDiscoveryPass(ctx context.Context) {
+	for _, bootstrap := range s.peerRegistry.bootstrapPeers() {
+		resp, err := discovery.Discover(ctx, bootstrap.APIHTTPSAddr, types.DiscoverRequest{}, nil, nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			s.peerRegistry.fail(bootstrap.RelayID)
+			log.Warn().
+				Err(err).
+				Str("peer", bootstrap.APIHTTPSAddr).
+				Msg("bootstrap discovery failed")
+			continue
+		}
+
+		updated, addedHintCount, warnErr, err := s.applyDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, false)
+		if err != nil {
+			s.peerRegistry.fail(bootstrap.RelayID)
+			log.Warn().
+				Err(err).
+				Str("peer", bootstrap.APIHTTPSAddr).
+				Msg("bootstrap discovery failed")
+			continue
+		}
+
+		if updated || warnErr != nil {
+			event := log.Info()
+			if warnErr != nil {
+				event = log.Warn().Err(warnErr)
+			}
+			event = event.
+				Str("peer", bootstrap.APIHTTPSAddr).
+				Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
+				Int("peer_count", len(s.peerRegistry.syncablePeers())).
+				Int("advertised_count", len(s.peerRegistry.advertisedPeers()))
+			if addedHintCount > 0 {
+				event = event.Int("added_hint_count", addedHintCount)
+			}
+			if warnErr != nil {
+				event.Msg("bootstrap discovery completed with warnings")
+			} else {
+				event.Msg("bootstrap discovery updated")
+			}
+		}
+	}
+}
+
+func (s *Server) runOverlayPeerDiscoveryPass(ctx context.Context) {
+	if s.overlay == nil {
+		return
+	}
+	overlayClient := s.overlay.Client()
+	if overlayClient == nil {
+		return
+	}
+
+	for _, peer := range s.peerRegistry.syncablePeers() {
+		var failureErr error
+
+		if err := requireOverlayPeerDescriptor(peer); err != nil {
+			failureErr = err
+		} else {
+			discoverURL := "http://" + net.JoinHostPort(peer.OverlayIPv4, fmt.Sprintf("%d", wireguard.DefaultPeerAPIHTTPPort))
+			resp, err := discovery.Discover(ctx, discoverURL, types.DiscoverRequest{}, nil, overlayClient)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				failureErr = err
+			} else {
+				updated, addedHintCount, warnErr, err := s.applyDiscoveryResponse(peer.RelayID, peer.APIHTTPSAddr, resp, true)
+				if err != nil {
+					failureErr = err
+				} else {
+					if warnErr != nil {
+						log.Warn().
+							Err(warnErr).
+							Str("peer", peer.APIHTTPSAddr).
+							Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
+							Int("peer_count", len(s.peerRegistry.syncablePeers())).
+							Int("advertised_count", len(s.peerRegistry.advertisedPeers())).
+							Int("added_hint_count", addedHintCount).
+							Msg("overlay peer discovery completed with warnings")
+						continue
+					}
+
+					if updated {
+						event := log.Info().
+							Str("peer", peer.APIHTTPSAddr).
+							Int("bootstrap_count", len(s.peerRegistry.bootstrapPeers())).
+							Int("peer_count", len(s.peerRegistry.syncablePeers())).
+							Int("advertised_count", len(s.peerRegistry.advertisedPeers()))
+						if addedHintCount > 0 {
+							event = event.Int("added_hint_count", addedHintCount)
+						}
+						event.Msg("overlay peer discovery updated")
+					}
+					continue
+				}
+			}
+		}
+
+		result := s.peerRegistry.recordFailure(peer.RelayID, failureErr, defaultWGRecoveryFailures)
+		if result.expired && s.overlay != nil {
+			failureErr = errors.Join(failureErr, s.overlay.Sync(s.cfg.PortalURL, s.peerRegistry.snapshot()))
+		}
+
+		event := log.Warn().
+			Err(failureErr).
+			Str("peer", peer.APIHTTPSAddr)
+		if result.expired {
+			event = event.
+				Bool("expired", true).
+				Str("reason", result.expireReason)
+			if result.consecutiveFailures > 0 {
+				event = event.Int("consecutive_failures", result.consecutiveFailures)
+			}
+		}
+		event.Msg("overlay peer discovery failed")
+	}
+}
+
 func (s *Server) runDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(defaultDiscoveryInterval)
 	defer ticker.Stop()
 
 	for {
-		peers := s.discoveryCache.KnownDescriptors()
-		var overlayClient *http.Client
-		if s.overlay != nil {
-			overlayClient = s.overlay.Client()
+		s.runBootstrapDiscoveryPass(ctx)
+		if ctx.Err() != nil {
+			return nil
 		}
-		for _, peer := range peers {
-			discoverURL, discoverClient := peer.APIHTTPSAddr, (*http.Client)(nil)
-			if state, pinned, _ := s.discoveryCache.Lookup(peer.RelayID); peer.SupportsOverlayPeer && overlayClient != nil && pinned && state.State != types.PeerStateExpired {
-				if peer.OverlayIPv4 == "" {
-					err := errors.New("relay peer is missing overlay ipv4")
-					s.discoveryCache.RecordFailure(peer.RelayID)
-					log.Warn().
-						Err(err).
-						Str("peer", peer.APIHTTPSAddr).
-						Msg("discover peer failed")
-					continue
-				}
-				discoverURL = "http://" + net.JoinHostPort(peer.OverlayIPv4, fmt.Sprintf("%d", wireguard.DefaultPeerAPIHTTPPort))
-				discoverClient = overlayClient
-			}
-			resp, err := discovery.Discover(ctx, discoverURL, types.DiscoverRequest{}, nil, discoverClient)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				s.discoveryCache.RecordFailure(peer.RelayID)
-				expireReason := ""
-				consecutiveFailures := 0
-				state, pinned, _ := s.discoveryCache.Lookup(peer.RelayID)
-				if pinned &&
-					state.State != types.PeerStateExpired &&
-					peer.SupportsOverlayPeer &&
-					state.ConsecutiveFailures >= defaultWGRecoveryFailures {
-					if removed := s.discoveryCache.Expire(peer.RelayID); removed {
-						expireReason = "recovery"
-						consecutiveFailures = state.ConsecutiveFailures
-					}
-				}
-				var apiErr *types.APIRequestError
-				if expireReason == "" && errors.As(err, &apiErr) &&
-					(apiErr.StatusCode == http.StatusForbidden ||
-						apiErr.StatusCode == http.StatusNotFound ||
-						apiErr.StatusCode == http.StatusGone) {
-					if removed := s.discoveryCache.Expire(peer.RelayID); removed {
-						expireReason = "status"
-					}
-				}
-				if expireReason != "" {
-					err = errors.Join(err, s.overlay.Sync(s.cfg.PortalURL, s.discoveryCache.Snapshot()))
-				}
-
-				event := log.Warn().
-					Err(err).
-					Str("peer", peer.APIHTTPSAddr)
-				if expireReason != "" {
-					event = event.
-						Bool("expired", true).
-						Str("reason", expireReason)
-					if consecutiveFailures > 0 {
-						event = event.Int("consecutive_failures", consecutiveFailures)
-					}
-				}
-				event.Msg("discover peer failed")
-				continue
-			}
-
-			now := time.Now().UTC()
-			selfDescriptor, peerDescriptors, warnErr := discovery.ValidateResponse(resp, now)
-			if selfDescriptor.RelayID == "" {
-				err = errors.Join(warnErr, errors.New("discover response is missing self descriptor"))
-			}
-			if err == nil {
-				err = s.discoveryCache.PinIdentity(peer.RelayID, peer.APIHTTPSAddr, selfDescriptor)
-			}
-			added, changed := false, false
-			if err == nil {
-				added, changed, err = s.discoveryCache.RecordVerified(selfDescriptor, true)
-			}
-			if err != nil {
-				s.discoveryCache.RecordFailure(peer.RelayID)
-				log.Warn().
-					Err(err).
-					Str("peer", peer.APIHTTPSAddr).
-					Msg("discover peer failed")
-				continue
-			}
-
-			peerSetChanged := changed
-			addedHintCount := 0
-			for _, peerDescriptor := range peerDescriptors {
-				hintAdded, hintChanged, err := s.discoveryCache.RecordVerified(peerDescriptor, false)
-				if err != nil {
-					warnErr = errors.Join(warnErr, fmt.Errorf("record hint %q: %w", peerDescriptor.RelayID, err))
-					continue
-				}
-				peerSetChanged = peerSetChanged || hintChanged
-				if hintAdded || hintChanged {
-					addedHintCount++
-				}
-			}
-			if peerSetChanged {
-				if err := s.overlay.Sync(s.cfg.PortalURL, s.discoveryCache.Snapshot()); err != nil {
-					warnErr = errors.Join(warnErr, err)
-				}
-			}
-
-			updated := added || changed || addedHintCount > 0
-			if updated || warnErr != nil {
-				var event *zerolog.Event
-				if warnErr != nil {
-					event = log.Warn().
-						Err(warnErr)
-				} else {
-					event = log.Info()
-				}
-				event.
-					Str("peer", peer.APIHTTPSAddr).
-					Bool("discoverable", selfDescriptor.SupportsOverlayPeer).
-					Int("known_count", len(s.discoveryCache.KnownDescriptors())).
-					Int("advertised_count", len(s.discoveryCache.AdvertisedDescriptors()))
-				if addedHintCount > 0 {
-					event.Int("added_hint_count", addedHintCount)
-				}
-				if updated {
-					event.Msg("discovery peer updated")
-				} else {
-					event.Msg("discover peer completed with warnings")
-				}
-			}
+		s.runOverlayPeerDiscoveryPass(ctx)
+		if ctx.Err() != nil {
+			return nil
 		}
 
 		select {
