@@ -22,25 +22,33 @@ import (
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
+	"github.com/gosuda/portal/v2/portal/wireguard"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
-	defaultLeaseTTL          = 30 * time.Second
-	defaultClaimTimeout      = 10 * time.Second
-	defaultDiscoveryInterval = 30 * time.Second
-	defaultIdleKeepalive     = 15 * time.Second
-	defaultReadyQueueLimit   = 8
-	defaultClientHelloWait   = 2 * time.Second
-	defaultControlBodyLimit  = 4 << 20
-	defaultUDPPortBase       = 50000
+	defaultLeaseTTL           = 30 * time.Second
+	defaultClaimTimeout       = 10 * time.Second
+	defaultDiscoveryInterval  = 30 * time.Second
+	defaultIdleKeepalive      = 15 * time.Second
+	defaultReadyQueueLimit    = 8
+	defaultClientHelloWait    = 2 * time.Second
+	defaultControlBodyLimit   = 4 << 20
+	defaultUDPPortBase        = 50000
+	defaultWGRecoveryFailures = 3
 )
 
 type ServerConfig struct {
 	PortalURL             string
 	OwnerPrivateKey       string
 	Bootstraps            []string
+	WireGuardPrivateKey   string
+	DiscoveryPort         int
+	WireGuardPublicKey    string
+	WireGuardEndpoint     string
+	OverlayIPv4           string
+	OverlayCIDRs          []string
 	ACME                  acme.Config
 	APIPort               int
 	SNIPort               int
@@ -59,23 +67,24 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	sniListener         net.Listener
-	apiListener         net.Listener
-	apiServer           *http.Server
-	apiTLSClose         io.Closer
-	acmeManager         *acme.Manager
-	quicTunnel          *quic.Listener
-	cancel              context.CancelFunc
-	group               *errgroup.Group
-	registry            *leaseRegistry
-	ports               *transport.PortAllocator
-	ownerIdentity       discovery.Identity
-	cfg                 ServerConfig
-	rootHost            string
-	trustedProxyCIDRs   []*net.IPNet
-	discoveryMu         sync.RWMutex
-	discoveryBootstraps []string
-	shutdownOnce        sync.Once
+	sniListener       net.Listener
+	apiListener       net.Listener
+	apiServer         *http.Server
+	apiTLSClose       io.Closer
+	acmeManager       *acme.Manager
+	quicTunnel        *quic.Listener
+	overlay           *wireguard.Overlay
+	cancel            context.CancelFunc
+	group             *errgroup.Group
+	registry          *leaseRegistry
+	ports             *transport.PortAllocator
+	ownerIdentity     utils.Secp256k1Identity
+	wgConfig          wireguard.Config
+	cfg               ServerConfig
+	rootHost          string
+	trustedProxyCIDRs []*net.IPNet
+	relaySet          *discovery.RelaySet
+	shutdownOnce      sync.Once
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -103,6 +112,31 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("normalize bootstraps: %w", err)
 	}
 	cfg.Bootstraps = bootstraps
+	generatedWireGuardPrivateKey := ""
+	if cfg.DiscoveryEnabled && strings.TrimSpace(cfg.WireGuardPrivateKey) == "" {
+		generatedWireGuardPrivateKey, err = utils.GenerateWireGuardPrivateKey()
+		if err != nil {
+			return nil, err
+		}
+		cfg.WireGuardPrivateKey = generatedWireGuardPrivateKey
+	}
+	wgConfig, err := wireguard.NormalizeConfig(rootHost, wireguard.Config{
+		PrivateKey:   cfg.WireGuardPrivateKey,
+		PublicKey:    cfg.WireGuardPublicKey,
+		Endpoint:     cfg.WireGuardEndpoint,
+		OverlayIPv4:  cfg.OverlayIPv4,
+		OverlayCIDRs: cfg.OverlayCIDRs,
+		ListenPort:   cfg.DiscoveryPort,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if generatedWireGuardPrivateKey != "" {
+		log.Warn().
+			Str("wireguard_public_key", wgConfig.PublicKey).
+			Str("wireguard_private_key", generatedWireGuardPrivateKey).
+			Msg("generated wireguard private key; set WIREGUARD_PRIVATE_KEY to preserve relay identity")
+	}
 
 	portMin, portMax := 0, 0
 	if cfg.UDPPortCount > 0 {
@@ -111,7 +145,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	ownerPrivateKey := strings.TrimSpace(cfg.OwnerPrivateKey)
-	ownerIdentity, err := discovery.ResolveIdentity(ownerPrivateKey)
+	ownerIdentity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
 	if err != nil {
 		if ownerPrivateKey == "" {
 			return nil, fmt.Errorf("generate relay owner private key: %w", err)
@@ -137,24 +171,16 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		registry:          registry,
 		ports:             ports,
 		ownerIdentity:     ownerIdentity,
+		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
 	}
 
-	// Tear down all lease resources when leases expire via TTL janitor.
-	registry.onExpired = func(record *leaseRecord) {
-		s.closeLease(record)
-	}
-
 	if cfg.DiscoveryEnabled {
-		bootstraps, err := utils.MergeRelayURLs(nil, []string{cfg.PortalURL}, cfg.Bootstraps)
+		s.relaySet = discovery.NewRelaySet()
+		_, err = s.relaySet.RegisterBootstrapRelayURLs(cfg.Bootstraps, time.Now().UTC())
 		if err != nil {
 			return nil, err
 		}
-		bootstraps, err = utils.ExcludeLocalRelayURLs(bootstraps...)
-		if err != nil {
-			return nil, err
-		}
-		s.discoveryBootstraps = bootstraps
 	}
 
 	return s, nil
@@ -204,13 +230,26 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.cancel = cancel
 	s.group = group
 
+	if s.wgConfig.PrivateKey != "" {
+		if err := s.startOverlay(); err != nil {
+			acmeManager.Stop()
+			_ = apiServer.Close()
+			_ = apiCloser.Close()
+			_ = sniListener.Close()
+			cancel()
+			return err
+		}
+	}
+
 	group.Go(s.runAPIServer)
+	if s.overlay != nil {
+		group.Go(s.overlay.Serve)
+	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
 	if s.DiscoveryEnabled() {
-		group.Go(func() error { return s.runDiscoveryLoop(groupCtx) })
+		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
-	group.Go(func() error { return s.watchContext(groupCtx) })
 	s.acmeManager.Start(serverCtx)
 
 	if s.cfg.UDPPortCount > 0 {
@@ -218,6 +257,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 			log.Warn().Err(err).Msg("quic tunnel listener disabled")
 		}
 	}
+	group.Go(func() error {
+		<-groupCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.Shutdown(shutdownCtx)
+	})
 
 	return nil
 }
@@ -237,7 +282,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 
 		for _, lease := range s.registry.CloseAll() {
-			s.closeLease(lease)
+			if lease != nil {
+				lease.Close()
+			}
 		}
 
 		if s.quicTunnel != nil {
@@ -250,6 +297,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 		if s.apiServer != nil {
 			if err := s.apiServer.Shutdown(ctx); err != nil && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
+		if s.overlay != nil {
+			if err := s.overlay.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
 			}
 		}
@@ -365,22 +417,16 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		CertPEM: certPEM,
 		KeyPEM:  keyPEM,
 	}
-	if err := validateAPITLS(apiTLS); err != nil {
+	if len(apiTLS.CertPEM) == 0 {
 		manager.Stop()
-		return keyless.TLSMaterialConfig{}, nil, err
+		return keyless.TLSMaterialConfig{}, nil, errors.New("api tls certificate is required")
+	}
+	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
+		manager.Stop()
+		return keyless.TLSMaterialConfig{}, nil, errors.New("api tls key or keyless signer is required")
 	}
 
 	return apiTLS, manager, nil
-}
-
-func validateAPITLS(apiTLS keyless.TLSMaterialConfig) error {
-	if len(apiTLS.CertPEM) == 0 {
-		return errors.New("api tls certificate is required")
-	}
-	if len(apiTLS.KeyPEM) == 0 && apiTLS.Keyless == nil {
-		return errors.New("api tls key or keyless signer is required")
-	}
-	return nil
 }
 
 func (s *Server) runSNIListener(ctx context.Context) error {
@@ -388,7 +434,55 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 		conn, err := s.sniListener.Accept()
 		switch {
 		case err == nil:
-			go s.handleSNIConn(ctx, conn)
+			go func(conn net.Conn) {
+				clientHello, wrappedConn, err := l4.InspectClientHello(conn, s.cfg.ClientHelloTimeout)
+				if err != nil {
+					if wrappedConn != nil {
+						_ = wrappedConn.Close()
+					} else {
+						_ = conn.Close()
+					}
+					return
+				}
+
+				serverName := utils.NormalizeHostname(clientHello.ServerName)
+				if serverName == "" {
+					_ = wrappedConn.Close()
+					return
+				}
+
+				if serverName == s.rootHost {
+					if s.apiListener == nil {
+						_ = wrappedConn.Close()
+						return
+					}
+					dialer := &net.Dialer{Timeout: 5 * time.Second}
+					upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
+					if err != nil {
+						_ = wrappedConn.Close()
+						return
+					}
+					BridgeConns(wrappedConn, upstream)
+					return
+				}
+
+				record, ok := s.registry.Lookup(serverName)
+				if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsLeaseRoutable(record.ID) || record.stream == nil {
+					_ = wrappedConn.Close()
+					return
+				}
+
+				claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
+				defer cancel()
+
+				session, err := record.stream.Claim(claimCtx)
+				if err != nil {
+					_ = wrappedConn.Close()
+					return
+				}
+
+				BridgeConns(wrappedConn, session)
+			}(conn)
 		case errors.Is(err, net.ErrClosed):
 			return nil
 		default:
@@ -397,123 +491,30 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 	}
 }
 
-func (s *Server) handleSNIConn(ctx context.Context, conn net.Conn) {
-	clientHello, wrappedConn, err := l4.InspectClientHello(conn, s.cfg.ClientHelloTimeout)
-	if err != nil {
-		if wrappedConn != nil {
-			_ = wrappedConn.Close()
-		} else {
-			_ = conn.Close()
+func (s *Server) startOverlay() error {
+	peerMux := http.NewServeMux()
+	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
+	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
+	peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
+		if !s.DiscoveryEnabled() {
+			http.NotFound(w, r)
+			return
 		}
-		return
-	}
+		s.handleRelayDiscovery(w, r)
+	})
 
-	serverName := utils.NormalizeHostname(clientHello.ServerName)
-	if serverName == "" {
-		_ = wrappedConn.Close()
-		return
-	}
-
-	if serverName == s.rootHost {
-		s.bridgeToAPI(ctx, wrappedConn)
-		return
-	}
-
-	stream, err := s.resolveStream(serverName)
+	overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
 	if err != nil {
-		_ = wrappedConn.Close()
-		return
+		return fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
-	claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
-	defer cancel()
-
-	session, err := stream.Claim(claimCtx)
-	if err != nil {
-		_ = wrappedConn.Close()
-		return
+	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+		_ = overlay.Shutdown(context.Background())
+		return fmt.Errorf("sync wireguard peers: %w", err)
 	}
 
-	BridgeConns(wrappedConn, session)
-}
-
-func (s *Server) bridgeToAPI(ctx context.Context, conn net.Conn) {
-	if s.apiListener == nil {
-		_ = conn.Close()
-		return
-	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
-	if err != nil {
-		_ = conn.Close()
-		return
-	}
-	BridgeConns(conn, upstream)
-}
-
-func (s *Server) lookupRoutableLease(serverName string) (*leaseRecord, error) {
-	record, ok := s.registry.Lookup(serverName)
-	if !ok || record == nil {
-		return nil, errors.New("no route")
-	}
-	if time.Now().After(record.ExpiresAt) {
-		return nil, errors.New("lease expired")
-	}
-	if !s.registry.policy.IsLeaseRoutable(record.ID) {
-		return nil, errors.New("not routable")
-	}
-	return record, nil
-}
-
-func (s *Server) resolveStream(serverName string) (*transport.RelayStream, error) {
-	record, err := s.lookupRoutableLease(serverName)
-	if err != nil {
-		return nil, err
-	}
-	if record.stream == nil {
-		return nil, errors.New("transport mismatch")
-	}
-	return record.stream, nil
-}
-
-func (s *Server) datagramPlaneReady() bool {
-	if s == nil || s.cfg.UDPPortCount <= 0 {
-		return false
-	}
-	if s.group == nil {
-		return true
-	}
-	return s.quicTunnel != nil
-}
-
-func (s *Server) requireDatagramPlane(udpEnabled bool) error {
-	if !udpEnabled {
-		return nil
-	}
-	if s.datagramPlaneReady() {
-		return nil
-	}
-	return errFeatureUnavailable
-}
-
-func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*leaseRecord, error) {
-	record, err := s.registry.FindByID(leaseID)
-	if err != nil {
-		return nil, err
-	}
-	if !s.registry.policy.IsLeaseRoutable(record.ID) {
-		return nil, errLeaseRejected
-	}
-	if err := s.authorizeLeaseToken(record, token); err != nil {
-		return nil, err
-	}
-	if record.stream == nil {
-		return nil, errTransportMismatch
-	}
-	if requireDatagram && record.datagram == nil {
-		return nil, errTransportMismatch
-	}
-	return record, nil
+	s.overlay = overlay
+	return nil
 }
 
 func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error {
@@ -564,96 +565,127 @@ func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
 	}
 }
 
-func (s *Server) closeLease(record *leaseRecord) {
-	if record == nil {
-		return
-	}
-	record.Close()
-}
-
-func (s *Server) watchContext(ctx context.Context) error {
-	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return s.Shutdown(shutdownCtx)
-}
-
-func (s *Server) discoveryBootstrapsSnapshot() []string {
-	if s == nil || !s.DiscoveryEnabled() {
-		return nil
-	}
-
-	s.discoveryMu.RLock()
-	defer s.discoveryMu.RUnlock()
-	return append([]string(nil), s.discoveryBootstraps...)
-}
-
-func (s *Server) mergeDiscoveryBootstraps(inputs []string) ([]string, error) {
-	if s == nil || !s.DiscoveryEnabled() || len(inputs) == 0 {
-		return nil, nil
-	}
-
-	s.discoveryMu.Lock()
-	defer s.discoveryMu.Unlock()
-
-	next, err := utils.MergeRelayURLs(s.discoveryBootstraps, []string{s.cfg.PortalURL}, inputs)
-	if err != nil {
-		return nil, err
-	}
-	next, err = utils.ExcludeLocalRelayURLs(next...)
-	if err != nil {
-		return nil, err
-	}
-
-	existing := make(map[string]struct{}, len(s.discoveryBootstraps))
-	for _, bootstrap := range s.discoveryBootstraps {
-		existing[bootstrap] = struct{}{}
-	}
-
-	added := make([]string, 0, len(next))
-	for _, bootstrap := range next {
-		if _, ok := existing[bootstrap]; ok {
-			continue
-		}
-		added = append(added, bootstrap)
-	}
-
-	s.discoveryBootstraps = next
-	return added, nil
-}
-
-func (s *Server) runDiscoveryLoop(ctx context.Context) error {
+func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(defaultDiscoveryInterval)
 	defer ticker.Stop()
 
 	for {
-		peers := s.discoveryBootstrapsSnapshot()
-		if len(peers) > 0 {
-			bootstraps, err := discovery.DiscoverBootstraps(ctx, peers, types.DiscoverRequest{}, nil)
-			switch {
-			case err == nil:
-				added, err := s.mergeDiscoveryBootstraps(bootstraps)
-				if err != nil {
-					log.Warn().
-						Err(err).
-						Int("bootstrap_count", len(peers)).
-						Msg("merge discovered bootstraps failed")
-				} else if len(added) > 0 {
-					log.Info().
-						Int("peer_count", len(peers)).
-						Int("added_count", len(added)).
-						Int("total_bootstrap_count", len(s.discoveryBootstrapsSnapshot())).
-						Strs("added_bootstraps", added).
-						Msg("discovery bootstraps updated")
+		bootstraps := s.relaySet.BootstrapDescriptors()
+
+		for _, bootstrap := range bootstraps {
+			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, nil)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
 				}
-			case ctx.Err() != nil:
-				return nil
-			default:
+				s.relaySet.MarkRelayFailure(bootstrap.APIHTTPSAddr, time.Now().UTC())
 				log.Warn().
 					Err(err).
-					Int("bootstrap_count", len(peers)).
-					Msg("discover bootstraps failed")
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery failed")
+				continue
 			}
+
+			now := time.Now().UTC()
+			var relaySetChanged bool
+			var warnErr error
+			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, now)
+			if relaySetChanged && s.overlay != nil {
+				if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
+					if warnErr == nil {
+						warnErr = syncErr
+					}
+				}
+			}
+			if err != nil {
+				s.relaySet.MarkRelayFailure(bootstrap.APIHTTPSAddr, time.Now().UTC())
+				log.Warn().
+					Err(err).
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery failed")
+				continue
+			}
+
+			if warnErr != nil {
+				log.Warn().
+					Err(warnErr).
+					Str("relay", bootstrap.APIHTTPSAddr).
+					Msg("bootstrap relay discovery completed with warnings")
+			}
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+
+		if s.overlay != nil {
+			overlayClient := s.overlay.Client()
+			syncableRelays := s.relaySet.SyncableDescriptors()
+
+			for _, relay := range syncableRelays {
+				var failureErr error
+
+				if err := discovery.RequireOverlayRelayDescriptor(relay); err != nil {
+					failureErr = err
+				} else {
+					discoverURL := "http://" + net.JoinHostPort(relay.OverlayIPv4, fmt.Sprintf("%d", wireguard.DefaultPeerAPIHTTPPort))
+					resp, err := discovery.DiscoverRelayDiscovery(ctx, discoverURL, nil, overlayClient)
+					if err != nil {
+						if ctx.Err() != nil {
+							return nil
+						}
+						failureErr = err
+					} else {
+						now := time.Now().UTC()
+						var relaySetChanged bool
+						var warnErr error
+						var snapshot map[string]types.RelayState
+						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.RelayID, relay.APIHTTPSAddr, resp, now)
+						if relaySetChanged {
+							snapshot = s.relaySet.Snapshot()
+							if syncErr := s.overlay.Sync(s.cfg.PortalURL, snapshot); syncErr != nil {
+								if warnErr == nil {
+									warnErr = syncErr
+								}
+							}
+						}
+						if err != nil {
+							failureErr = err
+						} else {
+							if warnErr != nil {
+								log.Warn().
+									Err(warnErr).
+									Str("relay", relay.APIHTTPSAddr).
+									Msg("overlay relay discovery completed with warnings")
+								continue
+							}
+
+							continue
+						}
+					}
+				}
+				expired, expireReason, consecutiveFailures := s.relaySet.RecordDiscoveryFailure(relay.RelayID, relay.APIHTTPSAddr, failureErr, defaultWGRecoveryFailures, time.Now().UTC())
+				if expired {
+					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
+						failureErr = syncErr
+					}
+				}
+
+				event := log.Warn().
+					Err(failureErr).
+					Str("relay", relay.APIHTTPSAddr)
+				if expired {
+					event = event.
+						Bool("expired", true).
+						Str("reason", expireReason)
+					if consecutiveFailures > 0 {
+						event = event.Int("consecutive_failures", consecutiveFailures)
+					}
+				}
+				event.Msg("overlay relay discovery failed")
+			}
+		}
+		if ctx.Err() != nil {
+			return nil
 		}
 
 		select {

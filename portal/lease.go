@@ -18,7 +18,6 @@ type leaseRegistry struct {
 	routes    *routeTable
 	leaseByID map[string]*leaseRecord
 	policy    *policy.Runtime
-	onExpired func(*leaseRecord) // called for each expired lease during cleanup
 	mu        sync.RWMutex
 }
 
@@ -65,12 +64,16 @@ func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) 
 	}
 }
 
+func (r *leaseRegistry) lookup(leaseID string) (*leaseRecord, bool) {
+	record, ok := r.leaseByID[leaseID]
+	return record, ok
+}
+
 func (r *leaseRegistry) Get(leaseID string) (*leaseRecord, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	record, ok := r.leaseByID[strings.TrimSpace(leaseID)]
-	return record, ok
+	return r.lookup(leaseID)
 }
 
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
@@ -95,7 +98,7 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 		return errors.New("lease record is required")
 	}
 
-	leaseID := strings.TrimSpace(record.ID)
+	leaseID := record.ID
 	if leaseID == "" {
 		return errors.New("lease id is required")
 	}
@@ -125,7 +128,7 @@ func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, c
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.leaseByID[strings.TrimSpace(leaseID)]
+	record, ok := r.lookup(leaseID)
 	if !ok {
 		return nil, errLeaseNotFound
 	}
@@ -150,7 +153,7 @@ func (r *leaseRegistry) Unregister(leaseID, reverseToken string) (*leaseRecord, 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.leaseByID[strings.TrimSpace(leaseID)]
+	record, ok := r.lookup(leaseID)
 	if !ok {
 		return nil, errLeaseNotFound
 	}
@@ -168,7 +171,7 @@ func (r *leaseRegistry) FindByID(leaseID string) (*leaseRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	record, ok := r.leaseByID[strings.TrimSpace(leaseID)]
+	record, ok := r.lookup(leaseID)
 	if !ok || time.Now().After(record.ExpiresAt) {
 		return nil, errLeaseNotFound
 	}
@@ -179,8 +182,8 @@ func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRec
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record := r.leaseByID[strings.TrimSpace(leaseID)]
-	if record == nil {
+	record, ok := r.lookup(leaseID)
+	if !ok {
 		return nil
 	}
 	record.LastSeenAt = now
@@ -193,9 +196,7 @@ func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRec
 
 func (r *leaseRegistry) cleanupExpired(now time.Time) {
 	for _, lease := range r.removeExpired(now) {
-		if r.onExpired != nil {
-			r.onExpired(lease)
-		}
+		lease.Close()
 	}
 }
 
@@ -234,7 +235,6 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	}
 
 	snapshot := record.Lease
-	snapshot.Bootstraps = append([]string(nil), snapshot.Bootstraps...)
 	snapshot.Metadata = snapshot.Metadata.Copy()
 	clientIP := record.ClientIP
 	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)

@@ -40,7 +40,7 @@ const heroFeatures = [
   {
     title: "End-to-end TLS",
     description:
-      "Traffic is routed via SNI with keyless TLS, while TLS still terminates on your app.",
+      "End-to-end TLS via SNI routing, keyless TLS, and built-in MITM detection.",
   },
   {
     title: "Permissionless hosting",

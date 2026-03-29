@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
 )
 
@@ -207,7 +208,8 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 	}
 
 	listener := &Listener{
-		api: &apiClient{baseURL: relayURL},
+		api:      &apiClient{baseURL: relayURL},
+		relaySet: discovery.NewRelaySet(),
 		cancel: func() {
 			select {
 			case <-doneCh:
@@ -219,8 +221,9 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		registered: make(chan struct{}),
 		banMITM:    true,
 	}
+	listener.relaySet.ReplaceKnownRelayURLs([]string{relayURL.String()})
 	listener.mitmManager = newMITMManager(context.Background(), listener)
-	listener.setStartupStatus(listenerStatusReady)
+	listener.markReachable()
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
@@ -228,8 +231,10 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	if status := listener.StartupStatus(); status != listenerStatusBanned {
-		t.Fatalf("listener status = %q, want %q", status, listenerStatusBanned)
+	for _, activeRelayURL := range listener.relaySet.ActiveRelayURLs() {
+		if activeRelayURL == relayURL.String() {
+			t.Fatal("relay still active after mitm detection")
+		}
 	}
 	if !listener.closed() {
 		t.Fatal("listener.closed() = false, want true")
@@ -245,12 +250,14 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 
 	listener := &Listener{
 		api:        &apiClient{baseURL: relayURL},
+		relaySet:   discovery.NewRelaySet(),
 		doneCh:     doneCh,
 		registered: make(chan struct{}),
 		banMITM:    false,
 	}
+	listener.relaySet.ReplaceKnownRelayURLs([]string{relayURL.String()})
 	listener.mitmManager = newMITMManager(context.Background(), listener)
-	listener.setStartupStatus(listenerStatusReady)
+	listener.markReachable()
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
@@ -258,8 +265,9 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		Reason:   types.MITMProbeReasonExporterMismatch,
 	}, nil)
 
-	if status := listener.StartupStatus(); status != listenerStatusReady {
-		t.Fatalf("listener status = %q, want %q", status, listenerStatusReady)
+	activeRelayURLs := listener.relaySet.ActiveRelayURLs()
+	if len(activeRelayURLs) != 1 || activeRelayURLs[0] != relayURL.String() {
+		t.Fatalf("ActiveRelayURLs() = %v, want [%q]", activeRelayURLs, relayURL.String())
 	}
 	if listener.closed() {
 		t.Fatal("listener.closed() = true, want false")

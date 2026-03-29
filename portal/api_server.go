@@ -36,9 +36,13 @@ var (
 )
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
-	keylessSignerHandler, err := newKeylessSignerHandler(apiTLS)
-	if err != nil {
-		return nil, nil, nil, err
+	var keylessSignerHandler http.Handler
+	if len(apiTLS.KeyPEM) > 0 {
+		signer, err := keyless.NewSigner(apiTLS.KeyPEM)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("configure api signer: %w", err)
+		}
+		keylessSignerHandler = signer.Handler()
 	}
 
 	apiServer := &http.Server{
@@ -80,7 +84,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 				base.ServeHTTP(w, r)
 				return
 			}
-			discovery.ServeHTTP(w, r, []string{s.cfg.PortalURL}, s.discoveryBootstrapsSnapshot(), s.discover)
+			s.handleRelayDiscovery(w, r)
 		case types.PathV1Sign:
 			if keylessSignerHandler == nil {
 				http.NotFound(w, r)
@@ -104,55 +108,58 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-func (s *Server) discover(_ context.Context, req types.DiscoverRequest) (types.DiscoverResponse, error) {
-	resp := types.DiscoverResponse{
-		OwnerAddress: s.ownerIdentity.Address,
-	}
-	if req.RootHost != "" && req.RootHost != s.rootHost {
-		return resp, nil
-	}
-	if req.Name == "" {
-		return resp, nil
+func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		return
 	}
 
-	hostname, err := utils.LeaseHostname(req.Name, s.rootHost)
+	now := time.Now().UTC()
+	ingressAddr := s.rootHost
+	if s.cfg.SNIPort != 0 && s.cfg.SNIPort != 443 {
+		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
+	}
+
+	supportsOverlayPeer := strings.TrimSpace(s.wgConfig.PublicKey) != "" &&
+		strings.TrimSpace(s.wgConfig.Endpoint) != "" &&
+		strings.TrimSpace(s.wgConfig.OverlayIPv4) != ""
+
+	self, err := discovery.SignedDescriptor(types.RelayDescriptor{
+		RelayID:             s.cfg.PortalURL,
+		OwnerAddress:        s.ownerIdentity.Address,
+		SignerPublicKey:     s.ownerIdentity.PublicKey,
+		Sequence:            uint64(now.UnixMilli()),
+		Version:             1,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(2 * defaultDiscoveryInterval),
+		APIHTTPSAddr:        s.cfg.PortalURL,
+		IngressTLSAddr:      ingressAddr,
+		SupportsTCP:         true,
+		SupportsUDP:         s.cfg.UDPPortCount > 0,
+		SupportsOverlayPeer: supportsOverlayPeer,
+		SupportsWitness:     false,
+		SupportsVPNExit:     false,
+		StatusState:         "healthy",
+		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
+		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
+		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
+		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
+	}, s.ownerIdentity.PrivateKey)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
+		return
 	}
 
-	now := time.Now()
-	var lease types.Lease
-	ok := false
-
-	s.registry.mu.RLock()
-	if leaseID, found := s.registry.routes.LookupExact(hostname); found {
-		record, found := s.registry.leaseByID[leaseID]
-		if found && record != nil && !now.After(record.ExpiresAt) && !record.Metadata.Hide && s.registry.policy.IsLeaseRoutable(record.ID) {
-			lease = record.Lease
-			lease.Bootstraps = append([]string(nil), lease.Bootstraps...)
-			lease.Metadata = lease.Metadata.Copy()
-			ok = true
-		}
+	resp := types.DiscoveryResponse{
+		ProtocolVersion: 1,
+		GeneratedAt:     now,
+		Self:            self,
+		Relays:          nil,
 	}
-	s.registry.mu.RUnlock()
-
-	if !ok {
-		return resp, nil
+	if s.relaySet != nil {
+		resp.Relays = s.relaySet.AdvertisedDescriptors()
 	}
-
-	ownerAddress := lease.OwnerAddress
-	if strings.TrimSpace(ownerAddress) == "" {
-		ownerAddress = s.ownerIdentity.Address
-	}
-
-	return types.DiscoverResponse{
-		Found:        true,
-		Name:         lease.Name,
-		Hostname:     lease.Hostname,
-		ExpiresAt:    lease.ExpiresAt,
-		OwnerAddress: ownerAddress,
-		Bootstraps:   lease.Bootstraps,
-	}, nil
+	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
@@ -297,7 +304,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := s.admitLeaseByID(leaseID, token, false)
+	lease, err := s.registry.FindByID(leaseID)
+	if err == nil && !s.registry.policy.IsLeaseRoutable(lease.ID) {
+		err = errLeaseRejected
+	}
+	if err == nil && !utils.TokenMatches(lease.ReverseToken, token) {
+		err = errUnauthorized
+	}
+	if err == nil && lease.stream == nil {
+		err = errTransportMismatch
+	}
 	switch {
 	case errors.Is(err, errLeaseNotFound):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
@@ -337,17 +353,11 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stream := lease.stream
-	if stream == nil {
-		_ = conn.Close()
-		return
-	}
-
 	remoteAddr := ""
 	if conn.RemoteAddr() != nil {
 		remoteAddr = conn.RemoteAddr().String()
 	}
-	if err := stream.OfferConn(conn); err != nil {
+	if err := lease.stream.OfferConn(conn); err != nil {
 		log.Warn().
 			Err(err).
 			Str("lease_id", lease.ID).
@@ -362,7 +372,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Str("lease_id", lease.ID).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", remoteAddr).
-		Int("ready", stream.ReadyCount()).
+		Int("ready", lease.stream.ReadyCount()).
 		Msg("sdk reverse connected")
 }
 
@@ -380,13 +390,22 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	if strings.TrimSpace(msg.LeaseID) == "" || strings.TrimSpace(msg.ReverseToken) == "" {
+	if msg.LeaseID == "" || msg.ReverseToken == "" {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
 
-	lease, err := s.admitLeaseByID(msg.LeaseID, msg.ReverseToken, true)
+	lease, err := s.registry.FindByID(msg.LeaseID)
+	if err == nil && !s.registry.policy.IsLeaseRoutable(lease.ID) {
+		err = errLeaseRejected
+	}
+	if err == nil && !utils.TokenMatches(lease.ReverseToken, msg.ReverseToken) {
+		err = errUnauthorized
+	}
+	if err == nil && (lease.stream == nil || lease.datagram == nil) {
+		err = errTransportMismatch
+	}
 	switch {
 	case errors.Is(err, errLeaseNotFound):
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
@@ -410,13 +429,7 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 
-	dg := lease.datagram
-	if dg == nil {
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
-		_ = conn.CloseWithError(1, "transport mismatch")
-		return
-	}
-	if err := dg.Register(conn); err != nil {
+	if err := lease.datagram.Register(conn); err != nil {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "broker_closed"})
 		_ = conn.CloseWithError(1, "broker closed")
 		return
@@ -452,23 +465,18 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	bootstraps, err := utils.NormalizeRelayURLs(req.Bootstraps...)
-	if err != nil {
-		return types.RegisterResponse{}, fmt.Errorf("normalize bootstraps: %w", err)
-	}
 	ownerAddress := strings.TrimSpace(req.OwnerAddress)
 	if ownerAddress != "" {
-		ownerAddress, err = discovery.NormalizeEVMAddress(ownerAddress)
+		ownerAddress, err = utils.NormalizeEVMAddress(ownerAddress)
 		if err != nil {
 			return types.RegisterResponse{}, fmt.Errorf("normalize owner address: %w", err)
 		}
 	}
 
-	if err := s.requireDatagramPlane(req.UDPEnabled); err != nil {
-		return types.RegisterResponse{}, err
-	}
-
 	if req.UDPEnabled {
+		if s.cfg.UDPPortCount <= 0 || s.group != nil && s.quicTunnel == nil {
+			return types.RegisterResponse{}, errFeatureUnavailable
+		}
 		if !s.registry.policy.IsUDPEnabled() {
 			return types.RegisterResponse{}, errUDPDisabled
 		}
@@ -485,7 +493,6 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			ID:           leaseID,
 			Name:         name,
 			Hostname:     hostname,
-			Bootstraps:   append([]string(nil), bootstraps...),
 			Metadata:     req.Metadata,
 			OwnerAddress: ownerAddress,
 			ExpiresAt:    expiresAt,
@@ -519,40 +526,14 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		record.Close()
 		return types.RegisterResponse{}, err
 	}
-	if s.DiscoveryEnabled() {
-		if _, err := s.mergeDiscoveryBootstraps(bootstraps); err != nil {
-			record.Close()
-			_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-			return types.RegisterResponse{}, err
-		}
-	}
-
-	responseBootstraps, err := utils.NormalizeRelayURLs(s.cfg.PortalURL)
-	if err != nil {
-		record.Close()
-		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-		return types.RegisterResponse{}, err
-	}
-	if s.DiscoveryEnabled() {
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, s.discoveryBootstrapsSnapshot()...)...)
-	} else {
-		responseBootstraps, err = utils.NormalizeRelayURLs(append(responseBootstraps, append(s.cfg.Bootstraps, record.Bootstraps...)...)...)
-	}
-	if err != nil {
-		record.Close()
-		_, _ = s.registry.Unregister(record.ID, record.ReverseToken)
-		return types.RegisterResponse{}, err
-	}
 
 	resp := types.RegisterResponse{
 		LeaseID:    leaseID,
 		Hostname:   hostname,
 		Metadata:   record.Metadata,
 		ExpiresAt:  expiresAt,
-		Bootstraps: responseBootstraps,
 		UDPEnabled: record.UDPEnabled,
 	}
-	resp.ConnectURL = strings.TrimRight(s.cfg.PortalURL, "/") + types.PathSDKConnect
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.datagram.UDPPort())
 	}
@@ -569,7 +550,7 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(req.LeaseID, req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
+	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		return types.RenewResponse{}, err
 	}
@@ -578,20 +559,12 @@ func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.Rene
 }
 
 func (s *Server) unregisterLease(req types.UnregisterRequest) error {
-	record, err := s.registry.Unregister(req.LeaseID, req.ReverseToken)
+	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID), req.ReverseToken)
 	if err != nil {
 		return err
 	}
-	s.closeLease(record)
-	return nil
-}
-
-func (s *Server) authorizeLeaseToken(record *leaseRecord, token string) error {
-	if record == nil {
-		return errLeaseNotFound
-	}
-	if !utils.TokenMatches(record.ReverseToken, token) {
-		return errUnauthorized
+	if record != nil {
+		record.Close()
 	}
 	return nil
 }
@@ -602,16 +575,4 @@ func (s *Server) runAPIServer() error {
 		return nil
 	}
 	return err
-}
-
-func newKeylessSignerHandler(apiTLS keyless.TLSMaterialConfig) (http.Handler, error) {
-	if len(apiTLS.KeyPEM) == 0 {
-		return nil, nil
-	}
-
-	signer, err := keyless.NewSigner(apiTLS.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("configure api signer: %w", err)
-	}
-	return signer.Handler(), nil
 }

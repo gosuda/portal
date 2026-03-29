@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/url"
@@ -15,6 +14,7 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
@@ -36,29 +36,19 @@ type ListenerConfig struct {
 	ReadyTarget      int
 	RetryCount       int
 	RetryWait        time.Duration
-
-	RegisterBootstraps []string
-	ownerAddress       string
+	ownerAddress     string
+	relaySet         *discovery.RelaySet
 }
-
-type listenerStatus string
-
-const (
-	listenerStatusInactive listenerStatus = "inactive"
-	listenerStatusReady    listenerStatus = "ready"
-	listenerStatusBanned   listenerStatus = "banned"
-)
 
 type Listener struct {
 	api    *apiClient
 	cancel context.CancelFunc
 	doneCh <-chan struct{}
 
-	retryCount         int
-	retryWait          time.Duration
-	leaseTTL           time.Duration
-	renewBefore        time.Duration
-	registerBootstraps []string
+	retryCount  int
+	retryWait   time.Duration
+	leaseTTL    time.Duration
+	renewBefore time.Duration
 
 	stream      *transport.ClientStream
 	datagram    *transport.ClientDatagram
@@ -68,15 +58,15 @@ type Listener struct {
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
-	banMITM       bool
-	mu            sync.Mutex
-	startupStatus listenerStatus
-	leaseID       string
-	hostname      string
-	udpAddr       string
-	metadata      types.LeaseMetadata
-	tlsConfig     *tls.Config
-	tlsCloser     io.Closer
+	banMITM   bool
+	relaySet  *discovery.RelaySet
+	mu        sync.Mutex
+	leaseID   string
+	hostname  string
+	udpAddr   string
+	metadata  types.LeaseMetadata
+	tlsConfig *tls.Config
+	tlsCloser io.Closer
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -95,25 +85,18 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		return nil, err
 	}
 
-	initialBootstraps, err := utils.NormalizeRelayURLs(cfg.RegisterBootstraps...)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("normalize bootstraps: %w", err)
-	}
-
 	l := &Listener{
-		doneCh:             listenerCtx.Done(),
-		cancel:             cancel,
-		api:                api,
-		registered:         make(chan struct{}),
-		startupStatus:      listenerStatusInactive,
-		retryCount:         cfg.RetryCount,
-		retryWait:          retryWait,
-		leaseTTL:           leaseTTL,
-		renewBefore:        renewBefore,
-		registerBootstraps: initialBootstraps,
-		metadata:           cfg.Metadata.Copy(),
-		banMITM:            cfg.BanMITM,
+		doneCh:      listenerCtx.Done(),
+		cancel:      cancel,
+		api:         api,
+		registered:  make(chan struct{}),
+		retryCount:  cfg.RetryCount,
+		retryWait:   retryWait,
+		leaseTTL:    leaseTTL,
+		renewBefore: renewBefore,
+		metadata:    cfg.Metadata.Copy(),
+		banMITM:     cfg.BanMITM,
+		relaySet:    cfg.relaySet,
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
 	l.stream = transport.NewClientStream(readyTarget, handshakeTimeout)
@@ -138,7 +121,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 	var retries int
 
 	for {
-		err := l.registerAndConfigure(ctx, l.registerBootstraps)
+		err := l.registerAndConfigure(ctx)
 		switch {
 		case err == nil:
 			for range readyTarget {
@@ -155,8 +138,8 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 						defer l.mu.Unlock()
 						return l.tlsConfig
 					},
-					func() { l.setStartupStatus(listenerStatusReady) },
-					func() { l.setStartupStatus(listenerStatusInactive) },
+					func() { l.markReachable() },
+					func() { l.markUnreachable() },
 					l.retryOrClose,
 				)
 			}
@@ -265,6 +248,65 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
+func (l *Listener) AcceptDatagram() (types.DatagramFrame, error) {
+	if l == nil || l.datagram == nil {
+		return types.DatagramFrame{}, net.ErrClosed
+	}
+
+	frame, err := l.datagram.Accept(l.doneCh)
+	if err != nil {
+		return types.DatagramFrame{}, err
+	}
+
+	frame.Payload = append([]byte(nil), frame.Payload...)
+	l.mu.Lock()
+	frame.LeaseID = l.leaseID
+	frame.UDPAddr = l.udpAddr
+	if l.api != nil && l.api.baseURL != nil {
+		frame.RelayURL = l.api.baseURL.String()
+	}
+	l.mu.Unlock()
+	return frame, nil
+}
+
+func (l *Listener) SendDatagram(frame types.DatagramFrame) error {
+	if l == nil || l.datagram == nil {
+		return net.ErrClosed
+	}
+
+	l.mu.Lock()
+	leaseID := l.leaseID
+	datagram := l.datagram
+	l.mu.Unlock()
+
+	if leaseID == "" || datagram == nil {
+		return net.ErrClosed
+	}
+	if frameLeaseID := strings.TrimSpace(frame.LeaseID); frameLeaseID != "" && frameLeaseID != leaseID {
+		return errors.New("datagram frame targets stale lease")
+	}
+	return datagram.Send(frame.FlowID, frame.Payload)
+}
+
+func (l *Listener) DatagramReady() (string, bool, bool) {
+	if l == nil || l.datagram == nil {
+		return "", false, false
+	}
+
+	l.mu.Lock()
+	udpAddr := l.udpAddr
+	datagram := l.datagram
+	l.mu.Unlock()
+
+	ready := datagram != nil && datagram.Connected() && udpAddr != ""
+	select {
+	case <-l.registered:
+		return udpAddr, ready, udpAddr != "" && !ready
+	default:
+		return udpAddr, ready, !l.closed()
+	}
+}
+
 func (l *Listener) Addr() net.Addr {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -318,12 +360,6 @@ func (l *Listener) PublicURL() string {
 		Scheme: l.api.baseURL.Scheme,
 		Host:   host,
 	}).String()
-}
-
-func (l *Listener) UDPAddr() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.udpAddr
 }
 
 func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) {
@@ -396,18 +432,14 @@ func (l *Listener) renewLease(ctx context.Context) error {
 
 	requestCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := l.registerAndConfigure(requestCtx, l.registerBootstraps); err != nil {
+	if err := l.registerAndConfigure(requestCtx); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps []string) error {
-	if err := l.api.ensureReady(ctx); err != nil {
-		return err
-	}
-
-	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil, registerBootstraps)
+func (l *Listener) registerAndConfigure(ctx context.Context) error {
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil)
 	if err != nil {
 		return err
 	}
@@ -418,7 +450,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps 
 			Message: "relay did not enable required udp support",
 		}
 	}
-
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
 		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
@@ -462,18 +493,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context, registerBootstraps 
 	return nil
 }
 
-// WaitRegistered blocks until the first successful lease registration or context cancellation.
-func (l *Listener) WaitRegistered(ctx context.Context) error {
-	select {
-	case <-l.registered:
-		return nil
-	case <-l.doneCh:
-		return net.ErrClosed
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func (l *Listener) retryOrClose(ctx context.Context, operation string, err error, retries int) bool {
 	if ctx.Err() != nil {
 		return false
@@ -486,7 +505,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 		Logger()
 
 	if operation == "lease registration" {
-		l.setStartupStatus(listenerStatusInactive)
+		l.markUnreachable()
 	}
 
 	if l.retryCount > 0 && retries > l.retryCount {
@@ -529,35 +548,28 @@ func (l *Listener) closed() bool {
 	}
 }
 
-func (l *Listener) setStartupStatus(status listenerStatus) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	if l.startupStatus == listenerStatusBanned && status != listenerStatusBanned {
-		l.mu.Unlock()
-		return
-	}
-	l.startupStatus = status
-	l.mu.Unlock()
-}
-
 func (l *Listener) ban() {
 	if l == nil {
 		return
 	}
-	l.setStartupStatus(listenerStatusBanned)
+	if l.relaySet != nil && l.api != nil && l.api.baseURL != nil {
+		l.relaySet.BanRelayURL(l.api.baseURL.String(), "mitm")
+	}
 	_ = l.Close()
 }
 
-func (l *Listener) StartupStatus() listenerStatus {
-	if l == nil {
-		return listenerStatusInactive
+func (l *Listener) markReachable() {
+	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
+		return
 	}
+	l.relaySet.MarkRelayReachable(l.api.baseURL.String(), time.Now().UTC())
+}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.startupStatus
+func (l *Listener) markUnreachable() {
+	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
+		return
+	}
+	l.relaySet.MarkRelayUnreachable(l.api.baseURL.String())
 }
 
 func (l *Listener) BanMITM() bool {

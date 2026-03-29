@@ -31,26 +31,28 @@ func main() {
 }
 
 type relayServerConfig struct {
-	PortalURL          string
-	APIPort            int
-	SNIPort            int
-	UDPPortCount       int
-	LandingPageEnabled bool
-	Bootstraps         string
-	DiscoveryEnabled   bool
-	OwnerPrivateKey    string
-	AdminSecretKey     string
-	TrustProxyHeaders  bool
-	TrustedProxyCIDRs  string
-	KeylessDir         string
-	AdminSettingsPath  string
-	ACMEDNSProvider    string
-	CloudflareToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
+	PortalURL           string
+	APIPort             int
+	SNIPort             int
+	UDPPortCount        int
+	LandingPageEnabled  bool
+	Bootstraps          string
+	DiscoveryEnabled    bool
+	OwnerPrivateKey     string
+	WireGuardPrivateKey string
+	DiscoveryPort       int
+	AdminSecretKey      string
+	TrustProxyHeaders   bool
+	TrustedProxyCIDRs   string
+	AdminSettingsPath   string
+	KeylessDir          string
+	ACMEDNSProvider     string
+	CloudflareToken     string
+	AWSAccessKeyID      string
+	AWSSecretAccessKey  string
+	AWSSessionToken     string
+	AWSRegion           string
+	AWSHostedZoneID     string
 }
 
 func runServeCommand(args []string) error {
@@ -65,6 +67,8 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.StringFlagEnv(fs, &cfg.OwnerPrivateKey, "owner-private-key", "", "relay owner private key used to derive a discovery address", "OWNER_PRIVATE_KEY")
+	utils.StringFlagEnv(fs, &cfg.WireGuardPrivateKey, "wireguard-private-key", "", "wireguard private key for relay peer overlay", "WIREGUARD_PRIVATE_KEY")
+	utils.IntFlagEnv(fs, &cfg.DiscoveryPort, "discovery-port", 0, utils.ParsePortNumber, "public UDP listen port advertised for relay-peer discovery overlay (defaults to 51820 when wireguard is enabled)", "DISCOVERY_PORT")
 	utils.StringFlagEnv(fs, &cfg.AdminSecretKey, "admin-secret-key", "", "admin auth secret", "ADMIN_SECRET_KEY")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
@@ -96,6 +100,7 @@ func runServeCommand(args []string) error {
 		Str("admin_settings_path", cfg.AdminSettingsPath).
 		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
+		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
 
@@ -112,9 +117,11 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 	}
 
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:       cfg.PortalURL,
-		OwnerPrivateKey: cfg.OwnerPrivateKey,
-		Bootstraps:      bootstraps,
+		PortalURL:           cfg.PortalURL,
+		OwnerPrivateKey:     cfg.OwnerPrivateKey,
+		Bootstraps:          bootstraps,
+		WireGuardPrivateKey: cfg.WireGuardPrivateKey,
+		DiscoveryPort:       cfg.DiscoveryPort,
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,
@@ -152,6 +159,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		Str("root_host", rootHost).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("discovery_enabled", server.DiscoveryEnabled()).
+		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
 	if quicAddr := server.QUICTunnelAddr(); quicAddr != "" {

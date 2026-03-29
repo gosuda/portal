@@ -94,7 +94,11 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool, bootstraps []string) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool) (types.RegisterResponse, error) {
+	if err := a.ensureHTTPClient(ctx); err != nil {
+		return types.RegisterResponse{}, err
+	}
+
 	var resp types.RegisterResponse
 	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		Name:         a.name,
@@ -102,16 +106,15 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		OwnerAddress: a.ownerAddress,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
-		Bootstraps:   bootstraps,
 		UDPEnabled:   udpEnabled,
-		ReportedIP:   a.resolvedPublicIP,
+		ReportedIP:   a.reportedIP(ctx),
 	}, &resp); err != nil {
 		return types.RegisterResponse{}, err
 	}
 	return resp, nil
 }
 
-func (a *apiClient) ensureReady(ctx context.Context) error {
+func (a *apiClient) ensureHTTPClient(ctx context.Context) error {
 	if a.httpClient != nil && a.rawTLSConfig != nil {
 		return nil
 	}
@@ -146,11 +149,14 @@ func (a *apiClient) ensureReady(ctx context.Context) error {
 	a.httpClient = httpClient
 	a.rawTLSConfig = rawTLSConfig
 
+	return nil
+}
+
+func (a *apiClient) reportedIP(ctx context.Context) string {
 	if a.resolvedPublicIP == "" {
 		a.resolvedPublicIP = utils.ResolvePublicIP(ctx)
 	}
-
-	return nil
+	return a.resolvedPublicIP
 }
 
 func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
@@ -174,11 +180,15 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 }
 
 func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Duration) error {
+	if err := a.ensureHTTPClient(ctx); err != nil {
+		return err
+	}
+
 	return a.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:      leaseID,
 		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
-		ReportedIP:   a.resolvedPublicIP,
+		ReportedIP:   a.reportedIP(ctx),
 	}, &types.RenewResponse{})
 }
 
@@ -190,6 +200,10 @@ func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
 }
 
 func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net.Conn, error) {
+	if err := a.ensureHTTPClient(ctx); err != nil {
+		return nil, err
+	}
+
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: a.dialTimeout},
 		Config:    a.rawTLSConfig.Clone(),
@@ -310,6 +324,10 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.
 func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken string) (*quic.Conn, error) {
+	if err := a.ensureHTTPClient(ctx); err != nil {
+		return nil, err
+	}
+
 	tlsConf := a.rawTLSConfig.Clone()
 	tlsConf.NextProtos = []string{"portal-tunnel"}
 
