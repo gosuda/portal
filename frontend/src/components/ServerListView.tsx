@@ -27,7 +27,7 @@ type ListServer = ClientServer | AdminServer;
 
 interface OfficialRegistryRelay {
   url: string;
-  status: "online" | "unreachable";
+  status: "online" | "unreachable" | "disconnected";
   releaseVersion?: string;
 }
 
@@ -44,12 +44,20 @@ const OFFICIAL_REGISTRY_SOURCE_URL =
 const REPOSITORY_URL = "https://github.com/gosuda/portal";
 
 async function loadOfficialRegistryRelay(
-  relayURL: string
+  relayURL: string,
+  timeoutMs: number = 5000
 ): Promise<OfficialRegistryRelay> {
   const domainURL = new URL(API_PATHS.sdk.domain, relayURL).toString();
 
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("timeout")), timeoutMs);
+  });
+
   try {
-    const domain = await apiClient.get<RelayDomainResponse>(domainURL);
+    const domain = await Promise.race([
+      apiClient.get<RelayDomainResponse>(domainURL),
+      timeoutPromise,
+    ]);
     return {
       url: relayURL,
       status: "online",
@@ -61,7 +69,7 @@ async function loadOfficialRegistryRelay(
   } catch {
     return {
       url: relayURL,
-      status: "unreachable",
+      status: "disconnected",
       releaseVersion: "",
     };
   }
@@ -88,6 +96,30 @@ async function loadOfficialRegistryRelays(
   return Promise.all(
     relayURLs.map((relayURL) => loadOfficialRegistryRelay(relayURL.trim()))
   );
+}
+
+async function retryDisconnectedRelays(
+  currentRelays: OfficialRegistryRelay[]
+): Promise<OfficialRegistryRelay[]> {
+  const disconnectedRelays = currentRelays.filter(
+    (relay) => relay.status === "disconnected" || relay.status === "unreachable"
+  );
+
+  if (disconnectedRelays.length === 0) {
+    return currentRelays;
+  }
+
+  const retriedResults = await Promise.all(
+    disconnectedRelays.map((relay) =>
+      loadOfficialRegistryRelay(relay.url, 5000)
+    )
+  );
+
+  const resultMap = new Map<string, OfficialRegistryRelay>();
+  currentRelays.forEach((relay) => resultMap.set(relay.url, relay));
+  retriedResults.forEach((relay) => resultMap.set(relay.url, relay));
+
+  return Array.from(resultMap.values());
 }
 
 interface ServerListViewProps {
@@ -278,6 +310,34 @@ export function ServerListView({
       cancelled = true;
     };
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (isAdmin || !officialRegistryRelays) {
+      return;
+    }
+
+    const hasDisconnected = officialRegistryRelays.some(
+      (relay) => relay.status === "disconnected" || relay.status === "unreachable"
+    );
+
+    if (!hasDisconnected) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void retryDisconnectedRelays(officialRegistryRelays)
+        .then((updatedRelays) => {
+          setOfficialRegistryRelays(updatedRelays);
+        })
+        .catch((error) => {
+          console.error("Failed to retry disconnected relays", error);
+        });
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isAdmin, officialRegistryRelays]);
 
   const isAllSelected =
     allLeaseIds.length > 0 &&
@@ -743,9 +803,9 @@ export function ServerListView({
                                 {relay.url}
                               </a>
                               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                {relay.status === "unreachable" ? (
+                                {relay.status === "unreachable" || relay.status === "disconnected" ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                    Offline
+                                    Disconnected
                                   </span>
                                 ) : relay.releaseVersion ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
