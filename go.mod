@@ -35,7 +35,7 @@ require (
 	github.com/aws/smithy-go v1.24.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/dchest/uniuri v1.2.0 // indirect
-	github.com/ethereum/go-ethereum v1.16.9 // indirect
+	github.com/ethereum/go-ethereum v1.17.1 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
