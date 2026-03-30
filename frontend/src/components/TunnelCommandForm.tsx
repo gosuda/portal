@@ -340,11 +340,12 @@ function FullTunnelCommandForm({
   Pick<TunnelCommandFormProps, "className">) {
   const inputId = useId();
   const isTerminal = theme === "terminal";
+  const currentOrigin = readCurrentOrigin();
 
   const [relayUrls, setRelayUrls] = useState<string[]>(() => [
-    readCurrentOrigin(),
+    currentOrigin,
   ]);
-  const [defaultRelays, setDefaultRelays] = useState(true);
+  const [discoveryEnabled, setDiscoveryEnabled] = useState(true);
   const [urlInput, setUrlInput] = useState("");
   const [enableUDP, setEnableUDP] = useState(false);
   const [udpPort, setUDPPort] = useState("");
@@ -376,7 +377,7 @@ function FullTunnelCommandForm({
     handleShuffleName,
   } = useTunnelCommand({
     relayUrls,
-    defaultRelays,
+    discovery: discoveryEnabled,
     thumbnailURL: normalizedThumbnailURL,
     enableUDP,
     udpPort,
@@ -398,6 +399,9 @@ function FullTunnelCommandForm({
   };
 
   const removeRelayURL = (url: string) => {
+    if (!discoveryEnabled && relayUrls.length <= 1) {
+      return;
+    }
     setRelayUrls((prev) => prev.filter((candidate) => candidate !== url));
   };
 
@@ -525,11 +529,17 @@ function FullTunnelCommandForm({
           >
             <input
               type="checkbox"
-              checked={defaultRelays}
-              onChange={(event) => setDefaultRelays(event.target.checked)}
+              checked={discoveryEnabled}
+              onChange={(event) => {
+                const nextEnabled = event.target.checked;
+                setDiscoveryEnabled(nextEnabled);
+                if (!nextEnabled && relayUrls.length === 0) {
+                  setRelayUrls([currentOrigin]);
+                }
+              }}
               className="h-4 w-4"
             />
-            <span>Include default registry</span>
+            <span>Enable relay discovery</span>
           </label>
         </div>
 
@@ -557,9 +567,14 @@ function FullTunnelCommandForm({
                 onClick={() => removeRelayURL(url)}
                 className={cn(
                   "ml-1 rounded-sm p-0.5",
-                  isTerminal ? "hover:bg-white/10" : "hover:bg-destructive/15"
+                  !discoveryEnabled && relayUrls.length <= 1
+                    ? "cursor-not-allowed opacity-40"
+                    : isTerminal
+                      ? "hover:bg-white/10"
+                      : "hover:bg-destructive/15"
                 )}
                 aria-label={`Remove ${url}`}
+                disabled={!discoveryEnabled && relayUrls.length <= 1}
               >
                 <X className="h-3 w-3" />
               </button>

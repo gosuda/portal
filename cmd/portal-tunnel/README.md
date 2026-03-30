@@ -46,8 +46,8 @@ portal expose --name myapp \
 - Route matching is longest-prefix-first. `/api=http://127.0.0.1:3001` matches `/api/*` and strips the `/api` prefix before proxying to the upstream.
 - Routed HTTP mode automatically forwards `X-Forwarded-*`, rewrites upstream `Location` redirects back to the public route path, and strips loopback cookie domains while remapping cookie paths to the mounted route prefix.
 - `--name` is optional. When omitted, the CLI generates a name for that run.
-- `--relays` sets the relay API URLs for that run.
-- `--discovery=false` disables the public registry seed list and the discovery expansion loop for that run.
+- `--relays` adds explicit relay API URLs for that run.
+- `--discovery=false` disables the public registry seed list and the runtime relay discovery expansion loop for that run. With `--discovery=false`, only the explicit `--relays` values are used.
 - `--ban-mitm` enables strict rejection when the TLS self-probe detects termination in the path.
 
 Flags:
@@ -61,7 +61,7 @@ Flags:
 --tags            Service tags metadata (comma-separated)
 --thumbnail       Service thumbnail URL metadata
 --owner           Service owner metadata
---hide            Hide service from discovery
+--hide            Hide service from relay listing screens
 --http-route      HTTP route mapping in PATH=UPSTREAM form; repeat for multiple routes
 ```
 
@@ -69,6 +69,7 @@ Flags:
 
 - Prints the relay URLs that the CLI will use for the current invocation.
 - `--relays` adds explicit relay URLs, and `--default-relays=false` disables the public registry list for the current listing run.
+- Unlike `portal expose`, `portal list` does not run the relay discovery expansion loop. It only resolves the registry seed list plus explicit `--relays` values.
 
 Legacy execution compatibility has been removed:
 
@@ -82,7 +83,7 @@ Legacy execution compatibility has been removed:
 - `install.ps1` installs `portal.exe` for the current Windows user and updates the user `PATH`.
 - The installer does not write a config file.
 - `portal expose 3000` still works after install because discovery is enabled by default.
-- Use `--relays https://portal.example.com` only when you want to target a specific relay explicitly.
+- To target only a specific relay, use `--relays https://portal.example.com --discovery=false`.
 
 ## Notes
 
