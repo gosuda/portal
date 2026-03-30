@@ -66,15 +66,15 @@ function splitDisplayCommand(command: string, os: TunnelCommandOS) {
 
 interface TunnelCommandExtras {
   relayUrls?: string[];
-  defaultRelays?: boolean;
+  discovery?: boolean;
   thumbnailURL?: string;
   enableUDP?: boolean;
   udpPort?: string;
 }
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
-  const currentOrigin = useMemo(readCurrentOrigin, []);
-  const nameSeed = useMemo(readTunnelNameSeed, []);
+  const [currentOrigin] = useState(readCurrentOrigin);
+  const [nameSeed] = useState(readTunnelNameSeed);
 
   const [target, setTarget] = useState(DEFAULT_HOST);
   const [name, setName] = useState("");
@@ -102,7 +102,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
       name: effectiveName,
       nameSeed,
       relayUrls: extras.relayUrls ?? [currentOrigin],
-      defaultRelays: extras.defaultRelays ?? true,
+      discovery: extras.discovery ?? true,
       thumbnailURL: extras.thumbnailURL ?? "",
       enableUDP: extras.enableUDP ?? false,
       udpPort: extras.udpPort ?? "",
@@ -111,7 +111,7 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
     [
       currentOrigin,
       effectiveName,
-      extras.defaultRelays,
+      extras.discovery,
       extras.enableUDP,
       extras.relayUrls,
       extras.thumbnailURL,

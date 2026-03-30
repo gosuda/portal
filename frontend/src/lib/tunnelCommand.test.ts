@@ -14,7 +14,7 @@ describe("tunnelCommand", () => {
       name: "My App",
       nameSeed: "web_portal",
       relayUrls: ["https://localhost:4017"],
-      defaultRelays: true,
+      discovery: true,
       thumbnailURL: "",
       os: "unix" as const,
     };
@@ -38,7 +38,7 @@ describe("tunnelCommand", () => {
       name: "my-app",
       nameSeed: "web_portal",
       relayUrls: ["https://relay.example.com"],
-      defaultRelays: false,
+      discovery: false,
       thumbnailURL: "https://example.com/thumb.png",
       os: "windows" as const,
     };
@@ -47,7 +47,7 @@ describe("tunnelCommand", () => {
       [
         `$ProgressPreference = 'SilentlyContinue'`,
         `irm https://relay.example.com/install.ps1 | iex`,
-        `portal expose localhost:3000 --name my-app --relays https://relay.example.com --default-relays=false --thumbnail https://example.com/thumb.png`,
+        `portal expose localhost:3000 --name my-app --relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
       ].join("\n")
     );
     expect(buildTunnelDisplayCommand(options)).toBe(
@@ -55,7 +55,7 @@ describe("tunnelCommand", () => {
         `$ProgressPreference = 'SilentlyContinue'`,
         `irm https://relay.example.com/install.ps1 | iex`,
         `portal expose localhost:3000 --name my-app`,
-        `--relays https://relay.example.com --default-relays=false --thumbnail https://example.com/thumb.png`,
+        `--relays https://relay.example.com --discovery=false --thumbnail https://example.com/thumb.png`,
       ].join("\n")
     );
   });

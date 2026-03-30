@@ -13,7 +13,7 @@ export interface TunnelCommandOptions {
   name: string;
   nameSeed: string;
   relayUrls: string[];
-  defaultRelays: boolean;
+  discovery: boolean;
   thumbnailURL: string;
   enableUDP?: boolean;
   udpPort?: string;
@@ -33,7 +33,7 @@ export function normalizeTunnelCommandName(value: string): string {
 
 export function buildTunnelCommand({
   currentOrigin,
-  defaultRelays,
+  discovery,
   enableUDP = false,
   name,
   nameSeed,
@@ -45,7 +45,7 @@ export function buildTunnelCommand({
 }: TunnelCommandOptions): string {
   const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
     currentOrigin,
-    defaultRelays,
+    discovery,
     enableUDP,
     name,
     nameSeed,
@@ -61,7 +61,7 @@ export function buildTunnelCommand({
 
 export function buildTunnelDisplayCommand({
   currentOrigin,
-  defaultRelays,
+  discovery,
   enableUDP = false,
   name,
   nameSeed,
@@ -73,7 +73,7 @@ export function buildTunnelDisplayCommand({
 }: TunnelCommandOptions): string {
   const { installLine, exposeHead, exposeOptions } = buildTunnelCommandParts({
     currentOrigin,
-    defaultRelays,
+    discovery,
     enableUDP,
     name,
     nameSeed,
@@ -89,7 +89,7 @@ export function buildTunnelDisplayCommand({
 
 function buildTunnelCommandParts({
   currentOrigin,
-  defaultRelays,
+  discovery,
   enableUDP = false,
   name,
   nameSeed,
@@ -122,8 +122,8 @@ function buildTunnelCommandParts({
   if (relayUrls.length > 0) {
     exposeArgs.push(`--relays ${formatToken(relayURLValue, os)}`);
   }
-  if (!defaultRelays) {
-    exposeArgs.push("--default-relays=false");
+  if (!discovery) {
+    exposeArgs.push("--discovery=false");
   }
 
   const normalizedThumbnailURL = normalizeAbsoluteHTTPURL(thumbnailURL);

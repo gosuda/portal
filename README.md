@@ -1,8 +1,10 @@
 # PORTAL — Public Open Relay To Access Localhost
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 <p align="center"><img width="800" alt="Portal Demo" src="./portal.gif" /></p>
 
-<p align="center">Expose your local application to the public internet — no port forwarding, no NAT, no DNS setup.<br />Portal is a self-hosted relay network. You can connect to any relay or run your own.</p><br />
+<p align="center">Expose your local application to the public internet - no port forwarding, no NAT, no DNS setup.<br />Portal is a self-hosted relay network with end-to-end encryption (E2EE). You can connect to any relay or run your own.</p><br />
 
 ## Why Portal?
 
@@ -64,7 +66,7 @@ portal expose 3000 --relays https://localhost:4017
 
 ```powershell
 $ProgressPreference = 'SilentlyContinue'
-irm https://localhost:4017/install.ps1 | iex 
+irm https://localhost:4017/install.ps1 | iex
 portal expose 3000 --relays https://localhost:4017
 ```
 
