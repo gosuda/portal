@@ -2,36 +2,27 @@ package sdk
 
 import (
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/types"
-	"github.com/gosuda/portal/v2/utils"
 )
 
-func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayID, relayURL string) types.RelayDescriptor {
+func mustRelayDescriptor(t *testing.T, relayID, relayURL string) types.RelayDescriptor {
 	t.Helper()
 
-	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
-	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
-	}
-
 	now := time.Now().UTC()
-	desc, err := discovery.SignedDescriptor(types.RelayDescriptor{
-		RelayID:         relayID,
-		OwnerAddress:    identity.Address,
-		SignerPublicKey: identity.PublicKey,
-		Sequence:        uint64(now.UnixMilli()),
-		Version:         1,
-		IssuedAt:        now,
-		ExpiresAt:       now.Add(time.Hour),
-		APIHTTPSAddr:    relayURL,
-	}, identity.PrivateKey)
+	desc, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
+		RelayID:      relayID,
+		Sequence:     uint64(now.UnixMilli()),
+		Version:      1,
+		IssuedAt:     now,
+		ExpiresAt:    now.Add(time.Hour),
+		APIHTTPSAddr: relayURL,
+	})
 	if err != nil {
-		t.Fatalf("SignedDescriptor() error = %v", err)
+		t.Fatalf("NormalizeDescriptor() error = %v", err)
 	}
 	return desc
 }
@@ -169,22 +160,16 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 	}
 }
 
-func TestExposurePinDiscoveredDescriptorRejectsIdentityChange(t *testing.T) {
+func TestExposurePinDiscoveredDescriptorRejectsURLChange(t *testing.T) {
 	exposure := &Exposure{relaySet: discovery.NewRelaySet()}
-	desc := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), "relay-a", "https://relay-a.example")
+	desc := mustRelayDescriptor(t, "relay-a", "https://relay-a.example")
 
 	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	changedSigner := mustSignedRelayDescriptor(t, strings.Repeat("12", 32), desc.RelayID, desc.APIHTTPSAddr)
-	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedSigner}, time.Now().UTC())
-	if err == nil {
-		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned signer mismatch")
-	}
-
-	changedURL := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), desc.RelayID, "https://relay-b.example")
-	_, _, _, _, err = exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
+	changedURL := mustRelayDescriptor(t, desc.RelayID, "https://relay-b.example")
+	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned relay url mismatch")
 	}

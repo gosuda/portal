@@ -32,8 +32,9 @@ type stack struct {
 	net       *netstack.Net
 	overlayIP netip.Addr
 
-	mu     sync.Mutex
-	closed bool
+	mu            sync.Mutex
+	closed        bool
+	peerEndpoints map[string]string
 }
 
 func newStack(cfg Config) (*stack, error) {
@@ -78,9 +79,10 @@ func newStack(cfg Config) (*stack, error) {
 	}
 
 	return &stack{
-		device:    wgDevice,
-		net:       network,
-		overlayIP: overlayIP,
+		device:        wgDevice,
+		net:           network,
+		overlayIP:     overlayIP,
+		peerEndpoints: map[string]string{},
 	}, nil
 }
 
@@ -127,6 +129,7 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 	var builder strings.Builder
 	builder.WriteString("replace_peers=true\n")
 	var warnErr error
+	nextPeerEndpoints := map[string]string{}
 
 	for _, peer := range peers {
 		publicKeyHex, err := utils.WireGuardKeyHex(peer.WireGuardPublicKey)
@@ -138,8 +141,16 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 		if endpoint := strings.TrimSpace(peer.WireGuardEndpoint); endpoint != "" {
 			resolvedEndpoint, err = resolvePeerEndpoint(endpoint)
 			if err != nil {
-				warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w", peer.RelayID, err))
-				continue
+				s.mu.Lock()
+				currentEndpoint := s.peerEndpoints[publicKeyHex]
+				s.mu.Unlock()
+				if currentEndpoint != "" {
+					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w; using current endpoint %q", peer.RelayID, err, currentEndpoint))
+					resolvedEndpoint = currentEndpoint
+				} else {
+					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w", peer.RelayID, err))
+					continue
+				}
 			}
 		}
 
@@ -150,6 +161,7 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 			builder.WriteString("endpoint=")
 			builder.WriteString(resolvedEndpoint)
 			builder.WriteByte('\n')
+			nextPeerEndpoints[publicKeyHex] = resolvedEndpoint
 		}
 
 		allowedIPs := utils.NormalizeIPPrefixes(peer.AllowedIPs)
@@ -168,6 +180,9 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 	if err := s.device.IpcSet(builder.String()); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.peerEndpoints = nextPeerEndpoints
+	s.mu.Unlock()
 	return warnErr
 }
 

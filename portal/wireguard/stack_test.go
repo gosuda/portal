@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
@@ -94,6 +95,73 @@ func TestResolvePeerEndpointResolvesHostname(t *testing.T) {
 	}
 	if !ip.IsLoopback() {
 		t.Fatalf("host = %q, want loopback IP", host)
+	}
+}
+
+func TestApplyPeersKeepsCurrentEndpointOnResolveFailure(t *testing.T) {
+	t.Parallel()
+
+	privateKey, err := utils.NormalizeWireGuardPrivateKey("3333333333333333333333333333333333333333333333333333333333333333")
+	if err != nil {
+		t.Fatalf("NormalizeWireGuardPrivateKey() error = %v", err)
+	}
+
+	port := reserveUDPPort(t)
+	stack, err := newStack(Config{
+		PrivateKey:  privateKey,
+		Endpoint:    net.JoinHostPort("127.0.0.1", port),
+		OverlayIPv4: "10.77.0.1",
+	})
+	if err != nil {
+		t.Fatalf("newStack() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := stack.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	peerPrivateKey, err := utils.NormalizeWireGuardPrivateKey("4444444444444444444444444444444444444444444444444444444444444444")
+	if err != nil {
+		t.Fatalf("NormalizeWireGuardPrivateKey() error = %v", err)
+	}
+	peerPublicKey, err := utils.WireGuardPublicKeyFromPrivate(peerPrivateKey)
+	if err != nil {
+		t.Fatalf("WireGuardPublicKeyFromPrivate() error = %v", err)
+	}
+	peerPublicKeyHex, err := utils.WireGuardKeyHex(peerPublicKey)
+	if err != nil {
+		t.Fatalf("WireGuardKeyHex() error = %v", err)
+	}
+
+	peer := types.DesiredPeer{
+		RelayID:            "https://peer.example.com",
+		WireGuardPublicKey: peerPublicKey,
+		WireGuardEndpoint:  "127.0.0.1:51820",
+		AllowedIPs:         []string{"10.77.0.2/32"},
+	}
+	if err := stack.ApplyPeers([]types.DesiredPeer{peer}); err != nil {
+		t.Fatalf("ApplyPeers() initial error = %v", err)
+	}
+
+	peer.WireGuardEndpoint = "peer.invalid:51820"
+	err = stack.ApplyPeers([]types.DesiredPeer{peer})
+	if err == nil {
+		t.Fatal("ApplyPeers() warning error = nil, want resolve warning")
+	}
+	if !strings.Contains(err.Error(), "using current endpoint") {
+		t.Fatalf("ApplyPeers() warning = %q, want current endpoint fallback", err)
+	}
+
+	config, err := stack.device.IpcGet()
+	if err != nil {
+		t.Fatalf("IpcGet() error = %v", err)
+	}
+	if !strings.Contains(config, "public_key="+peerPublicKeyHex+"\n") {
+		t.Fatalf("IpcGet() = %q, want peer public key %q", config, peerPublicKeyHex)
+	}
+	if !strings.Contains(config, "endpoint=127.0.0.1:51820\n") {
+		t.Fatalf("IpcGet() = %q, want endpoint %q", config, "127.0.0.1:51820")
 	}
 }
 

@@ -3,7 +3,6 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,12 +19,10 @@ const defaultRequestTimeout = 15 * time.Second
 
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	desc.RelayID = strings.TrimSpace(desc.RelayID)
-	desc.SignerPublicKey = strings.ToLower(strings.TrimSpace(desc.SignerPublicKey))
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
 	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
 	desc.OverlayIPv4 = strings.TrimSpace(desc.OverlayIPv4)
-	desc.DescriptorSignature = strings.TrimSpace(desc.DescriptorSignature)
 	if !desc.IssuedAt.IsZero() {
 		desc.IssuedAt = desc.IssuedAt.UTC()
 	}
@@ -43,13 +40,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 			desc.RelayID = normalized
 		}
 	}
-	if desc.OwnerAddress != "" {
-		address, err := utils.NormalizeEVMAddress(desc.OwnerAddress)
-		if err != nil {
-			return types.RelayDescriptor{}, fmt.Errorf("normalize owner address: %w", err)
-		}
-		desc.OwnerAddress = address
-	}
 	if len(desc.OverlayCIDRs) > 0 {
 		normalized, err := utils.NormalizeOverlayCIDRs(desc.OverlayCIDRs)
 		if err != nil {
@@ -64,32 +54,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 		desc.OverlayCIDRs = nil
 	}
 	return desc, nil
-}
-
-func SignDescriptor(desc types.RelayDescriptor, privateKeyHex string) (string, error) {
-	normalized, err := NormalizeDescriptor(desc)
-	if err != nil {
-		return "", err
-	}
-	normalized.DescriptorSignature = ""
-	payload, err := json.Marshal(normalized)
-	if err != nil {
-		return "", err
-	}
-	return utils.SignSHA256Secp256k1DER(payload, privateKeyHex)
-}
-
-func SignedDescriptor(desc types.RelayDescriptor, privateKeyHex string) (types.RelayDescriptor, error) {
-	normalized, err := NormalizeDescriptor(desc)
-	if err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	signature, err := SignDescriptor(normalized, privateKeyHex)
-	if err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	normalized.DescriptorSignature = signature
-	return normalized, nil
 }
 
 func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {
@@ -120,14 +84,6 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	case normalized.IssuedAt.After(normalized.ExpiresAt):
 		return types.RelayDescriptor{}, errors.New("issued_at must be before expires_at")
 	}
-
-	derivedOwnerAddress, err := utils.AddressFromCompressedPublicKeyHex(normalized.SignerPublicKey)
-	if err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	if normalized.OwnerAddress != derivedOwnerAddress {
-		return types.RelayDescriptor{}, errors.New("owner_address does not match signer_public_key")
-	}
 	if normalized.SupportsOverlayPeer {
 		if err := utils.ValidateWireGuardPublicKey(normalized.WireGuardPublicKey); err != nil {
 			return types.RelayDescriptor{}, err
@@ -139,17 +95,6 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 			return types.RelayDescriptor{}, err
 		}
 	}
-
-	signature := normalized.DescriptorSignature
-	normalized.DescriptorSignature = ""
-	payload, err := json.Marshal(normalized)
-	if err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	if err := utils.VerifySHA256Secp256k1DER(payload, normalized.SignerPublicKey, signature); err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	normalized.DescriptorSignature = signature
 	return normalized, nil
 }
 
@@ -203,25 +148,6 @@ func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetU
 		if normalized.APIHTTPSAddr != normalizedTargetURL {
 			return errors.New("descriptor api_https_addr does not match target url")
 		}
-	}
-	return nil
-}
-
-// ValidateDescriptorMatch checks if a descriptor matches a pinned descriptor.
-func ValidateDescriptorMatch(desc, pinned types.RelayDescriptor) error {
-	normalized, err := NormalizeDescriptor(desc)
-	if err != nil {
-		return err
-	}
-
-	if relayID := strings.TrimSpace(pinned.RelayID); relayID != "" && normalized.RelayID != relayID {
-		return errors.New("descriptor relay_id does not match pinned relay id")
-	}
-	if apiURL := strings.TrimSpace(pinned.APIHTTPSAddr); apiURL != "" && normalized.APIHTTPSAddr != apiURL {
-		return errors.New("descriptor api_https_addr does not match pinned relay url")
-	}
-	if signerKey := strings.ToLower(strings.TrimSpace(pinned.SignerPublicKey)); signerKey != "" && normalized.SignerPublicKey != signerKey {
-		return errors.New("descriptor signer_public_key does not match pinned signer")
 	}
 	return nil
 }
