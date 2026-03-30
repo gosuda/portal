@@ -269,7 +269,7 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 	if strings.TrimSpace(leaseID) != "" && claims.LeaseID != strings.TrimSpace(leaseID) {
 		return LeaseAccessTokenClaims{}, errors.New("lease access token lease id does not match request")
 	}
-	if err := claims.Claims.ValidateWithLeeway(jwt.Expected{
+	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      strings.TrimSpace(issuer),
 		AnyAudience: jwt.Audience{leaseAccessTokenAudience},
 		Time:        now.UTC(),
