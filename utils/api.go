@@ -20,10 +20,6 @@ func WriteAPIData(w http.ResponseWriter, status int, data any) {
 	WriteAPIEnvelope(w, status, types.APIEnvelope[any]{OK: true, Data: data})
 }
 
-func WriteAPIOK(w http.ResponseWriter, status int) {
-	WriteAPIData(w, status, map[string]any{})
-}
-
 func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	WriteAPIEnvelope(w, status, types.APIEnvelope[any]{
 		OK:    false,

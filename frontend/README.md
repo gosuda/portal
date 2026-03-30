@@ -172,11 +172,11 @@ npm run serve
 ### Connection Responsibilities
 
 - Conn #1 (`browser -> app`) is the data plane and keeps existing tenant-facing TLS behavior.
-- Conn #2 (`relay -> tunnel`) is the control plane and enforces lease token admission.
+- Conn #2 (`relay -> tunnel`) is the control plane and enforces lease access token admission.
 
 ### Breaking-Change Expectation
 
-- Clients with invalid lease tokens are expected to fail admission.
+- Clients with invalid lease access tokens are expected to fail admission.
 - Client certificates are not required for `/sdk/*` admission.
 
 ### Radix Select Values

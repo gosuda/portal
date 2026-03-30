@@ -11,7 +11,10 @@ import (
 	"math/big"
 	"net"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const localDevelopmentCertificateTTL = 3650 * 24 * time.Hour
@@ -91,7 +94,7 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = normalizeHost(baseHost)
+	baseHost = strings.TrimPrefix(utils.NormalizeHostname(baseHost), "*.")
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
 	if baseHost != "" && baseHost != "localhost" {
 		domains = append(domains, baseHost)

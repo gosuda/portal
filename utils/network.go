@@ -3,7 +3,7 @@ package utils
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -12,43 +12,102 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
+var (
+	publicIPEndpoints = []string{
+		"https://api.ipify.org",
+		"https://ifconfig.me/ip",
+		"https://icanhazip.com",
+		"https://checkip.amazonaws.com",
+	}
+	publicIPv4Endpoints = []string{
+		"https://api4.ipify.org",
+		"https://ipv4.icanhazip.com",
+		"https://v4.ident.me",
+		"https://checkip.amazonaws.com",
+	}
+)
+
 // ResolvePublicIP attempts to determine the caller's public IP address
 // using well-known external services. Returns empty string on failure.
 // Best-effort with a short timeout to avoid blocking registration.
 func ResolvePublicIP(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	endpoints := append(append([]string{}, publicIPEndpoints...), publicIPv4Endpoints...)
+	ip, err := resolvePublicIP(ctx, 5*time.Second, 1500*time.Millisecond, false, endpoints...)
+	if err != nil {
+		return ""
+	}
+	return ip
+}
+
+func ResolvePublicIPv4(ctx context.Context) (string, error) {
+	endpoints := append(append([]string{}, publicIPv4Endpoints...), publicIPEndpoints...)
+	return resolvePublicIP(ctx, 15*time.Second, 3*time.Second, true, endpoints...)
+}
+
+func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Duration, requireIPv4 bool, endpoints ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
-	endpoints := []string{
-		"https://api.ipify.org",
-		"https://ifconfig.me/ip",
-	}
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{}
+	headers := http.Header{"User-Agent": []string{"portal-tunnel"}}
+	var lastErr error
 
 	for _, endpoint := range endpoints {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			continue
-		}
-		req.Header.Set("User-Agent", "portal-tunnel")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			continue
+		if err := ctx.Err(); err != nil {
+			lastErr = err
+			break
 		}
 
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
+		requestTimeout := attemptTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				lastErr = context.DeadlineExceeded
+				break
+			}
+			if requestTimeout <= 0 || requestTimeout > remaining {
+				requestTimeout = remaining
+			}
+		}
+
+		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
+		resp, err := HTTPDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
+		cancelRequest()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		body, readErr := HTTPReadString(resp, 256)
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK || readErr != nil {
+		if resp.StatusCode != http.StatusOK {
+			lastErr = errors.New(resp.Status)
+			continue
+		}
+		if readErr != nil {
+			lastErr = readErr
 			continue
 		}
 
-		if candidate := SanitizeReportedIP(string(body)); candidate != "" {
-			return candidate
+		candidate := SanitizeReportedIP(body)
+		if candidate == "" {
+			lastErr = errors.New("invalid public ip response")
+			continue
 		}
+		if requireIPv4 {
+			parsed := net.ParseIP(candidate)
+			if parsed == nil || parsed.To4() == nil {
+				lastErr = errors.New("public ip is not ipv4")
+				continue
+			}
+		}
+		return candidate, nil
 	}
 
-	return ""
+	if lastErr == nil {
+		lastErr = errors.New("resolve public ip failed")
+	}
+	return "", lastErr
 }
 
 func SanitizeReportedIP(raw string) string {
@@ -71,24 +130,17 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 		return explicit, nil
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, types.PortalRelayRegistryURL, nil)
-	if err != nil {
-		return explicit, nil
-	}
-
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	var registry struct {
+		Relays []string `json:"relays"`
+	}
+	resp, err := HTTPDo(ctx, client, http.MethodGet, types.PortalRelayRegistryURL, nil, nil)
 	if err != nil {
 		return explicit, nil
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return explicit, nil
-	}
-
-	var registry struct {
-		Relays []string `json:"relays"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
 		return explicit, nil

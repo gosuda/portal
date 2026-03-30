@@ -27,11 +27,10 @@ type Exposure struct {
 	name             string
 	TargetAddr       string
 	UDPAddr          string
-	reverseToken     string
 	udpEnabled       bool
 	banMITM          bool
 	metadata         types.LeaseMetadata
-	ownerAddress     string
+	ownerPrivateKey  string
 	rootCAPEM        []byte
 	discoveryEnabled bool
 
@@ -51,7 +50,6 @@ type ExposeConfig struct {
 	Name            string
 	TargetAddr      string
 	UDPAddr         string
-	ReverseToken    string
 	UDPEnabled      bool
 	BanMITM         bool
 	Discovery       bool
@@ -91,11 +89,10 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		name:             cfg.Name,
 		TargetAddr:       targetAddr,
 		UDPAddr:          udpAddr,
-		reverseToken:     cfg.ReverseToken,
 		udpEnabled:       cfg.UDPEnabled,
 		banMITM:          cfg.BanMITM,
 		metadata:         cfg.Metadata.Copy(),
-		ownerAddress:     identity.Address,
+		ownerPrivateKey:  identity.PrivateKey,
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
 		discoveryEnabled: cfg.Discovery,
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
@@ -309,14 +306,13 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	}
 	for _, relayURL := range missingRelayURLs {
 		listener, err := NewListener(context.Background(), relayURL, ListenerConfig{
-			Name:         e.name,
-			ReverseToken: e.reverseToken,
-			UDPEnabled:   e.udpEnabled,
-			BanMITM:      e.banMITM,
-			Metadata:     e.metadata.Copy(),
-			RootCAPEM:    append([]byte(nil), e.rootCAPEM...),
-			ownerAddress: e.ownerAddress,
-			relaySet:     e.relaySet,
+			Name:            e.name,
+			OwnerPrivateKey: e.ownerPrivateKey,
+			UDPEnabled:      e.udpEnabled,
+			BanMITM:         e.banMITM,
+			Metadata:        e.metadata.Copy(),
+			RootCAPEM:       append([]byte(nil), e.rootCAPEM...),
+			relaySet:        e.relaySet,
 		})
 		if err != nil {
 			if failOnError {

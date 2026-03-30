@@ -23,7 +23,7 @@ import (
 
 type ListenerConfig struct {
 	Name             string
-	ReverseToken     string
+	OwnerPrivateKey  string
 	UDPEnabled       bool
 	BanMITM          bool
 	Metadata         types.LeaseMetadata
@@ -36,7 +36,6 @@ type ListenerConfig struct {
 	ReadyTarget      int
 	RetryCount       int
 	RetryWait        time.Duration
-	ownerAddress     string
 	relaySet         *discovery.RelaySet
 }
 
@@ -109,7 +108,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
-			return l.api.openQUICSession(ctx, state.LeaseID, state.ReverseToken)
+			return l.api.openQUICSession(ctx, state.LeaseID, state.AccessToken)
 		})
 	}
 
@@ -373,10 +372,13 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 	if l.api == nil || l.leaseID == "" || l.udpAddr == "" {
 		return transport.ClientDatagramState{}, false
 	}
+	l.api.mu.RLock()
+	accessToken := l.api.accessToken
+	l.api.mu.RUnlock()
 
 	return transport.ClientDatagramState{
-		LeaseID:      l.leaseID,
-		ReverseToken: l.api.reverseToken,
+		LeaseID:     l.leaseID,
+		AccessToken: accessToken,
 	}, true
 }
 

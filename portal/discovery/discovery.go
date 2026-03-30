@@ -305,27 +305,8 @@ func doGET[T any](ctx context.Context, baseURL, path string, query url.Values, r
 		client = &clone
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
-	if err != nil {
+	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &zero); err != nil {
 		return zero, err
 	}
-
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return zero, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return zero, utils.DecodeAPIRequestError(resp)
-	}
-
-	envelope, err := utils.DecodeAPIEnvelope[T](resp.Body)
-	if err != nil {
-		return zero, fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		return zero, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
-	}
-	return envelope.Data, nil
+	return zero, nil
 }

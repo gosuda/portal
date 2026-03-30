@@ -7,11 +7,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.8
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.8
 	github.com/aws/aws-sdk-go-v2/service/route53 v1.62.1
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0
 	github.com/go-acme/lego/v4 v4.32.0
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/gosuda/keyless_tls v0.0.1-0.20260304212324-7733f8366abc
 	github.com/quic-go/quic-go v0.59.0
 	github.com/rs/zerolog v1.34.0
+	github.com/spruceid/siwe-go v0.2.1
 	golang.org/x/crypto v0.48.0
 	golang.org/x/net v0.50.0
 	golang.org/x/sync v0.19.0
@@ -30,12 +32,16 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.14 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.6 // indirect
 	github.com/aws/smithy-go v1.24.0 // indirect
+	github.com/btcsuite/btcd/btcec/v2 v2.3.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
+	github.com/dchest/uniuri v1.2.0 // indirect
+	github.com/ethereum/go-ethereum v1.12.1 // indirect
 	github.com/google/btree v1.1.2 // indirect
+	github.com/holiman/uint256 v1.2.3 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
+	github.com/relvacode/iso8601 v1.1.1-0.20210511065120-b30b151cc433 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
@@ -44,5 +50,3 @@ require (
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c // indirect
 )
-
-exclude golang.zx2c4.com/wireguard/tun/netstack v0.0.0-20220703234212-c31a7b1ab478

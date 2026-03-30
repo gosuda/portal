@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -36,6 +37,7 @@ const (
 var errRelayIncompatible = errors.New("relay is incompatible")
 
 type apiClient struct {
+	mu               sync.RWMutex
 	baseURL          *url.URL
 	httpClient       *http.Client
 	rawTLSConfig     *tls.Config
@@ -43,8 +45,9 @@ type apiClient struct {
 	requestTimeout   time.Duration
 	rootCAPEM        []byte
 	name             string
-	reverseToken     string
+	accessToken      string
 	metadata         types.LeaseMetadata
+	ownerPrivateKey  string
 	ownerAddress     string
 	resolvedPublicIP string
 }
@@ -55,9 +58,9 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		return nil, err
 	}
 
-	reverseToken := strings.TrimSpace(cfg.ReverseToken)
-	if reverseToken == "" {
-		reverseToken = utils.RandomID("tok_")
+	identity, err := utils.ResolveSecp256k1Identity(cfg.OwnerPrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("resolve owner identity: %w", err)
 	}
 
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
@@ -74,14 +77,14 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
 	return &apiClient{
-		baseURL:        baseURL,
-		dialTimeout:    dialTimeout,
-		requestTimeout: requestTimeout,
-		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
-		name:           name,
-		reverseToken:   reverseToken,
-		metadata:       cfg.Metadata.Copy(),
-		ownerAddress:   cfg.ownerAddress,
+		baseURL:         baseURL,
+		dialTimeout:     dialTimeout,
+		requestTimeout:  requestTimeout,
+		rootCAPEM:       append([]byte(nil), cfg.RootCAPEM...),
+		name:            name,
+		metadata:        cfg.Metadata.Copy(),
+		ownerPrivateKey: identity.PrivateKey,
+		ownerAddress:    identity.Address,
 	}, nil
 }
 
@@ -99,18 +102,38 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		return types.RegisterResponse{}, err
 	}
 
-	var resp types.RegisterResponse
-	if err := a.doJSON(ctx, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
+	var challenge types.RegisterChallengeResponse
+	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRegisterChallenge}).String(), types.RegisterChallengeRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
 		OwnerAddress: a.ownerAddress,
-		ReverseToken: a.reverseToken,
 		TTL:          int(ttl / time.Second),
 		UDPEnabled:   udpEnabled,
-		ReportedIP:   a.reportedIP(ctx),
-	}, &resp); err != nil {
+	}, nil, &challenge); err != nil {
 		return types.RegisterResponse{}, err
 	}
+
+	signature, err := utils.SignEthereumPersonalMessage(challenge.SIWEMessage, a.ownerPrivateKey)
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+
+	var resp types.RegisterResponse
+	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRegister}).String(), types.RegisterRequest{
+		ChallengeID:   challenge.ChallengeID,
+		SIWEMessage:   challenge.SIWEMessage,
+		SIWESignature: signature,
+		ReportedIP:    a.reportedIP(ctx),
+	}, nil, &resp); err != nil {
+		return types.RegisterResponse{}, err
+	}
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return types.RegisterResponse{}, errors.New("relay did not return access token")
+	}
+	a.mu.Lock()
+	a.accessToken = resp.AccessToken
+	a.mu.Unlock()
 	return resp, nil
 }
 
@@ -161,7 +184,7 @@ func (a *apiClient) reportedIP(ctx context.Context) string {
 
 func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
 	var resp types.DomainResponse
-	if err := a.doJSONWithClient(ctx, httpClient, http.MethodGet, types.PathSDKDomain, nil, &resp); err != nil {
+	if err := utils.HTTPDoAPI(ctx, httpClient, http.MethodGet, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKDomain}).String(), nil, nil, &resp); err != nil {
 		err = fmt.Errorf("check relay compatibility: %w", err)
 		var netErr net.Error
 		var apiErr *types.APIRequestError
@@ -184,19 +207,43 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 		return err
 	}
 
-	return a.doJSON(ctx, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
-		LeaseID:      leaseID,
-		ReverseToken: a.reverseToken,
-		TTL:          int(ttl / time.Second),
-		ReportedIP:   a.reportedIP(ctx),
-	}, &types.RenewResponse{})
+	a.mu.RLock()
+	accessToken := a.accessToken
+	a.mu.RUnlock()
+	if strings.TrimSpace(accessToken) == "" {
+		return errors.New("access token is not available")
+	}
+
+	var resp types.RenewResponse
+	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRenew}).String(), types.RenewRequest{
+		LeaseID:     leaseID,
+		AccessToken: accessToken,
+		TTL:         int(ttl / time.Second),
+		ReportedIP:  a.reportedIP(ctx),
+	}, nil, &resp); err != nil {
+		return err
+	}
+	resp.AccessToken = strings.TrimSpace(resp.AccessToken)
+	if resp.AccessToken == "" {
+		return errors.New("relay did not return renewed access token")
+	}
+
+	a.mu.Lock()
+	if a.accessToken == accessToken {
+		a.accessToken = resp.AccessToken
+	}
+	a.mu.Unlock()
+	return nil
 }
 
 func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
-	return a.doJSON(ctx, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
-		LeaseID:      leaseID,
-		ReverseToken: a.reverseToken,
-	}, nil)
+	a.mu.RLock()
+	accessToken := a.accessToken
+	a.mu.RUnlock()
+	return utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKUnregister}).String(), types.UnregisterRequest{
+		LeaseID:     leaseID,
+		AccessToken: accessToken,
+	}, nil, nil)
 }
 
 func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net.Conn, error) {
@@ -226,7 +273,10 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 		Host:   a.baseURL.Host,
 		Header: make(http.Header),
 	}
-	req.Header.Set(types.HeaderReverseToken, a.reverseToken)
+	a.mu.RLock()
+	accessToken := a.accessToken
+	a.mu.RUnlock()
+	req.Header.Set(types.HeaderAccessToken, accessToken)
 	req.Header.Set("Connection", "keep-alive")
 
 	if writeErr := req.Write(conn); writeErr != nil {
@@ -249,54 +299,6 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 	}
 
 	return wrapBufferedConn(conn, reader), nil
-}
-
-func (a *apiClient) doJSON(ctx context.Context, method, path string, payload any, out any) error {
-	return a.doJSONWithClient(ctx, a.httpClient, method, path, payload, out)
-}
-
-func (a *apiClient) doJSONWithClient(ctx context.Context, httpClient *http.Client, method, path string, payload any, out any) error {
-	if httpClient == nil {
-		return errors.New("api client is not ready")
-	}
-
-	var body io.Reader
-	if payload != nil {
-		buf, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("marshal payload: %w", err)
-		}
-		body = bytes.NewReader(buf)
-	}
-
-	ref, _ := url.Parse(path)
-	req, err := http.NewRequestWithContext(ctx, method, a.baseURL.ResolveReference(ref).String(), body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return utils.DecodeAPIRequestError(resp)
-	}
-
-	envelope, err := utils.DecodeAPIEnvelope[json.RawMessage](resp.Body)
-	if err != nil {
-		return fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		return utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
-	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(envelope.Data, out)
 }
 
 type bufferedConn struct {
@@ -323,7 +325,7 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.
-func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken string) (*quic.Conn, error) {
+func (a *apiClient) openQUICSession(ctx context.Context, leaseID, accessToken string) (*quic.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
@@ -350,8 +352,8 @@ func (a *apiClient) openQUICSession(ctx context.Context, leaseID, reverseToken s
 	}
 
 	controlMsg := types.QUICControlMessage{
-		LeaseID:      leaseID,
-		ReverseToken: reverseToken,
+		LeaseID:     leaseID,
+		AccessToken: accessToken,
 	}
 	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
 		_ = conn.CloseWithError(1, "control write failed")

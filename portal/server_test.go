@@ -237,10 +237,10 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	resp, err := server.registerLease(types.RegisterRequest{
+	resp, err := server.registerLease(types.RegisterChallengeRequest{
 		Name:         "Demo-App",
-		ReverseToken: "tok_1",
-	}, "203.0.113.10")
+		OwnerAddress: server.OwnerAddress(),
+	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}
@@ -250,9 +250,9 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("registerLease() hostname = %q, want %q", resp.Hostname, wantHostname)
 	}
 
-	record, ok := server.registry.Get(resp.LeaseID)
-	if !ok {
-		t.Fatal("registry.Get() = false, want registered lease")
+	record, err := server.registry.FindByID(resp.LeaseID)
+	if err != nil {
+		t.Fatalf("registry.FindByID() error = %v, want registered lease", err)
 	}
 	snapshot := server.registry.Snapshot(record)
 	if snapshot.Name != "demo-app" {
@@ -275,23 +275,23 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	server.registry.policy.SetUDPPolicy(true, 0)
 
-	resp, err := server.registerLease(types.RegisterRequest{
+	resp, err := server.registerLease(types.RegisterChallengeRequest{
 		Name:         "demo-udp",
-		ReverseToken: "tok_udp",
+		OwnerAddress: server.OwnerAddress(),
 		UDPEnabled:   true,
-	}, "203.0.113.10")
+	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if record, ok := server.registry.Get(resp.LeaseID); ok {
+		if record, err := server.registry.FindByID(resp.LeaseID); err == nil {
 			record.Close()
 		}
 	})
 
-	record, ok := server.registry.Get(resp.LeaseID)
-	if !ok {
-		t.Fatal("registry.Get() = false, want registered lease")
+	record, err := server.registry.FindByID(resp.LeaseID)
+	if err != nil {
+		t.Fatalf("registry.FindByID() error = %v, want registered lease", err)
 	}
 	if record.stream == nil {
 		t.Fatal("stream = nil, want stream runtime")

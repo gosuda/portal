@@ -164,7 +164,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   -1,
 		})
-		utils.WriteAPIOK(w, http.StatusOK)
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
 	case types.PathAdminAuthStatus:
 		if r.Method != http.MethodGet {
@@ -189,7 +189,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOK := func() {
 		f.saveAdminState(runtime)
-		utils.WriteAPIOK(w, http.StatusOK)
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 	}
 
 	switch path {

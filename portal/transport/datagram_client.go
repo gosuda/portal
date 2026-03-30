@@ -13,8 +13,8 @@ import (
 )
 
 type ClientDatagramState struct {
-	LeaseID      string
-	ReverseToken string
+	LeaseID     string
+	AccessToken string
 }
 
 type ClientDatagram struct {

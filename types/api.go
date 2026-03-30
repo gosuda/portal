@@ -54,22 +54,34 @@ func (e *APIRequestError) Is(target error) bool {
 }
 
 type RegisterRequest struct {
+	ChallengeID   string `json:"challenge_id"`
+	SIWEMessage   string `json:"siwe_message"`
+	SIWESignature string `json:"siwe_signature"`
+	ReportedIP    string `json:"reported_ip,omitempty"`
+}
+
+type RegisterChallengeRequest struct {
 	Name         string        `json:"name"`
-	ReverseToken string        `json:"reverse_token"`
 	Metadata     LeaseMetadata `json:"metadata"`
-	OwnerAddress string        `json:"owner_address,omitempty"`
+	OwnerAddress string        `json:"owner_address"`
 	TTL          int           `json:"ttl,omitempty"`
 	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
-	ReportedIP   string        `json:"reported_ip,omitempty"`
+}
+
+type RegisterChallengeResponse struct {
+	ChallengeID string    `json:"challenge_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	SIWEMessage string    `json:"siwe_message"`
 }
 
 type RegisterResponse struct {
-	ExpiresAt  time.Time     `json:"expires_at"`
-	LeaseID    string        `json:"lease_id"`
-	Hostname   string        `json:"hostname"`
-	Metadata   LeaseMetadata `json:"metadata"`
-	UDPAddr    string        `json:"udp_addr,omitempty"`
-	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	ExpiresAt   time.Time     `json:"expires_at"`
+	LeaseID     string        `json:"lease_id"`
+	Hostname    string        `json:"hostname"`
+	Metadata    LeaseMetadata `json:"metadata"`
+	AccessToken string        `json:"access_token"`
+	UDPAddr     string        `json:"udp_addr,omitempty"`
+	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
@@ -80,8 +92,8 @@ type DiscoveryResponse struct {
 }
 
 type QUICControlMessage struct {
-	LeaseID      string `json:"lease_id"`
-	ReverseToken string `json:"reverse_token"`
+	LeaseID     string `json:"lease_id"`
+	AccessToken string `json:"access_token"`
 }
 
 type QUICControlResponse struct {
@@ -90,20 +102,21 @@ type QUICControlResponse struct {
 }
 
 type RenewRequest struct {
-	LeaseID      string `json:"lease_id"`
-	ReverseToken string `json:"reverse_token"`
-	TTL          int    `json:"ttl,omitempty"`
-	ReportedIP   string `json:"reported_ip,omitempty"`
+	LeaseID     string `json:"lease_id"`
+	AccessToken string `json:"access_token"`
+	TTL         int    `json:"ttl,omitempty"`
+	ReportedIP  string `json:"reported_ip,omitempty"`
 }
 
 type RenewResponse struct {
-	ExpiresAt time.Time `json:"expires_at"`
-	LeaseID   string    `json:"lease_id"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LeaseID     string    `json:"lease_id"`
+	AccessToken string    `json:"access_token"`
 }
 
 type UnregisterRequest struct {
-	LeaseID      string `json:"lease_id"`
-	ReverseToken string `json:"reverse_token"`
+	LeaseID     string `json:"lease_id"`
+	AccessToken string `json:"access_token"`
 }
 
 type DomainResponse struct {

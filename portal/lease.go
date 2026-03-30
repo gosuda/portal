@@ -3,32 +3,37 @@ package portal
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gosuda/portal/v2/portal/auth"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
+const defaultRegisterChallengeTTL = 2 * time.Minute
+
 type leaseRegistry struct {
-	routes    *routeTable
-	leaseByID map[string]*leaseRecord
-	policy    *policy.Runtime
-	mu        sync.RWMutex
+	routes             *routeTable
+	leaseByID          map[string]*leaseRecord
+	registerChallenges map[string]*auth.RegisterChallenge
+	policy             *policy.Runtime
+	mu                 sync.RWMutex
 }
 
 func newLeaseRegistry(runtime *policy.Runtime) *leaseRegistry {
 	if runtime == nil {
 		runtime = policy.NewRuntime()
 	}
+
 	return &leaseRegistry{
-		routes:    newRouteTable(),
-		leaseByID: make(map[string]*leaseRecord),
-		policy:    runtime,
+		routes:             newRouteTable(),
+		leaseByID:          make(map[string]*leaseRecord),
+		registerChallenges: make(map[string]*auth.RegisterChallenge),
+		policy:             runtime,
 	}
 }
 
@@ -43,6 +48,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	}
 	r.routes = newRouteTable()
 	r.leaseByID = make(map[string]*leaseRecord)
+	r.registerChallenges = make(map[string]*auth.RegisterChallenge)
 	return out
 }
 
@@ -62,18 +68,6 @@ func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) 
 			r.cleanupExpired(time.Now())
 		}
 	}
-}
-
-func (r *leaseRegistry) lookup(leaseID string) (*leaseRecord, bool) {
-	record, ok := r.leaseByID[leaseID]
-	return record, ok
-}
-
-func (r *leaseRegistry) Get(leaseID string) (*leaseRecord, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	return r.lookup(leaseID)
 }
 
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
@@ -111,7 +105,7 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	defer r.mu.Unlock()
 
 	if ownerLeaseID, ok := r.routes.LookupExact(hostname); ok && ownerLeaseID != leaseID {
-		return fmt.Errorf("%w: %s", errHostnameConflict, hostname)
+		return errHostnameConflict
 	}
 
 	record.ID = leaseID
@@ -124,16 +118,13 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	return nil
 }
 
-func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
+func (r *leaseRegistry) Renew(leaseID string, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.lookup(leaseID)
+	record, ok := r.leaseByID[leaseID]
 	if !ok {
 		return nil, errLeaseNotFound
-	}
-	if !utils.TokenMatches(record.ReverseToken, reverseToken) {
-		return nil, errUnauthorized
 	}
 
 	now := time.Now()
@@ -149,16 +140,13 @@ func (r *leaseRegistry) Renew(leaseID, reverseToken string, ttl time.Duration, c
 	return record, nil
 }
 
-func (r *leaseRegistry) Unregister(leaseID, reverseToken string) (*leaseRecord, error) {
+func (r *leaseRegistry) Unregister(leaseID string) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.lookup(leaseID)
+	record, ok := r.leaseByID[leaseID]
 	if !ok {
 		return nil, errLeaseNotFound
-	}
-	if !utils.TokenMatches(record.ReverseToken, reverseToken) {
-		return nil, errUnauthorized
 	}
 
 	delete(r.leaseByID, record.ID)
@@ -171,18 +159,71 @@ func (r *leaseRegistry) FindByID(leaseID string) (*leaseRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	record, ok := r.lookup(leaseID)
+	record, ok := r.leaseByID[leaseID]
 	if !ok || time.Now().After(record.ExpiresAt) {
 		return nil, errLeaseNotFound
 	}
 	return record, nil
 }
 
+func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string) (types.RegisterChallengeResponse, error) {
+	if req.UDPEnabled {
+		if !r.policy.IsUDPEnabled() {
+			return types.RegisterChallengeResponse{}, errUDPDisabled
+		}
+		if max := r.policy.UDPMaxLeases(); max > 0 && r.CountDatagramLeases() >= max {
+			return types.RegisterChallengeResponse{}, errUDPCapacityExceeded
+		}
+	}
+
+	now := time.Now().UTC()
+	challenge, err := auth.NewRegisterChallenge(req, domain, uri, now, defaultRegisterChallengeTTL)
+	if err != nil {
+		return types.RegisterChallengeResponse{}, err
+	}
+
+	r.mu.Lock()
+	r.registerChallenges[challenge.ChallengeID] = challenge
+	r.mu.Unlock()
+
+	return types.RegisterChallengeResponse{
+		ChallengeID: challenge.ChallengeID,
+		ExpiresAt:   challenge.ExpiresAt,
+		SIWEMessage: challenge.SIWEMessage,
+	}, nil
+}
+
+func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterRequest) (*auth.RegisterChallenge, error) {
+	challengeID := strings.TrimSpace(req.ChallengeID)
+	if challengeID == "" {
+		return nil, auth.ErrChallengeNotFound
+	}
+
+	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	challenge := r.registerChallenges[challengeID]
+	if challenge == nil {
+		return nil, auth.ErrChallengeNotFound
+	}
+	if challenge.Expired(now) {
+		delete(r.registerChallenges, challengeID)
+		return nil, auth.ErrChallengeExpired
+	}
+	if err := challenge.Verify(req, now); err != nil {
+		return nil, err
+	}
+
+	delete(r.registerChallenges, challengeID)
+	return challenge, nil
+}
+
 func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.lookup(leaseID)
+	record, ok := r.leaseByID[leaseID]
 	if !ok {
 		return nil
 	}
@@ -195,7 +236,15 @@ func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRec
 }
 
 func (r *leaseRegistry) cleanupExpired(now time.Time) {
-	for _, lease := range r.removeExpired(now) {
+	expiredLeases := r.removeExpired(now)
+	r.mu.Lock()
+	for challengeID, challenge := range r.registerChallenges {
+		if challenge == nil || challenge.Expired(now) {
+			delete(r.registerChallenges, challengeID)
+		}
+	}
+	r.mu.Unlock()
+	for _, lease := range expiredLeases {
 		lease.Close()
 	}
 }
@@ -253,12 +302,11 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 
 type leaseRecord struct {
 	types.Lease
-	ReverseToken string
-	datagram     *transport.RelayDatagram
-	ports        *transport.PortAllocator
-	stream       *transport.RelayStream
-	startErr     error
-	startOnce    sync.Once
+	datagram  *transport.RelayDatagram
+	ports     *transport.PortAllocator
+	stream    *transport.RelayStream
+	startErr  error
+	startOnce sync.Once
 }
 
 func (r *leaseRecord) Start() error {

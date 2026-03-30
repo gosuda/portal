@@ -26,37 +26,6 @@ type Secp256k1Identity struct {
 	PrivateKey string `json:"private_key"`
 }
 
-func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
-	publicKeyHex := strings.TrimSpace(rawPublicKey)
-	if publicKeyHex == "" {
-		return "", errors.New("public key is required")
-	}
-	if strings.HasPrefix(strings.ToLower(publicKeyHex), "0x") {
-		publicKeyHex = publicKeyHex[2:]
-	}
-
-	decoded, err := hex.DecodeString(publicKeyHex)
-	if err != nil {
-		return "", errors.New("public key must be hex encoded")
-	}
-
-	publicKey, err := secp256k1.ParsePubKey(decoded)
-	if err != nil {
-		return "", errors.New("invalid secp256k1 public key")
-	}
-
-	uncompressed := publicKey.SerializeUncompressed()
-	if len(uncompressed) != 65 || uncompressed[0] != 0x04 {
-		return "", errors.New("invalid uncompressed secp256k1 public key")
-	}
-
-	hasher := sha3.NewLegacyKeccak256()
-	_, _ = hasher.Write(uncompressed[1:])
-	hash := hasher.Sum(nil)
-
-	return NormalizeEVMAddress("0x" + hex.EncodeToString(hash[len(hash)-20:]))
-}
-
 func NormalizeEVMAddress(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -105,6 +74,63 @@ func NormalizeEVMAddress(raw string) (string, error) {
 		return "", errors.New("address checksum is invalid")
 	}
 	return "0x" + checksummed, nil
+}
+
+func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
+	publicKeyHex := strings.TrimSpace(rawPublicKey)
+	if publicKeyHex == "" {
+		return "", errors.New("public key is required")
+	}
+	if strings.HasPrefix(strings.ToLower(publicKeyHex), "0x") {
+		publicKeyHex = publicKeyHex[2:]
+	}
+
+	decoded, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return "", errors.New("public key must be hex encoded")
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(decoded)
+	if err != nil {
+		return "", errors.New("invalid secp256k1 public key")
+	}
+
+	uncompressed := publicKey.SerializeUncompressed()
+	if len(uncompressed) != 65 || uncompressed[0] != 0x04 {
+		return "", errors.New("invalid uncompressed secp256k1 public key")
+	}
+
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(uncompressed[1:])
+	hash := hasher.Sum(nil)
+
+	return NormalizeEVMAddress("0x" + hex.EncodeToString(hash[len(hash)-20:]))
+}
+
+func SignEthereumPersonalMessage(message, privateKeyHex string) (string, error) {
+	decoded, _, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, false)
+	if err != nil {
+		return "", err
+	}
+
+	privateKey := secp256k1.PrivKeyFromBytes(decoded)
+	data := []byte(message)
+	prefix := []byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(data)))
+	hasher := sha3.NewLegacyKeccak256()
+	_, _ = hasher.Write(prefix)
+	_, _ = hasher.Write(data)
+	hash := hasher.Sum(nil)
+
+	compactSignature := secp256k1ecdsa.SignCompact(privateKey, hash, false)
+	if len(compactSignature) != 65 {
+		return "", errors.New("invalid compact signature length")
+	}
+
+	signature := make([]byte, 65)
+	copy(signature[:32], compactSignature[1:33])
+	copy(signature[32:64], compactSignature[33:65])
+	signature[64] = compactSignature[0]
+	return "0x" + hex.EncodeToString(signature), nil
 }
 
 func ResolveSecp256k1Identity(rawPrivateKey string) (Secp256k1Identity, error) {
@@ -197,6 +223,39 @@ func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string)
 	return nil
 }
 
+func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, string, error) {
+	privateKeyHex := strings.TrimSpace(raw)
+	if privateKeyHex == "" {
+		return nil, "", errors.New("private key is required")
+	}
+	if strings.HasPrefix(strings.ToLower(privateKeyHex), "0x") {
+		privateKeyHex = privateKeyHex[2:]
+	}
+
+	decoded, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return nil, "", errors.New("secp256k1 private key must be hex encoded")
+	}
+	if len(decoded) != secp256k1.PrivKeyBytesLen {
+		return nil, "", fmt.Errorf("secp256k1 private key must be %d bytes", secp256k1.PrivKeyBytesLen)
+	}
+	if !requireNonZero {
+		return decoded, privateKeyHex, nil
+	}
+
+	isZero := true
+	for _, b := range decoded {
+		if b != 0 {
+			isZero = false
+			break
+		}
+	}
+	if isZero {
+		return nil, "", errors.New("secp256k1 private key must not be zero")
+	}
+	return decoded, privateKeyHex, nil
+}
+
 func NormalizeWireGuardPrivateKey(raw string) (string, error) {
 	key, err := decodeWireGuardKey(raw)
 	if err != nil {
@@ -224,6 +283,14 @@ func WireGuardPublicKeyFromPrivate(raw string) (string, error) {
 	var publicKey [32]byte
 	curve25519.ScalarBaseMult(&publicKey, &privateKey)
 	return base64.StdEncoding.EncodeToString(publicKey[:]), nil
+}
+
+func WireGuardKeyHex(raw string) (string, error) {
+	key, err := decodeWireGuardKey(raw)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(key[:]), nil
 }
 
 func ValidateWireGuardPublicKey(raw string) error {
@@ -258,6 +325,22 @@ func ValidateWireGuardEndpoint(raw string) error {
 		return errors.New("wireguard_endpoint port is invalid")
 	}
 	return nil
+}
+
+func WireGuardListenPort(rawEndpoint string) (int, error) {
+	endpoint := strings.TrimSpace(rawEndpoint)
+	if endpoint == "" {
+		return 0, errors.New("wireguard endpoint is required")
+	}
+	_, portText, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return 0, errors.New("wireguard endpoint must be host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 || port > 65535 {
+		return 0, errors.New("wireguard endpoint port is invalid")
+	}
+	return port, nil
 }
 
 func ValidateOverlayIPv4(raw string) error {
@@ -298,22 +381,6 @@ func NormalizeOverlayCIDRs(inputs []string) ([]string, error) {
 	return out, nil
 }
 
-func WireGuardListenPort(rawEndpoint string) (int, error) {
-	endpoint := strings.TrimSpace(rawEndpoint)
-	if endpoint == "" {
-		return 0, errors.New("wireguard endpoint is required")
-	}
-	_, portText, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return 0, errors.New("wireguard endpoint must be host:port")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port <= 0 || port > 65535 {
-		return 0, errors.New("wireguard endpoint port is invalid")
-	}
-	return port, nil
-}
-
 func DeriveWireGuardOverlayIPv4(publicKey string) (string, error) {
 	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(publicKey))
 	if err != nil {
@@ -330,47 +397,6 @@ func DeriveWireGuardOverlayIPv4(publicKey string) (string, error) {
 		sum[1],
 		1 + (sum[2] % 254),
 	}).String(), nil
-}
-
-func WireGuardKeyHex(raw string) (string, error) {
-	key, err := decodeWireGuardKey(raw)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(key[:]), nil
-}
-
-func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, string, error) {
-	privateKeyHex := strings.TrimSpace(raw)
-	if privateKeyHex == "" {
-		return nil, "", errors.New("private key is required")
-	}
-	if strings.HasPrefix(strings.ToLower(privateKeyHex), "0x") {
-		privateKeyHex = privateKeyHex[2:]
-	}
-
-	decoded, err := hex.DecodeString(privateKeyHex)
-	if err != nil {
-		return nil, "", errors.New("secp256k1 private key must be hex encoded")
-	}
-	if len(decoded) != secp256k1.PrivKeyBytesLen {
-		return nil, "", fmt.Errorf("secp256k1 private key must be %d bytes", secp256k1.PrivKeyBytesLen)
-	}
-	if !requireNonZero {
-		return decoded, privateKeyHex, nil
-	}
-
-	isZero := true
-	for _, b := range decoded {
-		if b != 0 {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		return nil, "", errors.New("secp256k1 private key must not be zero")
-	}
-	return decoded, privateKeyHex, nil
 }
 
 func decodeWireGuardKey(raw string) ([32]byte, error) {

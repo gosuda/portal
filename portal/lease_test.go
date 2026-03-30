@@ -23,8 +23,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 			Hostname:  "demo.example.com",
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
-		ReverseToken: "tok_1",
-		stream:       transport.NewRelayStream("lease_1", time.Minute, 1),
+		stream: transport.NewRelayStream("lease_1", time.Minute, 1),
 	}
 
 	if err := registry.Register(record); err != nil {
@@ -36,7 +35,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(record.ID, record.ReverseToken, time.Minute, "203.0.113.10", "")
+	renewed, err := registry.Renew(record.ID, time.Minute, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
@@ -47,7 +46,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}
 
-	removed, err := registry.Unregister(record.ID, record.ReverseToken)
+	removed, err := registry.Unregister(record.ID)
 	if err != nil {
 		t.Fatalf("Unregister() error = %v", err)
 	}
@@ -73,8 +72,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 			Hostname:  "*.example.com",
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
-		ReverseToken: "tok_wildcard",
-		stream:       transport.NewRelayStream("lease_wildcard", time.Minute, 1),
+		stream: transport.NewRelayStream("lease_wildcard", time.Minute, 1),
 	}
 	if err := registry.Register(wildcardLease); err != nil {
 		t.Fatalf("Register(wildcard) error = %v", err)
@@ -93,8 +91,7 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 			Hostname:  "*.example.com",
 			ExpiresAt: time.Now().Add(30 * time.Second),
 		},
-		ReverseToken: "tok_conflict",
-		stream:       transport.NewRelayStream("lease_conflict", time.Minute, 1),
+		stream: transport.NewRelayStream("lease_conflict", time.Minute, 1),
 	}
 	err := registry.Register(conflict)
 	if !errors.Is(err, errHostnameConflict) {
@@ -119,8 +116,7 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 			ExpiresAt: time.Now().Add(30 * time.Second),
 			ClientIP:  "203.0.113.20",
 		},
-		ReverseToken: "tok_policy",
-		stream:       transport.NewRelayStream("lease_policy", time.Minute, 1),
+		stream: transport.NewRelayStream("lease_policy", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -159,8 +155,7 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 			Hostname:  "expired.example.com",
 			ExpiresAt: time.Now().Add(-time.Second),
 		},
-		ReverseToken: "tok_expired",
-		stream:       transport.NewRelayStream("lease_expired", time.Minute, 1),
+		stream: transport.NewRelayStream("lease_expired", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
