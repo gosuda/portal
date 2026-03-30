@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -23,6 +24,7 @@ const (
 	DefaultListenPort          = 51820
 	DefaultPeerAPIHTTPPort     = 7777
 	DefaultPersistentKeepalive = 25
+	defaultEndpointResolveTTL  = 3 * time.Second
 )
 
 type stack struct {
@@ -124,18 +126,29 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 
 	var builder strings.Builder
 	builder.WriteString("replace_peers=true\n")
+	var warnErr error
 
 	for _, peer := range peers {
 		publicKeyHex, err := utils.WireGuardKeyHex(peer.WireGuardPublicKey)
 		if err != nil {
 			return fmt.Errorf("normalize peer %q public key: %w", peer.RelayID, err)
 		}
+
+		resolvedEndpoint := ""
+		if endpoint := strings.TrimSpace(peer.WireGuardEndpoint); endpoint != "" {
+			resolvedEndpoint, err = resolvePeerEndpoint(endpoint)
+			if err != nil {
+				warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w", peer.RelayID, err))
+				continue
+			}
+		}
+
 		builder.WriteString("public_key=")
 		builder.WriteString(publicKeyHex)
 		builder.WriteByte('\n')
-		if endpoint := strings.TrimSpace(peer.WireGuardEndpoint); endpoint != "" {
+		if resolvedEndpoint != "" {
 			builder.WriteString("endpoint=")
-			builder.WriteString(endpoint)
+			builder.WriteString(resolvedEndpoint)
 			builder.WriteByte('\n')
 		}
 
@@ -152,7 +165,51 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 		}
 	}
 
-	return s.device.IpcSet(builder.String())
+	if err := s.device.IpcSet(builder.String()); err != nil {
+		return err
+	}
+	return warnErr
+}
+
+func resolvePeerEndpoint(raw string) (string, error) {
+	endpoint := strings.TrimSpace(raw)
+	if endpoint == "" {
+		return "", errors.New("wireguard endpoint is required")
+	}
+
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", err
+	}
+
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return "", errors.New("wireguard endpoint host is required")
+	}
+
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return net.JoinHostPort(ip.String(), port), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), defaultEndpointResolveTTL)
+	defer cancel()
+
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return "", fmt.Errorf("lookup %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("lookup %q: no IP addresses found", host)
+	}
+
+	selected := addrs[0]
+	for _, addr := range addrs {
+		if addr.Is4() {
+			selected = addr
+			break
+		}
+	}
+	return net.JoinHostPort(selected.String(), port), nil
 }
 
 func (s *stack) Close() error {

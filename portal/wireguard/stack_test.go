@@ -3,6 +3,7 @@ package wireguard
 import (
 	"encoding/base64"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/gosuda/portal/v2/utils"
@@ -54,6 +55,46 @@ func TestStackStartAndClose(t *testing.T) {
 			t.Fatalf("Close() error = %v", err)
 		}
 	})
+}
+
+func TestResolvePeerEndpointPreservesIPLiteral(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolvePeerEndpoint("127.0.0.1:51820")
+	if err != nil {
+		t.Fatalf("resolvePeerEndpoint() error = %v", err)
+	}
+	if got != "127.0.0.1:51820" {
+		t.Fatalf("resolvePeerEndpoint() = %q, want %q", got, "127.0.0.1:51820")
+	}
+}
+
+func TestResolvePeerEndpointResolvesHostname(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolvePeerEndpoint("localhost:51820")
+	if err != nil {
+		t.Fatalf("resolvePeerEndpoint() error = %v", err)
+	}
+
+	host, port, err := net.SplitHostPort(got)
+	if err != nil {
+		t.Fatalf("SplitHostPort() error = %v", err)
+	}
+	if port != "51820" {
+		t.Fatalf("port = %q, want %q", port, "51820")
+	}
+	if strings.EqualFold(host, "localhost") {
+		t.Fatalf("host = %q, want resolved IP literal", host)
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		t.Fatalf("host = %q, want valid IP literal", host)
+	}
+	if !ip.IsLoopback() {
+		t.Fatalf("host = %q, want loopback IP", host)
+	}
 }
 
 func reserveUDPPort(t *testing.T) string {
