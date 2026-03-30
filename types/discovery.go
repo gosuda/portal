@@ -5,9 +5,6 @@ import "time"
 type RelayDescriptor struct {
 	RelayID string `json:"relay_id"`
 
-	OwnerAddress    string `json:"owner_address"`
-	SignerPublicKey string `json:"signer_public_key"`
-
 	Sequence  uint64    `json:"sequence"`
 	Version   uint32    `json:"version"`
 	IssuedAt  time.Time `json:"issued_at"`
@@ -24,8 +21,6 @@ type RelayDescriptor struct {
 	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
-
-	DescriptorSignature string `json:"descriptor_signature"`
 }
 
 type RelayState struct {

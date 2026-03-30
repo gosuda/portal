@@ -128,10 +128,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(s.wgConfig.Endpoint) != "" &&
 		strings.TrimSpace(s.wgConfig.OverlayIPv4) != ""
 
-	self, err := discovery.SignedDescriptor(types.RelayDescriptor{
+	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		RelayID:             s.cfg.PortalURL,
-		OwnerAddress:        s.ownerIdentity.Address,
-		SignerPublicKey:     s.ownerIdentity.PublicKey,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
 		IssuedAt:            now,
@@ -145,7 +143,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
 		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
 		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
-	}, s.ownerIdentity.PrivateKey)
+	})
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return

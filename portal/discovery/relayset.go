@@ -44,8 +44,8 @@ type RelaySummary struct {
 	Unreachable int
 }
 
-// RelaySet owns the shared relay discovery view: known relay URLs, pinned relay
-// descriptors, the latest validated descriptor seen for each relay, and common
+// RelaySet owns the shared relay discovery view: known relay URLs, stable relay
+// id/url mappings, the latest validated descriptor seen for each relay, and common
 // process-local relay state such as ban/reachability/failure tracking.
 //
 // Runtime-specific policy such as bootstrap classification, relay lifecycle, or
@@ -53,7 +53,6 @@ type RelaySummary struct {
 type RelaySet struct {
 	mu                  sync.RWMutex
 	knownRelayURLs      []string
-	pinnedByRelayID     map[string]types.RelayDescriptor
 	relayIDsByURL       map[string]string
 	relays              map[string]RelayView
 	localByURL          map[string]RelayLocalState
@@ -64,10 +63,9 @@ type RelaySet struct {
 
 func NewRelaySet() *RelaySet {
 	return &RelaySet{
-		pinnedByRelayID: make(map[string]types.RelayDescriptor),
-		relayIDsByURL:   make(map[string]string),
-		relays:          make(map[string]RelayView),
-		localByURL:      make(map[string]RelayLocalState),
+		relayIDsByURL: make(map[string]string),
+		relays:        make(map[string]RelayView),
+		localByURL:    make(map[string]RelayLocalState),
 	}
 }
 
@@ -126,7 +124,21 @@ func (s *RelaySet) ActiveRelayURLs() []string {
 	return out
 }
 
+func relayExpiredAt(view RelayView, state RelayLocalState, now time.Time) bool {
+	if state.Expired {
+		return true
+	}
+	if view.Descriptor.ExpiresAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !view.Descriptor.ExpiresAt.After(now)
+}
+
 func (s *RelaySet) logStatusChange() {
+	now := time.Now().UTC()
 	var currentReachable map[string]bool
 	trackedRelayURLs := s.trackedRelayURLs()
 	if len(trackedRelayURLs) > 0 {
@@ -140,6 +152,9 @@ func (s *RelaySet) logStatusChange() {
 	for _, relayURL := range trackedRelayURLs {
 		summary.Known++
 		state := s.localByURL[relayURL]
+		relayID := s.relayIDsByURL[relayURL]
+		view, ok := s.relays[relayID]
+		expired := ok && relayExpiredAt(view, state, now) || !ok && state.Expired
 		if state.Banned {
 			summary.Banned++
 			continue
@@ -147,10 +162,10 @@ func (s *RelaySet) logStatusChange() {
 		if state.Bootstrap {
 			summary.Bootstrap++
 		}
-		if state.Advertised {
+		if state.Advertised && !expired {
 			summary.Advertised++
 		}
-		if state.Expired {
+		if expired {
 			summary.Expired++
 		}
 		if state.Reachable {
@@ -158,9 +173,7 @@ func (s *RelaySet) logStatusChange() {
 		} else {
 			summary.Unreachable++
 		}
-		relayID := s.relayIDsByURL[relayURL]
-		view, ok := s.relays[relayID]
-		if ok && !state.Bootstrap && !state.Expired && view.Descriptor.SupportsOverlayPeer {
+		if ok && !state.Bootstrap && !expired && view.Descriptor.SupportsOverlayPeer {
 			summary.Syncable++
 		}
 	}
@@ -347,10 +360,11 @@ func (s *RelaySet) AdvertisedDescriptors() []types.RelayDescriptor {
 		return nil
 	}
 
+	now := time.Now().UTC()
 	out := make([]types.RelayDescriptor, 0, len(s.relays))
 	for _, view := range s.relays {
 		state := s.localByURL[view.Descriptor.APIHTTPSAddr]
-		if !state.Advertised || state.Expired || strings.TrimSpace(view.Descriptor.APIHTTPSAddr) == "" {
+		if !state.Advertised || relayExpiredAt(view, state, now) || strings.TrimSpace(view.Descriptor.APIHTTPSAddr) == "" {
 			continue
 		}
 		out = append(out, view.Descriptor)
@@ -374,10 +388,11 @@ func (s *RelaySet) SyncableDescriptors() []types.RelayDescriptor {
 		return nil
 	}
 
+	now := time.Now().UTC()
 	out := make([]types.RelayDescriptor, 0, len(s.relays))
 	for _, view := range s.relays {
 		state := s.localByURL[view.Descriptor.APIHTTPSAddr]
-		if state.Bootstrap || state.Expired || !view.Descriptor.SupportsOverlayPeer {
+		if state.Bootstrap || relayExpiredAt(view, state, now) || !view.Descriptor.SupportsOverlayPeer {
 			continue
 		}
 		out = append(out, view.Descriptor)
@@ -401,6 +416,7 @@ func (s *RelaySet) Snapshot() map[string]types.RelayState {
 		return nil
 	}
 
+	now := time.Now().UTC()
 	snapshot := make(map[string]types.RelayState, len(s.relays))
 	for relayID, view := range s.relays {
 		localState := s.localByURL[view.Descriptor.APIHTTPSAddr]
@@ -408,7 +424,7 @@ func (s *RelaySet) Snapshot() map[string]types.RelayState {
 			Descriptor:          view.Descriptor,
 			Bootstrap:           localState.Bootstrap,
 			Advertised:          localState.Advertised,
-			Expired:             localState.Expired,
+			Expired:             relayExpiredAt(view, localState, now),
 			FirstSeenAt:         view.FirstSeenAt,
 			LastSeenAt:          view.LastSeenAt,
 			ConsecutiveFailures: localState.ConsecutiveFailures,
@@ -444,20 +460,6 @@ func (s *RelaySet) ReplaceKnownRelayURLs(relayURLs []string) {
 	s.knownRelayURLs = append([]string(nil), filtered...)
 }
 
-func (s *RelaySet) pinTarget(targetRelayID, targetURL string, desc types.RelayDescriptor) error {
-	if s == nil {
-		return nil
-	}
-	if err := ValidateDescriptorTarget(desc, targetRelayID, targetURL); err != nil {
-		return err
-	}
-	if err := s.matchPinned(desc); err != nil {
-		return err
-	}
-	s.pin(desc)
-	return nil
-}
-
 func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time) (string, bool, bool, error) {
 	if s == nil {
 		return "", false, false, nil
@@ -466,10 +468,15 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 	if err != nil {
 		return "", false, false, err
 	}
-	if err := s.matchPinned(normalized); err != nil {
-		return "", false, false, err
+	if current, ok := s.relays[normalized.RelayID]; ok {
+		currentURL := strings.TrimSpace(current.Descriptor.APIHTTPSAddr)
+		if currentURL != "" && currentURL != normalized.APIHTTPSAddr {
+			return "", false, false, errors.New("descriptor api_https_addr does not match known relay url")
+		}
 	}
-	s.pin(normalized)
+	if knownRelayID, ok := s.relayIDsByURL[normalized.APIHTTPSAddr]; ok && knownRelayID != normalized.RelayID {
+		return "", false, false, errors.New("descriptor relay_id does not match known relay")
+	}
 
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -482,11 +489,12 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 		view.FirstSeenAt = now
 	}
 	previousDescriptor := view.Descriptor
-	view.Descriptor = desc
+	view.Descriptor = normalized
 	view.LastSeenAt = now
 	s.relays[relayID] = view
+	s.relayIDsByURL[normalized.APIHTTPSAddr] = relayID
 
-	changed := added || !reflect.DeepEqual(previousDescriptor, desc)
+	changed := added || !reflect.DeepEqual(previousDescriptor, normalized)
 	return relayID, added, changed, nil
 }
 
@@ -516,7 +524,7 @@ func (s *RelaySet) applyDiscoveryDescriptors(targetRelayID, targetURL string, se
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	if err := s.pinTarget(targetRelayID, targetURL, selfDescriptor); err != nil {
+	if err := ValidateDescriptorTarget(selfDescriptor, targetRelayID, targetURL); err != nil {
 		return false, 0, err
 	}
 
@@ -714,30 +722,4 @@ func (s *RelaySet) RecordDiscoveryFailure(relayID, relayURL string, err error, r
 		return true, "status", localState.ConsecutiveFailures
 	}
 	return false, "", localState.ConsecutiveFailures
-}
-
-func (s *RelaySet) matchPinned(desc types.RelayDescriptor) error {
-	if s == nil {
-		return nil
-	}
-	if pinned, ok := s.pinnedByRelayID[desc.RelayID]; ok {
-		if err := ValidateDescriptorMatch(desc, pinned); err != nil {
-			return err
-		}
-	}
-	if pinnedRelayID, ok := s.relayIDsByURL[desc.APIHTTPSAddr]; ok && pinnedRelayID != desc.RelayID {
-		return ValidateDescriptorMatch(desc, types.RelayDescriptor{
-			RelayID:      pinnedRelayID,
-			APIHTTPSAddr: desc.APIHTTPSAddr,
-		})
-	}
-	return nil
-}
-
-func (s *RelaySet) pin(desc types.RelayDescriptor) {
-	if s == nil {
-		return
-	}
-	s.pinnedByRelayID[desc.RelayID] = desc
-	s.relayIDsByURL[desc.APIHTTPSAddr] = desc.RelayID
 }

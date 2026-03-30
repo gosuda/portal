@@ -203,7 +203,7 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 ## WireGuard Overlay and Discovery
 
 - Discovery starts from bootstrap relay URLs over normal public HTTPS.
-- Each relay publishes a signed descriptor that may advertise:
+- Each relay publishes a descriptor over relay HTTPS that may advertise:
   - `wireguard_public_key`
   - `wireguard_endpoint`
   - `overlay_ipv4`

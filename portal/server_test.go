@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"reflect"
@@ -18,13 +19,8 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) types.RelayDescriptor {
+func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 	t.Helper()
-
-	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
-	if err != nil {
-		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
-	}
 
 	now := time.Now().UTC()
 	wireGuardPrivateKey, err := utils.NormalizeWireGuardPrivateKey(strings.Repeat("44", 32))
@@ -39,10 +35,8 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) t
 	if err != nil {
 		t.Fatalf("DeriveWireGuardOverlayIPv4() error = %v", err)
 	}
-	desc, err := discovery.SignedDescriptor(types.RelayDescriptor{
+	desc, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		RelayID:             relayURL,
-		OwnerAddress:        identity.Address,
-		SignerPublicKey:     identity.PublicKey,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
 		IssuedAt:            now,
@@ -53,9 +47,9 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) t
 		OverlayIPv4:         overlayIPv4,
 		SupportsTCP:         true,
 		SupportsOverlayPeer: true,
-	}, identity.PrivateKey)
+	})
 	if err != nil {
-		t.Fatalf("SignedDescriptor() error = %v", err)
+		t.Fatalf("NormalizeDescriptor() error = %v", err)
 	}
 	return desc
 }
@@ -144,6 +138,61 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	if signResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServerStartDiscoveryOmitsOwnerIdentityFields(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:        "https://localhost:4017",
+		ACME:             acme.Config{KeyDir: t.TempDir()},
+		APIListenAddr:    "127.0.0.1:0",
+		SNIListenAddr:    "127.0.0.1:0",
+		DiscoveryEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery)
+	if err != nil {
+		t.Fatalf("GET /discovery error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /discovery status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /discovery response: %v", err)
+	}
+	for _, key := range []string{"owner_address", "signer_public_key", "descriptor_signature"} {
+		if strings.Contains(string(body), key) {
+			t.Fatalf("/discovery body = %q, want %q omitted", string(body), key)
+		}
 	}
 }
 
@@ -365,11 +414,9 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.T) {
 	t.Parallel()
 
-	ownerPrivateKey := strings.Repeat("11", 32)
 	server, err := NewServer(ServerConfig{
 		PortalURL:           "https://portal.example.com",
 		Bootstraps:          []string{"https://bootstrap.example.com"},
-		OwnerPrivateKey:     ownerPrivateKey,
 		WireGuardPrivateKey: strings.Repeat("24", 32),
 		DiscoveryPort:       41023,
 		DiscoveryEnabled:    true,
@@ -378,8 +425,8 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 		t.Fatalf("NewServer() error = %v", err)
 	}
 
-	bootstrapDesc := mustSignedRelayDescriptor(t, ownerPrivateKey, "https://bootstrap.example.com")
-	relayADesc := mustSignedRelayDescriptor(t, ownerPrivateKey, "https://relay-a.example.com")
+	bootstrapDesc := mustRelayDescriptor(t, "https://bootstrap.example.com")
+	relayADesc := mustRelayDescriptor(t, "https://relay-a.example.com")
 
 	applyDiscovery := func(targetRelayID, targetURL string, resp types.DiscoveryResponse, requireSelfOverlay bool) (bool, int, error, error) {
 		now := time.Now().UTC()
