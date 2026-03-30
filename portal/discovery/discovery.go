@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,196 +16,316 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-type Resolver func(context.Context, types.DiscoverRequest) (types.DiscoverResponse, error)
-
 const defaultRequestTimeout = 15 * time.Second
 
-func DiscoverBootstraps(ctx context.Context, peers []string, req types.DiscoverRequest, rootCAPEM []byte) ([]string, error) {
-	peers, err := utils.ExcludeLocalRelayURLs(peers...)
-	if err != nil {
-		return nil, err
+func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
+	desc.RelayID = strings.TrimSpace(desc.RelayID)
+	desc.SignerPublicKey = strings.ToLower(strings.TrimSpace(desc.SignerPublicKey))
+	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
+	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
+	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
+	desc.OverlayIPv4 = strings.TrimSpace(desc.OverlayIPv4)
+	desc.DescriptorSignature = strings.TrimSpace(desc.DescriptorSignature)
+	if !desc.IssuedAt.IsZero() {
+		desc.IssuedAt = desc.IssuedAt.UTC()
 	}
-	if len(peers) == 0 {
-		return nil, nil
+	if !desc.ExpiresAt.IsZero() {
+		desc.ExpiresAt = desc.ExpiresAt.UTC()
+	}
+	if !desc.LastMITMDetectedAt.IsZero() {
+		desc.LastMITMDetectedAt = desc.LastMITMDetectedAt.UTC()
 	}
 
-	req, err = normalizeRequest(req)
-	if err != nil {
-		return nil, err
-	}
-
-	bootstraps := append([]string(nil), peers...)
-	var discoverErr error
-	discovered := false
-
-	for _, peer := range peers {
-		resp, err := discoverPeer(ctx, peer, req, rootCAPEM)
+	if desc.APIHTTPSAddr != "" {
+		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
 		if err != nil {
-			discoverErr = errors.Join(discoverErr, fmt.Errorf("discover %q: %w", peer, err))
-			continue
+			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
-
-		discoveredBootstraps, err := utils.ExcludeLocalRelayURLs(resp.Bootstraps...)
-		if err != nil {
-			discoverErr = errors.Join(discoverErr, fmt.Errorf("filter %q bootstraps: %w", peer, err))
-			continue
+		desc.APIHTTPSAddr = normalized
+		if desc.RelayID == "" {
+			desc.RelayID = normalized
 		}
-		bootstraps, err = utils.MergeRelayURLs(bootstraps, nil, discoveredBootstraps)
-		if err != nil {
-			discoverErr = errors.Join(discoverErr, fmt.Errorf("merge %q bootstraps: %w", peer, err))
-			continue
-		}
-		discovered = true
 	}
-
-	if !discovered {
-		return bootstraps, discoverErr
+	if desc.OwnerAddress != "" {
+		address, err := utils.NormalizeEVMAddress(desc.OwnerAddress)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize owner address: %w", err)
+		}
+		desc.OwnerAddress = address
 	}
-	return bootstraps, nil
+	if len(desc.OverlayCIDRs) > 0 {
+		normalized, err := utils.NormalizeOverlayCIDRs(desc.OverlayCIDRs)
+		if err != nil {
+			return types.RelayDescriptor{}, err
+		}
+		desc.OverlayCIDRs = normalized
+	}
+	if !desc.SupportsOverlayPeer {
+		desc.WireGuardPublicKey = ""
+		desc.WireGuardEndpoint = ""
+		desc.OverlayIPv4 = ""
+		desc.OverlayCIDRs = nil
+	}
+	return desc, nil
 }
 
-func ServeHTTP(w http.ResponseWriter, r *http.Request, selfURLs, bootstraps []string, resolver Resolver) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	req, err := normalizeRequest(types.DiscoverRequest{
-		RootHost: r.URL.Query().Get("root_host"),
-		Name:     r.URL.Query().Get("name"),
-	})
+func SignDescriptor(desc types.RelayDescriptor, privateKeyHex string) (string, error) {
+	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		return
+		return "", err
 	}
-
-	resolvedBootstraps, err := buildResponseBootstraps(selfURLs, bootstraps, nil)
+	normalized.DescriptorSignature = ""
+	payload, err := json.Marshal(normalized)
 	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
+		return "", err
 	}
-
-	resp := types.DiscoverResponse{
-		Found:      false,
-		Bootstraps: resolvedBootstraps,
-	}
-	if resolver == nil {
-		utils.WriteAPIData(w, http.StatusOK, resp)
-		return
-	}
-
-	localResp, err := resolver(r.Context(), req)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-
-	localResp.Bootstraps, err = buildResponseBootstraps(selfURLs, bootstraps, localResp.Bootstraps)
-	if err != nil {
-		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
-		return
-	}
-	utils.WriteAPIData(w, http.StatusOK, localResp)
+	return utils.SignSHA256Secp256k1DER(payload, privateKeyHex)
 }
 
-func normalizeRequest(req types.DiscoverRequest) (types.DiscoverRequest, error) {
-	req.RootHost = utils.NormalizeHostname(req.RootHost)
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		return req, nil
-	}
-	if req.RootHost == "" {
-		return types.DiscoverRequest{}, errors.New("root host is required when name is set")
-	}
-	name, err := utils.NormalizeDNSLabel(req.Name)
+func SignedDescriptor(desc types.RelayDescriptor, privateKeyHex string) (types.RelayDescriptor, error) {
+	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
-		return types.DiscoverRequest{}, err
+		return types.RelayDescriptor{}, err
 	}
-	req.Name = name
-	return req, nil
+	signature, err := SignDescriptor(normalized, privateKeyHex)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	normalized.DescriptorSignature = signature
+	return normalized, nil
 }
 
-func discoverPeer(ctx context.Context, relayURL string, req types.DiscoverRequest, rootCAPEM []byte) (types.DiscoverResponse, error) {
-	relayURL, err := utils.NormalizeRelayURL(relayURL)
+func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayDescriptor, error) {
+	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return types.RelayDescriptor{}, err
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	now = now.UTC()
+
+	switch {
+	case normalized.RelayID == "":
+		return types.RelayDescriptor{}, errors.New("relay_id is required")
+	case normalized.APIHTTPSAddr == "":
+		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
+	case normalized.Sequence == 0:
+		return types.RelayDescriptor{}, errors.New("sequence is required")
+	case normalized.Version == 0:
+		return types.RelayDescriptor{}, errors.New("version is required")
+	case normalized.IssuedAt.IsZero():
+		return types.RelayDescriptor{}, errors.New("issued_at is required")
+	case normalized.ExpiresAt.IsZero():
+		return types.RelayDescriptor{}, errors.New("expires_at is required")
+	case normalized.ExpiresAt.Before(now):
+		return types.RelayDescriptor{}, errors.New("descriptor expired")
+	case normalized.IssuedAt.After(normalized.ExpiresAt):
+		return types.RelayDescriptor{}, errors.New("issued_at must be before expires_at")
 	}
 
-	baseURL, err := url.Parse(relayURL)
+	derivedOwnerAddress, err := utils.AddressFromCompressedPublicKeyHex(normalized.SignerPublicKey)
 	if err != nil {
-		return types.DiscoverResponse{}, fmt.Errorf("parse relay url: %w", err)
+		return types.RelayDescriptor{}, err
+	}
+	if normalized.OwnerAddress != derivedOwnerAddress {
+		return types.RelayDescriptor{}, errors.New("owner_address does not match signer_public_key")
+	}
+	if normalized.SupportsOverlayPeer {
+		if err := utils.ValidateWireGuardPublicKey(normalized.WireGuardPublicKey); err != nil {
+			return types.RelayDescriptor{}, err
+		}
+		if err := utils.ValidateWireGuardEndpoint(normalized.WireGuardEndpoint); err != nil {
+			return types.RelayDescriptor{}, err
+		}
+		if err := utils.ValidateOverlayIPv4(normalized.OverlayIPv4); err != nil {
+			return types.RelayDescriptor{}, err
+		}
 	}
 
-	rootCAs, err := keyless.RelayRootCAs(ctx, relayURL, baseURL.Hostname(), rootCAPEM)
+	signature := normalized.DescriptorSignature
+	normalized.DescriptorSignature = ""
+	payload, err := json.Marshal(normalized)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return types.RelayDescriptor{}, err
+	}
+	if err := utils.VerifySHA256Secp256k1DER(payload, normalized.SignerPublicKey, signature); err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	normalized.DescriptorSignature = signature
+	return normalized, nil
+}
+
+func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	self, err := ValidateDescriptor(resp.Self, now)
+	if err != nil {
+		return types.RelayDescriptor{}, nil, err
 	}
 
-	ref, _ := url.Parse(types.PathDiscovery)
-	discoverURL := baseURL.ResolveReference(ref)
-	query := discoverURL.Query()
-	if req.RootHost != "" {
-		query.Set("root_host", req.RootHost)
+	seen := map[string]struct{}{self.RelayID: {}}
+	relays := make([]types.RelayDescriptor, 0, len(resp.Relays))
+	var validateErr error
+	for _, descriptor := range resp.Relays {
+		verified, err := ValidateDescriptor(descriptor, now)
+		if err != nil {
+			if validateErr == nil {
+				validateErr = err
+			}
+			continue
+		}
+		if _, ok := seen[verified.RelayID]; ok {
+			continue
+		}
+		seen[verified.RelayID] = struct{}{}
+		relays = append(relays, verified)
 	}
-	if req.Name != "" {
-		query.Set("name", req.Name)
-	}
-	discoverURL.RawQuery = query.Encode()
+	return self, relays, validateErr
+}
 
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				ServerName: baseURL.Hostname(),
-				RootCAs:    rootCAs,
-				NextProtos: []string{"http/1.1"},
+// ValidateDescriptorTarget checks if a descriptor matches expected target identity.
+func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetURL string) error {
+	normalized, err := NormalizeDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	relayID := strings.TrimSpace(normalized.RelayID)
+	if targetRelayID != "" && relayID != targetRelayID {
+		return errors.New("descriptor relay_id does not match target relay")
+	}
+
+	if targetURL != "" {
+		normalizedTargetURL, err := utils.NormalizeRelayURL(targetURL)
+		if err != nil {
+			return err
+		}
+		if normalized.APIHTTPSAddr != normalizedTargetURL {
+			return errors.New("descriptor api_https_addr does not match target url")
+		}
+	}
+	return nil
+}
+
+// ValidateDescriptorMatch checks if a descriptor matches a pinned descriptor.
+func ValidateDescriptorMatch(desc, pinned types.RelayDescriptor) error {
+	normalized, err := NormalizeDescriptor(desc)
+	if err != nil {
+		return err
+	}
+
+	if relayID := strings.TrimSpace(pinned.RelayID); relayID != "" && normalized.RelayID != relayID {
+		return errors.New("descriptor relay_id does not match pinned relay id")
+	}
+	if apiURL := strings.TrimSpace(pinned.APIHTTPSAddr); apiURL != "" && normalized.APIHTTPSAddr != apiURL {
+		return errors.New("descriptor api_https_addr does not match pinned relay url")
+	}
+	if signerKey := strings.ToLower(strings.TrimSpace(pinned.SignerPublicKey)); signerKey != "" && normalized.SignerPublicKey != signerKey {
+		return errors.New("descriptor signer_public_key does not match pinned signer")
+	}
+	return nil
+}
+
+func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byte, httpClient *http.Client) (types.DiscoveryResponse, error) {
+	resp, err := doGET[types.DiscoveryResponse](ctx, baseURL, types.PathDiscovery, nil, rootCAPEM, httpClient)
+	if err != nil {
+		return types.DiscoveryResponse{}, err
+	}
+	return resp, nil
+}
+
+func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
+	normalized, err := utils.NormalizeRelayURL(apiURL)
+	if err != nil {
+		return types.RelayDescriptor{}, err
+	}
+	return types.RelayDescriptor{
+		RelayID:      normalized,
+		APIHTTPSAddr: normalized,
+		Version:      1,
+	}, nil
+}
+
+func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
+	if !desc.SupportsOverlayPeer {
+		return errors.New("descriptor does not support overlay peer")
+	}
+	if strings.TrimSpace(desc.WireGuardPublicKey) == "" {
+		return errors.New("descriptor wireguard public key is required")
+	}
+	if strings.TrimSpace(desc.WireGuardEndpoint) == "" {
+		return errors.New("descriptor wireguard endpoint is required")
+	}
+	if strings.TrimSpace(desc.OverlayIPv4) == "" {
+		return errors.New("descriptor overlay ipv4 is required")
+	}
+	return nil
+}
+
+func doGET[T any](ctx context.Context, baseURL, path string, query url.Values, rootCAPEM []byte, httpClient *http.Client) (T, error) {
+	var zero T
+
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return zero, errors.New("discovery base url is required")
+	}
+	parsedBaseURL, err := url.Parse(baseURL)
+	if err != nil {
+		return zero, fmt.Errorf("parse discovery base url: %w", err)
+	}
+	if parsedBaseURL.Host == "" {
+		return zero, errors.New("discovery base url host is required")
+	}
+
+	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: path})
+	if query != nil {
+		requestURL.RawQuery = query.Encode()
+	}
+
+	client := httpClient
+	if client == nil {
+		rootCAs, err := keyless.RelayRootCAs(ctx, baseURL, parsedBaseURL.Hostname(), rootCAPEM)
+		if err != nil {
+			return zero, err
+		}
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					MinVersion: tls.VersionTLS12,
+					ServerName: parsedBaseURL.Hostname(),
+					RootCAs:    rootCAs,
+					NextProtos: []string{"http/1.1"},
+				},
+				ForceAttemptHTTP2: false,
 			},
-			ForceAttemptHTTP2: false,
-		},
-		Timeout: defaultRequestTimeout,
+		}
+	}
+	if client.Timeout == 0 {
+		clone := *client
+		clone.Timeout = defaultRequestTimeout
+		client = &clone
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, discoverURL.String(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return zero, err
 	}
 
-	resp, err := httpClient.Do(httpReq)
+	resp, err := client.Do(httpReq)
 	if err != nil {
-		return types.DiscoverResponse{}, err
+		return zero, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return types.DiscoverResponse{}, utils.DecodeAPIRequestError(resp)
+		return zero, utils.DecodeAPIRequestError(resp)
 	}
 
-	envelope, err := utils.DecodeAPIEnvelope[types.DiscoverResponse](resp.Body)
+	envelope, err := utils.DecodeAPIEnvelope[T](resp.Body)
 	if err != nil {
-		return types.DiscoverResponse{}, fmt.Errorf("decode response: %w", err)
+		return zero, fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
-		return types.DiscoverResponse{}, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
+		return zero, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
 	}
 	return envelope.Data, nil
-}
-
-func buildResponseBootstraps(selfURLs, bootstraps, extra []string) ([]string, error) {
-	merged, err := utils.MergeRelayURLs(bootstraps, selfURLs, extra)
-	if err != nil {
-		return nil, err
-	}
-	if len(selfURLs) == 0 {
-		return utils.ExcludeLocalRelayURLs(merged...)
-	}
-
-	normalizedSelf, err := utils.NormalizeRelayURLs(selfURLs...)
-	if err != nil {
-		return nil, fmt.Errorf("normalize self urls: %w", err)
-	}
-	resolvedBootstraps, err := utils.NormalizeRelayURLs(append(normalizedSelf, merged...)...)
-	if err != nil {
-		return nil, fmt.Errorf("normalize bootstraps: %w", err)
-	}
-	return utils.ExcludeLocalRelayURLs(resolvedBootstraps...)
 }

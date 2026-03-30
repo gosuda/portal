@@ -27,7 +27,7 @@ type ListServer = ClientServer | AdminServer;
 
 interface OfficialRegistryRelay {
   url: string;
-  status: "online" | "unreachable";
+  status: "online" | "disconnected" | "checking";
   releaseVersion?: string;
 }
 
@@ -44,12 +44,20 @@ const OFFICIAL_REGISTRY_SOURCE_URL =
 const REPOSITORY_URL = "https://github.com/gosuda/portal";
 
 async function loadOfficialRegistryRelay(
-  relayURL: string
+  relayURL: string,
+  timeoutMs: number = 5000
 ): Promise<OfficialRegistryRelay> {
   const domainURL = new URL(API_PATHS.sdk.domain, relayURL).toString();
 
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("timeout")), timeoutMs);
+  });
+
   try {
-    const domain = await apiClient.get<RelayDomainResponse>(domainURL);
+    const domain = await Promise.race([
+      apiClient.get<RelayDomainResponse>(domainURL),
+      timeoutPromise,
+    ]);
     return {
       url: relayURL,
       status: "online",
@@ -61,15 +69,13 @@ async function loadOfficialRegistryRelay(
   } catch {
     return {
       url: relayURL,
-      status: "unreachable",
+      status: "disconnected",
       releaseVersion: "",
     };
   }
 }
 
-async function loadOfficialRegistryRelays(
-  sourceURL: string
-): Promise<OfficialRegistryRelay[]> {
+async function loadOfficialRegistryRelayURLs(sourceURL: string): Promise<string[]> {
   const response = await fetch(sourceURL, {
     headers: { Accept: "application/json" },
   });
@@ -85,9 +91,44 @@ async function loadOfficialRegistryRelays(
       )
     : [];
 
-  return Promise.all(
-    relayURLs.map((relayURL) => loadOfficialRegistryRelay(relayURL.trim()))
+  return relayURLs.map((relayURL) => relayURL.trim());
+}
+
+function replaceOfficialRegistryRelay(
+  currentRelays: OfficialRegistryRelay[] | null,
+  nextRelay: OfficialRegistryRelay
+): OfficialRegistryRelay[] | null {
+  if (!currentRelays) {
+    return currentRelays;
+  }
+
+  return currentRelays.map((relay) =>
+    relay.url === nextRelay.url ? nextRelay : relay
   );
+}
+
+async function retryDisconnectedRelays(
+  currentRelays: OfficialRegistryRelay[]
+): Promise<OfficialRegistryRelay[]> {
+  const disconnectedRelays = currentRelays.filter(
+    (relay) => relay.status === "disconnected"
+  );
+
+  if (disconnectedRelays.length === 0) {
+    return currentRelays;
+  }
+
+  const retriedResults = await Promise.all(
+    disconnectedRelays.map((relay) =>
+      loadOfficialRegistryRelay(relay.url, 5000)
+    )
+  );
+
+  const resultMap = new Map<string, OfficialRegistryRelay>();
+  currentRelays.forEach((relay) => resultMap.set(relay.url, relay));
+  retriedResults.forEach((relay) => resultMap.set(relay.url, relay));
+
+  return Array.from(resultMap.values());
 }
 
 interface ServerListViewProps {
@@ -261,10 +302,26 @@ export function ServerListView({
     let cancelled = false;
     setOfficialRegistryRelays(null);
 
-    void loadOfficialRegistryRelays(OFFICIAL_REGISTRY_SOURCE_URL)
-      .then((relays) => {
+    void loadOfficialRegistryRelayURLs(OFFICIAL_REGISTRY_SOURCE_URL)
+      .then((relayURLs) => {
         if (!cancelled) {
-          setOfficialRegistryRelays(relays);
+          setOfficialRegistryRelays(
+            relayURLs.map((relayURL) => ({
+              url: relayURL,
+              status: "checking",
+              releaseVersion: "",
+            }))
+          );
+
+          relayURLs.forEach((relayURL) => {
+            void loadOfficialRegistryRelay(relayURL).then((relay) => {
+              if (!cancelled) {
+                setOfficialRegistryRelays((currentRelays) =>
+                  replaceOfficialRegistryRelay(currentRelays, relay)
+                );
+              }
+            });
+          });
         }
       })
       .catch((error) => {
@@ -279,10 +336,39 @@ export function ServerListView({
     };
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (isAdmin || !officialRegistryRelays) {
+      return;
+    }
+
+    const hasDisconnected = officialRegistryRelays.some(
+      (relay) => relay.status === "disconnected"
+    );
+
+    if (!hasDisconnected) {
+      return;
+    }
+
+    const intervalId = setInterval(() => {
+      void retryDisconnectedRelays(officialRegistryRelays)
+        .then((updatedRelays) => {
+          setOfficialRegistryRelays(updatedRelays);
+        })
+        .catch((error) => {
+          console.error("Failed to retry disconnected relays", error);
+        });
+    }, 30000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isAdmin, officialRegistryRelays]);
+
+  const officialRegistryList = officialRegistryRelays ?? [];
   const isAllSelected =
     allLeaseIds.length > 0 &&
     allLeaseIds.every((id) => selectedLeaseIds.has(id));
-  const officialRegistryAvailable = (officialRegistryRelays?.length ?? 0) > 0;
+  const officialRegistryAvailable = officialRegistryList.length > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
@@ -722,13 +808,9 @@ export function ServerListView({
                   </div>
 
                   <div className="mt-6 rounded-xl border border-border/80 bg-secondary/35 p-5 sm:p-6">
-                    {officialRegistryRelays === null ? (
-                      <p className="text-sm text-text-muted">
-                        Loading official registry...
-                      </p>
-                    ) : officialRegistryAvailable ? (
+                    {officialRegistryAvailable ? (
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                        {officialRegistryRelays.map((relay) => {
+                        {officialRegistryList.map((relay) => {
                           return (
                             <div
                               key={relay.url}
@@ -743,9 +825,13 @@ export function ServerListView({
                                 {relay.url}
                               </a>
                               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                                {relay.status === "unreachable" ? (
+                                {relay.status === "checking" ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                    Offline
+                                    Checking
+                                  </span>
+                                ) : relay.status === "disconnected" ? (
+                                  <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
+                                    Disconnected
                                   </span>
                                 ) : relay.releaseVersion ? (
                                   <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
@@ -757,11 +843,11 @@ export function ServerListView({
                           );
                         })}
                       </div>
-                    ) : (
+                    ) : officialRegistryRelays !== null ? (
                       <p className="text-sm text-text-muted">
                         Registry entries are unavailable right now.
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </main>

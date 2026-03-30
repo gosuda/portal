@@ -66,8 +66,6 @@ func (f *IPFilter) SetBannedIPs(ips []string) {
 func (f *IPFilter) RegisterLeaseIP(leaseID, ip string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	leaseID = strings.TrimSpace(leaseID)
-	ip = strings.TrimSpace(ip)
 	if leaseID == "" || ip == "" {
 		return
 	}
@@ -90,14 +88,19 @@ func (f *IPFilter) RegisterLeaseIP(leaseID, ip string) {
 func (f *IPFilter) LeaseIP(leaseID string) string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return f.leaseToIP[strings.TrimSpace(leaseID)]
+	if leaseID == "" {
+		return ""
+	}
+	return f.leaseToIP[leaseID]
 }
 
 func (f *IPFilter) RemoveLeaseIP(leaseID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	leaseID = strings.TrimSpace(leaseID)
+	if leaseID == "" {
+		return
+	}
 	ip, ok := f.leaseToIP[leaseID]
 	if !ok {
 		return

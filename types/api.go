@@ -59,7 +59,6 @@ type RegisterRequest struct {
 	Metadata     LeaseMetadata `json:"metadata"`
 	OwnerAddress string        `json:"owner_address,omitempty"`
 	TTL          int           `json:"ttl,omitempty"`
-	Bootstraps   []string      `json:"bootstraps,omitempty"`
 	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
 	ReportedIP   string        `json:"reported_ip,omitempty"`
 }
@@ -67,26 +66,17 @@ type RegisterRequest struct {
 type RegisterResponse struct {
 	ExpiresAt  time.Time     `json:"expires_at"`
 	LeaseID    string        `json:"lease_id"`
-	ConnectURL string        `json:"connect_url"`
 	Hostname   string        `json:"hostname"`
 	Metadata   LeaseMetadata `json:"metadata"`
-	Bootstraps []string      `json:"bootstraps,omitempty"`
 	UDPAddr    string        `json:"udp_addr,omitempty"`
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 }
 
-type DiscoverRequest struct {
-	RootHost string `json:"root_host"`
-	Name     string `json:"name"`
-}
-
-type DiscoverResponse struct {
-	Found        bool      `json:"found"`
-	Name         string    `json:"name,omitempty"`
-	Hostname     string    `json:"hostname,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	OwnerAddress string    `json:"owner_address,omitempty"`
-	Bootstraps   []string  `json:"bootstraps,omitempty"`
+type DiscoveryResponse struct {
+	ProtocolVersion uint32            `json:"protocol_version"`
+	GeneratedAt     time.Time         `json:"generated_at"`
+	Self            RelayDescriptor   `json:"self"`
+	Relays          []RelayDescriptor `json:"relays,omitempty"`
 }
 
 type QUICControlMessage struct {

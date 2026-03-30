@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"strings"
 	"sync"
 )
 
@@ -46,11 +45,7 @@ func (r *Runtime) BPSManager() *BPSManager {
 }
 
 func (r *Runtime) BanLease(leaseID string) {
-	if r == nil {
-		return
-	}
-	leaseID = strings.TrimSpace(leaseID)
-	if leaseID == "" {
+	if r == nil || leaseID == "" {
 		return
 	}
 	r.mu.Lock()
@@ -59,22 +54,21 @@ func (r *Runtime) BanLease(leaseID string) {
 }
 
 func (r *Runtime) UnbanLease(leaseID string) {
-	if r == nil {
+	if r == nil || leaseID == "" {
 		return
 	}
-	leaseID = strings.TrimSpace(leaseID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.bannedLeases, leaseID)
 }
 
 func (r *Runtime) IsLeaseBanned(leaseID string) bool {
-	if r == nil {
+	if r == nil || leaseID == "" {
 		return false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	_, ok := r.bannedLeases[strings.TrimSpace(leaseID)]
+	_, ok := r.bannedLeases[leaseID]
 	return ok
 }
 
@@ -98,7 +92,6 @@ func (r *Runtime) SetBannedLeases(leaseIDs []string) {
 
 	bannedLeases := make(map[string]struct{}, len(leaseIDs))
 	for _, leaseID := range leaseIDs {
-		leaseID = strings.TrimSpace(leaseID)
 		if leaseID == "" {
 			continue
 		}
@@ -111,20 +104,20 @@ func (r *Runtime) SetBannedLeases(leaseIDs []string) {
 }
 
 func (r *Runtime) EffectiveApproval(leaseID string) bool {
-	if r == nil || r.approver == nil {
+	if r == nil || r.approver == nil || leaseID == "" {
 		return true
 	}
 	if r.approver.Mode() == ModeAuto {
 		return true
 	}
-	return r.approver.IsApproved(strings.TrimSpace(leaseID))
+	return r.approver.IsApproved(leaseID)
 }
 
 func (r *Runtime) IsLeaseDenied(leaseID string) bool {
-	if r == nil || r.approver == nil {
+	if r == nil || r.approver == nil || leaseID == "" {
 		return false
 	}
-	return r.approver.IsDenied(strings.TrimSpace(leaseID))
+	return r.approver.IsDenied(leaseID)
 }
 
 func (r *Runtime) IsLeaseRoutable(leaseID string) bool {
