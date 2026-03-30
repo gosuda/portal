@@ -53,7 +53,6 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayURL string) t
 		OverlayIPv4:         overlayIPv4,
 		SupportsTCP:         true,
 		SupportsOverlayPeer: true,
-		StatusState:         "healthy",
 	}, identity.PrivateKey)
 	if err != nil {
 		t.Fatalf("SignedDescriptor() error = %v", err)
@@ -395,7 +394,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	resultUpdated, resultAdded, warnErr, err := applyDiscovery(
 		bootstrapDesc.RelayID,
 		bootstrapDesc.APIHTTPSAddr,
-		types.DiscoveryResponse{Self: bootstrapDesc},
+		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: bootstrapDesc},
 		false,
 	)
 	if err != nil {
@@ -414,7 +413,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	resultUpdated, resultAdded, warnErr, err = applyDiscovery(
 		bootstrapDesc.RelayID,
 		bootstrapDesc.APIHTTPSAddr,
-		types.DiscoveryResponse{Self: bootstrapDesc, Relays: []types.RelayDescriptor{relayADesc}},
+		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: bootstrapDesc, Relays: []types.RelayDescriptor{relayADesc}},
 		false,
 	)
 	if err != nil {
@@ -485,7 +484,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	resultUpdated, resultAdded, warnErr, err = applyDiscovery(
 		relayADesc.RelayID,
 		relayADesc.APIHTTPSAddr,
-		types.DiscoveryResponse{Self: relayADesc},
+		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: relayADesc},
 		true,
 	)
 	if err != nil {

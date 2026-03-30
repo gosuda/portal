@@ -24,20 +24,6 @@ type RelayDescriptor struct {
 	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
-	SupportsWitness     bool `json:"supports_witness,omitempty"`
-	SupportsVPNExit     bool `json:"supports_vpn_exit,omitempty"`
-
-	StatusState string `json:"status_state,omitempty"`
-
-	Region  string `json:"region,omitempty"`
-	Country string `json:"country,omitempty"`
-
-	ReputationScore    float64 `json:"reputation_score,omitempty"`
-	WitnessCount       uint64  `json:"witness_count,omitempty"`
-	MITMSuspectedCount uint64  `json:"mitm_suspected_count,omitempty"`
-	MITMQuarantined    bool    `json:"mitm_quarantined,omitempty"`
-
-	LastMITMDetectedAt time.Time `json:"last_mitm_detected_at,omitempty"`
 
 	DescriptorSignature string `json:"descriptor_signature"`
 }

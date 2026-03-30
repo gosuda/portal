@@ -141,9 +141,6 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		SupportsTCP:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
-		SupportsWitness:     false,
-		SupportsVPNExit:     false,
-		StatusState:         "healthy",
 		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
 		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
 		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
@@ -155,7 +152,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := types.DiscoveryResponse{
-		ProtocolVersion: 1,
+		ProtocolVersion: types.ProtocolVersion,
 		GeneratedAt:     now,
 		Self:            self,
 		Relays:          nil,
@@ -175,8 +172,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		SDKVersion:     types.SDKProtocolVersion,
-		ReleaseVersion: types.ReleaseVersion,
+		ProtocolVersion: types.ProtocolVersion,
+		ReleaseVersion:  types.ReleaseVersion,
 	})
 }
 

@@ -32,9 +32,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 	if !desc.ExpiresAt.IsZero() {
 		desc.ExpiresAt = desc.ExpiresAt.UTC()
 	}
-	if !desc.LastMITMDetectedAt.IsZero() {
-		desc.LastMITMDetectedAt = desc.LastMITMDetectedAt.UTC()
-	}
 
 	if desc.APIHTTPSAddr != "" {
 		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
@@ -157,6 +154,10 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 }
 
 func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	if strings.TrimSpace(resp.ProtocolVersion) != types.ProtocolVersion {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", strings.TrimSpace(resp.ProtocolVersion), types.ProtocolVersion)
+	}
+
 	self, err := ValidateDescriptor(resp.Self, now)
 	if err != nil {
 		return types.RelayDescriptor{}, nil, err

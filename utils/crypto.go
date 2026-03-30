@@ -20,7 +20,6 @@ import (
 )
 
 type Secp256k1Identity struct {
-	Generated  bool   `json:"generated,omitempty"`
 	Address    string `json:"address"`
 	PublicKey  string `json:"public_key"`
 	PrivateKey string `json:"private_key"`
@@ -135,14 +134,12 @@ func SignEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 
 func ResolveSecp256k1Identity(rawPrivateKey string) (Secp256k1Identity, error) {
 	privateKeyHex := strings.TrimSpace(rawPrivateKey)
-	generated := false
 	if privateKeyHex == "" {
 		privateKey, err := secp256k1.GeneratePrivateKey()
 		if err != nil {
 			return Secp256k1Identity{}, fmt.Errorf("generate secp256k1 private key: %w", err)
 		}
 		privateKeyHex = hex.EncodeToString(privateKey.Serialize())
-		generated = true
 	}
 
 	decoded, normalizedKeyHex, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, true)
@@ -162,7 +159,6 @@ func ResolveSecp256k1Identity(rawPrivateKey string) (Secp256k1Identity, error) {
 	}
 
 	return Secp256k1Identity{
-		Generated:  generated,
 		Address:    address,
 		PublicKey:  publicKeyHex,
 		PrivateKey: normalizedKeyHex,

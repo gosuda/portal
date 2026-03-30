@@ -85,7 +85,7 @@ type RegisterResponse struct {
 }
 
 type DiscoveryResponse struct {
-	ProtocolVersion uint32            `json:"protocol_version"`
+	ProtocolVersion string            `json:"protocol_version"`
 	GeneratedAt     time.Time         `json:"generated_at"`
 	Self            RelayDescriptor   `json:"self"`
 	Relays          []RelayDescriptor `json:"relays,omitempty"`
@@ -120,8 +120,8 @@ type UnregisterRequest struct {
 }
 
 type DomainResponse struct {
-	SDKVersion     string `json:"sdk_version"`
-	ReleaseVersion string `json:"release_version"`
+	ProtocolVersion string `json:"protocol_version"`
+	ReleaseVersion  string `json:"release_version"`
 }
 
 type TunnelStatusResponse struct {

@@ -42,6 +42,7 @@ UDP client
 - `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK owner secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay owner key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener because `/sdk/connect` depends on HTTP/1.1 hijacking semantics.
+- WireGuard, when enabled, is relay-to-relay overlay transport only. It is not used for tenant stream TLS, public UDP ingress, or `/sdk/*` control-plane traffic.
 
 ### Reverse Session Protocol
 
@@ -112,6 +113,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 - `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
 - `discovery`: signed relay descriptor publication and relay-set synchronization
+- `wireguard`: optional relay overlay network used to reach peer relay APIs over internal overlay IPs and keep relay peer state synchronized
 - `Server` additionally owns `quicTunnel` (QUIC listener, ALPN `portal-tunnel`) when UDP transport is enabled
 
 ### SDK (`sdk/`)
@@ -197,6 +199,26 @@ Client --UDP--> [:50000+ Relay] --DATAGRAM--> [RelayDatagram] --QUIC--> [ClientD
 ```
 
 Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
+
+## WireGuard Overlay and Discovery
+
+- Discovery starts from bootstrap relay URLs over normal public HTTPS.
+- Each relay publishes a signed descriptor that may advertise:
+  - `wireguard_public_key`
+  - `wireguard_endpoint`
+  - `overlay_ipv4`
+  - optional `overlay_cidrs`
+- When discovery is enabled and the relay has a WireGuard private key, the relay creates an internal overlay interface and derives:
+  - a relay WireGuard public key
+  - an overlay IPv4 identity
+  - a peer API listener bound on the overlay address
+- The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
+- Bootstrap relays are discovered first over public HTTPS. Non-bootstrap relays that advertise overlay support become sync candidates and are polled again over the WireGuard overlay.
+- Relay-set snapshots are translated into WireGuard peers with:
+  - peer public key
+  - endpoint
+  - allowed IPs = peer overlay `/32` plus advertised overlay CIDRs
+- Overlay failure affects inter-relay discovery and mesh synchronization only. Tenant stream routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path directly.
 
 ## Control Plane Flow
 
@@ -338,6 +360,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Reverse-only backend connectivity
 - One canonical raw TCP reverse transport
 - Raw public UDP exposure with an internal QUIC datagram backhaul
+- Optional WireGuard relay overlay for relay discovery and peer synchronization
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination

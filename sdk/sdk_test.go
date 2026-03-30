@@ -24,7 +24,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					SDKVersion: types.SDKProtocolVersion,
+					ProtocolVersion: types.ProtocolVersion,
 				},
 			})
 		case types.PathSDKRegisterChallenge:
@@ -176,7 +176,7 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					SDKVersion: types.SDKProtocolVersion,
+					ProtocolVersion: types.ProtocolVersion,
 				},
 			})
 		case types.PathSDKRegisterChallenge:
@@ -260,7 +260,7 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
 				OK: true,
 				Data: types.DomainResponse{
-					SDKVersion: types.SDKProtocolVersion,
+					ProtocolVersion: types.ProtocolVersion,
 				},
 			})
 		case types.PathSDKRegisterChallenge:
