@@ -66,6 +66,7 @@ services:
       SNI_PORT: ${SNI_PORT:-4443}
       WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
       DISCOVERY_PORT: ${DISCOVERY_PORT:-51820}
+      WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-}
 
       # UDP transport (0 = disabled, set count to enable).
       UDP_PORT_COUNT: ${UDP_PORT_COUNT:-0}

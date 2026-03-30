@@ -105,6 +105,7 @@ Example:
 PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
+WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=./.portal-certs
@@ -129,6 +130,8 @@ Notes:
 
 - For non-apex deployments, set `PORTAL_URL` to the non-apex host value, for example `https://portal.example.com:8443`
 - Portal uses the `PORTAL_URL` host for public lease hostnames
+- `WIREGUARD_ENDPOINT` is optional. When empty, Portal advertises `PORTAL_URL` host with `DISCOVERY_PORT`
+- Set `WIREGUARD_ENDPOINT` explicitly only when relay-peer discovery UDP is exposed on a different address than `PORTAL_URL`
 - `KEYLESS_DIR` stores relay certificate material
 
 If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
