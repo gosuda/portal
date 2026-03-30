@@ -197,8 +197,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
-		switch err {
-		case auth.ErrInvalidSignature:
+		switch {
+		case errors.Is(err, auth.ErrInvalidSignature):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		default:
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -208,18 +208,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.registerLease(challenge.Request, clientIP, req.ReportedIP)
 	if err != nil {
-		switch err {
-		case errFeatureUnavailable:
+		switch {
+		case errors.Is(err, errFeatureUnavailable):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
-		case errHostnameConflict:
+		case errors.Is(err, errHostnameConflict):
 			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeHostnameConflict, err.Error())
-		case errIPBanned:
+		case errors.Is(err, errIPBanned):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, err.Error())
-		case transport.ErrPortExhausted:
+		case errors.Is(err, transport.ErrPortExhausted):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted, err.Error())
-		case errUDPDisabled:
+		case errors.Is(err, errUDPDisabled):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
-		case errUDPCapacityExceeded:
+		case errors.Is(err, errUDPCapacityExceeded):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
 		default:
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -269,12 +269,12 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 
 	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI)
 	if err != nil {
-		switch err {
-		case errFeatureUnavailable:
+		switch {
+		case errors.Is(err, errFeatureUnavailable):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
-		case errUDPDisabled:
+		case errors.Is(err, errUDPDisabled):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
-		case errUDPCapacityExceeded:
+		case errors.Is(err, errUDPCapacityExceeded):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
 		default:
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -315,8 +315,8 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
-		switch err {
-		case errLeaseNotFound:
+		switch {
+		case errors.Is(err, errLeaseNotFound):
 			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		default:
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
@@ -354,8 +354,8 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 
 	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID))
 	if err != nil {
-		switch err {
-		case errLeaseNotFound:
+		switch {
+		case errors.Is(err, errLeaseNotFound):
 			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		default:
 			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
