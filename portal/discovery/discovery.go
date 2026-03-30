@@ -32,9 +32,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 	if !desc.ExpiresAt.IsZero() {
 		desc.ExpiresAt = desc.ExpiresAt.UTC()
 	}
-	if !desc.LastMITMDetectedAt.IsZero() {
-		desc.LastMITMDetectedAt = desc.LastMITMDetectedAt.UTC()
-	}
 
 	if desc.APIHTTPSAddr != "" {
 		normalized, err := utils.NormalizeRelayURL(desc.APIHTTPSAddr)
@@ -157,6 +154,10 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 }
 
 func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
+	if strings.TrimSpace(resp.ProtocolVersion) != types.ProtocolVersion {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", strings.TrimSpace(resp.ProtocolVersion), types.ProtocolVersion)
+	}
+
 	self, err := ValidateDescriptor(resp.Self, now)
 	if err != nil {
 		return types.RelayDescriptor{}, nil, err
@@ -305,27 +306,8 @@ func doGET[T any](ctx context.Context, baseURL, path string, query url.Values, r
 		client = &clone
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL.String(), nil)
-	if err != nil {
+	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &zero); err != nil {
 		return zero, err
 	}
-
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return zero, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return zero, utils.DecodeAPIRequestError(resp)
-	}
-
-	envelope, err := utils.DecodeAPIEnvelope[T](resp.Body)
-	if err != nil {
-		return zero, fmt.Errorf("decode response: %w", err)
-	}
-	if !envelope.OK {
-		return zero, utils.NewAPIRequestError(resp.StatusCode, envelope.Error)
-	}
-	return envelope.Data, nil
+	return zero, nil
 }

@@ -3,10 +3,10 @@ package utils
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -500,13 +500,6 @@ func RandomHex(size int) (string, error) {
 }
 
 // Security and TLS helpers.
-func TokenMatches(expected, actual string) bool {
-	if len(expected) == 0 || len(actual) == 0 {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) == 1
-}
-
 func CertPoolFromPEM(rootCAPEM []byte) (*x509.CertPool, error) {
 	if len(rootCAPEM) == 0 {
 		return nil, nil
@@ -516,6 +509,14 @@ func CertPoolFromPEM(rootCAPEM []byte) (*x509.CertPool, error) {
 		return nil, errors.New("failed to parse relay root ca")
 	}
 	return pool, nil
+}
+
+func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, errors.New("no pem block found")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
 func SleepOrDone(ctx context.Context, d time.Duration) bool {

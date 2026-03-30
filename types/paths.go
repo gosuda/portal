@@ -25,11 +25,12 @@ const (
 
 	PathTunnelStatus = "/tunnel/status"
 
-	PathSDKPrefix     = "/sdk/"
-	PathSDKDomain     = "/sdk/domain"
-	PathSDKRegister   = "/sdk/register"
-	PathSDKRenew      = "/sdk/renew"
-	PathSDKUnregister = "/sdk/unregister"
-	PathSDKConnect    = "/sdk/connect"
-	PathDiscovery     = "/discovery"
+	PathSDKPrefix            = "/sdk/"
+	PathSDKDomain            = "/sdk/domain"
+	PathSDKRegisterChallenge = "/sdk/register/challenge"
+	PathSDKRegister          = "/sdk/register"
+	PathSDKRenew             = "/sdk/renew"
+	PathSDKUnregister        = "/sdk/unregister"
+	PathSDKConnect           = "/sdk/connect"
+	PathDiscovery            = "/discovery"
 )

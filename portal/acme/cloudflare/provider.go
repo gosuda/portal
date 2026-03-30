@@ -1,9 +1,7 @@
 package cloudflare
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +10,8 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
@@ -87,7 +87,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	baseDomain = normalizeHost(baseDomain)
+	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
@@ -155,7 +155,7 @@ func listZones(ctx context.Context, token, name string) ([]zone, error) {
 	u.RawQuery = q.Encode()
 
 	var out zonesResult
-	if err := doGet(ctx, token, u.String(), &out); err != nil {
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
 		return nil, err
 	}
 	if !out.Success {
@@ -172,7 +172,7 @@ func listDNSRecords(ctx context.Context, token, zoneID, name, recordType string)
 	u.RawQuery = q.Encode()
 
 	var out recordsResult
-	if err := doGet(ctx, token, u.String(), &out); err != nil {
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodGet, u.String(), nil, cloudflareHeaders(token), &out); err != nil {
 		return nil, err
 	}
 	if !out.Success {
@@ -192,7 +192,7 @@ func createDNSRecord(ctx context.Context, token, zoneID, name, ip string) error 
 	}
 
 	var out recordResult
-	if err := doMutate(ctx, http.MethodPost, token, endpoint, body, &out); err != nil {
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPost, endpoint, body, cloudflareHeaders(token), &out); err != nil {
 		return err
 	}
 	if !out.Success {
@@ -212,7 +212,7 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, name, ip stri
 	}
 
 	var out recordResult
-	if err := doMutate(ctx, http.MethodPut, token, endpoint, body, &out); err != nil {
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPut, endpoint, body, cloudflareHeaders(token), &out); err != nil {
 		return err
 	}
 	if !out.Success {
@@ -221,43 +221,11 @@ func updateDNSRecord(ctx context.Context, token, zoneID, recordID, name, ip stri
 	return nil
 }
 
-func doGet(ctx context.Context, token, rawURL string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
+func cloudflareHeaders(token string) http.Header {
+	return http.Header{
+		"Authorization": []string{"Bearer " + token},
+		"Content-Type":  []string{"application/json"},
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func doMutate(ctx context.Context, method, token, rawURL string, body any, out any) error {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func wrapErrors(errs []apiError) error {
@@ -269,11 +237,4 @@ func wrapErrors(errs []apiError) error {
 		messages = append(messages, fmt.Sprintf("[%d] %s", apiErr.Code, apiErr.Message))
 	}
 	return errors.New(strings.Join(messages, "; "))
-}
-
-func normalizeHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimPrefix(host, "*.")
-	host = strings.TrimSuffix(host, ".")
-	return host
 }

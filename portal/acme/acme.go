@@ -12,9 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,7 +77,7 @@ type acmeUser struct {
 }
 
 func NewManager(cfg Config) (*Manager, error) {
-	cfg.BaseDomain = normalizeHost(cfg.BaseDomain)
+	cfg.BaseDomain = strings.TrimPrefix(utils.NormalizeHostname(cfg.BaseDomain), "*.")
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
@@ -291,7 +288,7 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 		return errors.New("acme dns provider is required")
 	}
 
-	publicIP, err := detectPublicIPv4(ctx)
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
 	if err != nil {
 		return fmt.Errorf("detect public ip: %w", err)
 	}
@@ -317,7 +314,7 @@ func certNeedsRenewal(certFile string, domains []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	cert, err := ParseCertificatePEM(certPEM)
+	cert, err := utils.ParseCertificatePEM(certPEM)
 	if err != nil {
 		return false, err
 	}
@@ -336,7 +333,7 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	cert, err := ParseCertificatePEM(certPEM)
+	cert, err := utils.ParseCertificatePEM(certPEM)
 	if err != nil {
 		return false, err
 	}
@@ -527,46 +524,4 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Chmod(path, mode)
-}
-
-func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, errors.New("no pem block found")
-	}
-	return x509.ParseCertificate(block.Bytes)
-}
-
-func normalizeHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimPrefix(host, "*.")
-	host = strings.TrimSuffix(host, ".")
-	return host
-}
-
-func detectPublicIPv4(ctx context.Context) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api4.ipify.org", nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
-	if err != nil {
-		return "", err
-	}
-	ip := strings.TrimSpace(string(body))
-	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.To4() == nil {
-		return "", fmt.Errorf("invalid ipv4 address: %q", ip)
-	}
-	return ip, nil
 }

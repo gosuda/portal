@@ -14,6 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/route53/types"
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/route53"
+
+	"github.com/gosuda/portal/v2/utils"
 )
 
 const defaultAWSRegion = "us-east-1"
@@ -72,7 +74,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	baseDomain = normalizeHost(baseDomain)
+	baseDomain = utils.NormalizeHostname(baseDomain)
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
@@ -143,7 +145,7 @@ func findHostedZoneID(ctx context.Context, client *awsroute53.Client, domain, ex
 			if hostedZone.Config != nil && hostedZone.Config.PrivateZone {
 				continue
 			}
-			zoneName := normalizeHost(aws.ToString(hostedZone.Name))
+			zoneName := utils.NormalizeHostname(aws.ToString(hostedZone.Name))
 			zoneID := normalizeZoneID(aws.ToString(hostedZone.Id))
 			if zoneName == "" || zoneID == "" {
 				continue
@@ -169,7 +171,7 @@ func upsertARecord(ctx context.Context, client *awsroute53.Client, hostedZoneID,
 		return errors.New("hosted zone id is required")
 	}
 
-	fqdn := ensureTrailingDot(normalizeHost(name))
+	fqdn := ensureTrailingDot(utils.NormalizeHostname(name))
 	recordSet := &types.ResourceRecordSet{
 		Name: aws.String(fqdn),
 		Type: types.RRTypeA,
@@ -213,7 +215,7 @@ func domainCandidates(domain string) []string {
 
 	candidates := make([]string, 0, len(parts)-1)
 	for i := range len(parts) - 1 {
-		candidate := normalizeHost(strings.Join(parts[i:], "."))
+		candidate := utils.NormalizeHostname(strings.Join(parts[i:], "."))
 		if candidate != "" {
 			candidates = append(candidates, candidate)
 		}
@@ -243,12 +245,6 @@ func validateConfig(cfg Config) error {
 		return errors.New("route53 access key id and secret access key must be supplied together")
 	}
 	return nil
-}
-
-func normalizeHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimSuffix(host, ".")
-	return host
 }
 
 func normalizeZoneID(raw string) string {

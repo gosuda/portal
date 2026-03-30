@@ -29,7 +29,6 @@ func mustSignedRelayDescriptor(t *testing.T, ownerPrivateKey, relayID, relayURL 
 		IssuedAt:        now,
 		ExpiresAt:       now.Add(time.Hour),
 		APIHTTPSAddr:    relayURL,
-		StatusState:     "healthy",
 	}, identity.PrivateKey)
 	if err != nil {
 		t.Fatalf("SignedDescriptor() error = %v", err)
@@ -174,18 +173,18 @@ func TestExposurePinDiscoveredDescriptorRejectsIdentityChange(t *testing.T) {
 	exposure := &Exposure{relaySet: discovery.NewRelaySet()}
 	desc := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), "relay-a", "https://relay-a.example")
 
-	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{Self: desc}, time.Now().UTC()); err != nil {
+	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
 	changedSigner := mustSignedRelayDescriptor(t, strings.Repeat("12", 32), desc.RelayID, desc.APIHTTPSAddr)
-	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{Self: changedSigner}, time.Now().UTC())
+	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedSigner}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned signer mismatch")
 	}
 
 	changedURL := mustSignedRelayDescriptor(t, strings.Repeat("11", 32), desc.RelayID, "https://relay-b.example")
-	_, _, _, _, err = exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{Self: changedURL}, time.Now().UTC())
+	_, _, _, _, err = exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
 	if err == nil {
 		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned relay url mismatch")
 	}

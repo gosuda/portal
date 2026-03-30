@@ -9,12 +9,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/gosuda/portal/v2/portal/auth"
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/portal/policy"
@@ -71,6 +73,8 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 			s.handleHealthz(w, r)
 		case types.PathSDKDomain:
 			s.handleDomain(w, r)
+		case types.PathSDKRegisterChallenge:
+			s.handleRegisterChallenge(w, r)
 		case types.PathSDKRegister:
 			s.handleRegister(w, r)
 		case types.PathSDKRenew:
@@ -137,9 +141,6 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		SupportsTCP:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
-		SupportsWitness:     false,
-		SupportsVPNExit:     false,
-		StatusState:         "healthy",
 		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
 		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
 		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
@@ -151,7 +152,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := types.DiscoveryResponse{
-		ProtocolVersion: 1,
+		ProtocolVersion: types.ProtocolVersion,
 		GeneratedAt:     now,
 		Self:            self,
 		Relays:          nil,
@@ -171,8 +172,8 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.DomainResponse{
-		SDKVersion:     types.SDKProtocolVersion,
-		ReleaseVersion: types.ReleaseVersion,
+		ProtocolVersion: types.ProtocolVersion,
+		ReleaseVersion:  types.ReleaseVersion,
 	})
 }
 
@@ -194,28 +195,90 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.registerLease(req, clientIP)
+	challenge, err := s.registry.consumeVerifiedRegisterChallenge(req)
 	if err != nil {
-		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
-		if errors.Is(err, errFeatureUnavailable) {
-			status, code = http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable
+		switch {
+		case errors.Is(err, auth.ErrInvalidSignature):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
+		default:
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		}
-		if errors.Is(err, errHostnameConflict) {
-			status, code = http.StatusConflict, types.APIErrorCodeHostnameConflict
+		return
+	}
+
+	resp, err := s.registerLease(challenge.Request, clientIP, req.ReportedIP)
+	if err != nil {
+		switch {
+		case errors.Is(err, errFeatureUnavailable):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
+		case errors.Is(err, errHostnameConflict):
+			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeHostnameConflict, err.Error())
+		case errors.Is(err, errIPBanned):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, err.Error())
+		case errors.Is(err, transport.ErrPortExhausted):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted, err.Error())
+		case errors.Is(err, errUDPDisabled):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
+		case errors.Is(err, errUDPCapacityExceeded):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
+		default:
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		}
-		if errors.Is(err, errIPBanned) {
-			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
+		return
+	}
+
+	utils.WriteAPIData(w, http.StatusCreated, resp)
+}
+
+func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
+	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+		return
+	}
+
+	var req types.RegisterChallengeRequest
+	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
+		return
+	}
+
+	scheme := "https"
+	if r.TLS == nil {
+		scheme = "http"
+	}
+	domain := strings.TrimSpace(r.Host)
+	if domain == "" {
+		domain = s.rootHost
+	}
+	registerURI := (&url.URL{
+		Scheme: scheme,
+		Host:   domain,
+		Path:   types.PathSDKRegister,
+	}).String()
+
+	if req.UDPEnabled && (s.cfg.UDPPortCount <= 0 || s.group != nil && s.quicTunnel == nil) {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+		return
+	}
+
+	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI)
+	if err != nil {
+		switch {
+		case errors.Is(err, errFeatureUnavailable):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
+		case errors.Is(err, errUDPDisabled):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
+		case errors.Is(err, errUDPCapacityExceeded):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
+		default:
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		}
-		if errors.Is(err, transport.ErrPortExhausted) {
-			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted
-		}
-		if errors.Is(err, errUDPDisabled) {
-			status, code = http.StatusForbidden, types.APIErrorCodeUDPDisabled
-		}
-		if errors.Is(err, errUDPCapacityExceeded) {
-			status, code = http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded
-		}
-		utils.WriteAPIError(w, status, code, err.Error())
 		return
 	}
 
@@ -240,27 +303,37 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.ownerIdentity.PublicKey, s.cfg.PortalURL, strings.TrimSpace(req.LeaseID), time.Now().UTC())
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
+		return
+	}
+
 	ttl := s.cfg.LeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
+	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
-		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
-		if errors.Is(err, errLeaseNotFound) {
-			status, code = http.StatusNotFound, types.APIErrorCodeLeaseNotFound
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
+		default:
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		}
-		if errors.Is(err, errUnauthorized) {
-			status, code = http.StatusForbidden, types.APIErrorCodeUnauthorized
-		}
-		if errors.Is(err, errIPBanned) {
-			status, code = http.StatusForbidden, types.APIErrorCodeIPBanned
-		}
-		utils.WriteAPIError(w, status, code, err.Error())
+		return
+	}
+	nextAccessToken, _, err := auth.IssueLeaseAccessToken(s.ownerIdentity.PrivateKey, s.ownerIdentity.Address, s.cfg.PortalURL, claims.Subject, record.ID, ttl)
+	if err != nil {
+		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt})
+	utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
+		LeaseID:     record.ID,
+		ExpiresAt:   record.ExpiresAt,
+		AccessToken: nextAccessToken,
+	})
 }
 
 func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
@@ -274,24 +347,26 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return
 	}
+	if _, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.ownerIdentity.PublicKey, s.cfg.PortalURL, strings.TrimSpace(req.LeaseID), time.Now().UTC()); err != nil {
+		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
+		return
+	}
 
-	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID), req.ReverseToken)
+	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID))
 	if err != nil {
-		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
-		if errors.Is(err, errLeaseNotFound) {
-			status, code = http.StatusNotFound, types.APIErrorCodeLeaseNotFound
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
+		default:
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		}
-		if errors.Is(err, errUnauthorized) {
-			status, code = http.StatusForbidden, types.APIErrorCodeUnauthorized
-		}
-		utils.WriteAPIError(w, status, code, err.Error())
 		return
 	}
 	if record != nil {
 		record.Close()
 	}
 
-	utils.WriteAPIOK(w, http.StatusOK)
+	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +380,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
-	token := strings.TrimSpace(r.Header.Get(types.HeaderReverseToken))
+	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
 	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
@@ -390,13 +465,13 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	if msg.LeaseID == "" || msg.ReverseToken == "" {
+	if msg.LeaseID == "" || msg.AccessToken == "" {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
 
-	lease, err := s.admitLeaseByID(msg.LeaseID, msg.ReverseToken, true)
+	lease, err := s.admitLeaseByID(msg.LeaseID, msg.AccessToken, true)
 	switch {
 	case err == nil:
 	case errors.Is(err, errLeaseNotFound):
@@ -445,7 +520,7 @@ func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*l
 	if !s.registry.policy.IsLeaseRoutable(lease.ID) {
 		return nil, errLeaseRejected
 	}
-	if !utils.TokenMatches(lease.ReverseToken, token) {
+	if _, err := auth.VerifyLeaseAccessToken(token, s.ownerIdentity.PublicKey, s.cfg.PortalURL, leaseID, time.Now().UTC()); err != nil {
 		return nil, errUnauthorized
 	}
 	if lease.stream == nil || (requireDatagram && lease.datagram == nil) {
@@ -454,13 +529,10 @@ func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*l
 	return lease, nil
 }
 
-func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
+func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, reportedIP string) (types.RegisterResponse, error) {
 	name, err := utils.NormalizeDNSLabel(req.Name)
 	if err != nil {
 		return types.RegisterResponse{}, err
-	}
-	if strings.TrimSpace(req.ReverseToken) == "" {
-		return types.RegisterResponse{}, errors.New("reverse token is required")
 	}
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		return types.RegisterResponse{}, errIPBanned
@@ -493,10 +565,13 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			return types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
-
 	leaseID := utils.RandomID("lease_")
-	now := time.Now()
-	expiresAt := now.Add(ttl)
+	accessToken, claims, err := auth.IssueLeaseAccessToken(s.ownerIdentity.PrivateKey, s.ownerIdentity.Address, s.cfg.PortalURL, ownerAddress, leaseID, ttl)
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+	issuedAt := claims.IssuedAt.Time().UTC()
+	expiresAt := claims.Expiry.Time().UTC()
 	record := &leaseRecord{
 		Lease: types.Lease{
 			ID:           leaseID,
@@ -505,14 +580,13 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 			Metadata:     req.Metadata,
 			OwnerAddress: ownerAddress,
 			ExpiresAt:    expiresAt,
-			FirstSeenAt:  now,
-			LastSeenAt:   now,
+			FirstSeenAt:  issuedAt,
+			LastSeenAt:   issuedAt,
 			ClientIP:     clientIP,
-			ReportedIP:   utils.SanitizeReportedIP(req.ReportedIP),
+			ReportedIP:   utils.SanitizeReportedIP(reportedIP),
 			UDPEnabled:   req.UDPEnabled,
 		},
-		ReverseToken: req.ReverseToken,
-		stream:       transport.NewRelayStream(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+		stream: transport.NewRelayStream(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
 	}
 	if req.UDPEnabled {
 		if s.ports == nil {
@@ -520,7 +594,7 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 		}
 		port, err := s.ports.Allocate(name)
 		if err != nil {
-			return types.RegisterResponse{}, fmt.Errorf("allocate udp port: %w", err)
+			return types.RegisterResponse{}, err
 		}
 		record.datagram = transport.NewRelayDatagram(leaseID, port)
 		record.ports = s.ports
@@ -537,11 +611,12 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	}
 
 	resp := types.RegisterResponse{
-		LeaseID:    leaseID,
-		Hostname:   hostname,
-		Metadata:   record.Metadata,
-		ExpiresAt:  expiresAt,
-		UDPEnabled: record.UDPEnabled,
+		LeaseID:     leaseID,
+		Hostname:    hostname,
+		Metadata:    record.Metadata,
+		ExpiresAt:   expiresAt,
+		AccessToken: accessToken,
+		UDPEnabled:  record.UDPEnabled,
 	}
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.datagram.UDPPort())

@@ -3,7 +3,7 @@
 ## Overview
 
 Portal publishes local services on public subdomains and optional UDP ports through a relay.
-Backends connect outward to the relay. Stream traffic is routed by SNI, and tenant TLS remains end-to-end between the client and the SDK/tunnel endpoint for the stream path.
+Backends connect outward to the relay. Stream traffic is routed by SNI, and tenant TLS remains end-to-end between the client and the SDK or tunnel endpoint for the stream path.
 
 High-level path:
 
@@ -15,7 +15,7 @@ Stream client
   -> Local service
 
 UDP client
-  -> Relay lease UDP port (29900-29999 by default)
+  -> Relay lease UDP port (50000+ by default)
   -> Internal QUIC tunnel
   -> SDK / portal-tunnel
   -> Local UDP service
@@ -38,10 +38,11 @@ UDP client
 - Relay does not terminate tenant TLS. It peeks ClientHello for SNI and bridges raw encrypted bytes after routing.
 - SDK/tunnel endpoints terminate tenant TLS locally with a keyless-backed signer that calls the relay.
 - In keyless TLS, the relay performs certificate private-key signing through `/v1/sign`, but the SDK/tunnel endpoint still runs the TLS server handshake and derives tenant TLS session keys locally.
-- `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus reverse token.
-- `/sdk/register` requires the caller to supply the reverse token that later authorizes the lease lifecycle, but registration itself is not separately authenticated by that token.
+- `/sdk/connect`, `/sdk/renew`, and `/sdk/unregister` are authorized by lease existence plus a relay-issued lease access token.
+- `/sdk/register` is authenticated by a SIWE challenge/response flow using the SDK owner secp256k1 key. On success, the relay issues a lease-scoped ES256K JWT access token signed by the relay owner key and used for the rest of the lease lifecycle.
 - Relay URLs must use `https://`.
 - HTTP/2 stays disabled on the admin/API TLS listener because `/sdk/connect` depends on HTTP/1.1 hijacking semantics.
+- WireGuard, when enabled, is relay-to-relay overlay transport only. It is not used for tenant stream TLS, public UDP ingress, or `/sdk/*` control-plane traffic.
 
 ### Reverse Session Protocol
 
@@ -72,6 +73,7 @@ UDP client
 Portal has three distinct network roles:
 
 - **Control-plane HTTP requests**
+  - `POST /sdk/register/challenge`
   - `POST /sdk/register`
   - `POST /sdk/renew`
   - `POST /sdk/unregister`
@@ -82,8 +84,8 @@ Portal has three distinct network roles:
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
-  - QUIC on `API_PORT/udp`
-  - authenticated by a QUIC control stream
+  - QUIC to the relay URL host:port with ALPN `portal-tunnel`
+  - authenticated by a first-stream control message carrying `lease_id` + `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
 That distinction matters because `/sdk/connect` stops being ordinary HTTP once hijacked, while the UDP backhaul is a separate internal QUIC carrier.
@@ -101,26 +103,26 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 
 ### Relay Core (`portal/`)
 
-- `Server`: owns listeners, lease registry, API handlers, and shutdown lifecycle
+- `Server`: owns listeners, lease registry, API handlers, discovery, and shutdown lifecycle
 - `routeTable`: exact + single-label wildcard hostname lookup
 - `transport.RelayStream`: per-lease ready queue for reverse stream sessions
-- `transport.RelayDatagram`: per-lease raw UDP port and datagram backhaul runtime
+- `transport.RelayDatagram`: per-lease raw UDP socket plus QUIC DATAGRAM bridge runtime
+- `transport.PortAllocator`: count-based UDP port allocator with sticky name-based reservation and grace period
+- `transport.datagramSession`: internal QUIC DATAGRAM bind/send/receive primitive shared by relay and SDK datagram runtimes
 - `acme`: Cloudflare/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
-- `portal/datagram/`: subpackage for QUIC/UDP datagram transport
-  - `Session`: owns one active QUIC DATAGRAM connection, decodes frames, exposes `Incoming()` channel
-  - `FlowMux`: per-lease QUIC connection manager; multiplexes UDP datagrams using flow IDs over DATAGRAM frames (RFC 9221); embeds a `Session` with dispatch and idle-flow cleanup goroutines
-  - `Relay`: binds a public UDP port per lease, bridges between raw UDP sockets and `FlowMux` using `TouchFlow`/`SendDatagram`
-  - `PortAllocator`: assigns and recycles per-lease UDP ports from a count-based pool (base port 50000, count via `UDP_PORT_COUNT`) with sticky name-based reservation and grace period
-  - `ParseQUICInitialSNI`: decrypts QUIC v1 Initial packets and extracts TLS ClientHello SNI for the QUIC SNI router
-- `Server` additionally owns: `quicTunnel` (QUIC listener, ALPN `portal-tunnel`), `quicSNI` (raw UDP PacketConn for QUIC SNI routing), `quicSNIRoutes` (cached FlowMux per source address)
+- `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
+- `discovery`: signed relay descriptor publication and relay-set synchronization
+- `wireguard`: optional relay overlay network used to reach peer relay APIs over internal overlay IPs and keep relay peer state synchronized
+- `Server` additionally owns `quicTunnel` (QUIC listener, ALPN `portal-tunnel`) when UDP transport is enabled
 
 ### SDK (`sdk/`)
 
 - `ExposeConfig.Discovery`: when true, `Expose` fetches the default Portal relay registry, merges it with explicit relay inputs, normalizes the result, and runs the relay discovery loop
 - Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
-- `Listener`: validates one relay URL locally, then starts relay compatibility checks, lease registration, reverse session maintenance, and lease renewal in the background until ready
-- `api_client.go`: internal relay client for control-plane requests, reverse session dialing, and internal QUIC tunnel setup
+- `Listener`: validates one relay URL locally, then starts relay compatibility checks, SIWE-based lease registration, reverse session maintenance, and lease renewal in the background until ready
+- `Listener` owns a `transport.ClientStream` and, when UDP is enabled, a `transport.ClientDatagram`
+- `api_client.go`: internal relay client for register challenge, register, renew, unregister, reverse session dialing, and QUIC tunnel setup
 - `mitm.go`: tenant-side TLS passthrough self-probe. The SDK opens a probe connection to its own public URL, compares TLS exporter values on both SDK-controlled ends, and logs suspected relay-side TLS termination on mismatch; strict callers can opt into relay banning instead
 - `ListenerConfig.RetryCount <= 0` means retry forever; positive values close the listener after the retry budget is exhausted
 - `NewListener` callers provide explicit normalized relay URLs
@@ -132,12 +134,11 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Tenant TLS is created automatically through the relay keyless signer; callers do not provide a local self-signed fallback path
 - MITM self-probes are traffic-triggered, not periodic. A listener triggers at most one asynchronous probe per 30-second cooldown, and only after real tenant traffic performs I/O on an accepted connection
 - Probe identification does not use a dedicated ALPN or fixed plaintext marker. The first encrypted probe payload is `nonce + random padding`, and inbound probe matching is only attempted while a probe is in flight
-- `Listener` embeds a `datagram.Session` for QUIC datagram transport (no separate UDP listener type)
-- `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the session
-- `Listener.WaitDatagramReady()`: blocks until relay publishes `udp_addr` and `quic_addr`
+- `Listener.AcceptDatagram()` / `SendDatagram()`: read/write datagram frames via the client datagram runtime
+- `Listener.DatagramReady()`: reports the published `udp_addr` plus whether the QUIC datagram plane is currently connected
 - `Exposure.AcceptDatagram()`: receives datagrams from all backing relay listeners with relay context populated on `DatagramFrame`
 - `Exposure.SendDatagram()`: sends a datagram frame back through the owning relay listener
-- `Exposure.WaitDatagramReady()`: blocks until at least one relay's datagram plane is ready
+- `Exposure.WaitDatagramReady()`: blocks until at least one relay listener has both a published `udp_addr` and a connected datagram plane
 
 ### Tunnel (`cmd/portal-tunnel`)
 
@@ -152,13 +153,13 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `--ban-mitm` flag (bool, default `false`): when enabled, TLS self-probe mismatches ban the relay for the current exposure instead of only logging
 - `runUDPBestEffort`: waits for datagram readiness, then calls `proxyExposureDatagrams`
 - `proxyExposureDatagrams` (`relays.go`): per-flow UDP sockets to local target with idle cleanup; uses `Exposure.SendDatagram()` for the return path
-- Best-effort UDP — failures logged but do not terminate the TCP tunnel
+- Best-effort UDP failures are logged but do not terminate the TCP tunnel
 
 ## Transport Model
 
 ### Raw reverse transport (TLS only)
 
-1. SDK/tunnel registers one lease per relay with `POST /sdk/register`.
+1. SDK/tunnel registers one lease per relay through `POST /sdk/register/challenge` followed by `POST /sdk/register`.
 2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?lease_id=...`.
 3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease stream ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
@@ -183,40 +184,81 @@ Result: this is a detect-only signal by default. It raises the cost of adaptive 
 
 ### UDP/QUIC Datagram Transport
 
-1. SDK/tunnel registers a lease with `udp_enabled=true` via `POST /sdk/register`.
-2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` AND admin has enabled UDP), allocates a UDP port via `PortAllocator`, creates `FlowMux` + `Relay` in `leaseDatagramRuntime`.
-3. Response includes `udp_addr` (public UDP endpoint) and `quic_addr` (QUIC tunnel endpoint).
-4. SDK opens a QUIC connection to `quic_addr` (ALPN `portal-tunnel`, TLS 1.3, datagrams enabled).
-5. Authentication: SDK sends `{lease_id, reverse_token}` JSON on the first QUIC stream; relay validates and calls `FlowMux.Register(conn)`.
-6. External UDP client sends a packet to `udp_addr` → `Relay.readLoop` → `FlowMux.TouchFlow` (assigns flow ID) → `FlowMux.SendDatagram` → QUIC DATAGRAM frame.
-7. SDK-side `Session.receiveLoop` decodes frame → `Listener.AcceptDatagram()` → `Exposure.AcceptDatagram()` → `proxyExposureDatagrams` → local UDP target.
-8. Return path: local response → per-flow read goroutine → `Exposure.SendDatagram()` → `Session.Send` → QUIC DATAGRAM → `FlowMux.runDispatchLoop` → reply callback → `conn.WriteToUDP` to original client.
+1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned SIWE message, and then completes `POST /sdk/register`.
+2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` and admin has enabled UDP), allocates a UDP port via `PortAllocator`, and creates a `transport.RelayDatagram` for the lease.
+3. Registration response includes `udp_addr` (public UDP endpoint) and `access_token`. There is no separate `quic_addr`; the SDK dials QUIC to the relay URL host:port.
+4. SDK `transport.ClientDatagram` opens a QUIC connection with ALPN `portal-tunnel` and QUIC DATAGRAM support enabled.
+5. Authentication: SDK sends `{lease_id, access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
+6. External UDP client sends a packet to `udp_addr` -> `RelayDatagram.readLoop` -> `TouchFlow` (assigns flow ID) -> `SendDatagram` -> QUIC DATAGRAM frame.
+7. SDK-side `datagramSession.receiveLoop` decodes frames -> `Listener.AcceptDatagram()` -> `Exposure.AcceptDatagram()` -> `proxyExposureDatagrams` -> local UDP target.
+8. Return path: local response -> `Exposure.SendDatagram()` -> `Listener.SendDatagram()` -> `ClientDatagram.Send()` -> QUIC DATAGRAM -> `RelayDatagram.dispatch()` -> `conn.WriteToUDP` to the original client.
 
 ```text
-Client --UDP--> [:50000+ Relay] --DATAGRAM--> [FlowMux/Session] --QUIC--> [Session/Listener] --UDP--> Local Service
-                                                                   <--QUIC DATAGRAM return path--
+Client --UDP--> [:50000+ Relay] --DATAGRAM--> [RelayDatagram] --QUIC--> [ClientDatagram] --UDP--> Local Service
+                                                          <--QUIC DATAGRAM return path--
 ```
 
 Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
+
+## WireGuard Overlay and Discovery
+
+- Discovery starts from bootstrap relay URLs over normal public HTTPS.
+- Each relay publishes a signed descriptor that may advertise:
+  - `wireguard_public_key`
+  - `wireguard_endpoint`
+  - `overlay_ipv4`
+  - optional `overlay_cidrs`
+- When discovery is enabled and the relay has a WireGuard private key, the relay creates an internal overlay interface and derives:
+  - a relay WireGuard public key
+  - an overlay IPv4 identity
+  - a peer API listener bound on the overlay address
+- The overlay peer API is plain HTTP on the WireGuard network, not public Internet HTTP. It serves the same discovery payload shape used by public `/discovery`.
+- Bootstrap relays are discovered first over public HTTPS. Non-bootstrap relays that advertise overlay support become sync candidates and are polled again over the WireGuard overlay.
+- Relay-set snapshots are translated into WireGuard peers with:
+  - peer public key
+  - endpoint
+  - allowed IPs = peer overlay `/32` plus advertised overlay CIDRs
+- Overlay failure affects inter-relay discovery and mesh synchronization only. Tenant stream routing, keyless TLS, register/renew/connect, and public UDP ingress do not depend on the WireGuard transport path directly.
 
 ## Control Plane Flow
 
 ### 1. Register
 
+- `POST /sdk/register/challenge`
 - `POST /sdk/register`
 - JSON envelope response
-- Caller provides:
+- Challenge request fields:
   - `name`
-  - `reverse_token`
-  - optional `metadata`
-  - optional `ttl`
-  - optional `udp_enabled` (default `false`)
+  - `metadata`
+  - `owner_address`
+  - `ttl`
+  - `udp_enabled`
+- Challenge response fields:
+  - `challenge_id`
+  - `expires_at`
+  - `siwe_message`
+- Caller signs the returned SIWE message with the owner Ethereum private key (`personal_sign`) and then submits:
+  - `challenge_id`
+  - `siwe_message`
+  - `siwe_signature`
 - `name` must be a valid single DNS label and relay publishes the lease at `<name>.<root host>`
 - Registration reserves the hostname and publishes the route immediately; if no reverse session is ready yet, inbound SNI claims wait up to `ClaimTimeout`
-- When datagram-capable, response includes `udp_addr`, `quic_addr`, and `transport`
-- UDP registration requires two conditions: server must have `UDP_PORT_COUNT > 0` AND admin must enable UDP in the admin panel
+- When registration succeeds, the response includes:
+  - `lease_id`
+  - `hostname`
+  - `expires_at`
+  - `access_token`
+  - optional `udp_addr`
+- `access_token` is a relay-issued ES256K JWT signed by the relay owner key and validated with:
+  - `iss = PORTAL_URL`
+  - `aud = portal-sdk`
+  - `sub = owner_address`
+  - `lease_id`
+  - `iat`, `nbf`, `exp`
+  - `jti`
+- UDP registration requires two conditions: server must have `UDP_PORT_COUNT > 0` and admin must enable UDP in the admin panel
 - `APIErrorCodeUDPDisabled` (HTTP 403) when UDP is disabled by admin policy
-- `APIErrorCodeUDPCapacityExceeded` (HTTP 503) when admin-configured max UDP lease limit is reached
+- `APIErrorCodeUDPCapacityExceeded` (HTTP 503) when the admin-configured max UDP lease limit is reached
 - `APIErrorCodeUDPPortExhausted` (HTTP 503) when the UDP port pool is exhausted
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
@@ -224,23 +266,23 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 
 - `GET /sdk/connect?lease_id=...`
 - Requires HTTP/1.1
-- Requires `X-Portal-Token` header with the lease reverse token
+- Requires `X-Portal-Access-Token` header with the lease access token
 - Relay validates:
   - lease exists and is not expired
-  - reverse token matches the registered lease token
+  - the lease access token signature, issuer, audience, lease ID, and expiry are valid
 - After claim, relay writes `0x02` before switching the session into tenant TLS passthrough
 - After hijack, the connection becomes a broker-managed reverse session
 
 ### 3. Renew
 
 - `POST /sdk/renew`
-- Requires `lease_id` + `reverse_token`
-- Extends lease TTL
+- Requires `lease_id` + `access_token`
+- Extends lease TTL and returns a refreshed `access_token`
 
 ### 4. Unregister
 
 - `POST /sdk/unregister`
-- Requires `lease_id` + `reverse_token`
+- Requires `lease_id` + `access_token`
 - Removes the lease, routes, and ready reverse sessions
 
 ## Routing Behavior
@@ -294,10 +336,9 @@ Cross-package public contract lives in:
 - `types/paths.go`
   - shared `/sdk/*`, admin, health, install, and signer paths
 - `types/transport.go`
-  - `LeaseCapabilities` (Stream/Datagram booleans)
+  - `ErrDatagramTooSmall`
   - `DatagramFrame` wire frame plus SDK relay context
   - `EncodeDatagram` / `DecodeDatagram`
-  - Transport constants: `TransportTCP`, `TransportUDP`, `TransportBoth`
 
 Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 
@@ -319,14 +360,15 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Reverse-only backend connectivity
 - One canonical raw TCP reverse transport
 - Raw public UDP exposure with an internal QUIC datagram backhaul
+- Optional WireGuard relay overlay for relay discovery and peer synchronization
 - SNI-based routing with root-host fallback
 - End-to-end tenant TLS with relay-backed keyless signing
 - Traffic-triggered detect-only MITM self-probing for probable relay-side TLS termination
-- Per-lease reverse token authorization for reverse session lifecycle
+- SIWE owner proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
 - Per-lease UDP port allocation with sticky name-based reservation
-- QUIC tunnel authentication via control stream (lease ID + reverse token)
+- QUIC tunnel authentication via control stream (lease ID + lease access token)
 
 ## ADRs
 
