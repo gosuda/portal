@@ -133,6 +133,42 @@ func (e *Exposure) ActiveRelayURLs() []string {
 	return e.relaySet.ActiveRelayURLs()
 }
 
+func (e *Exposure) Addr() net.Addr {
+	return listenerAddr("portal:exposure")
+}
+
+type exposureConn struct {
+	net.Conn
+	id         uint64
+	localAddr  string
+	remoteAddr string
+	closeOnce  sync.Once
+}
+
+func (c *exposureConn) Close() error {
+	var closeErr error
+	c.closeOnce.Do(func() {
+		closeErr = c.Conn.Close()
+		if errors.Is(closeErr, net.ErrClosed) {
+			closeErr = nil
+		}
+
+		event := log.Info().
+			Uint64("conn_id", c.id).
+			Str("local_addr", c.localAddr).
+			Str("remote_addr", c.remoteAddr)
+		if closeErr != nil {
+			event = log.Warn().
+				Err(closeErr).
+				Uint64("conn_id", c.id).
+				Str("local_addr", c.localAddr).
+				Str("remote_addr", c.remoteAddr)
+		}
+		event.Msg("exposure connection closed")
+	})
+	return closeErr
+}
+
 func (e *Exposure) Accept() (net.Conn, error) {
 	select {
 	case <-e.done:
@@ -156,129 +192,6 @@ func (e *Exposure) Accept() (net.Conn, error) {
 			remoteAddr: utils.AddrString(conn.RemoteAddr()),
 		}, nil
 	}
-}
-
-func (e *Exposure) Addr() net.Addr {
-	return listenerAddr("portal:exposure")
-}
-
-func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
-	var relayListener net.Listener
-	e.listenerMu.RLock()
-	activeListeners := make([]*Listener, 0, len(e.relayListeners))
-	for _, relayURL := range e.relaySet.ActiveRelayURLs() {
-		listener, ok := e.relayListeners[relayURL]
-		if !ok {
-			continue
-		}
-		activeListeners = append(activeListeners, listener)
-	}
-	e.listenerMu.RUnlock()
-	if len(activeListeners) > 0 {
-		relayListener = e
-	}
-	return RunHTTP(ctx, relayListener, handler, localAddr)
-}
-
-func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
-	localAddr = strings.TrimSpace(localAddr)
-
-	if relayListener == nil && localAddr == "" {
-		return errors.New("relay listener or local address is required")
-	}
-
-	var relaySrv *http.Server
-	if relayListener != nil {
-		relaySrv = &http.Server{
-			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
-		}
-	}
-
-	var localSrv *http.Server
-	if localAddr != "" {
-		localSrv = &http.Server{
-			Addr:              localAddr,
-			Handler:           handler,
-			ReadHeaderTimeout: defaultRequestTimeout,
-		}
-	}
-
-	serverCount := 0
-	if relaySrv != nil {
-		serverCount++
-	}
-	if localSrv != nil {
-		serverCount++
-	}
-
-	results := make(chan error, serverCount)
-	normalizeServeErr := func(err error, prefix string) error {
-		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-			return nil
-		}
-		return fmt.Errorf("%s: %w", prefix, err)
-	}
-
-	var (
-		shutdownOnce sync.Once
-		shutdownErr  error
-	)
-	shutdown := func() error {
-		shutdownOnce.Do(func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultHTTPShutdownTimeout)
-			defer cancel()
-
-			var localErr error
-			if localSrv != nil {
-				localErr = localSrv.Shutdown(shutdownCtx)
-				if errors.Is(localErr, http.ErrServerClosed) {
-					localErr = nil
-				}
-			}
-
-			var relayErr error
-			if relaySrv != nil {
-				relayErr = relaySrv.Shutdown(shutdownCtx)
-				if errors.Is(relayErr, http.ErrServerClosed) {
-					relayErr = nil
-				}
-			}
-
-			shutdownErr = errors.Join(localErr, relayErr)
-		})
-		return shutdownErr
-	}
-
-	if localSrv != nil {
-		go func() {
-			results <- normalizeServeErr(localSrv.ListenAndServe(), "serve local http")
-		}()
-	}
-	if relaySrv != nil {
-		go func() {
-			results <- normalizeServeErr(relaySrv.Serve(relayListener), "serve relay http")
-		}()
-	}
-
-	var serveErr error
-	remaining := serverCount
-	ctxDone := ctx.Done()
-	for remaining > 0 {
-		select {
-		case err := <-results:
-			remaining--
-			if err != nil {
-				serveErr = errors.Join(serveErr, err)
-				_ = shutdown()
-			}
-		case <-ctxDone:
-			_ = shutdown()
-			ctxDone = nil
-		}
-	}
-
-	return errors.Join(serveErr, shutdownErr)
 }
 
 func (e *Exposure) Close() error {
@@ -315,6 +228,53 @@ func (e *Exposure) Close() error {
 		event.Msg("exposure closed")
 	})
 	return closeErr
+}
+
+const defaultDiscoveryInterval = 30 * time.Second
+
+func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
+	for {
+		relayURLs := append([]string(nil), e.relaySet.ActiveRelayURLs()...)
+		if len(relayURLs) > 0 {
+			var discoveredRelayURLs []string
+
+			for _, relayURL := range relayURLs {
+				resp, err := discovery.DiscoverRelayDiscovery(ctx, relayURL, e.rootCAPEM, nil)
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					continue
+				}
+
+				now := time.Now().UTC()
+				var descriptorRelayURLs []string
+				descriptorRelayURLs, _, _, _, err = e.relaySet.ApplyRelayDiscoveryResponse(relayURL, relayURL, resp, now)
+				if err != nil {
+					continue
+				}
+
+				if len(discoveredRelayURLs) == 0 {
+					discoveredRelayURLs = append([]string(nil), relayURLs...)
+				}
+				discoveredRelayURLs, err = utils.MergeRelayURLs(discoveredRelayURLs, nil, descriptorRelayURLs)
+				if err != nil {
+					continue
+				}
+			}
+
+			if len(discoveredRelayURLs) > 0 {
+				if e.relaySet == nil {
+					e.relaySet = discovery.NewRelaySet()
+				}
+				e.relaySet.ReplaceKnownRelayURLs(discoveredRelayURLs)
+				_ = e.reconcileRelayListeners(false)
+			}
+		}
+		if !utils.SleepOrDone(ctx, defaultDiscoveryInterval) {
+			return
+		}
+	}
 }
 
 func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
@@ -454,38 +414,6 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 	}
 }
 
-type exposureConn struct {
-	net.Conn
-	id         uint64
-	localAddr  string
-	remoteAddr string
-	closeOnce  sync.Once
-}
-
-func (c *exposureConn) Close() error {
-	var closeErr error
-	c.closeOnce.Do(func() {
-		closeErr = c.Conn.Close()
-		if errors.Is(closeErr, net.ErrClosed) {
-			closeErr = nil
-		}
-
-		event := log.Info().
-			Uint64("conn_id", c.id).
-			Str("local_addr", c.localAddr).
-			Str("remote_addr", c.remoteAddr)
-		if closeErr != nil {
-			event = log.Warn().
-				Err(closeErr).
-				Uint64("conn_id", c.id).
-				Str("local_addr", c.localAddr).
-				Str("remote_addr", c.remoteAddr)
-		}
-		event.Msg("exposure connection closed")
-	})
-	return closeErr
-}
-
 func (e *Exposure) AcceptDatagram() (types.DatagramFrame, error) {
 	if !e.udpEnabled {
 		return types.DatagramFrame{}, net.ErrClosed
@@ -565,49 +493,121 @@ func (e *Exposure) WaitDatagramReady(ctx context.Context) ([]string, error) {
 	}
 }
 
-const defaultDiscoveryInterval = 30 * time.Second
-
-func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
-	for {
-		relayURLs := append([]string(nil), e.relaySet.ActiveRelayURLs()...)
-		if len(relayURLs) > 0 {
-			var discoveredRelayURLs []string
-
-			for _, relayURL := range relayURLs {
-				resp, err := discovery.DiscoverRelayDiscovery(ctx, relayURL, e.rootCAPEM, nil)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					continue
-				}
-
-				now := time.Now().UTC()
-				var descriptorRelayURLs []string
-				descriptorRelayURLs, _, _, _, err = e.relaySet.ApplyRelayDiscoveryResponse(relayURL, relayURL, resp, now)
-				if err != nil {
-					continue
-				}
-
-				if len(discoveredRelayURLs) == 0 {
-					discoveredRelayURLs = append([]string(nil), relayURLs...)
-				}
-				discoveredRelayURLs, err = utils.MergeRelayURLs(discoveredRelayURLs, nil, descriptorRelayURLs)
-				if err != nil {
-					continue
-				}
-			}
-
-			if len(discoveredRelayURLs) > 0 {
-				if e.relaySet == nil {
-					e.relaySet = discovery.NewRelaySet()
-				}
-				e.relaySet.ReplaceKnownRelayURLs(discoveredRelayURLs)
-				_ = e.reconcileRelayListeners(false)
-			}
+func (e *Exposure) RunHTTP(ctx context.Context, handler http.Handler, localAddr string) error {
+	var relayListener net.Listener
+	e.listenerMu.RLock()
+	activeListeners := make([]*Listener, 0, len(e.relayListeners))
+	for _, relayURL := range e.relaySet.ActiveRelayURLs() {
+		listener, ok := e.relayListeners[relayURL]
+		if !ok {
+			continue
 		}
-		if !utils.SleepOrDone(ctx, defaultDiscoveryInterval) {
-			return
+		activeListeners = append(activeListeners, listener)
+	}
+	e.listenerMu.RUnlock()
+	if len(activeListeners) > 0 {
+		relayListener = e
+	}
+	return RunHTTP(ctx, relayListener, handler, localAddr)
+}
+
+func RunHTTP(ctx context.Context, relayListener net.Listener, handler http.Handler, localAddr string) error {
+	localAddr = strings.TrimSpace(localAddr)
+
+	if relayListener == nil && localAddr == "" {
+		return errors.New("relay listener or local address is required")
+	}
+
+	var relaySrv *http.Server
+	if relayListener != nil {
+		relaySrv = &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: defaultRequestTimeout,
 		}
 	}
+
+	var localSrv *http.Server
+	if localAddr != "" {
+		localSrv = &http.Server{
+			Addr:              localAddr,
+			Handler:           handler,
+			ReadHeaderTimeout: defaultRequestTimeout,
+		}
+	}
+
+	serverCount := 0
+	if relaySrv != nil {
+		serverCount++
+	}
+	if localSrv != nil {
+		serverCount++
+	}
+
+	results := make(chan error, serverCount)
+	normalizeServeErr := func(err error, prefix string) error {
+		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+
+	var (
+		shutdownOnce sync.Once
+		shutdownErr  error
+	)
+	shutdown := func() error {
+		shutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultHTTPShutdownTimeout)
+			defer cancel()
+
+			var localErr error
+			if localSrv != nil {
+				localErr = localSrv.Shutdown(shutdownCtx)
+				if errors.Is(localErr, http.ErrServerClosed) {
+					localErr = nil
+				}
+			}
+
+			var relayErr error
+			if relaySrv != nil {
+				relayErr = relaySrv.Shutdown(shutdownCtx)
+				if errors.Is(relayErr, http.ErrServerClosed) {
+					relayErr = nil
+				}
+			}
+
+			shutdownErr = errors.Join(localErr, relayErr)
+		})
+		return shutdownErr
+	}
+
+	if localSrv != nil {
+		go func() {
+			results <- normalizeServeErr(localSrv.ListenAndServe(), "serve local http")
+		}()
+	}
+	if relaySrv != nil {
+		go func() {
+			results <- normalizeServeErr(relaySrv.Serve(relayListener), "serve relay http")
+		}()
+	}
+
+	var serveErr error
+	remaining := serverCount
+	ctxDone := ctx.Done()
+	for remaining > 0 {
+		select {
+		case err := <-results:
+			remaining--
+			if err != nil {
+				serveErr = errors.Join(serveErr, err)
+				_ = shutdown()
+			}
+		case <-ctxDone:
+			_ = shutdown()
+			ctxDone = nil
+		}
+	}
+
+	return errors.Join(serveErr, shutdownErr)
 }

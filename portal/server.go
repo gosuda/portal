@@ -158,7 +158,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Str("owner_private_key", ownerIdentity.PrivateKey).
 			Msg("generated relay owner private key; set OWNER_PRIVATE_KEY unique identity")
 	}
-	cfg.OwnerPrivateKey = ""
 
 	runtime := policy.NewRuntime()
 	runtime.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
@@ -491,32 +490,6 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 	}
 }
 
-func (s *Server) startOverlay() error {
-	peerMux := http.NewServeMux()
-	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
-	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
-	peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
-		if !s.DiscoveryEnabled() {
-			http.NotFound(w, r)
-			return
-		}
-		s.handleRelayDiscovery(w, r)
-	})
-
-	overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
-	if err != nil {
-		return fmt.Errorf("start wireguard overlay: %w", err)
-	}
-
-	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
-		_ = overlay.Shutdown(context.Background())
-		return fmt.Errorf("sync wireguard peers: %w", err)
-	}
-
-	s.overlay = overlay
-	return nil
-}
-
 func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error {
 	if len(apiTLS.KeyPEM) == 0 {
 		return fmt.Errorf("quic tunnel requires api tls key")
@@ -565,6 +538,31 @@ func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
 	}
 }
 
+func (s *Server) startOverlay() error {
+	peerMux := http.NewServeMux()
+	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
+	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
+	peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
+		if !s.DiscoveryEnabled() {
+			http.NotFound(w, r)
+			return
+		}
+		s.handleRelayDiscovery(w, r)
+	})
+
+	overlay, err := wireguard.NewOverlay(s.wgConfig, peerMux)
+	if err != nil {
+		return fmt.Errorf("start wireguard overlay: %w", err)
+	}
+
+	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+		_ = overlay.Shutdown(context.Background())
+		return fmt.Errorf("sync wireguard peers: %w", err)
+	}
+
+	s.overlay = overlay
+	return nil
+}
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(defaultDiscoveryInterval)
 	defer ticker.Stop()

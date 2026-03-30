@@ -240,7 +240,11 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.renewLease(req, clientIP)
+	ttl := s.cfg.LeaseTTL
+	if req.TTL > 0 {
+		ttl = time.Duration(req.TTL) * time.Second
+	}
+	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
 		if errors.Is(err, errLeaseNotFound) {
@@ -256,7 +260,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, resp)
+	utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt})
 }
 
 func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +275,8 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.unregisterLease(req); err != nil {
+	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID), req.ReverseToken)
+	if err != nil {
 		status, code := http.StatusBadRequest, types.APIErrorCodeInvalidRequest
 		if errors.Is(err, errLeaseNotFound) {
 			status, code = http.StatusNotFound, types.APIErrorCodeLeaseNotFound
@@ -281,6 +286,9 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		}
 		utils.WriteAPIError(w, status, code, err.Error())
 		return
+	}
+	if record != nil {
+		record.Close()
 	}
 
 	utils.WriteAPIOK(w, http.StatusOK)
@@ -304,30 +312,22 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lease, err := s.registry.FindByID(leaseID)
-	if err == nil && !s.registry.policy.IsLeaseRoutable(lease.ID) {
-		err = errLeaseRejected
-	}
-	if err == nil && !utils.TokenMatches(lease.ReverseToken, token) {
-		err = errUnauthorized
-	}
-	if err == nil && lease.stream == nil {
-		err = errTransportMismatch
-	}
-	switch {
-	case errors.Is(err, errLeaseNotFound):
+	lease, err := s.admitLeaseByID(leaseID, token, false)
+	switch err {
+	case nil:
+	case errLeaseNotFound:
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
-	case errors.Is(err, errLeaseRejected):
+	case errLeaseRejected:
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
-	case errors.Is(err, errUnauthorized):
+	case errUnauthorized:
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		return
-	case errors.Is(err, errTransportMismatch):
+	case errTransportMismatch:
 		utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
 		return
-	case err != nil:
+	default:
 		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
 		return
 	}
@@ -396,34 +396,26 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 
-	lease, err := s.registry.FindByID(msg.LeaseID)
-	if err == nil && !s.registry.policy.IsLeaseRoutable(lease.ID) {
-		err = errLeaseRejected
-	}
-	if err == nil && !utils.TokenMatches(lease.ReverseToken, msg.ReverseToken) {
-		err = errUnauthorized
-	}
-	if err == nil && (lease.stream == nil || lease.datagram == nil) {
-		err = errTransportMismatch
-	}
-	switch {
-	case errors.Is(err, errLeaseNotFound):
+	lease, err := s.admitLeaseByID(msg.LeaseID, msg.ReverseToken, true)
+	switch err {
+	case nil:
+	case errLeaseNotFound:
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
 		_ = conn.CloseWithError(1, "lease not found")
 		return
-	case errors.Is(err, errUnauthorized):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
-		_ = conn.CloseWithError(1, "unauthorized")
-		return
-	case errors.Is(err, errLeaseRejected):
+	case errLeaseRejected:
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
 		_ = conn.CloseWithError(1, "lease rejected")
 		return
-	case errors.Is(err, errTransportMismatch):
+	case errUnauthorized:
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
+		_ = conn.CloseWithError(1, "unauthorized")
+		return
+	case errTransportMismatch:
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
 		_ = conn.CloseWithError(1, "transport mismatch")
 		return
-	case err != nil:
+	default:
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
@@ -443,6 +435,23 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		Str("lease_name", lease.Name).
 		Str("remote_addr", conn.RemoteAddr().String()).
 		Msg("quic tunnel connected")
+}
+
+func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*leaseRecord, error) {
+	lease, err := s.registry.FindByID(leaseID)
+	if err != nil {
+		return nil, err
+	}
+	if !s.registry.policy.IsLeaseRoutable(lease.ID) {
+		return nil, errLeaseRejected
+	}
+	if !utils.TokenMatches(lease.ReverseToken, token) {
+		return nil, errUnauthorized
+	}
+	if lease.stream == nil || (requireDatagram && lease.datagram == nil) {
+		return nil, errTransportMismatch
+	}
+	return lease, nil
 }
 
 func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (types.RegisterResponse, error) {
@@ -539,34 +548,6 @@ func (s *Server) registerLease(req types.RegisterRequest, clientIP string) (type
 	}
 
 	return resp, nil
-}
-
-func (s *Server) renewLease(req types.RenewRequest, clientIP string) (types.RenewResponse, error) {
-	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		return types.RenewResponse{}, errIPBanned
-	}
-
-	ttl := s.cfg.LeaseTTL
-	if req.TTL > 0 {
-		ttl = time.Duration(req.TTL) * time.Second
-	}
-	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), req.ReverseToken, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
-	if err != nil {
-		return types.RenewResponse{}, err
-	}
-
-	return types.RenewResponse{LeaseID: record.ID, ExpiresAt: record.ExpiresAt}, nil
-}
-
-func (s *Server) unregisterLease(req types.UnregisterRequest) error {
-	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID), req.ReverseToken)
-	if err != nil {
-		return err
-	}
-	if record != nil {
-		record.Close()
-	}
-	return nil
 }
 
 func (s *Server) runAPIServer() error {
