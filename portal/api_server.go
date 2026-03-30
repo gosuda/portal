@@ -313,18 +313,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lease, err := s.admitLeaseByID(leaseID, token, false)
-	switch err {
-	case nil:
-	case errLeaseNotFound:
+	switch {
+	case err == nil:
+	case errors.Is(err, errLeaseNotFound):
 		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
 		return
-	case errLeaseRejected:
+	case errors.Is(err, errLeaseRejected):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
 		return
-	case errUnauthorized:
+	case errors.Is(err, errUnauthorized):
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		return
-	case errTransportMismatch:
+	case errors.Is(err, errTransportMismatch):
 		utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
 		return
 	default:
@@ -397,21 +397,21 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 	}
 
 	lease, err := s.admitLeaseByID(msg.LeaseID, msg.ReverseToken, true)
-	switch err {
-	case nil:
-	case errLeaseNotFound:
+	switch {
+	case err == nil:
+	case errors.Is(err, errLeaseNotFound):
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
 		_ = conn.CloseWithError(1, "lease not found")
 		return
-	case errLeaseRejected:
+	case errors.Is(err, errLeaseRejected):
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
 		_ = conn.CloseWithError(1, "lease rejected")
 		return
-	case errUnauthorized:
+	case errors.Is(err, errUnauthorized):
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
 		_ = conn.CloseWithError(1, "unauthorized")
 		return
-	case errTransportMismatch:
+	case errors.Is(err, errTransportMismatch):
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
 		_ = conn.CloseWithError(1, "transport mismatch")
 		return
