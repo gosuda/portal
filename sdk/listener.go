@@ -148,7 +148,10 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 				Str("relay_url", l.api.baseURL.String()).
 				Str("lease_id", l.LeaseID())
 			if publicURL != "" {
-				event = event.Str("public_url", publicURL)
+				event.
+					Str("public_url", publicURL).
+					Msg("connected; open this URL: " + publicURL)
+				return
 			}
 			event.Msg("relay listener registered")
 			return

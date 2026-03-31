@@ -65,6 +65,7 @@ portal expose 3000
 ```
 
 ```powershell
+$ProgressPreference = 'SilentlyContinue'
 irm https://github.com/gosuda/portal/releases/latest/download/install.ps1 | iex
 portal expose 3000
 ```

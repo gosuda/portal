@@ -13,6 +13,7 @@ portal list
 ```
 
 ```powershell
+$ProgressPreference = 'SilentlyContinue'
 irm https://github.com/gosuda/portal/releases/latest/download/install.ps1 | iex
 portal expose 3000
 portal list
@@ -27,6 +28,7 @@ portal list
 ```
 
 ```powershell
+$ProgressPreference = 'SilentlyContinue'
 irm https://portal.example.com/install.ps1 | iex
 portal expose 3000
 portal list
