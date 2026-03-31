@@ -1,4 +1,4 @@
-# PORTAL — Public Open Relay To Access Localhost
+# PORTAL - Public Open Relay To Access Localhost
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
@@ -21,9 +21,9 @@ Unlike other tunneling services, Portal is self-hosted and permissionless. You c
 - **NAT-friendly connectivity**: Works behind NAT or firewalls without opening inbound ports
 - **Automatic subdomain routing**: Gives each app its own subdomain (`your-app.<base-domain>`)
 - **End-to-end tenant TLS**: Relay routes by SNI, while tenant TLS terminates on your side with relay-backed keyless signing
-- **Permissionless Hosting**: Anyone can run their own Portal — no approval needed
-- **One-Command Setup**: Expose any local app with a single command
-- **UDP Relay (Experimental)**: Supports raw UDP relay
+- **Permissionless hosting**: Anyone can run their own Portal, no approval needed
+- **One-command setup**: Expose any local app with a single command
+- **UDP relay (experimental)**: Supports raw UDP relay
 
 ## How Portal Provides End-to-End Encryption
 
@@ -57,21 +57,17 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
 
-For a local relay started with `docker compose up`:
+Install the tunnel from the official GitHub release assets:
 
 ```bash
-curl -ksSL https://localhost:4017/install.sh | bash
-portal expose 3000 --relays https://localhost:4017
+curl -fsSL https://github.com/gosuda/portal/releases/latest/download/install.sh | bash
+portal expose 3000
 ```
 
 ```powershell
-$ProgressPreference = 'SilentlyContinue'
-irm https://localhost:4017/install.ps1 | iex
-portal expose 3000 --relays https://localhost:4017
+irm https://github.com/gosuda/portal/releases/latest/download/install.ps1 | iex
+portal expose 3000
 ```
-
-Replace `https://localhost:4017` with your relay URL when using a hosted relay.
-The relay landing page also generates the exact install command for the current relay.
 For CLI usage and install details, see [cmd/portal-tunnel/README.md](cmd/portal-tunnel/README.md).
 
 ### Use the Go SDK (Advanced)
@@ -112,4 +108,4 @@ We welcome contributions from the community!
 
 ## License
 
-MIT License — see [LICENSE](LICENSE)
+MIT License - see [LICENSE](LICENSE)

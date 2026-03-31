@@ -227,8 +227,6 @@ func (e *Exposure) Close() error {
 	return closeErr
 }
 
-const defaultDiscoveryInterval = 30 * time.Second
-
 func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
 	for {
 		relayURLs := append([]string(nil), e.relaySet.ActiveRelayURLs()...)
@@ -268,7 +266,7 @@ func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
 				_ = e.reconcileRelayListeners(false)
 			}
 		}
-		if !utils.SleepOrDone(ctx, defaultDiscoveryInterval) {
+		if !utils.SleepOrDone(ctx, types.DiscoveryPollInterval) {
 			return
 		}
 	}

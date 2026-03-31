@@ -4,6 +4,22 @@
 
 ## Usage
 
+Install directly from the official GitHub release assets:
+
+```bash
+curl -fsSL https://github.com/gosuda/portal/releases/latest/download/install.sh | bash
+portal expose 3000
+portal list
+```
+
+```powershell
+irm https://github.com/gosuda/portal/releases/latest/download/install.ps1 | iex
+portal expose 3000
+portal list
+```
+
+If your relay publishes its own installer, you can use that instead:
+
 ```bash
 curl -sSL https://portal.example.com/install.sh | bash
 portal expose 3000

@@ -3,7 +3,6 @@ import * as vscode from "vscode";
 import {
   buildCommand,
   defaultRelayRegistryURL,
-  isLocalhost,
   validateRelayUrl,
 } from "./command";
 
@@ -12,7 +11,6 @@ const defaultTunnelHost = "localhost:3000";
 
 interface RelaySelection {
   relayUrls: string[];
-  installRelayUrl: string;
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -74,14 +72,19 @@ function runTunnelCommand(args: {
   relaySelection: RelaySelection;
   thumbnail: string;
 }) {
-  const command = buildCommand({
-    host: args.host,
-    name: args.name,
-    relayList: args.relaySelection.relayUrls.join(","),
-    relayUrl: args.relaySelection.installRelayUrl,
-    thumbnail: args.thumbnail,
-    isLocal: isLocalhost(args.relaySelection.installRelayUrl),
-  });
+  let command: string;
+  try {
+    command = buildCommand({
+      host: args.host,
+      name: args.name,
+      relayList: args.relaySelection.relayUrls.join(","),
+      thumbnail: args.thumbnail,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to build the Portal tunnel command.";
+    vscode.window.showErrorMessage(message);
+    return;
+  }
 
   if (tunnelTerminal) {
     tunnelTerminal.dispose();
@@ -132,17 +135,11 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
       return undefined;
     }
     const relayUrls = saved.map((url) => url.trim());
-    return {
-      relayUrls,
-      installRelayUrl: relayUrls[0],
-    };
+    return { relayUrls };
   }
 
   if (!interactive) {
-    return {
-      relayUrls: [],
-      installRelayUrl: "",
-    };
+    return { relayUrls: [] };
   }
 
   const choice = await vscode.window.showQuickPick([
@@ -152,7 +149,7 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
     },
     {
       label: "Enter relay URL",
-      description: "Install from a specific https:// relay",
+      description: "Connect the tunnel to a specific https:// relay",
     },
   ], {
     title: "Portal: Relay Source",
@@ -163,10 +160,7 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
   }
   if (choice.label === "Use default public registry") {
     vscode.window.showInformationMessage(`Portal will use the default public registry: ${defaultRelayRegistryURL}`);
-    return {
-      relayUrls: [],
-      installRelayUrl: "",
-    };
+    return { relayUrls: [] };
   }
 
   const input = await vscode.window.showInputBox({
@@ -178,10 +172,7 @@ async function resolveRelaySelection(interactive: boolean): Promise<RelaySelecti
     return undefined;
   }
   const relayUrl = input.trim();
-  return {
-    relayUrls: [relayUrl],
-    installRelayUrl: relayUrl,
-  };
+  return { relayUrls: [relayUrl] };
 }
 
 async function promptThumbnail(): Promise<string | undefined> {

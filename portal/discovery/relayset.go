@@ -350,6 +350,29 @@ func (s *RelaySet) MarkRelayFailure(relayURL string, now time.Time) RelayLocalSt
 	return state
 }
 
+func (s *RelaySet) RecordBootstrapDiscoveryFailure(relayURL string, err error, now time.Time) {
+	state := s.MarkRelayFailure(relayURL, now)
+	if statusCode, code, unavailable := DiscoveryUnavailableStatus(err); unavailable {
+		if state.ConsecutiveFailures > 1 {
+			return
+		}
+		event := log.Info().Str("relay", relayURL)
+		if statusCode > 0 {
+			event = event.Int("status_code", statusCode)
+		}
+		if code != "" {
+			event = event.Str("code", code)
+		}
+		event.Msg("bootstrap relay discovery unavailable; peer may have discovery disabled")
+		return
+	}
+
+	log.Warn().
+		Err(err).
+		Str("relay", relayURL).
+		Msg("bootstrap relay discovery failed")
+}
+
 func (s *RelaySet) AdvertisedDescriptors() []types.RelayDescriptor {
 	if s == nil {
 		return nil

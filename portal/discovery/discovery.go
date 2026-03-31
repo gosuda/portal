@@ -2,7 +2,6 @@ package discovery
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -153,11 +152,43 @@ func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetU
 }
 
 func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byte, httpClient *http.Client) (types.DiscoveryResponse, error) {
-	resp, err := doGET[types.DiscoveryResponse](ctx, baseURL, types.PathDiscovery, nil, rootCAPEM, httpClient)
+	parsedBaseURL, err := url.Parse(baseURL)
 	if err != nil {
+		return types.DiscoveryResponse{}, fmt.Errorf("parse discovery base url: %w", err)
+	}
+
+	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: types.PathDiscovery})
+
+	client := httpClient
+	if client == nil {
+		_, client, err = keyless.NewRelayHTTPClient(ctx, parsedBaseURL, rootCAPEM, defaultRequestTimeout)
+		if err != nil {
+			return types.DiscoveryResponse{}, err
+		}
+	}
+	if client.Timeout == 0 {
+		clone := *client
+		clone.Timeout = defaultRequestTimeout
+		client = &clone
+	}
+
+	var resp types.DiscoveryResponse
+	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &resp); err != nil {
 		return types.DiscoveryResponse{}, err
 	}
 	return resp, nil
+}
+
+func DiscoveryUnavailableStatus(err error) (statusCode int, code string, unavailable bool) {
+	var apiErr *types.APIRequestError
+	if !errors.As(err, &apiErr) || apiErr == nil {
+		return 0, "", false
+	}
+	code = strings.TrimSpace(apiErr.Code)
+	if apiErr.StatusCode == http.StatusNotFound || code == types.APIErrorCodeFeatureUnavailable {
+		return apiErr.StatusCode, code, true
+	}
+	return 0, "", false
 }
 
 func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
@@ -186,54 +217,4 @@ func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
 		return errors.New("descriptor overlay ipv4 is required")
 	}
 	return nil
-}
-
-func doGET[T any](ctx context.Context, baseURL, path string, query url.Values, rootCAPEM []byte, httpClient *http.Client) (T, error) {
-	var zero T
-
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return zero, errors.New("discovery base url is required")
-	}
-	parsedBaseURL, err := url.Parse(baseURL)
-	if err != nil {
-		return zero, fmt.Errorf("parse discovery base url: %w", err)
-	}
-	if parsedBaseURL.Host == "" {
-		return zero, errors.New("discovery base url host is required")
-	}
-
-	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: path})
-	if query != nil {
-		requestURL.RawQuery = query.Encode()
-	}
-
-	client := httpClient
-	if client == nil {
-		rootCAs, err := keyless.RelayRootCAs(ctx, baseURL, parsedBaseURL.Hostname(), rootCAPEM)
-		if err != nil {
-			return zero, err
-		}
-		client = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-					ServerName: parsedBaseURL.Hostname(),
-					RootCAs:    rootCAs,
-					NextProtos: []string{"http/1.1"},
-				},
-				ForceAttemptHTTP2: false,
-			},
-		}
-	}
-	if client.Timeout == 0 {
-		clone := *client
-		clone.Timeout = defaultRequestTimeout
-		client = &clone
-	}
-
-	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &zero); err != nil {
-		return zero, err
-	}
-	return zero, nil
 }

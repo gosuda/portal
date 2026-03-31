@@ -2,6 +2,8 @@ package types
 
 import "time"
 
+const DiscoveryPollInterval = 1 * time.Minute
+
 type RelayDescriptor struct {
 	RelayID string `json:"relay_id"`
 

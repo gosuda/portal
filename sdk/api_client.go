@@ -145,25 +145,14 @@ func (a *apiClient) ensureHTTPClient(ctx context.Context) error {
 	bootstrapCtx, cancel := context.WithTimeout(ctx, defaultDialTimeout+defaultHandshakeTimeout)
 	defer cancel()
 
-	rootCAs, err := keyless.RelayRootCAs(bootstrapCtx, a.baseURL.String(), a.baseURL.Hostname(), a.rootCAPEM)
+	rawTLSConfig, httpClient, err := keyless.NewRelayHTTPClient(bootstrapCtx, a.baseURL, a.rootCAPEM, a.requestTimeout)
 	if err != nil {
 		return err
 	}
-
-	rawTLSConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		ServerName: a.baseURL.Hostname(),
-		RootCAs:    rootCAs,
-		NextProtos: []string{"http/1.1"},
-	}
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:   rawTLSConfig.Clone(),
-			ForceAttemptHTTP2: false,
-		},
-		Timeout: a.requestTimeout,
-	}
 	if err := a.ensureCompatible(ctx, httpClient); err != nil {
+		if transport, ok := httpClient.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
 		a.close()
 		return err
 	}

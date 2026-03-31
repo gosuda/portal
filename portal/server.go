@@ -30,7 +30,6 @@ import (
 const (
 	defaultLeaseTTL           = 30 * time.Second
 	defaultClaimTimeout       = 10 * time.Second
-	defaultDiscoveryInterval  = 30 * time.Second
 	defaultIdleKeepalive      = 15 * time.Second
 	defaultReadyQueueLimit    = 8
 	defaultClientHelloWait    = 2 * time.Second
@@ -40,30 +39,25 @@ const (
 )
 
 type ServerConfig struct {
-	PortalURL             string
-	OwnerPrivateKey       string
-	Bootstraps            []string
-	WireGuardPrivateKey   string
-	DiscoveryPort         int
-	WireGuardPublicKey    string
-	WireGuardEndpoint     string
-	OverlayIPv4           string
-	OverlayCIDRs          []string
-	ACME                  acme.Config
-	APIPort               int
-	SNIPort               int
-	APIListenAddr         string
-	SNIListenAddr         string
-	QUICListenAddr        string
-	TrustedProxyCIDRs     string
-	LeaseTTL              time.Duration
-	ClaimTimeout          time.Duration
-	IdleKeepaliveInterval time.Duration
-	ReadyQueueLimit       int
-	ClientHelloTimeout    time.Duration
-	TrustProxyHeaders     bool
-	DiscoveryEnabled      bool
-	UDPPortCount          int
+	PortalURL           string
+	OwnerPrivateKey     string
+	Bootstraps          []string
+	WireGuardPrivateKey string
+	DiscoveryPort       int
+	WireGuardPublicKey  string
+	WireGuardEndpoint   string
+	OverlayIPv4         string
+	OverlayCIDRs        []string
+	ACME                acme.Config
+	APIPort             int
+	SNIPort             int
+	APIListenAddr       string
+	SNIListenAddr       string
+	QUICListenAddr      string
+	TrustedProxyCIDRs   string
+	TrustProxyHeaders   bool
+	DiscoveryEnabled    bool
+	UDPPortCount        int
 }
 
 type Server struct {
@@ -93,11 +87,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	cfg.SNIPort = utils.IntOrDefault(cfg.SNIPort, 443)
 	cfg.APIListenAddr = utils.StringOrDefault(cfg.APIListenAddr, fmt.Sprintf(":%d", cfg.APIPort))
 	cfg.SNIListenAddr = utils.StringOrDefault(cfg.SNIListenAddr, fmt.Sprintf(":%d", cfg.SNIPort))
-	cfg.LeaseTTL = utils.DurationOrDefault(cfg.LeaseTTL, defaultLeaseTTL)
-	cfg.ClaimTimeout = utils.DurationOrDefault(cfg.ClaimTimeout, defaultClaimTimeout)
-	cfg.IdleKeepaliveInterval = utils.DurationOrDefault(cfg.IdleKeepaliveInterval, defaultIdleKeepalive)
-	cfg.ReadyQueueLimit = utils.IntOrDefault(cfg.ReadyQueueLimit, defaultReadyQueueLimit)
-	cfg.ClientHelloTimeout = utils.DurationOrDefault(cfg.ClientHelloTimeout, defaultClientHelloWait)
 	rootHost := utils.PortalRootHost(cfg.PortalURL)
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
@@ -246,7 +235,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
-	if s.DiscoveryEnabled() {
+	if s.cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
 	s.acmeManager.Start(serverCtx)
@@ -262,6 +251,20 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		defer cancel()
 		return s.Shutdown(shutdownCtx)
 	})
+
+	logEvent := log.Info().
+		Str("api_addr", utils.HostPortOrLoopback(s.apiListener.Addr().String())).
+		Str("sni_addr", s.sniListener.Addr().String()).
+		Str("root_host", s.rootHost).
+		Str("acme_dns_provider", s.cfg.ACME.DNSProvider).
+		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
+		Bool("wireguard_enabled", strings.TrimSpace(s.wgConfig.PrivateKey) != "").
+		Bool("udp_enabled", s.cfg.UDPPortCount > 0).
+		Bool("acme_enabled", !strings.HasSuffix(s.rootHost, "localhost") && s.rootHost != "127.0.0.1" && s.rootHost != "::1")
+	if s.quicTunnel != nil {
+		logEvent = logEvent.Str("internal_quic_tunnel_addr", s.quicTunnel.Addr().String())
+	}
+	logEvent.Msg("relay server started")
 
 	return nil
 }
@@ -321,50 +324,11 @@ func (s *Server) PolicyRuntime() *policy.Runtime {
 	return s.registry.policy
 }
 
-func (s *Server) APIAddr() string {
-	if s.apiListener == nil {
-		return ""
-	}
-	return s.apiListener.Addr().String()
-}
-
-func (s *Server) SNIAddr() string {
-	if s.sniListener == nil {
-		return ""
-	}
-	return s.sniListener.Addr().String()
-}
-
-func (s *Server) QUICTunnelAddr() string {
-	if s.quicTunnel == nil {
-		return ""
-	}
-	return s.quicTunnel.Addr().String()
-}
-
-func (s *Server) DiscoveryEnabled() bool {
-	return s != nil && s.cfg.DiscoveryEnabled
-}
-
 func (s *Server) PortalURL() string {
 	if s == nil {
 		return ""
 	}
 	return s.cfg.PortalURL
-}
-
-func (s *Server) OwnerAddress() string {
-	if s == nil {
-		return ""
-	}
-	return s.ownerIdentity.Address
-}
-
-func (s *Server) RootHost() string {
-	if s == nil {
-		return ""
-	}
-	return s.rootHost
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
@@ -434,7 +398,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 		switch {
 		case err == nil:
 			go func(conn net.Conn) {
-				clientHello, wrappedConn, err := l4.InspectClientHello(conn, s.cfg.ClientHelloTimeout)
+				clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
 				if err != nil {
 					if wrappedConn != nil {
 						_ = wrappedConn.Close()
@@ -471,7 +435,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				claimCtx, cancel := context.WithTimeout(ctx, s.cfg.ClaimTimeout)
+				claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
 				defer cancel()
 
 				session, err := record.stream.Claim(claimCtx)
@@ -543,7 +507,7 @@ func (s *Server) startOverlay() error {
 	peerMux.HandleFunc(types.PathRoot, s.handleRoot)
 	peerMux.HandleFunc(types.PathHealthz, s.handleHealthz)
 	peerMux.HandleFunc(types.PathDiscovery, func(w http.ResponseWriter, r *http.Request) {
-		if !s.DiscoveryEnabled() {
+		if !s.cfg.DiscoveryEnabled {
 			http.NotFound(w, r)
 			return
 		}
@@ -564,7 +528,7 @@ func (s *Server) startOverlay() error {
 	return nil
 }
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
-	ticker := time.NewTicker(defaultDiscoveryInterval)
+	ticker := time.NewTicker(types.DiscoveryPollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -576,11 +540,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return nil
 				}
-				s.relaySet.MarkRelayFailure(bootstrap.APIHTTPSAddr, time.Now().UTC())
-				log.Warn().
-					Err(err).
-					Str("relay", bootstrap.APIHTTPSAddr).
-					Msg("bootstrap relay discovery failed")
+				s.relaySet.RecordBootstrapDiscoveryFailure(bootstrap.APIHTTPSAddr, err, time.Now().UTC())
 				continue
 			}
 
