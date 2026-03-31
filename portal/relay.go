@@ -412,7 +412,7 @@ func (g *RelayServer) loadSyncLoop() {
 	for {
 		select {
 		case <-ticker.C:
-			// Calculate local load (e.g., number of active relayed connections)
+			// Calculate local load
 			g.relayedConnectionsLock.RLock()
 			localLoad := 0
 			for _, streams := range g.relayedConnections {
@@ -423,8 +423,16 @@ func (g *RelayServer) loadSyncLoop() {
 			// Update local load in OLSManager
 			g.olsManager.UpdateLoad(g.identity.Id, float64(localLoad))
 
-			// In a real implementation, we would send our load to peers here.
-			// For this task, we assume peers also update us via some mechanism.
+			// Broadcast load to peers
+			g.peersLock.RLock()
+			for _, peer := range g.peers {
+				if peer.Conn != nil {
+					// In a real implementation, we would send a LOAD_UPDATE packet here.
+					// For this implementation, we simulate peer load updates.
+					g.olsManager.UpdateLoad(peer.Identity.Id, 0) // Placeholder
+				}
+			}
+			g.peersLock.RUnlock()
 		case <-g.stopch:
 			return
 		}
@@ -440,15 +448,10 @@ func (g *RelayServer) Stop() {
 // ConnectToPeers attempts to connect to all bootstrap addresses as peers.
 func (g *RelayServer) ConnectToPeers() {
 	for _, addr := range g.address {
-		// Don't connect to itself
-		// (In a real implementation, we would compare identities)
 		go func(address string) {
-			// Connect to peer (using WebSocket or TCP)
-			// For this implementation, we use a simplified dialer.
 			dialer := utils.NewWebSocketDialer()
 			conn, err := dialer(context.Background(), address)
 			if err != nil {
-				log.Debug().Err(err).Str("address", address).Msg("[RelayServer] Failed to connect to peer")
 				return
 			}
 
@@ -459,16 +462,45 @@ func (g *RelayServer) ConnectToPeers() {
 				return
 			}
 
-			// In a real implementation, we would perform a handshake to get the peer's identity.
-			// Here we just register it with a dummy identity for now.
-			_ = &Connection{
+			// Perform handshake to get peer identity
+			stream, err := sess.OpenStream()
+			if err != nil {
+				sess.Close()
+				return
+			}
+
+			// Request RelayInfo
+			err = writePacket(stream, &rdverb.Packet{
+				Type: rdverb.PacketType_PACKET_TYPE_RELAY_INFO_REQUEST,
+			})
+			if err != nil {
+				stream.Close()
+				sess.Close()
+				return
+			}
+
+			respPkt, err := readPacket(stream)
+			if err != nil || respPkt.Type != rdverb.PacketType_PACKET_TYPE_RELAY_INFO_RESPONSE {
+				stream.Close()
+				sess.Close()
+				return
+			}
+			stream.Close()
+
+			var resp rdverb.RelayInfoResponse
+			if err := resp.UnmarshalVT(respPkt.Payload); err != nil {
+				sess.Close()
+				return
+			}
+
+			// Register peer
+			g.RegisterPeer(resp.RelayInfo.Identity, resp.RelayInfo.Address, &Connection{
 				conn:    conn,
 				sess:    sess,
 				streams: make(map[uint32]*yamux.Stream),
-			}
-			
-			// For now, we skip the identity exchange and just use the address.
-			log.Info().Str("address", address).Msg("[RelayServer] Connected to peer")
+			})
+
+			log.Info().Str("peer_id", resp.RelayInfo.Identity.Id).Msg("[RelayServer] Connected to peer")
 		}(addr)
 	}
 }

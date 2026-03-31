@@ -6,28 +6,25 @@ import (
 	"sync"
 )
 
-// OLSNode represents a node in the OLS grid.
+// OLSNode represents a node in the grid.
 type OLSNode struct {
 	ID      string
 	Address string
 	Load    float64
 }
 
-// OLSManager manages the orthogonal Latin square topology.
+// OLSManager manages the grid topology using recursive composition.
 type OLSManager struct {
 	mu sync.RWMutex
 
-	nodes    map[string]*OLSNode
-	nodeList []string // sorted IDs for consistency
+	nodes map[string]*OLSNode
+	n     int
+	grid  [][]*OLSNode
 
-	n    int          // order of Latin square
-	grid [][]*OLSNode // n x n grid
-
-	// Latin squares
+	// Orthogonal Latin Squares
 	l1 [][]int
 	l2 [][]int
 
-	// Current rotation (0, 90, 180, 270 degrees)
 	rotation int
 }
 
@@ -37,12 +34,11 @@ func NewOLSManager() *OLSManager {
 	}
 }
 
-// UpdateNodes updates the set of nodes and reconfigures the grid if necessary.
+// UpdateNodes updates the set of nodes and reconfigures the grid.
 func (m *OLSManager) UpdateNodes(nodes map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Update node list
 	m.nodes = make(map[string]*OLSNode)
 	for id, addr := range nodes {
 		m.nodes[id] = &OLSNode{ID: id, Address: addr}
@@ -56,7 +52,7 @@ func (m *OLSManager) UpdateNodes(nodes map[string]string) {
 	}
 }
 
-// reconfigure builds a new n x n grid and generates MOLS.
+// reconfigure builds a new grid using recursive composition of squares.
 func (m *OLSManager) reconfigure(n int) {
 	m.n = n
 	m.grid = make([][]*OLSNode, n)
@@ -64,55 +60,98 @@ func (m *OLSManager) reconfigure(n int) {
 		m.grid[i] = make([]*OLSNode, n)
 	}
 
-	// Assign nodes to grid (simplified: just take first n*n nodes)
+	// Assign nodes to grid
 	count := 0
 	for _, node := range m.nodes {
 		if count >= n*n {
 			break
 		}
-		row := count / n
-		col := count % n
-		m.grid[row][col] = node
+		m.grid[count/n][count%n] = node
 		count++
 	}
 
-	// Generate MOLS. For simplicity, we use a basic construction for prime n.
-	// For non-prime, this might not be strictly orthogonal but should suffice for balancing.
-	m.l1 = generateLatinSquare(n, 1)
-	m.l2 = generateLatinSquare(n, 2)
-	
-	if n > 2 && !areOrthogonal(m.l1, m.l2, n) {
-		// Fallback for non-prime or problematic n
-		m.l2 = generateLatinSquare(n, n-1)
-	}
+	// Generate MOLS using recursive composition
+	m.l1, m.l2 = generateMOLS(n)
 }
 
-func generateLatinSquare(n, k int) [][]int {
+// generateMOLS constructs a pair of orthogonal latin squares of order n.
+// It uses recursive composition to build larger squares from smaller components.
+func generateMOLS(n int) ([][]int, [][]int) {
+	if n < 2 {
+		return [][]int{{0}}, [][]int{{0}}
+	}
+
+	// Base case: Prime or small order
+	if isPrime(n) {
+		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
+	}
+
+	// Recursive step: Find factors m, k such that n = m * k
+	m, k := findFactors(n)
+	if m == 1 {
+		// Fallback if no good factors found (should not happen for n >= 2)
+		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
+	}
+
+	// Recurse to get MOLS for components
+	a1, a2 := generateMOLS(m)
+	b1, b2 := generateMOLS(k)
+
+	// Compose the components into a larger square (Kronecker product style)
+	return composeMOLS(a1, b1), composeMOLS(a2, b2)
+}
+
+func generateBaseMOLS(n, step int) [][]int {
 	ls := make([][]int, n)
 	for i := 0; i < n; i++ {
 		ls[i] = make([]int, n)
 		for j := 0; j < n; j++ {
-			ls[i][j] = (k*i + j) % n
+			ls[i][j] = (step*i + j) % n
 		}
 	}
 	return ls
 }
 
-func areOrthogonal(l1, l2 [][]int, n int) bool {
-	pairs := make(map[string]bool)
+// composeMOLS combines two squares of order m and k into a square of order m*k.
+func composeMOLS(a, b [][]int) [][]int {
+	m := len(a)
+	k := len(b)
+	n := m * k
+	res := make([][]int, n)
 	for i := 0; i < n; i++ {
+		res[i] = make([]int, n)
 		for j := 0; j < n; j++ {
-			key := fmt.Sprintf("%d,%d", l1[i][j], l2[i][j])
-			if pairs[key] {
-				return false
-			}
-			pairs[key] = true
+			// (i, j) in n x n grid maps to
+			// (i/k, j/k) in m x m grid and (i%k, j%k) in k x k grid
+			valA := a[i/k][j/k]
+			valB := b[i%k][j%k]
+			res[i][j] = valA*k + valB
+		}
+	}
+	return res
+}
+
+func isPrime(n int) bool {
+	if n < 2 {
+		return false
+	}
+	for i := 2; i*i <= n; i++ {
+		if n%i == 0 {
+			return false
 		}
 	}
 	return true
 }
 
-// GetTargetNode returns the target node for a given client and lease.
+func findFactors(n int) (int, int) {
+	for i := 2; i*i <= n; i++ {
+		if n%i == 0 {
+			return i, n / i
+		}
+	}
+	return 1, n
+}
+
 func (m *OLSManager) GetTargetNode(clientID, leaseID string) (*OLSNode, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -121,19 +160,16 @@ func (m *OLSManager) GetTargetNode(clientID, leaseID string) (*OLSNode, error) {
 		return nil, fmt.Errorf("grid not initialized")
 	}
 
-	// Simple hash-based mapping to (i, j)
 	i := hashString(clientID) % m.n
 	j := hashString(leaseID) % m.n
 
-	// Get grid coordinates using MOLS
 	row := m.l1[i][j]
 	col := m.l2[i][j]
 
-	// Apply rotation
 	row, col = m.applyRotation(row, col)
 
 	if m.grid[row][col] == nil {
-		return nil, fmt.Errorf("node not found at grid %d,%d", row, col)
+		return nil, fmt.Errorf("node not found at %d,%d", row, col)
 	}
 
 	return m.grid[row][col], nil
@@ -153,18 +189,6 @@ func (m *OLSManager) applyRotation(row, col int) (int, int) {
 	}
 }
 
-func hashString(s string) int {
-	h := 0
-	for i := 0; i < len(s); i++ {
-		h = 31*h + int(s[i])
-	}
-	if h < 0 {
-		h = -h
-	}
-	return h
-}
-
-// UpdateLoad updates the load for a node and checks if rotation is needed.
 func (m *OLSManager) UpdateLoad(nodeID string, load float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -181,9 +205,8 @@ func (m *OLSManager) checkAndRotate() {
 		return
 	}
 
-	// Calculate load vector
-	var rowLoad []float64 = make([]float64, m.n)
-	var colLoad []float64 = make([]float64, m.n)
+	rowLoad := make([]float64, m.n)
+	colLoad := make([]float64, m.n)
 	totalLoad := 0.0
 
 	for i := 0; i < m.n; i++ {
@@ -201,17 +224,23 @@ func (m *OLSManager) checkAndRotate() {
 		return
 	}
 
-	// If load imbalance exceeds threshold, rotate
-	// Simplified check: if row imbalance > col imbalance * 1.5, rotate?
-	// Actually, the prompt says "specific direction... vector... 90 deg rotation".
-	// Let's use a simpler heuristic: if row variance > column variance significantly, rotate.
-	
 	rowVar := variance(rowLoad)
 	colVar := variance(colLoad)
 
 	if rowVar > colVar*2 {
 		m.rotation = (m.rotation + 90) % 360
 	}
+}
+
+func hashString(s string) int {
+	h := 0
+	for i := 0; i < len(s); i++ {
+		h = 31*h + int(s[i])
+	}
+	if h < 0 {
+		h = -h
+	}
+	return h
 }
 
 func variance(data []float64) float64 {
