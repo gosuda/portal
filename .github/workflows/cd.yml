@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: gosuda/portal
   PLATFORMS: linux/amd64,linux/arm64
 
 concurrency:
