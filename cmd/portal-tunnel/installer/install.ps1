@@ -31,7 +31,12 @@ try {
     Invoke-WebRequest -UseBasicParsing -Uri $BinUrl -OutFile $BinPath
 
     Write-Host "Verifying SHA256 checksum..."
-    $ChecksumPayload = (Invoke-WebRequest -UseBasicParsing -Uri $ChecksumUrl).Content
+    $ChecksumResponse = Invoke-WebRequest -UseBasicParsing -Uri $ChecksumUrl
+    if ($ChecksumResponse.Content -is [byte[]]) {
+        $ChecksumPayload = [System.Text.Encoding]::UTF8.GetString($ChecksumResponse.Content)
+    } else {
+        $ChecksumPayload = [string]$ChecksumResponse.Content
+    }
     $ChecksumMatch = [regex]::Match($ChecksumPayload, '([A-Fa-f0-9]{64})')
     if (-not $ChecksumMatch.Success) {
         throw "Invalid checksum payload from $ChecksumUrl. Expected '<sha256>  <filename>'."
