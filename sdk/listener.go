@@ -144,13 +144,10 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 			}
 			go l.runRenewLoop(ctx)
 			publicURL := l.PublicURL()
-			event := log.Info().
-				Str("relay_url", l.api.baseURL.String()).
-				Str("lease_id", l.LeaseID())
+			event := log.Info().Str("lease_id", l.LeaseID())
 			if publicURL != "" {
 				event.
-					Str("public_url", publicURL).
-					Msg("connected; open this URL: " + publicURL)
+					Msg("service ready at " + publicURL)
 				return
 			}
 			event.Msg("relay listener registered")
