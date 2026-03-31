@@ -1,6 +1,10 @@
 import * as assert from "assert";
 
-import { buildCommand, validateRelayUrl } from "../command";
+import {
+  buildCommand,
+  resolveTunnelBinaryURL,
+  validateRelayUrl,
+} from "../command";
 
 suite("Extension Test Suite", () => {
   test("validateRelayUrl accepts only https URLs", () => {
@@ -9,18 +13,33 @@ suite("Extension Test Suite", () => {
     assert.strictEqual(validateRelayUrl("not-a-url"), "Enter a valid https:// URL");
   });
 
-  test("buildCommand omits --name when empty and resolves unix portal binary after install", () => {
+  test("resolveTunnelBinaryURL maps darwin amd64 assets to GitHub releases", () => {
+    assert.strictEqual(
+      resolveTunnelBinaryURL("darwin", "x64"),
+      "https://github.com/gosuda/portal/releases/latest/download/portal-darwin-amd64"
+    );
+    assert.strictEqual(
+      resolveTunnelBinaryURL("win32", "arm64"),
+      "https://github.com/gosuda/portal/releases/latest/download/portal-windows-arm64.exe"
+    );
+    assert.strictEqual(resolveTunnelBinaryURL("freebsd", "x64"), undefined);
+  });
+
+  test("buildCommand omits --name when empty and downloads the unix tunnel binary directly", () => {
     const command = buildCommand({
       host: "localhost:3000",
       name: "",
       relayList: "https://relay.example.com",
-      relayUrl: "https://relay.example.com",
       thumbnail: "",
-      isLocal: false,
-    }, "unix");
+      tunnelBinaryURL: "https://github.com/gosuda/portal/releases/latest/download/portal-linux-amd64",
+    }, {
+      shellTarget: "unix",
+      platform: "linux",
+      arch: "x64",
+    });
 
-    assert.match(command, /curl -fsSL https:\/\/relay\.example\.com\/install\.sh \| bash/);
-    assert.match(command, /PORTAL_BIN="\$\(command -v portal 2>\/dev\/null \|\| true\)"/);
+    assert.match(command, /curl -fsSL https:\/\/github\.com\/gosuda\/portal\/releases\/latest\/download\/portal-linux-amd64 -o "\$PORTAL_TMP"/);
+    assert.match(command, /PORTAL_BIN="\$HOME\/\.local\/bin\/portal"/);
     assert.match(command, /"\$PORTAL_BIN" expose localhost:3000 --relays https:\/\/relay\.example\.com/);
     assert.ok(!command.includes("--name"));
   });
@@ -30,30 +49,35 @@ suite("Extension Test Suite", () => {
       host: "localhost:3000",
       name: "",
       relayList: "",
-      relayUrl: "",
       thumbnail: "",
-      isLocal: false,
-    }, "unix");
+      tunnelBinaryURL: "https://github.com/gosuda/portal/releases/latest/download/portal-linux-amd64",
+    }, {
+      shellTarget: "unix",
+      platform: "linux",
+      arch: "x64",
+    });
 
-    assert.ok(!command.includes("/install.sh"));
+    assert.match(command, /curl -fsSL https:\/\/github\.com\/gosuda\/portal\/releases\/latest\/download\/portal-linux-amd64 -o "\$PORTAL_TMP"/);
     assert.ok(!command.includes("--relays"));
     assert.ok(!command.includes("--name"));
-    assert.match(command, /portal CLI not found\. Install from a relay first or configure portal\.relayUrls\./);
     assert.match(command, /"\$PORTAL_BIN" expose localhost:3000/);
   });
 
-  test("buildCommand uses explicit portal.exe path on windows", () => {
+  test("buildCommand downloads portal.exe on windows", () => {
     const command = buildCommand({
       host: "localhost:3000",
       name: "my-app",
       relayList: "https://relay.example.com",
-      relayUrl: "https://relay.example.com",
       thumbnail: "https://example.com/thumb.png",
-      isLocal: false,
-    }, "windows");
+      tunnelBinaryURL: "https://github.com/gosuda/portal/releases/latest/download/portal-windows-amd64.exe",
+    }, {
+      shellTarget: "windows",
+      platform: "win32",
+      arch: "x64",
+    });
 
-    assert.match(command, /irm https:\/\/relay\.example\.com\/install\.ps1 \| iex/);
-    assert.match(command, /\$PortalBin = Join-Path \$env:LOCALAPPDATA 'portal\\bin\\portal\.exe'/);
+    assert.match(command, /Invoke-WebRequest -Uri https:\/\/github\.com\/gosuda\/portal\/releases\/latest\/download\/portal-windows-amd64\.exe -OutFile \$PortalTmp/);
+    assert.match(command, /\$PortalBin = Join-Path \$PortalDir 'portal\.exe'/);
     assert.match(command, /& \$PortalBin expose localhost:3000 --name my-app --relays https:\/\/relay\.example\.com --thumbnail https:\/\/example\.com\/thumb\.png/);
   });
 });

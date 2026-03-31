@@ -3,14 +3,20 @@ import * as os from "os";
 export type ShellTarget = "unix" | "windows";
 
 export const defaultRelayRegistryURL = "https://raw.githubusercontent.com/gosuda/portal/main/registry.json";
+export const defaultTunnelDownloadBaseURL = "https://github.com/gosuda/portal/releases/latest/download";
 
 export interface TunnelCommandOptions {
   host: string;
   name: string;
   relayList: string;
-  relayUrl: string;
   thumbnail: string;
-  isLocal: boolean;
+  tunnelBinaryURL?: string;
+}
+
+export interface TunnelCommandRuntime {
+  shellTarget: ShellTarget;
+  platform: NodeJS.Platform;
+  arch: string;
 }
 
 export function validateRelayUrl(value: string): string | undefined {
@@ -34,10 +40,54 @@ export function shellTargetForPlatform(platform = os.platform()): ShellTarget {
   return platform === "win32" ? "windows" : "unix";
 }
 
-export function buildCommand(opts: TunnelCommandOptions, target = shellTargetForPlatform()): string {
-  const { host, name, relayList, relayUrl, thumbnail, isLocal } = opts;
-  const installShellUrl = `${relayUrl}/install.sh`;
-  const installPowerShellUrl = `${relayUrl}/install.ps1`;
+export function defaultTunnelCommandRuntime(
+  platform = os.platform(),
+  arch = os.arch()
+): TunnelCommandRuntime {
+  return {
+    shellTarget: shellTargetForPlatform(platform),
+    platform,
+    arch,
+  };
+}
+
+export function resolveTunnelBinaryURL(
+  platform = os.platform(),
+  arch = os.arch()
+): string | undefined {
+  const platformName =
+    platform === "darwin" || platform === "linux"
+      ? platform
+      : platform === "win32"
+        ? "windows"
+        : undefined;
+  const archName =
+    arch === "x64"
+      ? "amd64"
+      : arch === "arm64"
+        ? "arm64"
+        : undefined;
+  if (!platformName || !archName) {
+    return undefined;
+  }
+  const extension = platformName === "windows" ? ".exe" : "";
+  return `${defaultTunnelDownloadBaseURL}/portal-${platformName}-${archName}${extension}`;
+}
+
+export function buildCommand(
+  opts: TunnelCommandOptions,
+  runtime = defaultTunnelCommandRuntime()
+): string {
+  const { host, name, relayList, thumbnail } = opts;
+  const target = runtime.shellTarget;
+  const tunnelBinaryURL =
+    opts.tunnelBinaryURL?.trim() ||
+    resolveTunnelBinaryURL(runtime.platform, runtime.arch);
+  if (!tunnelBinaryURL) {
+    throw new Error(
+      `Unsupported platform ${runtime.platform}/${runtime.arch}. Portal supports macOS, Linux, and Windows on x64 or arm64.`
+    );
+  }
   const exposeArgs: string[] = [];
 
   const trimmedName = name.trim();
@@ -54,39 +104,29 @@ export function buildCommand(opts: TunnelCommandOptions, target = shellTargetFor
   const exposeCommand = `expose ${[formatToken(host, target), ...exposeArgs].join(" ")}`;
 
   if (target === "windows") {
-    const commandLines = [`$ProgressPreference = 'SilentlyContinue'`];
-    if (relayUrl.trim()) {
-      commandLines.push(`irm ${formatToken(installPowerShellUrl, target)} | iex`);
-    }
-    commandLines.push(`$PortalBin = Join-Path $env:LOCALAPPDATA 'portal\\bin\\portal.exe'`);
-    commandLines.push(`if (-not (Test-Path $PortalBin)) { throw "portal CLI not found. Install from a relay first or configure portal.relayUrls." }`);
+    const commandLines = [
+      `$ProgressPreference = 'SilentlyContinue'`,
+      `$PortalDir = Join-Path $env:LOCALAPPDATA 'portal\\bin'`,
+      `$PortalBin = Join-Path $PortalDir 'portal.exe'`,
+      `$PortalTmp = Join-Path $PortalDir 'portal.exe.download'`,
+      `New-Item -ItemType Directory -Force -Path $PortalDir | Out-Null`,
+      `Invoke-WebRequest -Uri ${formatToken(tunnelBinaryURL, target)} -OutFile $PortalTmp`,
+      `Move-Item -Force $PortalTmp $PortalBin`,
+    ];
     commandLines.push(`& $PortalBin ${exposeCommand}`);
     return commandLines.join("\n");
   }
 
-  const commandLines: string[] = [];
-  if (relayUrl.trim()) {
-    const curlFlags = isLocal ? "-kfsSL" : "-fsSL";
-    commandLines.push(`curl ${curlFlags} ${formatToken(installShellUrl, target)} | bash`);
-  }
-  commandLines.push(`PORTAL_BIN="$(command -v portal 2>/dev/null || true)"`);
-  commandLines.push(`if [ -z "$PORTAL_BIN" ]; then`);
-  commandLines.push(`  for candidate in "$HOME/.local/bin/portal" "$HOME/bin/portal"; do`);
-  commandLines.push(`    if [ -x "$candidate" ]; then PORTAL_BIN="$candidate"; break; fi`);
-  commandLines.push(`  done`);
-  commandLines.push(`fi`);
-  commandLines.push(`if [ -z "$PORTAL_BIN" ]; then echo "portal CLI not found. Install from a relay first or configure portal.relayUrls." >&2; exit 1; fi`);
-  commandLines.push(`"${"$"}PORTAL_BIN" ${exposeCommand}`);
+  const commandLines = [
+    `PORTAL_BIN="$HOME/.local/bin/portal"`,
+    `PORTAL_TMP="$PORTAL_BIN.download"`,
+    `mkdir -p "$(dirname "$PORTAL_BIN")"`,
+    `curl -fsSL ${formatToken(tunnelBinaryURL, target)} -o "$PORTAL_TMP"`,
+    `chmod +x "$PORTAL_TMP"`,
+    `mv "$PORTAL_TMP" "$PORTAL_BIN"`,
+    `"${"$"}PORTAL_BIN" ${exposeCommand}`,
+  ];
   return commandLines.join("\n");
-}
-
-export function isLocalhost(url: string): boolean {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".localhost");
-  } catch {
-    return false;
-  }
 }
 
 function quoteShellValue(value: string): string {
