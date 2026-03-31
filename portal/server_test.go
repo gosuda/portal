@@ -112,7 +112,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		}
 	})
 
-	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathHealthz)
+	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {
 		t.Fatalf("GET /healthz error = %v", err)
 	}
@@ -130,7 +130,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		t.Fatalf("GET /healthz response = %+v, want ok status", healthEnvelope)
 	}
 
-	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathV1Sign)
+	signResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathV1Sign)
 	if err != nil {
 		t.Fatalf("GET /v1/sign error = %v", err)
 	}
@@ -175,7 +175,7 @@ func TestServerStartDiscoveryOmitsOwnerIdentityFields(t *testing.T) {
 		}
 	})
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery)
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
 	if err != nil {
 		t.Fatalf("GET /discovery error = %v", err)
 	}
@@ -287,7 +287,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 
 	resp, err := server.registerLease(types.RegisterChallengeRequest{
 		Name:         "Demo-App",
-		OwnerAddress: server.OwnerAddress(),
+		OwnerAddress: server.ownerIdentity.Address,
 	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
@@ -325,7 +325,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 
 	resp, err := server.registerLease(types.RegisterChallengeRequest{
 		Name:         "demo-udp",
-		OwnerAddress: server.OwnerAddress(),
+		OwnerAddress: server.ownerIdentity.Address,
 		UDPEnabled:   true,
 	}, "203.0.113.10", "")
 	if err != nil {
@@ -597,7 +597,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 		}
 	})
 
-	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.APIAddr()) + types.PathDiscovery)
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
 	if err != nil {
 		t.Fatalf("GET relay discovery error = %v", err)
 	}
@@ -606,7 +606,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET relay discovery status = %d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
-	if server.DiscoveryEnabled() {
-		t.Fatal("DiscoveryEnabled() = true, want false without configured discovery service")
+	if server.cfg.DiscoveryEnabled {
+		t.Fatal("cfg.DiscoveryEnabled = true, want false without configured discovery service")
 	}
 }

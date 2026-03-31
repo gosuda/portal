@@ -84,7 +84,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 		case types.PathSDKConnect:
 			s.handleConnect(w, r)
 		case types.PathDiscovery:
-			if !s.DiscoveryEnabled() {
+			if !s.cfg.DiscoveryEnabled {
 				base.ServeHTTP(w, r)
 				return
 			}
@@ -133,7 +133,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
 		IssuedAt:            now,
-		ExpiresAt:           now.Add(2 * defaultDiscoveryInterval),
+		ExpiresAt:           now.Add(2 * types.DiscoveryPollInterval),
 		APIHTTPSAddr:        s.cfg.PortalURL,
 		IngressTLSAddr:      ingressAddr,
 		SupportsTCP:         true,
@@ -307,7 +307,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ttl := s.cfg.LeaseTTL
+	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
@@ -540,7 +540,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		return types.RegisterResponse{}, err
 	}
 
-	ttl := s.cfg.LeaseTTL
+	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
@@ -584,7 +584,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 			ReportedIP:   utils.SanitizeReportedIP(reportedIP),
 			UDPEnabled:   req.UDPEnabled,
 		},
-		stream: transport.NewRelayStream(leaseID, s.cfg.IdleKeepaliveInterval, s.cfg.ReadyQueueLimit),
+		stream: transport.NewRelayStream(leaseID, defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 	if req.UDPEnabled {
 		if s.ports == nil {

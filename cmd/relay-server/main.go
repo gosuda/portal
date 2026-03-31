@@ -155,21 +155,6 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		return fmt.Errorf("start relay server: %w", err)
 	}
 
-	rootHost := server.RootHost()
-	logEvent := log.Info().
-		Str("api_addr", utils.HostPortOrLoopback(server.APIAddr())).
-		Str("sni_addr", server.SNIAddr()).
-		Str("root_host", rootHost).
-		Str("acme_dns_provider", cfg.ACMEDNSProvider).
-		Bool("discovery_enabled", server.DiscoveryEnabled()).
-		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
-		Bool("udp_enabled", cfg.UDPPortCount > 0).
-		Bool("acme_enabled", !strings.HasSuffix(rootHost, "localhost") && rootHost != "127.0.0.1" && rootHost != "::1")
-	if quicAddr := server.QUICTunnelAddr(); quicAddr != "" {
-		logEvent = logEvent.Str("internal_quic_tunnel_addr", quicAddr)
-	}
-	logEvent.Msg("relay server started")
-
 	return server.Wait()
 }
 
