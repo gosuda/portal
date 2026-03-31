@@ -126,6 +126,7 @@ func runServer() error {
 	})
 
 	serv.Start()
+	serv.ConnectToPeers()
 	defer serv.Stop()
 
 	httpSrv := serveHTTP(fmt.Sprintf(":%d", flagPort), serv, admin, frontend, flagNoIndex, stop)

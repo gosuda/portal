@@ -19,7 +19,10 @@ import (
 
 type contextKey string
 
-const leaseIDContextKey contextKey = "leaseID"
+const (
+	leaseIDContextKey  contextKey = "leaseID"
+	clientIDContextKey contextKey = "clientID"
+)
 
 // HTTPProxy is a server-side HTTP reverse proxy that tunnels requests
 // to backend apps connected via portal tunnel. This makes all traffic
@@ -43,7 +46,14 @@ func NewHTTPProxy(server *portal.RelayServer) *HTTPProxy {
 			if err != nil {
 				host = addr
 			}
-			return server.DialLease(host, "http/1.1")
+			// In ReverseProxy, we don't have direct access to the original *http.Request here,
+			// but we can extract information from the context if we set it earlier.
+			// For simplicity, we use "proxy" as clientID or get it from context.
+			clientID, _ := ctx.Value(clientIDContextKey).(string)
+			if clientID == "" {
+				clientID = "proxy"
+			}
+			return server.DialLease(clientID, host, "http/1.1")
 		},
 	}
 
@@ -142,8 +152,9 @@ func (p *HTTPProxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	// HTTP reverse proxy with lease ID in context
+	// HTTP reverse proxy with lease ID and client ID in context
 	ctx := context.WithValue(r.Context(), leaseIDContextKey, leaseID)
+	ctx = context.WithValue(ctx, clientIDContextKey, r.RemoteAddr)
 	p.reverseProxy.ServeHTTP(w, r.WithContext(ctx))
 	return true
 }
@@ -151,7 +162,7 @@ func (p *HTTPProxy) TryProxy(w http.ResponseWriter, r *http.Request) bool {
 // handleWebSocket proxies a WebSocket upgrade request through the tunnel.
 func (p *HTTPProxy) handleWebSocket(w http.ResponseWriter, r *http.Request, leaseID string) {
 	// 1. Dial backend through tunnel
-	backendConn, err := p.server.DialLease(leaseID, "http/1.1")
+	backendConn, err := p.server.DialLease(r.RemoteAddr, leaseID, "http/1.1")
 	if err != nil {
 		log.Error().Err(err).Str("lease_id", leaseID).Msg("[HTTPProxy] WebSocket: failed to dial lease")
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
