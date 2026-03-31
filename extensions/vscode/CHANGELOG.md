@@ -6,7 +6,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [0.0.3]
 
-- Download the tunnel binary directly from the latest GitHub release assets before execution
+- Run the latest GitHub release installer script before execution
 
 ## [0.0.2]
 

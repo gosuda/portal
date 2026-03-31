@@ -10,7 +10,7 @@ export interface TunnelCommandOptions {
   name: string;
   relayList: string;
   thumbnail: string;
-  tunnelBinaryURL?: string;
+  tunnelInstallerURL?: string;
 }
 
 export interface TunnelCommandRuntime {
@@ -51,27 +51,20 @@ export function defaultTunnelCommandRuntime(
   };
 }
 
-export function resolveTunnelBinaryURL(
+export function resolveTunnelInstallerURL(
   platform = os.platform(),
   arch = os.arch()
 ): string | undefined {
-  const platformName =
-    platform === "darwin" || platform === "linux"
-      ? platform
-      : platform === "win32"
-        ? "windows"
-        : undefined;
-  const archName =
-    arch === "x64"
-      ? "amd64"
-      : arch === "arm64"
-        ? "arm64"
-        : undefined;
-  if (!platformName || !archName) {
+  if (arch !== "x64" && arch !== "arm64") {
     return undefined;
   }
-  const extension = platformName === "windows" ? ".exe" : "";
-  return `${defaultTunnelDownloadBaseURL}/portal-${platformName}-${archName}${extension}`;
+  if (platform === "darwin" || platform === "linux") {
+    return `${defaultTunnelDownloadBaseURL}/install.sh`;
+  }
+  if (platform === "win32") {
+    return `${defaultTunnelDownloadBaseURL}/install.ps1`;
+  }
+  return undefined;
 }
 
 export function buildCommand(
@@ -80,10 +73,10 @@ export function buildCommand(
 ): string {
   const { host, name, relayList, thumbnail } = opts;
   const target = runtime.shellTarget;
-  const tunnelBinaryURL =
-    opts.tunnelBinaryURL?.trim() ||
-    resolveTunnelBinaryURL(runtime.platform, runtime.arch);
-  if (!tunnelBinaryURL) {
+  const tunnelInstallerURL =
+    opts.tunnelInstallerURL?.trim() ||
+    resolveTunnelInstallerURL(runtime.platform, runtime.arch);
+  if (!tunnelInstallerURL) {
     throw new Error(
       `Unsupported platform ${runtime.platform}/${runtime.arch}. Portal supports macOS, Linux, and Windows on x64 or arm64.`
     );
@@ -106,24 +99,24 @@ export function buildCommand(
   if (target === "windows") {
     const commandLines = [
       `$ProgressPreference = 'SilentlyContinue'`,
-      `$PortalDir = Join-Path $env:LOCALAPPDATA 'portal\\bin'`,
-      `$PortalBin = Join-Path $PortalDir 'portal.exe'`,
-      `$PortalTmp = Join-Path $PortalDir 'portal.exe.download'`,
-      `New-Item -ItemType Directory -Force -Path $PortalDir | Out-Null`,
-      `Invoke-WebRequest -Uri ${formatToken(tunnelBinaryURL, target)} -OutFile $PortalTmp`,
-      `Move-Item -Force $PortalTmp $PortalBin`,
+      `irm ${formatToken(tunnelInstallerURL, target)} | iex`,
+      `$PortalBin = Join-Path $env:LOCALAPPDATA 'portal\\bin\\portal.exe'`,
+      `if (-not (Test-Path $PortalBin)) { throw 'Portal install failed: portal.exe not found.' }`,
     ];
     commandLines.push(`& $PortalBin ${exposeCommand}`);
     return commandLines.join("\n");
   }
 
   const commandLines = [
-    `PORTAL_BIN="$HOME/.local/bin/portal"`,
-    `PORTAL_TMP="$PORTAL_BIN.download"`,
-    `mkdir -p "$(dirname "$PORTAL_BIN")"`,
-    `curl -fsSL ${formatToken(tunnelBinaryURL, target)} -o "$PORTAL_TMP"`,
-    `chmod +x "$PORTAL_TMP"`,
-    `mv "$PORTAL_TMP" "$PORTAL_BIN"`,
+    `set -e`,
+    `PORTAL_INSTALLER="$(mktemp "${"$"}{TMPDIR:-/tmp}/portal-install.XXXXXX" 2>/dev/null || mktemp -t portal-install)"`,
+    `curl -fsSL ${formatToken(tunnelInstallerURL, target)} -o "$PORTAL_INSTALLER"`,
+    `sh "$PORTAL_INSTALLER"`,
+    `rm -f "$PORTAL_INSTALLER"`,
+    `PORTAL_BIN="$(command -v portal 2>/dev/null || true)"`,
+    `if [ -z "$PORTAL_BIN" ] && [ -x "$HOME/.local/bin/portal" ]; then PORTAL_BIN="$HOME/.local/bin/portal"; fi`,
+    `if [ -z "$PORTAL_BIN" ] && [ -x "$HOME/bin/portal" ]; then PORTAL_BIN="$HOME/bin/portal"; fi`,
+    `if [ -z "$PORTAL_BIN" ]; then echo "Portal install failed: portal executable not found." >&2; exit 1; fi`,
     `"${"$"}PORTAL_BIN" ${exposeCommand}`,
   ];
   return commandLines.join("\n");

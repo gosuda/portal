@@ -57,7 +57,19 @@ For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
 
-For a local relay started with `docker compose up`:
+Install the tunnel from the official GitHub release assets:
+
+```bash
+curl -fsSL https://github.com/gosuda/portal/releases/latest/download/install.sh | bash
+portal expose 3000
+```
+
+```powershell
+irm https://github.com/gosuda/portal/releases/latest/download/install.ps1 | iex
+portal expose 3000
+```
+
+If you prefer a relay-local installer, or want the relay to provide the exact install command for its own host, use the relay installer instead:
 
 ```bash
 curl -ksSL https://localhost:4017/install.sh | bash

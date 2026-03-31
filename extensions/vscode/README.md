@@ -8,14 +8,14 @@ Expose your local service to the internet via a [Portal](https://github.com/gosu
 - `Portal: Start Tunnel (Advanced)` prompts for host, optional service name, relay source, and optional thumbnail
 - `Portal: Stop Tunnel` stops the active tunnel terminal
 - Persisted settings for relay URLs, default local host, and default service name
-- Downloads the matching Portal tunnel binary from the latest GitHub release assets before starting the tunnel
+- Runs the latest Portal release installer script before starting the tunnel
 - When no relay URL is configured, the extension can use the public registry at `https://raw.githubusercontent.com/gosuda/portal/main/registry.json`
 
 ## Requirements
 
 - A running [Portal relay server](https://github.com/gosuda/portal) with an `https://` URL
 - `curl` on macOS/Linux, PowerShell on Windows
-- GitHub release asset access for `https://github.com/gosuda/portal/releases/latest/download/...`
+- GitHub release asset access for `https://github.com/gosuda/portal/releases/latest/download/install.sh` or `install.ps1`
 
 ## Settings
 
@@ -44,7 +44,7 @@ Example `settings.json`:
 
 Use `Portal: Start Tunnel (Advanced)` when you need a different host, custom relay selection, or a thumbnail URL.
 
-The extension downloads the platform-specific tunnel binary from the latest GitHub release assets and then runs `portal expose ...` with the selected relay settings.
+The extension runs the platform-appropriate installer script from the latest GitHub release assets and then runs `portal expose ...` with the selected relay settings.
 
 To stop, run `Portal: Stop Tunnel` or close the `Portal Tunnel` terminal.
 
@@ -70,7 +70,7 @@ If you want Linux behavior from WSL, open the folder with `Remote - WSL` first s
 
 ### 0.0.3
 
-- Download the tunnel binary directly from the latest GitHub release assets before execution
+- Run the latest GitHub release installer script before execution
 
 ### 0.0.2
 
