@@ -31,7 +31,7 @@ func proxyExposure(ctx context.Context, exposure *sdk.Exposure, serviceName stri
 		Str("tcp_target", tcpTarget).
 		Str("service_name", serviceName).
 		Strs("relays", exposure.ActiveRelayURLs()).
-		Msg("starting portal tunnel")
+		Msg("starting portal tunnel; public URLs will be logged as relays become ready")
 	if udpEnabled {
 		log.Info().
 			Str("udp_target", udpTarget).
