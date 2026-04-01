@@ -112,9 +112,28 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
+func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) (string, bool) {
+	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
+	if !s.registry.policy.IPFilter().IsIPBanned(clientIP) {
+		return clientIP, true
+	}
+	utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+	return "", false
+}
+
+func leaseLookupError(err error) utils.APIErrorResponse {
+	if errors.Is(err, errLeaseNotFound) {
+		return utils.APIErrorResponse{
+			Status:  http.StatusNotFound,
+			Code:    types.APIErrorCodeLeaseNotFound,
+			Message: err.Error(),
+		}
+	}
+	return utils.InvalidRequestError(err)
+}
+
 func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -124,9 +143,9 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
 	}
 
-	supportsOverlayPeer := strings.TrimSpace(s.wgConfig.PublicKey) != "" &&
-		strings.TrimSpace(s.wgConfig.Endpoint) != "" &&
-		strings.TrimSpace(s.wgConfig.OverlayIPv4) != ""
+	supportsOverlayPeer := s.wgConfig.PublicKey != "" &&
+		s.wgConfig.Endpoint != "" &&
+		s.wgConfig.OverlayIPv4 != ""
 
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		RelayID:             s.cfg.PortalURL,
@@ -139,9 +158,9 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		SupportsTCP:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
-		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
-		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
-		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
+		WireGuardPublicKey:  s.wgConfig.PublicKey,
+		WireGuardEndpoint:   s.wgConfig.Endpoint,
+		OverlayIPv4:         s.wgConfig.OverlayIPv4,
 		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
 	})
 	if err != nil {
@@ -164,8 +183,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -176,20 +194,17 @@ func (s *Server) handleDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
-	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
 
-	var req types.RegisterRequest
-	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
+	req, ok := utils.DecodeJSONRequest[types.RegisterRequest](w, r, defaultControlBodyLimit)
+	if !ok {
 		return
 	}
 
@@ -199,7 +214,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, auth.ErrInvalidSignature):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
 		default:
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+			utils.InvalidRequestError(err).Write(w)
 		}
 		return
 	}
@@ -220,7 +235,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errUDPCapacityExceeded):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
 		default:
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+			utils.InvalidRequestError(err).Write(w)
 		}
 		return
 	}
@@ -229,20 +244,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
-	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+	if _, ok := s.extractAllowedClientIP(w, r); !ok {
 		return
 	}
 
-	var req types.RegisterChallengeRequest
-	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
+	req, ok := utils.DecodeJSONRequest[types.RegisterChallengeRequest](w, r, defaultControlBodyLimit)
+	if !ok {
 		return
 	}
 
@@ -275,7 +286,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		case errors.Is(err, errUDPCapacityExceeded):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
 		default:
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+			utils.InvalidRequestError(err).Write(w)
 		}
 		return
 	}
@@ -284,20 +295,17 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
-	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
 
-	var req types.RenewRequest
-	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
+	req, ok := utils.DecodeJSONRequest[types.RenewRequest](w, r, defaultControlBodyLimit)
+	if !ok {
 		return
 	}
 
@@ -313,12 +321,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
-		switch {
-		case errors.Is(err, errLeaseNotFound):
-			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
-		default:
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		}
+		leaseLookupError(err).Write(w)
 		return
 	}
 	nextAccessToken, _, err := auth.IssueLeaseAccessToken(s.ownerIdentity.PrivateKey, s.ownerIdentity.Address, s.cfg.PortalURL, claims.Subject, record.ID, ttl)
@@ -335,14 +338,12 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	var req types.UnregisterRequest
-	if err := utils.DecodeJSONBody(w, r, &req, defaultControlBodyLimit); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
+	req, ok := utils.DecodeJSONRequest[types.UnregisterRequest](w, r, defaultControlBodyLimit)
+	if !ok {
 		return
 	}
 	if _, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.ownerIdentity.PublicKey, s.cfg.PortalURL, strings.TrimSpace(req.LeaseID), time.Now().UTC()); err != nil {
@@ -352,24 +353,18 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 
 	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID))
 	if err != nil {
-		switch {
-		case errors.Is(err, errLeaseNotFound):
-			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
-		default:
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
-		}
+		leaseLookupError(err).Write(w)
 		return
 	}
 	if record != nil {
 		record.Close()
 	}
 
-	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
+	utils.WriteAPIEmpty(w, http.StatusOK)
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if r.ProtoMajor != 1 {
@@ -379,29 +374,25 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
 	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
-	clientIP := policy.ExtractClientIP(r, s.cfg.TrustProxyHeaders, s.trustedProxyCIDRs)
-	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, "request denied because source IP is banned")
+	clientIP, ok := s.extractAllowedClientIP(w, r)
+	if !ok {
 		return
 	}
 
 	lease, err := s.admitLeaseByID(leaseID, token, false)
-	switch {
-	case err == nil:
-	case errors.Is(err, errLeaseNotFound):
-		utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
-		return
-	case errors.Is(err, errLeaseRejected):
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
-		return
-	case errors.Is(err, errUnauthorized):
-		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-		return
-	case errors.Is(err, errTransportMismatch):
-		utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
-		return
-	default:
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, err.Error())
+	if err != nil {
+		switch {
+		case errors.Is(err, errLeaseNotFound):
+			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
+		case errors.Is(err, errLeaseRejected):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
+		case errors.Is(err, errUnauthorized):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
+		case errors.Is(err, errTransportMismatch):
+			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
+		default:
+			utils.InvalidRequestError(err).Write(w)
+		}
 		return
 	}
 

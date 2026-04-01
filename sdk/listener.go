@@ -346,12 +346,12 @@ func (l *Listener) PublicURL() string {
 		return ""
 	}
 
-	if strings.TrimSpace(l.api.baseURL.Scheme) == "" {
+	if l.api.baseURL.Scheme == "" {
 		return "https://" + hostname
 	}
 
 	host := hostname
-	if port := strings.TrimSpace(l.api.baseURL.Port()); port != "" {
+	if port := l.api.baseURL.Port(); port != "" {
 		host = net.JoinHostPort(hostname, port)
 	}
 

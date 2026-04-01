@@ -145,11 +145,10 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			f.handleLogin(w, r)
 			return
 		}
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		utils.MethodNotAllowedError().Write(w)
 		return
 	case types.PathAdminLogout:
-		if r.Method != http.MethodPost {
-			utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
 		if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value != "" {
@@ -164,11 +163,10 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   -1,
 		})
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
+		utils.WriteAPIEmpty(w, http.StatusOK)
 		return
 	case types.PathAdminAuthStatus:
-		if r.Method != http.MethodGet {
-			utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, types.AdminAuthStatusResponse{
@@ -184,18 +182,12 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runtime := f.server.PolicyRuntime()
-	methodNotAllowed := func() {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
-	}
-	writeOK := func() {
-		f.saveAdminState(runtime)
-		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-	}
+	methodNotAllowed := utils.MethodNotAllowedError()
+	invalidRequestBody := utils.InvalidRequestMessage("invalid request body")
 
 	switch path {
 	case types.PathAdminSnapshot:
-		if r.Method != http.MethodGet {
-			methodNotAllowed()
+		if !utils.RequireMethod(w, r, http.MethodGet) {
 			return
 		}
 		utils.WriteAPIData(w, http.StatusOK, types.AdminSnapshotResponse{
@@ -208,13 +200,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			},
 		})
 	case types.PathAdminLandingPage:
-		if r.Method != http.MethodPost {
-			methodNotAllowed()
+		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		var req types.AdminLandingPageSettingsRequest
-		if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+		req, ok := utils.DecodeJSONRequestAs[types.AdminLandingPageSettingsRequest](w, r, 1<<16, invalidRequestBody)
+		if !ok {
 			return
 		}
 		f.setLandingPageEnabled(req.Enabled)
@@ -223,13 +213,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			Enabled: f.isLandingPageEnabled(),
 		})
 	case types.PathAdminUDP:
-		if r.Method != http.MethodPost {
-			methodNotAllowed()
+		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		var req types.AdminUDPSettingsRequest
-		if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+		req, ok := utils.DecodeJSONRequestAs[types.AdminUDPSettingsRequest](w, r, 1<<16, invalidRequestBody)
+		if !ok {
 			return
 		}
 		if req.MaxLeases < 0 {
@@ -243,13 +231,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			MaxLeases: runtime.UDPMaxLeases(),
 		})
 	case types.PathAdminApproval:
-		if r.Method != http.MethodPost {
-			methodNotAllowed()
+		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		var req types.AdminApprovalModeRequest
-		if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+		req, ok := utils.DecodeJSONRequestAs[types.AdminApprovalModeRequest](w, r, 1<<16, invalidRequestBody)
+		if !ok {
 			return
 		}
 		if err := runtime.Approver().SetMode(policy.Mode(strings.TrimSpace(req.Mode))); err != nil {
@@ -284,16 +270,16 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				case http.MethodDelete:
 					runtime.UnbanLease(leaseID)
 				default:
-					methodNotAllowed()
+					methodNotAllowed.Write(w)
 					return
 				}
-				writeOK()
+				f.saveAdminState(runtime)
+				utils.WriteAPIEmpty(w, http.StatusOK)
 			case "bps":
 				switch r.Method {
 				case http.MethodPost:
-					var req types.AdminBPSRequest
-					if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
-						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+					req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, 1<<16, invalidRequestBody)
+					if !ok {
 						return
 					}
 					if req.BPS <= 0 {
@@ -304,10 +290,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				case http.MethodDelete:
 					runtime.BPSManager().DeleteLeaseBPS(leaseID)
 				default:
-					methodNotAllowed()
+					methodNotAllowed.Write(w)
 					return
 				}
-				writeOK()
+				f.saveAdminState(runtime)
+				utils.WriteAPIEmpty(w, http.StatusOK)
 			case "approve":
 				approver := runtime.Approver()
 				switch r.Method {
@@ -317,10 +304,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				case http.MethodDelete:
 					approver.Revoke(leaseID)
 				default:
-					methodNotAllowed()
+					methodNotAllowed.Write(w)
 					return
 				}
-				writeOK()
+				f.saveAdminState(runtime)
+				utils.WriteAPIEmpty(w, http.StatusOK)
 			case "deny":
 				approver := runtime.Approver()
 				switch r.Method {
@@ -329,10 +317,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				case http.MethodDelete:
 					approver.Undeny(leaseID)
 				default:
-					methodNotAllowed()
+					methodNotAllowed.Write(w)
 					return
 				}
-				writeOK()
+				f.saveAdminState(runtime)
+				utils.WriteAPIEmpty(w, http.StatusOK)
 			default:
 				http.NotFound(w, r)
 			}
@@ -356,10 +345,11 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			case http.MethodDelete:
 				filter.UnbanIP(rawIP)
 			default:
-				methodNotAllowed()
+				methodNotAllowed.Write(w)
 				return
 			}
-			writeOK()
+			f.saveAdminState(runtime)
+			utils.WriteAPIEmpty(w, http.StatusOK)
 		default:
 			http.NotFound(w, r)
 		}
@@ -367,8 +357,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if !f.auth.AuthEnabled() {
@@ -376,9 +365,8 @@ func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req types.AdminLoginRequest
-	if err := utils.DecodeJSONBody(w, r, &req, 1<<16); err != nil {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid request body")
+	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, 1<<16, utils.InvalidRequestMessage("invalid request body"))
+	if !ok {
 		return
 	}
 	if !f.auth.ValidateKey(req.Key) {

@@ -27,11 +27,13 @@ func (e *APIRequestError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if strings.TrimSpace(e.Code) != "" {
-		return e.Code + ": " + strings.TrimSpace(e.Message)
+	code := strings.TrimSpace(e.Code)
+	message := strings.TrimSpace(e.Message)
+	if code != "" {
+		return code + ": " + message
 	}
-	if strings.TrimSpace(e.Message) != "" {
-		return strings.TrimSpace(e.Message)
+	if message != "" {
+		return message
 	}
 	if e.StatusCode > 0 {
 		return fmt.Sprintf("api request failed with status %d", e.StatusCode)

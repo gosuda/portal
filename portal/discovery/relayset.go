@@ -88,7 +88,7 @@ func (s *RelaySet) trackedRelayURLs() []string {
 		urls = append(urls, relayURL)
 	}
 	for _, view := range s.relays {
-		relayURL := strings.TrimSpace(view.Descriptor.APIHTTPSAddr)
+		relayURL := view.Descriptor.APIHTTPSAddr
 		if relayURL == "" {
 			continue
 		}
@@ -237,7 +237,7 @@ func (s *RelaySet) BootstrapDescriptors() []types.RelayDescriptor {
 			continue
 		}
 		if relayID, ok := s.relayIDsByURL[relayURL]; ok {
-			if view, ok := s.relays[relayID]; ok && strings.TrimSpace(view.Descriptor.APIHTTPSAddr) != "" {
+			if view, ok := s.relays[relayID]; ok && view.Descriptor.APIHTTPSAddr != "" {
 				out = append(out, view.Descriptor)
 				continue
 			}
@@ -266,9 +266,10 @@ func (s *RelaySet) BanRelayURL(relayURL, reason string) bool {
 	}
 
 	state := s.localByURL[relayURL]
-	changed := !state.Banned || strings.TrimSpace(state.BanReason) != strings.TrimSpace(reason)
+	reason = strings.TrimSpace(reason)
+	changed := !state.Banned || strings.TrimSpace(state.BanReason) != reason
 	state.Banned = true
-	state.BanReason = strings.TrimSpace(reason)
+	state.BanReason = reason
 	state.Reachable = false
 	s.localByURL[relayURL] = state
 	if changed {
@@ -387,7 +388,7 @@ func (s *RelaySet) AdvertisedDescriptors() []types.RelayDescriptor {
 	out := make([]types.RelayDescriptor, 0, len(s.relays))
 	for _, view := range s.relays {
 		state := s.localByURL[view.Descriptor.APIHTTPSAddr]
-		if !state.Advertised || relayExpiredAt(view, state, now) || strings.TrimSpace(view.Descriptor.APIHTTPSAddr) == "" {
+		if !state.Advertised || relayExpiredAt(view, state, now) || view.Descriptor.APIHTTPSAddr == "" {
 			continue
 		}
 		out = append(out, view.Descriptor)
@@ -492,7 +493,7 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 		return "", false, false, err
 	}
 	if current, ok := s.relays[normalized.RelayID]; ok {
-		currentURL := strings.TrimSpace(current.Descriptor.APIHTTPSAddr)
+		currentURL := current.Descriptor.APIHTTPSAddr
 		if currentURL != "" && currentURL != normalized.APIHTTPSAddr {
 			return "", false, false, errors.New("descriptor api_https_addr does not match known relay url")
 		}
@@ -523,11 +524,11 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 
 func relayDiscoveryURLs(selfDescriptor types.RelayDescriptor, relayDescriptors []types.RelayDescriptor) []string {
 	relayURLs := make([]string, 0, 1+len(relayDescriptors))
-	if apiURL := strings.TrimSpace(selfDescriptor.APIHTTPSAddr); apiURL != "" {
+	if apiURL := selfDescriptor.APIHTTPSAddr; apiURL != "" {
 		relayURLs = append(relayURLs, apiURL)
 	}
 	for _, relayDescriptor := range relayDescriptors {
-		if apiURL := strings.TrimSpace(relayDescriptor.APIHTTPSAddr); apiURL != "" {
+		if apiURL := relayDescriptor.APIHTTPSAddr; apiURL != "" {
 			relayURLs = append(relayURLs, apiURL)
 		}
 	}

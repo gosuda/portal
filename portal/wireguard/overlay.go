@@ -171,7 +171,7 @@ func peersForSnapshot(selfRelayID string, snapshot map[string]types.RelayState) 
 		if desc.RelayID == selfRelayID || !desc.SupportsOverlayPeer {
 			continue
 		}
-		if strings.TrimSpace(desc.WireGuardPublicKey) == "" || strings.TrimSpace(desc.WireGuardEndpoint) == "" || strings.TrimSpace(desc.OverlayIPv4) == "" {
+		if desc.WireGuardPublicKey == "" || desc.WireGuardEndpoint == "" || desc.OverlayIPv4 == "" {
 			continue
 		}
 

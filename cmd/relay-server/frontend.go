@@ -76,7 +76,7 @@ func (f *Frontend) Handler() *http.ServeMux {
 		f.ServeAppStatic(w, r, "")
 	})
 	mux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
-		f.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+		f.ServeAppStatic(w, r, strings.TrimPrefix(r.URL.Path, types.PathAppPrefix))
 	})
 	mux.HandleFunc(types.PathAssetsPrefix, func(w http.ResponseWriter, r *http.Request) {
 		f.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
@@ -205,14 +205,13 @@ func (f *Frontend) injectServerData(htmlContent string) string {
 }
 
 func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
 	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
 	if hostname == "" {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
+		utils.InvalidRequestMessage("hostname is required").Write(w)
 		return
 	}
 
