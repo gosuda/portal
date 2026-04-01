@@ -205,14 +205,13 @@ func (f *Frontend) injectServerData(htmlContent string) string {
 }
 
 func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
 	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
 	if hostname == "" {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
+		utils.InvalidRequestMessage("hostname is required").Write(w)
 		return
 	}
 

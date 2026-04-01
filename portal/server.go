@@ -527,6 +527,7 @@ func (s *Server) startOverlay() error {
 	s.overlay = overlay
 	return nil
 }
+
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(types.DiscoveryPollInterval)
 	defer ticker.Stop()

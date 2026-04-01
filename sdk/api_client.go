@@ -103,7 +103,7 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 	}
 
 	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRegisterChallenge}).String(), types.RegisterChallengeRequest{
+	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{
 		Name:         a.name,
 		Metadata:     a.metadata.Copy(),
 		OwnerAddress: a.ownerAddress,
@@ -119,7 +119,7 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 	}
 
 	var resp types.RegisterResponse
-	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRegister}).String(), types.RegisterRequest{
+	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRegister, types.RegisterRequest{
 		ChallengeID:   challenge.ChallengeID,
 		SIWEMessage:   challenge.SIWEMessage,
 		SIWESignature: signature,
@@ -173,7 +173,7 @@ func (a *apiClient) reportedIP(ctx context.Context) string {
 
 func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Client) error {
 	var resp types.DomainResponse
-	if err := utils.HTTPDoAPI(ctx, httpClient, http.MethodGet, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKDomain}).String(), nil, nil, &resp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, httpClient, a.baseURL, http.MethodGet, types.PathSDKDomain, nil, nil, &resp); err != nil {
 		err = fmt.Errorf("check relay compatibility: %w", err)
 		var netErr net.Error
 		var apiErr *types.APIRequestError
@@ -204,7 +204,7 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 	}
 
 	var resp types.RenewResponse
-	if err := utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKRenew}).String(), types.RenewRequest{
+	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
 		LeaseID:     leaseID,
 		AccessToken: accessToken,
 		TTL:         int(ttl / time.Second),
@@ -229,7 +229,7 @@ func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
 	a.mu.RLock()
 	accessToken := a.accessToken
 	a.mu.RUnlock()
-	return utils.HTTPDoAPI(ctx, a.httpClient, http.MethodPost, a.baseURL.ResolveReference(&url.URL{Path: types.PathSDKUnregister}).String(), types.UnregisterRequest{
+	return utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
 		LeaseID:     leaseID,
 		AccessToken: accessToken,
 	}, nil, nil)
@@ -250,8 +250,7 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 		return nil, err
 	}
 
-	connectRef, _ := url.Parse(types.PathSDKConnect)
-	connectURL := a.baseURL.ResolveReference(connectRef)
+	connectURL := utils.ResolveAPIURL(a.baseURL, types.PathSDKConnect)
 	query := connectURL.Query()
 	query.Set("lease_id", leaseID)
 	connectURL.RawQuery = query.Encode()

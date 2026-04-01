@@ -157,8 +157,6 @@ func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byt
 		return types.DiscoveryResponse{}, fmt.Errorf("parse discovery base url: %w", err)
 	}
 
-	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: types.PathDiscovery})
-
 	client := httpClient
 	if client == nil {
 		_, client, err = keyless.NewRelayHTTPClient(ctx, parsedBaseURL, rootCAPEM, defaultRequestTimeout)
@@ -173,7 +171,7 @@ func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byt
 	}
 
 	var resp types.DiscoveryResponse
-	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &resp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, client, parsedBaseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
 		return types.DiscoveryResponse{}, err
 	}
 	return resp, nil

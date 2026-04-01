@@ -171,7 +171,10 @@ func upsertARecord(ctx context.Context, client *awsroute53.Client, hostedZoneID,
 		return errors.New("hosted zone id is required")
 	}
 
-	fqdn := ensureTrailingDot(utils.NormalizeHostname(name))
+	fqdn := utils.NormalizeHostname(name)
+	if !strings.HasSuffix(fqdn, ".") {
+		fqdn += "."
+	}
 	recordSet := &types.ResourceRecordSet{
 		Name: aws.String(fqdn),
 		Type: types.RRTypeA,
@@ -250,11 +253,4 @@ func validateConfig(cfg Config) error {
 func normalizeZoneID(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	return strings.TrimPrefix(trimmed, "/hostedzone/")
-}
-
-func ensureTrailingDot(name string) string {
-	if strings.HasSuffix(name, ".") {
-		return name
-	}
-	return name + "."
 }
