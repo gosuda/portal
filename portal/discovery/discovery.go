@@ -17,7 +17,8 @@ import (
 const defaultRequestTimeout = 15 * time.Second
 
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
-	desc.RelayID = strings.TrimSpace(desc.RelayID)
+	desc.Name = utils.NormalizeHostname(desc.Name)
+	desc.Address = strings.TrimSpace(desc.Address)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
 	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
@@ -35,9 +36,13 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
 		desc.APIHTTPSAddr = normalized
-		if desc.RelayID == "" {
-			desc.RelayID = normalized
+	}
+	if desc.Address != "" {
+		normalized, err := utils.NormalizeEVMAddress(desc.Address)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
 		}
+		desc.Address = normalized
 	}
 	if len(desc.OverlayCIDRs) > 0 {
 		normalized, err := utils.NormalizeOverlayCIDRs(desc.OverlayCIDRs)
@@ -66,8 +71,8 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	now = now.UTC()
 
 	switch {
-	case normalized.RelayID == "":
-		return types.RelayDescriptor{}, errors.New("relay_id is required")
+	case normalized.Name == "":
+		return types.RelayDescriptor{}, errors.New("identity.name is required")
 	case normalized.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
 	case normalized.Sequence == 0:
@@ -108,7 +113,7 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 		return types.RelayDescriptor{}, nil, err
 	}
 
-	seen := map[string]struct{}{self.RelayID: {}}
+	seen := map[string]struct{}{self.Key(): {}}
 	relays := make([]types.RelayDescriptor, 0, len(resp.Relays))
 	var validateErr error
 	for _, descriptor := range resp.Relays {
@@ -119,25 +124,39 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 			}
 			continue
 		}
-		if _, ok := seen[verified.RelayID]; ok {
+		identityKey := verified.Key()
+		if _, ok := seen[identityKey]; ok {
 			continue
 		}
-		seen[verified.RelayID] = struct{}{}
+		seen[identityKey] = struct{}{}
 		relays = append(relays, verified)
 	}
 	return self, relays, validateErr
 }
 
 // ValidateDescriptorTarget checks if a descriptor matches expected target identity.
-func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetURL string) error {
+func ValidateDescriptorTarget(desc types.RelayDescriptor, targetIdentity types.Identity, targetURL string) error {
 	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
 		return err
 	}
 
-	relayID := normalized.RelayID
-	if targetRelayID != "" && relayID != targetRelayID {
-		return errors.New("descriptor relay_id does not match target relay")
+	targetName := strings.TrimSpace(targetIdentity.Name)
+	if targetName != "" {
+		normalizedTargetName := utils.NormalizeHostname(targetName)
+		if normalized.Name != normalizedTargetName {
+			return errors.New("descriptor name does not match target relay")
+		}
+	}
+	targetAddress := strings.TrimSpace(targetIdentity.Address)
+	if targetAddress != "" {
+		normalizedTargetAddress, err := utils.NormalizeEVMAddress(targetAddress)
+		if err != nil {
+			return err
+		}
+		if normalized.Address != normalizedTargetAddress {
+			return errors.New("descriptor address does not match target relay")
+		}
 	}
 
 	if targetURL != "" {
@@ -196,7 +215,9 @@ func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
 		return types.RelayDescriptor{}, err
 	}
 	return types.RelayDescriptor{
-		RelayID:      normalized,
+		Identity: types.Identity{
+			Name: utils.PortalRootHost(normalized),
+		},
 		APIHTTPSAddr: normalized,
 		Version:      1,
 	}, nil

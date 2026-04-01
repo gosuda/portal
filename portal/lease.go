@@ -18,7 +18,7 @@ const defaultRegisterChallengeTTL = 2 * time.Minute
 
 type leaseRegistry struct {
 	routes             *routeTable
-	leaseByID          map[string]*leaseRecord
+	leasesByKey        map[string]*leaseRecord
 	registerChallenges map[string]*auth.RegisterChallenge
 	policy             *policy.Runtime
 	mu                 sync.RWMutex
@@ -31,7 +31,7 @@ func newLeaseRegistry(runtime *policy.Runtime) *leaseRegistry {
 
 	return &leaseRegistry{
 		routes:             newRouteTable(),
-		leaseByID:          make(map[string]*leaseRecord),
+		leasesByKey:        make(map[string]*leaseRecord),
 		registerChallenges: make(map[string]*auth.RegisterChallenge),
 		policy:             runtime,
 	}
@@ -41,13 +41,13 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	out := make([]*leaseRecord, 0, len(r.leaseByID))
-	for _, record := range r.leaseByID {
+	out := make([]*leaseRecord, 0, len(r.leasesByKey))
+	for _, record := range r.leasesByKey {
 		out = append(out, record)
-		r.policy.ForgetLease(record.ID)
+		r.policy.ForgetIdentity(record.Key())
 	}
 	r.routes = newRouteTable()
-	r.leaseByID = make(map[string]*leaseRecord)
+	r.leasesByKey = make(map[string]*leaseRecord)
 	r.registerChallenges = make(map[string]*auth.RegisterChallenge)
 	return out
 }
@@ -79,11 +79,11 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	leaseID, ok := r.routes.Lookup(host)
+	key, ok := r.routes.Lookup(host)
 	if !ok {
 		return nil, false
 	}
-	record, ok := r.leaseByID[leaseID]
+	record, ok := r.leasesByKey[key]
 	return record, ok && record != nil
 }
 
@@ -92,9 +92,9 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 		return errors.New("lease record is required")
 	}
 
-	leaseID := record.ID
-	if leaseID == "" {
-		return errors.New("lease id is required")
+	key := record.Key()
+	if key == "" {
+		return errors.New("lease identity is required")
 	}
 	hostname := utils.NormalizeHostname(record.Hostname)
 	if hostname == "" {
@@ -102,27 +102,37 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
-	if ownerLeaseID, ok := r.routes.LookupExact(hostname); ok && ownerLeaseID != leaseID {
+	if existingKey, ok := r.routes.LookupExact(hostname); ok && existingKey != key {
+		r.mu.Unlock()
 		return errHostnameConflict
 	}
 
-	record.ID = leaseID
+	var replaced *leaseRecord
+	if existing, ok := r.leasesByKey[key]; ok && existing != nil {
+		replaced = existing
+		r.routes.Delete(existing.Hostname)
+		r.policy.ForgetIdentity(existing.Key())
+	}
 	record.Hostname = hostname
-	r.leaseByID[leaseID] = record
-	r.routes.Set(hostname, leaseID)
+	r.leasesByKey[key] = record
+	r.routes.Set(hostname, key)
 	if strings.TrimSpace(record.ClientIP) != "" {
-		r.policy.IPFilter().RegisterLeaseIP(leaseID, record.ClientIP)
+		r.policy.IPFilter().RegisterIdentityIP(key, record.ClientIP)
+	}
+	r.mu.Unlock()
+
+	if replaced != nil && replaced != record {
+		replaced.Close()
 	}
 	return nil
 }
 
-func (r *leaseRegistry) Renew(leaseID string, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
+func (r *leaseRegistry) Renew(identity types.Identity, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.leaseByID[leaseID]
+	record, ok := r.leasesByKey[identity.Key()]
 	if !ok {
 		return nil, errLeaseNotFound
 	}
@@ -132,7 +142,7 @@ func (r *leaseRegistry) Renew(leaseID string, ttl time.Duration, clientIP, repor
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
-		r.policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
+		r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	}
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
@@ -140,26 +150,27 @@ func (r *leaseRegistry) Renew(leaseID string, ttl time.Duration, clientIP, repor
 	return record, nil
 }
 
-func (r *leaseRegistry) Unregister(leaseID string) (*leaseRecord, error) {
+func (r *leaseRegistry) Unregister(identity types.Identity) (*leaseRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.leaseByID[leaseID]
+	key := identity.Key()
+	record, ok := r.leasesByKey[key]
 	if !ok {
 		return nil, errLeaseNotFound
 	}
 
-	delete(r.leaseByID, record.ID)
+	delete(r.leasesByKey, key)
 	r.routes.Delete(record.Hostname)
-	r.policy.ForgetLease(record.ID)
+	r.policy.ForgetIdentity(key)
 	return record, nil
 }
 
-func (r *leaseRegistry) FindByID(leaseID string) (*leaseRecord, error) {
+func (r *leaseRegistry) Find(identity types.Identity) (*leaseRecord, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	record, ok := r.leaseByID[leaseID]
+	record, ok := r.leasesByKey[identity.Key()]
 	if !ok || time.Now().After(record.ExpiresAt) {
 		return nil, errLeaseNotFound
 	}
@@ -219,18 +230,18 @@ func (r *leaseRegistry) consumeVerifiedRegisterChallenge(req types.RegisterReque
 	return challenge, nil
 }
 
-func (r *leaseRegistry) Touch(leaseID, clientIP string, now time.Time) *leaseRecord {
+func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time.Time) *leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	record, ok := r.leaseByID[leaseID]
+	record, ok := r.leasesByKey[identity.Key()]
 	if !ok {
 		return nil
 	}
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
-		r.policy.IPFilter().RegisterLeaseIP(record.ID, clientIP)
+		r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	}
 	return record
 }
@@ -254,12 +265,12 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 	defer r.mu.Unlock()
 
 	expired := make([]*leaseRecord, 0)
-	for leaseID, record := range r.leaseByID {
+	for key, record := range r.leasesByKey {
 		if now.After(record.ExpiresAt) {
 			expired = append(expired, record)
-			delete(r.leaseByID, leaseID)
+			delete(r.leasesByKey, key)
 			r.routes.Delete(record.Hostname)
-			r.policy.ForgetLease(record.ID)
+			r.policy.ForgetIdentity(key)
 		}
 	}
 	return expired
@@ -270,7 +281,7 @@ func (r *leaseRegistry) CountDatagramLeases() int {
 	defer r.mu.RUnlock()
 	now := time.Now()
 	count := 0
-	for _, record := range r.leaseByID {
+	for _, record := range r.leasesByKey {
 		if record.datagram != nil && now.Before(record.ExpiresAt) {
 			count++
 		}
@@ -283,30 +294,56 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 		return types.Lease{}
 	}
 
-	snapshot := record.Lease
-	snapshot.Metadata = snapshot.Metadata.Copy()
-	clientIP := record.ClientIP
-	snapshot.BPS = r.policy.BPSManager().LeaseBPS(record.ID)
+	snapshot := types.Lease{
+		Name:        record.Name,
+		ExpiresAt:   record.ExpiresAt,
+		FirstSeenAt: record.FirstSeenAt,
+		LastSeenAt:  record.LastSeenAt,
+		Hostname:    record.Hostname,
+		UDPEnabled:  record.UDPEnabled,
+		Metadata:    record.Metadata.Copy(),
+	}
 	if record.stream != nil {
 		snapshot.Ready = record.stream.ReadyCount()
 	}
-	if record.datagram != nil {
-		snapshot.UDPPort = record.datagram.UDPPort()
-	}
-	snapshot.IsApproved = r.policy.EffectiveApproval(record.ID)
-	snapshot.IsBanned = r.policy.IsLeaseBanned(record.ID)
-	snapshot.IsDenied = r.policy.IsLeaseDenied(record.ID)
-	snapshot.IsIPBanned = r.policy.IPFilter().IsIPBanned(clientIP)
 	return snapshot
 }
 
 type leaseRecord struct {
-	types.Lease
-	datagram  *transport.RelayDatagram
-	ports     *transport.PortAllocator
-	stream    *transport.RelayStream
-	startErr  error
-	startOnce sync.Once
+	types.Identity
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	ClientIP    string
+	ReportedIP  string
+	Hostname    string
+	UDPEnabled  bool
+	Metadata    types.LeaseMetadata
+	datagram    *transport.RelayDatagram
+	ports       *transport.PortAllocator
+	stream      *transport.RelayStream
+	startErr    error
+	startOnce   sync.Once
+}
+
+func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
+	if record == nil {
+		return types.AdminLease{}
+	}
+
+	clientIP := record.ClientIP
+	identityKey := record.Key()
+	return types.AdminLease{
+		Lease:      r.Snapshot(record),
+		Address:    record.Address,
+		BPS:        r.policy.BPSManager().IdentityBPS(identityKey),
+		ClientIP:   clientIP,
+		ReportedIP: record.ReportedIP,
+		IsApproved: r.policy.EffectiveApproval(identityKey),
+		IsBanned:   r.policy.IsIdentityBanned(identityKey),
+		IsDenied:   r.policy.IsIdentityDenied(identityKey),
+		IsIPBanned: r.policy.IPFilter().IsIPBanned(clientIP),
+	}
 }
 
 func (r *leaseRecord) Start() error {
@@ -344,12 +381,12 @@ func newRouteTable() *routeTable {
 	return &routeTable{exact: make(map[string]string)}
 }
 
-func (t *routeTable) Set(host, leaseID string) {
+func (t *routeTable) Set(host, identityKey string) {
 	host = utils.NormalizeHostname(host)
 	if host == "" {
 		return
 	}
-	t.exact[host] = leaseID
+	t.exact[host] = identityKey
 }
 
 func (t *routeTable) Delete(host string) {
@@ -361,8 +398,8 @@ func (t *routeTable) LookupExact(host string) (string, bool) {
 	if host == "" {
 		return "", false
 	}
-	leaseID, ok := t.exact[host]
-	return leaseID, ok
+	identityKey, ok := t.exact[host]
+	return identityKey, ok
 }
 
 func (t *routeTable) Lookup(host string) (string, bool) {
@@ -371,8 +408,8 @@ func (t *routeTable) Lookup(host string) (string, bool) {
 		return "", false
 	}
 
-	if leaseID, ok := t.exact[host]; ok {
-		return leaseID, true
+	if identityKey, ok := t.exact[host]; ok {
+		return identityKey, true
 	}
 
 	parts := strings.Split(host, ".")
@@ -380,6 +417,6 @@ func (t *routeTable) Lookup(host string) (string, bool) {
 		return "", false
 	}
 	wildcard := "*." + strings.Join(parts[1:], ".")
-	leaseID, ok := t.exact[wildcard]
-	return leaseID, ok
+	identityKey, ok := t.exact[wildcard]
+	return identityKey, ok
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
 	registerReqCh := make(chan types.RegisterRequest, 1)
+	var mu sync.RWMutex
+	var registeredIdentity types.Identity
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -32,6 +35,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
+			mu.Lock()
+			registeredIdentity = challengeReq.Identity.Copy()
+			mu.Unlock()
 			select {
 			case challengeReqCh <- challengeReq:
 			default:
@@ -41,7 +47,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 				Data: types.RegisterChallengeResponse{
 					ChallengeID: "challenge-1",
 					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
-					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.OwnerAddress, "challenge-1"),
+					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-1"),
 				},
 			})
 		case types.PathSDKRegister:
@@ -49,6 +55,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			select {
 			case registerReqCh <- registerReq:
 			default:
@@ -56,9 +65,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:     "lease-1",
+					Identity:    identity,
 					Hostname:    "127.0.0.1",
-					Metadata:    types.LeaseMetadata{Owner: "alice"},
+					Metadata:    types.LeaseMetadata{Description: "demo"},
 					AccessToken: "jwt-register-1",
 				},
 			})
@@ -68,9 +77,12 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-1", AccessToken: "jwt-renew-1"},
+				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-1"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -81,8 +93,8 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	defer server.Close()
 
 	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Name:     "Demo-App",
-		Metadata: types.LeaseMetadata{Owner: "alice"},
+		Identity: types.Identity{Name: "Demo-App"},
+		Metadata: types.LeaseMetadata{Description: "demo"},
 		LeaseTTL: 42 * time.Second,
 	})
 	if err != nil {
@@ -110,7 +122,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 		}
 	})
 	waitForSDKTest(t, func() bool {
-		return listener.LeaseID() == "lease-1"
+		return listener.Hostname() == "127.0.0.1"
 	})
 
 	if challengeReq.TTL != 42 {
@@ -119,11 +131,11 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if challengeReq.UDPEnabled {
 		t.Fatal("register challenge UDPEnabled = true, want false")
 	}
-	if challengeReq.Name != "demo-app" {
-		t.Fatalf("register challenge Name = %q, want %q", challengeReq.Name, "demo-app")
+	if challengeReq.Identity.Name != "demo-app" {
+		t.Fatalf("register challenge Identity.Name = %q, want %q", challengeReq.Identity.Name, "demo-app")
 	}
-	if challengeReq.OwnerAddress == "" {
-		t.Fatal("register challenge OwnerAddress = empty, want derived address")
+	if challengeReq.Identity.Address == "" {
+		t.Fatal("register challenge Identity.Address = empty, want derived address")
 	}
 	if registerReq.ChallengeID != "challenge-1" {
 		t.Fatalf("register request ChallengeID = %q, want %q", registerReq.ChallengeID, "challenge-1")
@@ -134,8 +146,8 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if registerReq.SIWESignature == "" {
 		t.Fatal("register request SIWESignature = empty, want signature")
 	}
-	if listener.LeaseID() != "lease-1" {
-		t.Fatalf("LeaseID() = %q, want %q", listener.LeaseID(), "lease-1")
+	if listener.Address() != challengeReq.Identity.Address {
+		t.Fatalf("Address() = %q, want %q", listener.Address(), challengeReq.Identity.Address)
 	}
 	if got := listener.Hostname(); got != "127.0.0.1" {
 		t.Fatalf("Hostname() = %q, want %q", got, "127.0.0.1")
@@ -143,13 +155,13 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if got := listener.PublicURL(); got != server.URL {
 		t.Fatalf("PublicURL() = %q, want %q", got, server.URL)
 	}
-	if got := listener.Metadata(); got.Owner != "alice" {
-		t.Fatalf("Metadata().Owner = %q, want %q", got.Owner, "alice")
+	if got := listener.Metadata(); got.Description != "demo" {
+		t.Fatalf("Metadata().Description = %q, want %q", got.Description, "demo")
 	}
 }
 
 func TestExposeNoRelayInputs(t *testing.T) {
-	exposure, err := Expose(context.Background(), ExposeConfig{Name: "demo"})
+	exposure, err := Expose(context.Background(), ExposeConfig{Identity: types.Identity{Name: "demo"}})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
 	}
@@ -162,9 +174,9 @@ func TestExposeNoRelayInputs(t *testing.T) {
 	}
 }
 
-func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
-	ownerPrivateKey := strings.Repeat("11", 32)
-	identity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
+func TestExposeResolvesPrivateKey(t *testing.T) {
+	privateKey := strings.Repeat("11", 32)
+	identity, err := utils.ResolveSecp256k1Identity(privateKey)
 	if err != nil {
 		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
 	}
@@ -193,7 +205,7 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 				Data: types.RegisterChallengeResponse{
 					ChallengeID: "challenge-1",
 					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
-					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.OwnerAddress, "challenge-1"),
+					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-1"),
 				},
 			})
 		case types.PathSDKRegister:
@@ -204,7 +216,7 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:     "lease-1",
+					Identity:    types.Identity{Name: identity.Name, Address: identity.Address},
 					Hostname:    "127.0.0.1",
 					AccessToken: "jwt-register-2",
 				},
@@ -217,7 +229,7 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-1", AccessToken: "jwt-renew-2"},
+				Data: types.RenewResponse{Identity: types.Identity{Name: identity.Name, Address: identity.Address}, AccessToken: "jwt-renew-2"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -228,9 +240,11 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 	defer server.Close()
 
 	exposure, err := Expose(context.Background(), ExposeConfig{
-		RelayURLs:       []string{server.URL},
-		Name:            "demo",
-		OwnerPrivateKey: ownerPrivateKey,
+		RelayURLs: []string{server.URL},
+		Identity: types.Identity{
+			Name:       "demo",
+			PrivateKey: privateKey,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
@@ -247,13 +261,15 @@ func TestExposeResolvesOwnerPrivateKey(t *testing.T) {
 		}
 	})
 
-	if challengeReq.OwnerAddress != identity.Address {
-		t.Fatalf("register challenge OwnerAddress = %q, want %q", challengeReq.OwnerAddress, identity.Address)
+	if challengeReq.Identity.Address != identity.Address {
+		t.Fatalf("register challenge Identity.Address = %q, want %q", challengeReq.Identity.Address, identity.Address)
 	}
 }
 
-func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
+func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
+	var mu sync.RWMutex
+	var registeredIdentity types.Identity
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -268,6 +284,9 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
+			mu.Lock()
+			registeredIdentity = challengeReq.Identity.Copy()
+			mu.Unlock()
 			select {
 			case challengeReqCh <- challengeReq:
 			default:
@@ -277,7 +296,7 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 				Data: types.RegisterChallengeResponse{
 					ChallengeID: "challenge-1",
 					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
-					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.OwnerAddress, "challenge-1"),
+					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-1"),
 				},
 			})
 		case types.PathSDKRegister:
@@ -285,10 +304,13 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					LeaseID:     "lease-1",
+					Identity:    identity,
 					Hostname:    "127.0.0.1",
 					AccessToken: "jwt-register-3",
 				},
@@ -299,9 +321,12 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{LeaseID: "lease-1", AccessToken: "jwt-renew-3"},
+				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-3"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -313,7 +338,9 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 
 	exposure, err := Expose(context.Background(), ExposeConfig{
 		RelayURLs: []string{server.URL},
-		Name:      "demo",
+		Identity: types.Identity{
+			Name: "demo",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Expose() error = %v", err)
@@ -330,22 +357,22 @@ func TestExposeGeneratesOwnerAddressWithoutPrivateKey(t *testing.T) {
 		}
 	})
 
-	if challengeReq.OwnerAddress == "" {
-		t.Fatal("register challenge OwnerAddress = empty, want generated address")
+	if challengeReq.Identity.Address == "" {
+		t.Fatal("register challenge Identity.Address = empty, want generated address")
 	}
-	if _, err := utils.NormalizeEVMAddress(challengeReq.OwnerAddress); err != nil {
-		t.Fatalf("register challenge OwnerAddress = %q, want valid EVM address: %v", challengeReq.OwnerAddress, err)
+	if _, err := utils.NormalizeEVMAddress(challengeReq.Identity.Address); err != nil {
+		t.Fatalf("register challenge Identity.Address = %q, want valid EVM address: %v", challengeReq.Identity.Address, err)
 	}
 }
 
-func mustSDKTestSIWEMessage(t *testing.T, r *http.Request, ownerAddress, challengeID string) string {
+func mustSDKTestSIWEMessage(t *testing.T, r *http.Request, address, challengeID string) string {
 	t.Helper()
 
 	scheme := "https"
 	if r.TLS == nil {
 		scheme = "http"
 	}
-	message, err := siwe.InitMessage(r.Host, ownerAddress, scheme+"://"+r.Host+types.PathSDKRegister, "testnonce123", map[string]interface{}{
+	message, err := siwe.InitMessage(r.Host, address, scheme+"://"+r.Host+types.PathSDKRegister, "testnonce123", map[string]interface{}{
 		"statement":      "Register a portal lease",
 		"chainId":        1,
 		"issuedAt":       time.Now().UTC().Format(time.RFC3339),

@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ServerData } from "@/hooks/useSSRData";
+import type { AdminLeaseData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
 import {
   API_PATHS,
   adminIPBanPath,
   adminLeasePath,
-  encodeLeaseID,
 } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 import { parseLeaseMetadata } from "@/lib/metadata";
@@ -26,14 +25,15 @@ type LandingPageSettingsResponse = {
 type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
   landing_page_enabled?: boolean;
-  leases?: ServerData[];
+  leases?: AdminLeaseData[];
   udp?: { enabled: boolean; max_leases: number };
 };
 
 type LeaseActionResult = ApprovalModeResponse;
 
 export interface AdminServer extends BaseServer {
-  peerId: string;
+  identityKey: string;
+  address: string;
   isBanned: boolean;
   bps: number;
   isApproved: boolean;
@@ -41,8 +41,6 @@ export interface AdminServer extends BaseServer {
   ip: string;
   displayIP: string;
   isIPBanned: boolean;
-  transport: string;
-  udpPort: number;
 }
 
 export interface UDPSettings {
@@ -52,7 +50,8 @@ export interface UDPSettings {
 
 const ADMIN_ERROR_MESSAGE_BY_CODE: Record<string, string> = {
   invalid_mode: "Invalid approval mode. Choose auto or manual and retry.",
-  invalid_lease_id: "Selected lease identifier is invalid. Refresh and try again.",
+  invalid_address: "Selected address is invalid. Refresh and try again.",
+  invalid_request: "Selected lease is invalid. Refresh and try again.",
   lease_rejected: "Request was rejected by policy. Review conflicts and retry.",
   ip_banned: "Request denied because the source IP is banned.",
   unauthorized: "Admin authorization failed. Sign in again and retry.",
@@ -85,16 +84,41 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function buildIdentityKey(name: string, address: string): string {
+  return `${name.trim().toLowerCase()}:${address.trim().toLowerCase()}`;
+}
+
+function resolveLeaseIdentity(
+  rows: AdminLeaseData[],
+  identityKey: string
+): { name: string; address: string } {
+  const match = rows.find((row) => {
+    const name = (row.name || "").trim();
+    const address = row.address.trim();
+    return buildIdentityKey(name, address) === identityKey;
+  });
+  if (!match) {
+    throw new Error("Missing lease identity");
+  }
+
+  return {
+    name: (match.name || "").trim(),
+    address: match.address.trim(),
+  };
+}
+
 function toAdminServer(
-  row: ServerData,
+  row: AdminLeaseData,
   index: number
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.Metadata);
   const hostname = row.Hostname || "";
+  const serviceName = row.name || "";
+  const address = row.address.trim();
 
   return {
     id: index + 1,
-    name: row.Name || hostname || "(unnamed)",
+    name: serviceName || hostname || "(unnamed)",
     description: metadata.description,
     tags: metadata.tags,
     thumbnail: metadata.thumbnail,
@@ -104,16 +128,15 @@ function toAdminServer(
     link: hostname ? `https://${hostname}/` : "",
     lastUpdated: row.LastSeenAt || undefined,
     firstSeen: row.FirstSeenAt || undefined,
-    peerId: row.ID,
-    isBanned: row.IsBanned || false,
-    bps: row.BPS || 0,
-    isApproved: row.IsApproved || false,
-    isDenied: row.IsDenied || false,
-    ip: row.ClientIP || "",
-    displayIP: row.ReportedIP || row.ClientIP || "",
-    isIPBanned: row.IsIPBanned || false,
-    transport: row.Transport || "tcp",
-    udpPort: row.UDPPort || 0,
+    identityKey: buildIdentityKey(serviceName, address),
+    address,
+    isBanned: row.IsBanned,
+    bps: row.BPS,
+    isApproved: row.IsApproved,
+    isDenied: row.IsDenied,
+    ip: row.ClientIP,
+    displayIP: row.ReportedIP || row.ClientIP,
+    isIPBanned: row.IsIPBanned,
   };
 }
 
@@ -137,7 +160,7 @@ function dedupeStrings(values: string[]): string[] {
 }
 
 interface AdminSnapshot {
-  serverData: ServerData[];
+  serverData: AdminLeaseData[];
   approvalMode: ApprovalMode;
   landingPageEnabled: boolean;
   udpSettings: UDPSettings;
@@ -159,7 +182,7 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
 }
 
 export function useAdmin() {
-  const [serverData, setServerData] = useState<ServerData[]>([]);
+  const [serverData, setServerData] = useState<AdminLeaseData[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [landingPageEnabled, setLandingPageEnabled] = useState(true);
   const [udpSettings, setUDPSettings] = useState<UDPSettings>({ enabled: false, maxLeases: 0 });
@@ -249,37 +272,43 @@ export function useAdmin() {
   };
 
   const updateLeaseAction = async (
-    peerId: string,
+    identityKey: string,
     action: LeaseAction,
     enabled: boolean
   ) => {
-    if (!peerId) {
-      throw new Error("Missing lease ID");
-    }
-    const encodedLeaseID = encodeLeaseID(peerId);
+    const identity = resolveLeaseIdentity(serverData, identityKey);
     const method = enabled ? apiClient.post : apiClient.delete;
-    await method<LeaseActionResult>(adminLeasePath(encodedLeaseID, action));
+    await method<LeaseActionResult>(
+      adminLeasePath(identity.name, identity.address, action)
+    );
   };
 
   const handleBanFilterChange = (value: BanFilter) => {
     setBanFilter(value);
   };
 
-  const handleBanStatus = (peerId: string, isBan: boolean) =>
-    runAdminAction(() => updateLeaseAction(peerId, "ban", isBan));
+  const handleBanStatus = (identityKey: string, isBan: boolean) =>
+    runAdminAction(() => updateLeaseAction(identityKey, "ban", isBan));
 
-  const handleBPSChange = async (peerId: string, bps: number) => {
-    if (!peerId) {
-      throw new Error("Missing lease ID");
+  const handleBPSChange = async (identityKey: string, bps: number) => {
+    if (!identityKey) {
+      throw new Error("Missing lease identity");
     }
 
-    const encodedLeaseID = encodeLeaseID(peerId);
+    const identity = resolveLeaseIdentity(serverData, identityKey);
     const normalizedBPS = Math.max(0, Math.trunc(bps));
-    const previousBPS = serverData.find((row) => row.ID === peerId)?.BPS ?? 0;
+    const previousBPS =
+      serverData.find((row) =>
+        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
+        identityKey
+      )?.BPS ?? 0;
 
     setServerData((prev) =>
       prev.map((row) =>
-        row.ID === peerId ? { ...row, BPS: normalizedBPS } : row
+        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
+        identityKey
+          ? { ...row, BPS: normalizedBPS }
+          : row
       )
     );
 
@@ -287,19 +316,22 @@ export function useAdmin() {
       await runAdminAction(async () => {
         if (!Number.isFinite(normalizedBPS) || normalizedBPS <= 0) {
           await apiClient.delete<LeaseActionResult>(
-            adminLeasePath(encodedLeaseID, "bps")
+            adminLeasePath(identity.name, identity.address, "bps")
           );
           return;
         }
         await apiClient.post<LeaseActionResult>(
-          adminLeasePath(encodedLeaseID, "bps"),
+          adminLeasePath(identity.name, identity.address, "bps"),
           { bps: normalizedBPS }
         );
       });
     } catch (err) {
       setServerData((prev) =>
         prev.map((row) =>
-          row.ID === peerId ? { ...row, BPS: previousBPS } : row
+          buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
+          identityKey
+            ? { ...row, BPS: previousBPS }
+            : row
         )
       );
       throw err;
@@ -340,11 +372,11 @@ export function useAdmin() {
     });
   };
 
-  const handleApproveStatus = (peerId: string, approve: boolean) =>
-    runAdminAction(() => updateLeaseAction(peerId, "approve", approve));
+  const handleApproveStatus = (identityKey: string, approve: boolean) =>
+    runAdminAction(() => updateLeaseAction(identityKey, "approve", approve));
 
-  const handleDenyStatus = (peerId: string, deny: boolean) =>
-    runAdminAction(() => updateLeaseAction(peerId, "deny", deny));
+  const handleDenyStatus = (identityKey: string, deny: boolean) =>
+    runAdminAction(() => updateLeaseAction(identityKey, "deny", deny));
 
   const handleIPBanStatus = (ip: string, isBan: boolean) =>
     runAdminAction(async () => {
@@ -359,18 +391,21 @@ export function useAdmin() {
       await apiClient.delete<LeaseActionResult>(adminIPBanPath(normalizedIP));
     });
 
-  const runBulkLeaseAction = async (peerIds: string[], action: LeaseAction) => {
-    const normalizedPeerIDs = dedupeStrings(peerIds.filter((peerId) => peerId.length > 0));
-    if (normalizedPeerIDs.length === 0) {
+  const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
+    const normalizedIdentityKeys = dedupeStrings(
+      identityKeys.filter((identityKey) => identityKey.length > 0)
+    );
+    if (normalizedIdentityKeys.length === 0) {
       throw new Error("No valid leases selected");
     }
 
     const results = await Promise.allSettled(
-      normalizedPeerIDs.map((peerId) =>
-        apiClient.post<LeaseActionResult>(
-          adminLeasePath(encodeLeaseID(peerId), action)
-        )
-      )
+      normalizedIdentityKeys.map((identityKey) => {
+        const identity = resolveLeaseIdentity(serverData, identityKey);
+        return apiClient.post<LeaseActionResult>(
+          adminLeasePath(identity.name, identity.address, action)
+        );
+      })
     );
 
     const failed = results.find(
@@ -386,14 +421,14 @@ export function useAdmin() {
     }
   };
 
-  const handleBulkAction = (peerIds: string[], action: LeaseAction) =>
-    runAdminAction(() => runBulkLeaseAction(peerIds, action));
+  const handleBulkAction = (identityKeys: string[], action: LeaseAction) =>
+    runAdminAction(() => runBulkLeaseAction(identityKeys, action));
 
-  const handleBulkApprove = (peerIds: string[]) => handleBulkAction(peerIds, "approve");
+  const handleBulkApprove = (identityKeys: string[]) => handleBulkAction(identityKeys, "approve");
 
-  const handleBulkDeny = (peerIds: string[]) => handleBulkAction(peerIds, "deny");
+  const handleBulkDeny = (identityKeys: string[]) => handleBulkAction(identityKeys, "deny");
 
-  const handleBulkBan = (peerIds: string[]) => handleBulkAction(peerIds, "ban");
+  const handleBulkBan = (identityKeys: string[]) => handleBulkAction(identityKeys, "ban");
 
   return {
     servers,

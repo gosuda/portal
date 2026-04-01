@@ -31,16 +31,17 @@ func main() {
 }
 
 type demoConfig struct {
-	relayURLs string
-	discovery bool
-	banMITM   bool
-	addr      string
-	name      string
-	desc      string
-	tags      string
-	owner     string
-	hide      bool
-	thumbnail string
+	relayURLs    string
+	discovery    bool
+	banMITM      bool
+	identityPath string
+	addr         string
+	name         string
+	desc         string
+	tags         string
+	owner        string
+	hide         bool
+	thumbnail    string
 }
 
 func runTCPCommand(args []string) error {
@@ -50,6 +51,7 @@ func runTCPCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://gosunuts.xyz", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
@@ -68,6 +70,11 @@ func runTCPCommand(args []string) error {
 		printTCPUsage(os.Stderr)
 		return err
 	}
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	if err != nil {
+		return fmt.Errorf("invalid --name value: %w", err)
+	}
+	cfg.name = normalizedName
 
 	ctx, stop := utils.SignalContext()
 	defer stop()
@@ -82,6 +89,7 @@ func runUDPCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
+	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
@@ -99,6 +107,11 @@ func runUDPCommand(args []string) error {
 		printUDPUsage(os.Stderr)
 		return err
 	}
+	normalizedName, err := utils.NormalizeDNSLabel(cfg.name)
+	if err != nil {
+		return fmt.Errorf("invalid --name value: %w", err)
+	}
+	cfg.name = normalizedName
 
 	ctx, stop := utils.SignalContext()
 	defer stop()
@@ -133,9 +146,17 @@ func runHelpCommand(args []string) error {
 }
 
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {
+	identity, createdIdentity, err := utils.LoadOrCreateIdentity(cfg.identityPath, types.Identity{Name: cfg.name})
+	if err != nil {
+		return fmt.Errorf("load demo identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().Str("identity_path", cfg.identityPath).Str("address", identity.Address).Msg("generated demo identity and saved it to disk")
+	}
+
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs: utils.SplitCSV(cfg.relayURLs),
-		Name:      cfg.name,
+		Identity:  identity,
 		BanMITM:   cfg.banMITM,
 		Discovery: cfg.discovery,
 		Metadata: types.LeaseMetadata{
@@ -173,9 +194,17 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
+	identity, createdIdentity, err := utils.LoadOrCreateIdentity(cfg.identityPath, types.Identity{Name: cfg.name})
+	if err != nil {
+		return fmt.Errorf("load demo identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().Str("identity_path", cfg.identityPath).Str("address", identity.Address).Msg("generated demo identity and saved it to disk")
+	}
+
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
 		RelayURLs:  utils.SplitCSV(cfg.relayURLs),
-		Name:       cfg.name,
+		Identity:   identity,
 		UDPEnabled: true,
 		BanMITM:    cfg.banMITM,
 		Discovery:  cfg.discovery,

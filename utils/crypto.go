@@ -15,15 +15,10 @@ import (
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"github.com/gosuda/portal/v2/types"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/sha3"
 )
-
-type Secp256k1Identity struct {
-	Address    string `json:"address"`
-	PublicKey  string `json:"public_key"`
-	PrivateKey string `json:"private_key"`
-}
 
 func NormalizeEVMAddress(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -129,33 +124,33 @@ func SignEthereumPersonalMessage(message, privateKeyHex string) (string, error) 
 	return "0x" + hex.EncodeToString(signature), nil
 }
 
-func ResolveSecp256k1Identity(rawPrivateKey string) (Secp256k1Identity, error) {
+func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {
 	privateKeyHex := strings.TrimSpace(rawPrivateKey)
 	if privateKeyHex == "" {
 		privateKey, err := secp256k1.GeneratePrivateKey()
 		if err != nil {
-			return Secp256k1Identity{}, fmt.Errorf("generate secp256k1 private key: %w", err)
+			return types.Identity{}, fmt.Errorf("generate secp256k1 private key: %w", err)
 		}
 		privateKeyHex = hex.EncodeToString(privateKey.Serialize())
 	}
 
 	decoded, normalizedKeyHex, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, true)
 	if err != nil {
-		return Secp256k1Identity{}, err
+		return types.Identity{}, err
 	}
 
 	privateKey := secp256k1.PrivKeyFromBytes(decoded)
 	if privateKey == nil {
-		return Secp256k1Identity{}, errors.New("invalid secp256k1 private key")
+		return types.Identity{}, errors.New("invalid secp256k1 private key")
 	}
 
 	publicKeyHex := hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
 	address, err := AddressFromCompressedPublicKeyHex(publicKeyHex)
 	if err != nil {
-		return Secp256k1Identity{}, err
+		return types.Identity{}, err
 	}
 
-	return Secp256k1Identity{
+	return types.Identity{
 		Address:    address,
 		PublicKey:  publicKeyHex,
 		PrivateKey: normalizedKeyHex,

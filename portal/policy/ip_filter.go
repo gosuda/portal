@@ -7,17 +7,17 @@ import (
 )
 
 type IPFilter struct {
-	bannedIPs  map[string]struct{}
-	leaseToIP  map[string]string
-	ipToLeases map[string][]string
-	mu         sync.RWMutex
+	bannedIPs      map[string]struct{}
+	identityToIP   map[string]string
+	ipToIdentities map[string][]string
+	mu             sync.RWMutex
 }
 
 func NewIPFilter() *IPFilter {
 	return &IPFilter{
-		bannedIPs:  make(map[string]struct{}),
-		leaseToIP:  make(map[string]string),
-		ipToLeases: make(map[string][]string),
+		bannedIPs:      make(map[string]struct{}),
+		identityToIP:   make(map[string]string),
+		ipToIdentities: make(map[string][]string),
 	}
 }
 
@@ -63,61 +63,61 @@ func (f *IPFilter) SetBannedIPs(ips []string) {
 	}
 }
 
-func (f *IPFilter) RegisterLeaseIP(leaseID, ip string) {
+func (f *IPFilter) RegisterIdentityIP(key, ip string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if leaseID == "" || ip == "" {
+	if key == "" || ip == "" {
 		return
 	}
 
-	if oldIP, ok := f.leaseToIP[leaseID]; ok {
+	if oldIP, ok := f.identityToIP[key]; ok {
 		if oldIP == ip {
 			return
 		}
-		f.removeLeaseFromIPLocked(leaseID, oldIP)
+		f.removeIdentityFromIPLocked(key, oldIP)
 	}
-	if slices.Contains(f.ipToLeases[ip], leaseID) {
-		f.leaseToIP[leaseID] = ip
+	if slices.Contains(f.ipToIdentities[ip], key) {
+		f.identityToIP[key] = ip
 		return
 	}
 
-	f.leaseToIP[leaseID] = ip
-	f.ipToLeases[ip] = append(f.ipToLeases[ip], leaseID)
+	f.identityToIP[key] = ip
+	f.ipToIdentities[ip] = append(f.ipToIdentities[ip], key)
 }
 
-func (f *IPFilter) LeaseIP(leaseID string) string {
+func (f *IPFilter) IdentityIP(key string) string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	if leaseID == "" {
+	if key == "" {
 		return ""
 	}
-	return f.leaseToIP[leaseID]
+	return f.identityToIP[key]
 }
 
-func (f *IPFilter) RemoveLeaseIP(leaseID string) {
+func (f *IPFilter) RemoveIdentityIP(key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if leaseID == "" {
+	if key == "" {
 		return
 	}
-	ip, ok := f.leaseToIP[leaseID]
+	ip, ok := f.identityToIP[key]
 	if !ok {
 		return
 	}
-	delete(f.leaseToIP, leaseID)
-	f.removeLeaseFromIPLocked(leaseID, ip)
+	delete(f.identityToIP, key)
+	f.removeIdentityFromIPLocked(key, ip)
 }
 
-func (f *IPFilter) removeLeaseFromIPLocked(leaseID, ip string) {
-	leases := f.ipToLeases[ip]
-	for i, candidate := range leases {
-		if candidate == leaseID {
-			f.ipToLeases[ip] = append(leases[:i], leases[i+1:]...)
+func (f *IPFilter) removeIdentityFromIPLocked(key, ip string) {
+	identities := f.ipToIdentities[ip]
+	for i, candidate := range identities {
+		if candidate == key {
+			f.ipToIdentities[ip] = append(identities[:i], identities[i+1:]...)
 			break
 		}
 	}
-	if len(f.ipToLeases[ip]) == 0 {
-		delete(f.ipToLeases, ip)
+	if len(f.ipToIdentities[ip]) == 0 {
+		delete(f.ipToIdentities, ip)
 	}
 }

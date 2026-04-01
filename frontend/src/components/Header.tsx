@@ -90,7 +90,7 @@ export function Header({
             href={repoURL}
             target="_blank"
             rel="noopener noreferrer"
-            className="hidden h-12 w-12 items-center justify-center rounded-full border border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:text-primary xl:inline-flex"
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/90 text-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:text-primary"
             aria-label="View source on GitHub"
           >
             <svg
@@ -105,7 +105,7 @@ export function Header({
           </a>
         )}
 
-        <ThemeToggleButton className="hidden xl:inline-flex" />
+        <ThemeToggleButton className="inline-flex shrink-0" />
 
         {isAdmin && onLogout && (
           <TooltipProvider>

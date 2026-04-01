@@ -34,7 +34,7 @@ const (
 type MITMProbeReport struct {
 	RelayURL  string
 	PublicURL string
-	LeaseID   string
+	Address   string
 	Detected  bool
 	Reason    string
 }
@@ -94,7 +94,7 @@ func (m *mitmManager) probeTLSPassthrough(ctx context.Context) (MITMProbeReport,
 	report := MITMProbeReport{
 		RelayURL:  l.api.baseURL.String(),
 		PublicURL: publicURL,
-		LeaseID:   l.LeaseID(),
+		Address:   l.Address(),
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, defaultMITMProbeTimeout)
@@ -232,13 +232,13 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		log.Warn().
 			Err(err).
 			Str("relay_url", l.api.baseURL.String()).
-			Str("lease_id", l.LeaseID()).
+			Str("address", l.Address()).
 			Msg("tls passthrough self-probe failed")
 	case report.Reason == types.MITMProbeReasonProbeTimeout:
 		log.Warn().
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
-			Str("lease_id", report.LeaseID).
+			Str("address", report.Address).
 			Msg("tls self-probe timed out before passthrough could be verified")
 	case report.Detected:
 		event := log.Warn().
@@ -246,7 +246,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 			Str("reason", report.Reason).
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
-			Str("lease_id", report.LeaseID)
+			Str("address", report.Address)
 		if l.BanMITM() {
 			event.Msg("tls termination suspected by self-probe; banning relay")
 			l.ban()
@@ -257,7 +257,7 @@ func (m *mitmManager) logResult(report MITMProbeReport, err error) {
 		log.Debug().
 			Str("relay_url", report.RelayURL).
 			Str("public_url", report.PublicURL).
-			Str("lease_id", report.LeaseID).
+			Str("address", report.Address).
 			Msg("tls passthrough self-probe passed")
 	}
 }

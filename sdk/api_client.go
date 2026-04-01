@@ -44,23 +44,16 @@ type apiClient struct {
 	dialTimeout      time.Duration
 	requestTimeout   time.Duration
 	rootCAPEM        []byte
-	name             string
+	identity         types.Identity
 	accessToken      string
 	metadata         types.LeaseMetadata
-	ownerPrivateKey  string
-	ownerAddress     string
 	resolvedPublicIP string
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
-	name, err := utils.NormalizeDNSLabel(cfg.Name)
+	identity, err := utils.ResolveLeaseIdentity(cfg.Identity)
 	if err != nil {
-		return nil, err
-	}
-
-	identity, err := utils.ResolveSecp256k1Identity(cfg.OwnerPrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("resolve owner identity: %w", err)
+		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
 
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
@@ -77,14 +70,12 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
 	return &apiClient{
-		baseURL:         baseURL,
-		dialTimeout:     dialTimeout,
-		requestTimeout:  requestTimeout,
-		rootCAPEM:       append([]byte(nil), cfg.RootCAPEM...),
-		name:            name,
-		metadata:        cfg.Metadata.Copy(),
-		ownerPrivateKey: identity.PrivateKey,
-		ownerAddress:    identity.Address,
+		baseURL:        baseURL,
+		dialTimeout:    dialTimeout,
+		requestTimeout: requestTimeout,
+		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
+		identity:       identity,
+		metadata:       cfg.Metadata.Copy(),
 	}, nil
 }
 
@@ -103,17 +94,17 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 	}
 
 	var challenge types.RegisterChallengeResponse
-	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRegisterChallenge, types.RegisterChallengeRequest{
-		Name:         a.name,
-		Metadata:     a.metadata.Copy(),
-		OwnerAddress: a.ownerAddress,
-		TTL:          int(ttl / time.Second),
-		UDPEnabled:   udpEnabled,
-	}, nil, &challenge); err != nil {
+	challengeReq := types.RegisterChallengeRequest{
+		Identity:   a.identity.Copy(),
+		Metadata:   a.metadata.Copy(),
+		TTL:        int(ttl / time.Second),
+		UDPEnabled: udpEnabled,
+	}
+	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRegisterChallenge, challengeReq, nil, &challenge); err != nil {
 		return types.RegisterResponse{}, err
 	}
 
-	signature, err := utils.SignEthereumPersonalMessage(challenge.SIWEMessage, a.ownerPrivateKey)
+	signature, err := utils.SignEthereumPersonalMessage(challenge.SIWEMessage, a.identity.PrivateKey)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -131,6 +122,14 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 	if resp.AccessToken == "" {
 		return types.RegisterResponse{}, errors.New("relay did not return access token")
 	}
+	registeredIdentity, err := utils.NormalizeIdentity(resp.Identity)
+	if err != nil {
+		return types.RegisterResponse{}, err
+	}
+	if registeredIdentity.Key() != a.identity.Key() {
+		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
+	}
+	resp.Identity = registeredIdentity
 	a.mu.Lock()
 	a.accessToken = resp.AccessToken
 	a.mu.Unlock()
@@ -192,7 +191,7 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 	return nil
 }
 
-func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Duration) error {
+func (a *apiClient) renewLease(ctx context.Context, identity types.Identity, ttl time.Duration) error {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return err
 	}
@@ -206,7 +205,7 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 
 	var resp types.RenewResponse
 	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
-		LeaseID:     leaseID,
+		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 		TTL:         int(ttl / time.Second),
 		ReportedIP:  a.reportedIP(ctx),
@@ -217,6 +216,13 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 	if resp.AccessToken == "" {
 		return errors.New("relay did not return renewed access token")
 	}
+	renewedIdentity, err := utils.NormalizeIdentity(resp.Identity)
+	if err != nil {
+		return err
+	}
+	if renewedIdentity.Key() != a.identity.Key() {
+		return errors.New("relay returned mismatched renewed lease identity")
+	}
 
 	a.mu.Lock()
 	if a.accessToken == accessToken {
@@ -226,17 +232,17 @@ func (a *apiClient) renewLease(ctx context.Context, leaseID string, ttl time.Dur
 	return nil
 }
 
-func (a *apiClient) unregisterLease(ctx context.Context, leaseID string) error {
+func (a *apiClient) unregisterLease(ctx context.Context, identity types.Identity) error {
 	a.mu.RLock()
 	accessToken := a.accessToken
 	a.mu.RUnlock()
 	return utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
-		LeaseID:     leaseID,
+		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 	}, nil, nil)
 }
 
-func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net.Conn, error) {
+func (a *apiClient) openReverseSession(ctx context.Context, identity types.Identity) (net.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
@@ -253,7 +259,8 @@ func (a *apiClient) openReverseSession(ctx context.Context, leaseID string) (net
 
 	connectURL := utils.ResolveAPIURL(a.baseURL, types.PathSDKConnect)
 	query := connectURL.Query()
-	query.Set("lease_id", leaseID)
+	query.Set("name", identity.Name)
+	query.Set("address", identity.Address)
 	connectURL.RawQuery = query.Encode()
 
 	req := &http.Request{
@@ -314,7 +321,7 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.
-func (a *apiClient) openQUICSession(ctx context.Context, leaseID, accessToken string) (*quic.Conn, error) {
+func (a *apiClient) openQUICSession(ctx context.Context, identity types.Identity, accessToken string) (*quic.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
@@ -341,7 +348,7 @@ func (a *apiClient) openQUICSession(ctx context.Context, leaseID, accessToken st
 	}
 
 	controlMsg := types.QUICControlMessage{
-		LeaseID:     leaseID,
+		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 	}
 	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
