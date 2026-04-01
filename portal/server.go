@@ -436,10 +436,6 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 						// Check if we can reach target via overlay
 						snapshot := s.relaySet.Snapshot()
 						if targetState, ok := snapshot[target.ID]; ok && targetState.Descriptor.SupportsOverlayPeer {
-							overlayClient := s.overlay.Client()
-							// Proxy logic: in v2, we might want a simple TCP proxy or a protocol-aware one.
-							// For simplicity, we can try to dial the target's SNI port.
-							dialer := &net.Dialer{Timeout: 5 * time.Second}
 							// Use overlay address if available, or API address
 							proxyAddr := targetState.Descriptor.IngressTLSAddr
 							if targetState.Descriptor.OverlayIPv4 != "" {
@@ -448,7 +444,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 								proxyAddr = net.JoinHostPort(targetState.Descriptor.OverlayIPv4, port)
 							}
 
-							targetConn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+							targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
 							if err == nil {
 								BridgeConns(wrappedConn, targetConn)
 								return
