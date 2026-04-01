@@ -63,11 +63,13 @@ UDP client
 
 ### Operational Constraints
 
-- For non-localhost deployments, ACME management supports only `cloudflare` and `route53`.
+- For non-localhost deployments, relay TLS can run from manual certificate files in `KEYLESS_DIR` or from managed ACME.
+- When managed ACME is enabled, supported DNS providers are only `cloudflare` and `route53`.
+- ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync.
 - Relay, tunnel, and demo-app identities are persisted as JSON at `IDENTITY_PATH` / `--identity-path`. Missing files are generated automatically and stored with `name`, `address`, `public_key`, and `private_key`.
-- Non-localhost ACME keeps both root and wildcard DNS A records in sync.
+- Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
 - Relay certificate material lives under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.
-- Localhost uses the development certificate path instead of DNS-provider-managed ACME.
+- Localhost uses the development certificate path instead of public managed/manual certificate setup.
 
 ## Connection Model
 
@@ -348,10 +350,12 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Relay admin/API TLS uses the certificate in `KEYLESS_DIR`
   - `fullchain.pem`
   - `privatekey.pem`
-- For non-localhost deployments, ACME DNS-01 currently supports `cloudflare` and `route53`, and keeps:
+- For non-localhost deployments, Portal can either use those files directly or manage them through ACME.
+- When ACME is enabled, DNS-01 currently supports `cloudflare` and `route53`, and keeps:
   - root host A record
   - wildcard host A record
   - relay certificate renewal
+- When manual certificate files are present and valid, Portal uses them instead of provisioning a new certificate, but can still use `ACME_DNS_PROVIDER` for ENS gasless DNSSEC/TXT automation.
 - SDK/tunnel fetches the relay certificate chain from the relay root host, verifies that the leaf covers tenant hostnames, and builds a tenant-side `tls.Config` with a remote signer backed by `/v1/sign`
 - During tenant TLS handshake, the SDK/tunnel endpoint acts as the TLS server and derives tenant session keys locally; the relay only signs handshake digests and does not receive tenant TLS traffic secrets
 - Relay control-plane TLS and reverse-session setup still terminate on the relay's admin/API listener and are not protected by the tenant keyless TLS path

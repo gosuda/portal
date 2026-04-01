@@ -17,18 +17,6 @@ const (
 	TypeRoute53    = "route53"
 )
 
-type DNSProviderConfig struct {
-	Type               string
-	CloudflareToken    string
-	AWSAccessKeyID     string
-	AWSSecretAccessKey string
-	AWSSessionToken    string
-	AWSRegion          string
-	AWSHostedZoneID    string
-	AWSKMSKeyARN       string
-	DNSSECKSKName      string
-}
-
 type DNSProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
@@ -38,8 +26,10 @@ type DNSProvider interface {
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (types.DNSSECStatus, error)
 }
 
-func NewDNSProvider(cfg DNSProviderConfig) (DNSProvider, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
+func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
+	switch strings.ToLower(strings.TrimSpace(providerType)) {
+	case "":
+		return nil, nil
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
 	case TypeRoute53:
@@ -53,6 +43,6 @@ func NewDNSProvider(cfg DNSProviderConfig) (DNSProvider, error) {
 			DNSSECKSKName:   cfg.DNSSECKSKName,
 		}), nil
 	default:
-		return nil, fmt.Errorf("unsupported acme dns provider: %q", cfg.Type)
+		return nil, fmt.Errorf("unsupported acme dns provider: %q", providerType)
 	}
 }

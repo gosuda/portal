@@ -60,22 +60,11 @@ type Manager struct {
 	stopCh        chan struct{}
 	cfg           Config
 	wg            sync.WaitGroup
-	mu            sync.RWMutex
 	dns           DNSProvider
 	startOnce     sync.Once
 	stopOnce      sync.Once
 	dnssecLogOnce sync.Once
 	ensLogOnce    sync.Once
-}
-
-type provisionConfig struct {
-	KeyFile          string
-	CertFile         string
-	AccountKeyFile   string
-	RegistrationFile string
-	Email            string
-	DNSProvider      DNSProvider
-	Domains          []string
 }
 
 type acmeUser struct {
@@ -121,26 +110,22 @@ func NewManager(cfg Config) (*Manager, error) {
 		}, nil
 	}
 
-	dns, err := NewDNSProvider(DNSProviderConfig{
-		Type:               cfg.DNSProvider,
-		CloudflareToken:    cfg.CloudflareToken,
-		AWSAccessKeyID:     cfg.AWSAccessKeyID,
-		AWSSecretAccessKey: cfg.AWSSecretAccessKey,
-		AWSSessionToken:    cfg.AWSSessionToken,
-		AWSRegion:          cfg.AWSRegion,
-		AWSHostedZoneID:    cfg.AWSHostedZoneID,
-		AWSKMSKeyARN:       cfg.AWSKMSKeyARN,
-		DNSSECKSKName:      cfg.DNSSECKSKName,
-	})
+	manager := &Manager{
+		cfg:    cfg,
+		stopCh: make(chan struct{}),
+	}
+
+	acmeDNS, err := NewDNSProvider(cfg.DNSProvider, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
 	}
+	manager.dns = acmeDNS
 
-	return &Manager{
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
-		dns:    dns,
-	}, nil
+	if cfg.ENSGaslessEnabled && manager.dns == nil {
+		return nil, errors.New("ens gasless automation requires ACME_DNS_PROVIDER")
+	}
+
+	return manager, nil
 }
 
 func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error) {
@@ -154,12 +139,25 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 		}
 		return m.TLSFiles()
 	}
+	certFile, keyFile, manual, err := m.manualCertificateOverride()
+	if err != nil {
+		return "", "", err
+	}
+	if manual {
+		if err := m.syncENSGasless(ctx); err != nil {
+			return "", "", err
+		}
+		return certFile, keyFile, nil
+	}
+	if !m.managedACME() {
+		return m.ensureManualCertificate()
+	}
 
 	if err := m.syncDNS(ctx); err != nil {
 		return "", "", fmt.Errorf("ensure dns records: %w", err)
 	}
 
-	certFile, keyFile, err := m.TLSFiles()
+	certFile, keyFile, err = m.TLSFiles()
 	if err == nil {
 		covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
 		if err == nil && covered {
@@ -191,7 +189,7 @@ func (m *Manager) EnsureTLSMaterial(ctx context.Context) ([]byte, []byte, error)
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) || (!m.cfg.ENSGaslessEnabled && !m.managedACME()) {
 		return
 	}
 
@@ -223,18 +221,76 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	return certFile, keyFile, nil
 }
 
-func (m *Manager) provision(ctx context.Context) error {
-	cfg := provisionConfig{
-		KeyFile:          filepath.Join(m.cfg.KeyDir, keyFileName),
-		CertFile:         filepath.Join(m.cfg.KeyDir, fullChainFileName),
-		AccountKeyFile:   filepath.Join(m.cfg.KeyDir, accountKeyFileName),
-		RegistrationFile: filepath.Join(m.cfg.KeyDir, registrationFileName),
-		Email:            defaultACMEEmailPrefix + m.cfg.BaseDomain,
-		DNSProvider:      m.dns,
-		Domains:          certificateDomains(m.cfg.BaseDomain),
+func (m *Manager) managedACME() bool {
+	return m != nil && m.dns != nil
+}
+
+func (m *Manager) ensureManualCertificate() (string, string, error) {
+	certFile, keyFile, err := m.TLSFiles()
+	if err != nil {
+		return "", "", fmt.Errorf("manual certificate mode requires %s and %s in %s or configure ACME_DNS_PROVIDER", fullChainFileName, keyFileName, m.cfg.KeyDir)
 	}
 
-	for _, path := range []string{cfg.KeyFile, cfg.CertFile, cfg.AccountKeyFile, cfg.RegistrationFile} {
+	covered, err := m.manualCertificateCovered(certFile)
+	if err != nil {
+		return "", "", err
+	}
+	if !covered {
+		return "", "", fmt.Errorf("manual relay certificate must cover %s and *.%s", m.cfg.BaseDomain, m.cfg.BaseDomain)
+	}
+	return certFile, keyFile, nil
+}
+
+func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
+	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return "", "", false, nil
+	}
+	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	if !fileExists(certFile) || !fileExists(keyFile) {
+		return "", "", false, nil
+	}
+	var err error
+	covered, err := m.manualCertificateCovered(certFile)
+	if err != nil {
+		return "", "", false, err
+	}
+	hasACMEState := m.hasACMEState()
+	if !covered {
+		if !hasACMEState {
+			return "", "", false, fmt.Errorf("manual relay certificate must cover %s and *.%s", m.cfg.BaseDomain, m.cfg.BaseDomain)
+		}
+		return "", "", false, nil
+	}
+	if hasACMEState {
+		return "", "", false, nil
+	}
+	return certFile, keyFile, true, nil
+}
+
+func (m *Manager) manualCertificateCovered(certFile string) (bool, error) {
+	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
+	if err != nil {
+		return false, fmt.Errorf("validate relay certificate: %w", err)
+	}
+	return covered, nil
+}
+
+func (m *Manager) hasACMEState() bool {
+	if m == nil {
+		return false
+	}
+	return fileExists(filepath.Join(m.cfg.KeyDir, accountKeyFileName)) || fileExists(filepath.Join(m.cfg.KeyDir, registrationFileName))
+}
+
+func (m *Manager) provision(ctx context.Context) error {
+	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
+	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
+	accountKeyFile := filepath.Join(m.cfg.KeyDir, accountKeyFileName)
+	registrationFile := filepath.Join(m.cfg.KeyDir, registrationFileName)
+	domains := certificateDomains(m.cfg.BaseDomain)
+
+	for _, path := range []string{keyFile, certFile, accountKeyFile, registrationFile} {
 		if err := ensureParentDir(path); err != nil {
 			return err
 		}
@@ -243,13 +299,13 @@ func (m *Manager) provision(ctx context.Context) error {
 		return fmt.Errorf("acme provisioning canceled: %w", err)
 	}
 
-	client, _, err := newClient(ctx, cfg)
+	client, err := newClient(ctx, defaultACMEEmailPrefix+m.cfg.BaseDomain, accountKeyFile, registrationFile, m.dns)
 	if err != nil {
 		return err
 	}
 
 	obtained, err := client.Certificate.Obtain(certificate.ObtainRequest{
-		Domains: cfg.Domains,
+		Domains: domains,
 		Bundle:  true,
 	})
 	if err != nil {
@@ -259,10 +315,10 @@ func (m *Manager) provision(ctx context.Context) error {
 		return errors.New("acme obtain response missing certificate or private key")
 	}
 
-	if err := writeFileAtomic(cfg.CertFile, obtained.Certificate, 0o644); err != nil {
+	if err := writeFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
 		return fmt.Errorf("write certificate chain: %w", err)
 	}
-	if err := writeFileAtomic(cfg.KeyFile, obtained.PrivateKey, 0o600); err != nil {
+	if err := writeFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 	return nil
@@ -290,11 +346,12 @@ func (m *Manager) maintenanceLoop(ctx context.Context) {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("sync dns records")
 			}
 		case <-renewTicker.C:
-			if !m.shouldRenew() {
+			_, _, manual, err := m.manualCertificateOverride()
+			if err != nil || manual || !m.managedACME() || !m.shouldRenew() {
 				continue
 			}
 			renewCtx, cancel := context.WithTimeout(ctx, defaultSyncTimeout)
-			err := m.provision(renewCtx)
+			err = m.provision(renewCtx)
 			cancel()
 			if err != nil {
 				log.Warn().Err(err).Str("base_domain", m.cfg.BaseDomain).Msg("renew acme certificate")
@@ -307,37 +364,15 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if m == nil || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
-	if m.dns == nil {
-		return errors.New("acme dns provider is required")
+	if err := m.syncENSGasless(ctx); err != nil {
+		return err
 	}
-	if m.cfg.ENSGaslessEnabled {
-		status, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
-		if err != nil {
-			return fmt.Errorf("ensure dnssec: %w", err)
-		}
-		m.dnssecLogOnce.Do(func() {
-			event := log.Info().
-				Str("provider", m.dns.Name()).
-				Str("base_domain", m.cfg.BaseDomain).
-				Str("state", strings.TrimSpace(status.State))
-			if strings.TrimSpace(status.DSRecord) != "" {
-				event = event.Str("ds_record", strings.TrimSpace(status.DSRecord))
-			}
-			if strings.TrimSpace(status.Message) != "" {
-				event = event.Str("message", strings.TrimSpace(status.Message))
-			}
-			event.Msg("dnssec configured")
-		})
-		if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
-			return fmt.Errorf("ensure ens gasless txt: %w", err)
-		}
-		m.ensLogOnce.Do(func() {
-			log.Info().
-				Str("provider", m.dns.Name()).
-				Str("base_domain", m.cfg.BaseDomain).
-				Str("address", m.cfg.ENSGaslessAddress).
-				Msg("ens gasless dns import configured")
-		})
+	_, _, manual, err := m.manualCertificateOverride()
+	if err != nil {
+		return err
+	}
+	if manual || !m.managedACME() {
+		return nil
 	}
 
 	publicIP, err := utils.ResolvePublicIPv4(ctx)
@@ -348,12 +383,51 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
 }
 
+func (m *Manager) syncENSGasless(ctx context.Context) error {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return nil
+	}
+	if m.dns == nil {
+		return errors.New("ACME_DNS_PROVIDER is required")
+	}
+
+	status, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
+	if err != nil {
+		return fmt.Errorf("ensure dnssec: %w", err)
+	}
+	m.dnssecLogOnce.Do(func() {
+		event := log.Info().
+			Str("provider", m.dns.Name()).
+			Str("base_domain", m.cfg.BaseDomain).
+			Str("state", strings.TrimSpace(status.State))
+		if strings.TrimSpace(status.DSRecord) != "" {
+			event = event.Str("ds_record", strings.TrimSpace(status.DSRecord))
+		}
+		if strings.TrimSpace(status.Message) != "" {
+			event = event.Str("message", strings.TrimSpace(status.Message))
+		}
+		event.Msg("dnssec configured")
+	})
+
+	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
+		return fmt.Errorf("ensure ens gasless txt: %w", err)
+	}
+	m.ensLogOnce.Do(func() {
+		log.Info().
+			Str("provider", m.dns.Name()).
+			Str("base_domain", m.cfg.BaseDomain).
+			Str("address", m.cfg.ENSGaslessAddress).
+			Msg("ens gasless dns import configured")
+	})
+	return nil
+}
+
 func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address string) error {
 	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
 		return nil
 	}
 	if m.dns == nil {
-		return errors.New("acme dns provider is required")
+		return errors.New("ACME_DNS_PROVIDER is required")
 	}
 
 	hostname = utils.NormalizeHostname(hostname)
@@ -376,7 +450,7 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 		return nil
 	}
 	if m.dns == nil {
-		return errors.New("acme dns provider is required")
+		return errors.New("ACME_DNS_PROVIDER is required")
 	}
 
 	hostname = utils.NormalizeHostname(hostname)
@@ -399,9 +473,6 @@ func hostnameMatchesBaseDomain(hostname, baseDomain string) bool {
 }
 
 func (m *Manager) shouldRenew() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
 	needsRenewal, err := certNeedsRenewal(certFile, certificateDomains(m.cfg.BaseDomain))
 	return err == nil && needsRenewal
@@ -423,11 +494,7 @@ func certNeedsRenewal(certFile string, domains []string) (bool, error) {
 	if time.Until(cert.NotAfter) < 30*24*time.Hour {
 		return true, nil
 	}
-	covered, err := certCoversDomains(certFile, domains)
-	if err != nil {
-		return false, err
-	}
-	return !covered, nil
+	return !certificateCoversDomains(cert, domains), nil
 }
 
 func certCoversDomains(certFile string, domains []string) (bool, error) {
@@ -439,36 +506,40 @@ func certCoversDomains(certFile string, domains []string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return certificateCoversDomains(cert, domains), nil
+}
+
+func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
 	for _, domain := range domains {
 		if wildcardDomain, ok := strings.CutPrefix(domain, "*."); ok {
 			if !certificateCoversHostname(cert, "probe."+wildcardDomain) {
-				return false, nil
+				return false
 			}
 			continue
 		}
 		if !certificateCoversHostname(cert, domain) {
-			return false, nil
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
 func certificateCoversHostname(cert *x509.Certificate, hostname string) bool {
 	return cert != nil && cert.VerifyHostname(hostname) == nil
 }
 
-func newClient(ctx context.Context, cfg provisionConfig) (*lego.Client, *acmeUser, error) {
-	accountKey, err := loadOrCreateAccountKey(cfg.AccountKeyFile)
+func newClient(ctx context.Context, email, accountKeyFile, registrationFile string, dnsProvider DNSProvider) (*lego.Client, error) {
+	accountKey, err := loadOrCreateAccountKey(accountKeyFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load acme account key: %w", err)
+		return nil, fmt.Errorf("load acme account key: %w", err)
 	}
-	accountReg, err := loadRegistration(cfg.RegistrationFile)
+	accountReg, err := loadRegistration(registrationFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load acme registration: %w", err)
+		return nil, fmt.Errorf("load acme registration: %w", err)
 	}
 
 	user := &acmeUser{
-		Email:        cfg.Email,
+		Email:        email,
 		Key:          accountKey,
 		Registration: accountReg,
 	}
@@ -479,32 +550,32 @@ func newClient(ctx context.Context, cfg provisionConfig) (*lego.Client, *acmeUse
 
 	client, err := lego.NewClient(clientConfig)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create acme client: %w", err)
+		return nil, fmt.Errorf("create acme client: %w", err)
 	}
 
-	if cfg.DNSProvider == nil {
-		return nil, nil, errors.New("acme dns provider is required")
+	if dnsProvider == nil {
+		return nil, errors.New("ACME_DNS_PROVIDER is required")
 	}
-	challengeProvider, err := cfg.DNSProvider.ChallengeProvider(ctx)
+	challengeProvider, err := dnsProvider.ChallengeProvider(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create dns challenge provider: %w", err)
+		return nil, fmt.Errorf("create dns challenge provider: %w", err)
 	}
 	if err := client.Challenge.SetDNS01Provider(challengeProvider); err != nil {
-		return nil, nil, fmt.Errorf("set dns01 provider: %w", err)
+		return nil, fmt.Errorf("set dns01 provider: %w", err)
 	}
 
 	if user.Registration == nil {
 		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
-			return nil, nil, fmt.Errorf("register acme account: %w", err)
+			return nil, fmt.Errorf("register acme account: %w", err)
 		}
 		user.Registration = reg
-		if err := saveRegistration(cfg.RegistrationFile, reg); err != nil {
-			return nil, nil, fmt.Errorf("persist acme registration: %w", err)
+		if err := saveRegistration(registrationFile, reg); err != nil {
+			return nil, fmt.Errorf("persist acme registration: %w", err)
 		}
 	}
 
-	return client, user, nil
+	return client, nil
 }
 
 func (u *acmeUser) GetEmail() string                        { return u.Email }

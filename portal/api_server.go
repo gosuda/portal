@@ -359,7 +359,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	}
 	deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
 	defer cancel()
-	if err := s.deleteLeaseENSGasless(deleteCtx, record); err != nil {
+	if err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, record.Hostname); err != nil {
 		log.Warn().
 			Err(err).
 			Str("hostname", record.Hostname).
@@ -602,7 +602,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	}
 	syncCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
 	defer cancel()
-	if err := s.syncLeaseENSGasless(syncCtx, record); err != nil {
+	if err := s.acmeManager.SyncENSGaslessHostname(syncCtx, record.Hostname, record.Address); err != nil {
 		_, _ = s.registry.Unregister(record.Copy())
 		record.Close()
 		return types.RegisterResponse{}, err

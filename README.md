@@ -53,8 +53,14 @@ cd portal && cp .env.example .env
 docker compose up
 ```
 
-The Docker setup persists both the relay identity JSON and relay certificates under `./.portal-certs`. Keep that directory on persistent storage if you want a stable relay address and ACME state across restarts.
+The Docker setup persists both the relay identity JSON and relay certificates under `./.portal-certs`. Keep that directory on persistent storage if you want a stable relay address and certificate state across restarts.
 
+For public domains, you can either:
+
+- place `fullchain.pem` and `privatekey.pem` in `./.portal-certs` and leave `ACME_DNS_PROVIDER` empty, or
+- set `ACME_DNS_PROVIDER=cloudflare|route53` and let Portal manage DNS-01 + renewal
+
+If you want Portal-managed ENS TXT/DNSSEC while keeping manual certificate files, place the certs in `./.portal-certs`, set `ACME_DNS_PROVIDER`, and enable `ENS_GASLESS_ENABLED=true`.
 For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 
 ### Expose Local Service via Tunnel
