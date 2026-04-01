@@ -52,6 +52,7 @@ function buildLease(address: string, name: string = "relay-1"): AdminLeaseData {
     name,
     BPS: 1024,
     ClientIP: "203.0.113.10",
+    ReportedIP: "",
     Hostname: "relay.example.com",
     Metadata: {
       description: "relay",
