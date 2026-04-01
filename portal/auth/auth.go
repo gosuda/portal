@@ -43,7 +43,7 @@ type es256kOpaqueSigner struct {
 }
 
 func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
-	return &jose.JSONWebKey{KeyID: strings.TrimSpace(s.keyID)}
+	return &jose.JSONWebKey{KeyID: s.keyID}
 }
 
 func (s *es256kOpaqueSigner) Algs() []jose.SignatureAlgorithm {
@@ -244,9 +244,7 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 	if pubKeyText == "" {
 		return LeaseAccessTokenClaims{}, errors.New("public key is required")
 	}
-	if strings.HasPrefix(strings.ToLower(pubKeyText), "0x") {
-		pubKeyText = pubKeyText[2:]
-	}
+	pubKeyText = utils.TrimHexPrefix(pubKeyText)
 
 	pubKeyBytes, err := hex.DecodeString(pubKeyText)
 	if err != nil {
@@ -266,7 +264,8 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
-	if strings.TrimSpace(leaseID) != "" && claims.LeaseID != strings.TrimSpace(leaseID) {
+	requestedLeaseID := strings.TrimSpace(leaseID)
+	if requestedLeaseID != "" && claims.LeaseID != requestedLeaseID {
 		return LeaseAccessTokenClaims{}, errors.New("lease access token lease id does not match request")
 	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
@@ -281,9 +280,7 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 
 func decodePrivateKeyHex(privateKeyHex string) ([]byte, error) {
 	trimmed := strings.TrimSpace(privateKeyHex)
-	if strings.HasPrefix(strings.ToLower(trimmed), "0x") {
-		trimmed = trimmed[2:]
-	}
+	trimmed = utils.TrimHexPrefix(trimmed)
 	decoded, err := hex.DecodeString(trimmed)
 	if err != nil {
 		return nil, err

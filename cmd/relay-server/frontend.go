@@ -76,7 +76,7 @@ func (f *Frontend) Handler() *http.ServeMux {
 		f.ServeAppStatic(w, r, "")
 	})
 	mux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
-		f.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+		f.ServeAppStatic(w, r, strings.TrimPrefix(r.URL.Path, types.PathAppPrefix))
 	})
 	mux.HandleFunc(types.PathAssetsPrefix, func(w http.ResponseWriter, r *http.Request) {
 		f.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")

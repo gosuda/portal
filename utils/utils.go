@@ -38,6 +38,13 @@ func SplitCSV(raw string) []string {
 	return out
 }
 
+func TrimHexPrefix(raw string) string {
+	if len(raw) >= 2 && raw[0] == '0' && (raw[1] == 'x' || raw[1] == 'X') {
+		return raw[2:]
+	}
+	return raw
+}
+
 func ParseCIDRs(raw string) ([]*net.IPNet, error) {
 	parts := SplitCSV(raw)
 	if len(parts) == 0 {

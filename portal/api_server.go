@@ -143,9 +143,9 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
 	}
 
-	supportsOverlayPeer := strings.TrimSpace(s.wgConfig.PublicKey) != "" &&
-		strings.TrimSpace(s.wgConfig.Endpoint) != "" &&
-		strings.TrimSpace(s.wgConfig.OverlayIPv4) != ""
+	supportsOverlayPeer := s.wgConfig.PublicKey != "" &&
+		s.wgConfig.Endpoint != "" &&
+		s.wgConfig.OverlayIPv4 != ""
 
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		RelayID:             s.cfg.PortalURL,
@@ -158,9 +158,9 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		SupportsTCP:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
-		WireGuardPublicKey:  strings.TrimSpace(s.wgConfig.PublicKey),
-		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
-		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
+		WireGuardPublicKey:  s.wgConfig.PublicKey,
+		WireGuardEndpoint:   s.wgConfig.Endpoint,
+		OverlayIPv4:         s.wgConfig.OverlayIPv4,
 		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
 	})
 	if err != nil {

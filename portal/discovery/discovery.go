@@ -98,8 +98,9 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 }
 
 func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
-	if strings.TrimSpace(resp.ProtocolVersion) != types.ProtocolVersion {
-		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", strings.TrimSpace(resp.ProtocolVersion), types.ProtocolVersion)
+	protocolVersion := strings.TrimSpace(resp.ProtocolVersion)
+	if protocolVersion != types.ProtocolVersion {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", protocolVersion, types.ProtocolVersion)
 	}
 
 	self, err := ValidateDescriptor(resp.Self, now)
@@ -134,7 +135,7 @@ func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetU
 		return err
 	}
 
-	relayID := strings.TrimSpace(normalized.RelayID)
+	relayID := normalized.RelayID
 	if targetRelayID != "" && relayID != targetRelayID {
 		return errors.New("descriptor relay_id does not match target relay")
 	}
@@ -205,13 +206,13 @@ func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
 	if !desc.SupportsOverlayPeer {
 		return errors.New("descriptor does not support overlay peer")
 	}
-	if strings.TrimSpace(desc.WireGuardPublicKey) == "" {
+	if desc.WireGuardPublicKey == "" {
 		return errors.New("descriptor wireguard public key is required")
 	}
-	if strings.TrimSpace(desc.WireGuardEndpoint) == "" {
+	if desc.WireGuardEndpoint == "" {
 		return errors.New("descriptor wireguard endpoint is required")
 	}
-	if strings.TrimSpace(desc.OverlayIPv4) == "" {
+	if desc.OverlayIPv4 == "" {
 		return errors.New("descriptor overlay ipv4 is required")
 	}
 	return nil

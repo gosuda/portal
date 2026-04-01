@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -15,7 +14,7 @@ func NewRelayHTTPClient(ctx context.Context, relayURL *url.URL, rootCAPEM []byte
 		return nil, nil, errors.New("relay url is required")
 	}
 
-	serverName := strings.TrimSpace(relayURL.Hostname())
+	serverName := relayURL.Hostname()
 	if serverName == "" {
 		return nil, nil, errors.New("relay hostname is required")
 	}

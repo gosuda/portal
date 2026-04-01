@@ -258,7 +258,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Str("root_host", s.rootHost).
 		Str("acme_dns_provider", s.cfg.ACME.DNSProvider).
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
-		Bool("wireguard_enabled", strings.TrimSpace(s.wgConfig.PrivateKey) != "").
+		Bool("wireguard_enabled", s.wgConfig.PrivateKey != "").
 		Bool("udp_enabled", s.cfg.UDPPortCount > 0).
 		Bool("acme_enabled", !strings.HasSuffix(s.rootHost, "localhost") && s.rootHost != "127.0.0.1" && s.rootHost != "::1")
 	if s.quicTunnel != nil {

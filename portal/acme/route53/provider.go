@@ -74,7 +74,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("route53 provider is nil")
 	}
-	baseDomain = utils.NormalizeHostname(baseDomain)
+	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
@@ -211,17 +211,15 @@ func validateIPv4(raw string) error {
 }
 
 func domainCandidates(domain string) []string {
-	parts := strings.Split(strings.TrimSpace(strings.TrimSuffix(domain, ".")), ".")
+	normalized := utils.NormalizeHostname(domain)
+	parts := strings.Split(normalized, ".")
 	if len(parts) < 2 {
 		return nil
 	}
 
 	candidates := make([]string, 0, len(parts)-1)
 	for i := range len(parts) - 1 {
-		candidate := utils.NormalizeHostname(strings.Join(parts[i:], "."))
-		if candidate != "" {
-			candidates = append(candidates, candidate)
-		}
+		candidates = append(candidates, strings.Join(parts[i:], "."))
 	}
 	return candidates
 }

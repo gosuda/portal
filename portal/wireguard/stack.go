@@ -48,7 +48,7 @@ func newStack(cfg Config) (*stack, error) {
 		return nil, err
 	}
 
-	overlayIP, err := netip.ParseAddr(strings.TrimSpace(cfg.OverlayIPv4))
+	overlayIP, err := netip.ParseAddr(cfg.OverlayIPv4)
 	if err != nil || !overlayIP.Is4() {
 		return nil, errors.New("overlay ipv4 must be a valid IPv4 address")
 	}
@@ -138,7 +138,7 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 		}
 
 		resolvedEndpoint := ""
-		if endpoint := strings.TrimSpace(peer.WireGuardEndpoint); endpoint != "" {
+		if endpoint := peer.WireGuardEndpoint; endpoint != "" {
 			resolvedEndpoint, err = resolvePeerEndpoint(endpoint)
 			if err != nil {
 				s.mu.Lock()

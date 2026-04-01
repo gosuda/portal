@@ -30,11 +30,10 @@ func NormalizeEVMAddress(raw string) (string, error) {
 	if trimmed == "" {
 		return "", errors.New("address is required")
 	}
-	if !strings.HasPrefix(strings.ToLower(trimmed), "0x") {
+	hexPart := TrimHexPrefix(trimmed)
+	if hexPart == trimmed {
 		return "", errors.New("address must start with 0x")
 	}
-
-	hexPart := trimmed[2:]
 	if len(hexPart) != 40 {
 		return "", errors.New("address must be 20 bytes")
 	}
@@ -80,9 +79,7 @@ func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
 	if publicKeyHex == "" {
 		return "", errors.New("public key is required")
 	}
-	if strings.HasPrefix(strings.ToLower(publicKeyHex), "0x") {
-		publicKeyHex = publicKeyHex[2:]
-	}
+	publicKeyHex = TrimHexPrefix(publicKeyHex)
 
 	decoded, err := hex.DecodeString(publicKeyHex)
 	if err != nil {
@@ -182,9 +179,7 @@ func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string)
 	if pubKeyText == "" {
 		return errors.New("public key is required")
 	}
-	if strings.HasPrefix(strings.ToLower(pubKeyText), "0x") {
-		pubKeyText = pubKeyText[2:]
-	}
+	pubKeyText = TrimHexPrefix(pubKeyText)
 
 	pubKeyBytes, err := hex.DecodeString(pubKeyText)
 	if err != nil {
@@ -199,9 +194,7 @@ func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string)
 	if sigText == "" {
 		return errors.New("signature is required")
 	}
-	if strings.HasPrefix(strings.ToLower(sigText), "0x") {
-		sigText = sigText[2:]
-	}
+	sigText = TrimHexPrefix(sigText)
 
 	sigBytes, err := hex.DecodeString(sigText)
 	if err != nil {
@@ -224,9 +217,7 @@ func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, stri
 	if privateKeyHex == "" {
 		return nil, "", errors.New("private key is required")
 	}
-	if strings.HasPrefix(strings.ToLower(privateKeyHex), "0x") {
-		privateKeyHex = privateKeyHex[2:]
-	}
+	privateKeyHex = TrimHexPrefix(privateKeyHex)
 
 	decoded, err := hex.DecodeString(privateKeyHex)
 	if err != nil {
