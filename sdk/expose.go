@@ -24,13 +24,12 @@ type Exposure struct {
 	cancel context.CancelFunc
 	done   <-chan struct{}
 
-	name             string
+	identity         types.Identity
 	TargetAddr       string
 	UDPAddr          string
 	udpEnabled       bool
 	banMITM          bool
 	metadata         types.LeaseMetadata
-	ownerPrivateKey  string
 	rootCAPEM        []byte
 	discoveryEnabled bool
 
@@ -46,16 +45,15 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs       []string
-	Name            string
-	TargetAddr      string
-	UDPAddr         string
-	UDPEnabled      bool
-	BanMITM         bool
-	Discovery       bool
-	Metadata        types.LeaseMetadata
-	OwnerPrivateKey string
-	RootCAPEM       []byte
+	RelayURLs  []string
+	Identity   types.Identity
+	TargetAddr string
+	UDPAddr    string
+	UDPEnabled bool
+	BanMITM    bool
+	Discovery  bool
+	Metadata   types.LeaseMetadata
+	RootCAPEM  []byte
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
@@ -66,9 +64,9 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		return nil, err
 	}
 
-	identity, err := utils.ResolveSecp256k1Identity(cfg.OwnerPrivateKey)
+	identity, err := utils.ResolveLeaseIdentity(cfg.Identity)
 	if err != nil {
-		return nil, fmt.Errorf("resolve owner identity: %w", err)
+		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
 	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
 	if err != nil {
@@ -86,13 +84,12 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	exposure := &Exposure{
 		cancel:           cancel,
 		done:             exposureCtx.Done(),
-		name:             cfg.Name,
+		identity:         identity,
 		TargetAddr:       targetAddr,
 		UDPAddr:          udpAddr,
 		udpEnabled:       cfg.UDPEnabled,
 		banMITM:          cfg.BanMITM,
 		metadata:         cfg.Metadata.Copy(),
-		ownerPrivateKey:  identity.PrivateKey,
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
 		discoveryEnabled: cfg.Discovery,
 		accepted:         make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
@@ -132,6 +129,13 @@ func (e *Exposure) ActiveRelayURLs() []string {
 
 func (e *Exposure) Addr() net.Addr {
 	return listenerAddr("portal:exposure")
+}
+
+func (e *Exposure) Identity() types.Identity {
+	if e == nil {
+		return types.Identity{}
+	}
+	return e.identity.Copy()
 }
 
 type exposureConn struct {
@@ -243,8 +247,12 @@ func (e *Exposure) runRelayDiscoveryLoop(ctx context.Context) {
 				}
 
 				now := time.Now().UTC()
+				targetDescriptor, err := discovery.SeedDescriptor(relayURL)
+				if err != nil {
+					continue
+				}
 				var descriptorRelayURLs []string
-				descriptorRelayURLs, _, _, _, err = e.relaySet.ApplyRelayDiscoveryResponse(relayURL, relayURL, resp, now)
+				descriptorRelayURLs, _, _, _, err = e.relaySet.ApplyRelayDiscoveryResponse(targetDescriptor.Identity, relayURL, resp, now)
 				if err != nil {
 					continue
 				}
@@ -304,13 +312,12 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 	}
 	for _, relayURL := range missingRelayURLs {
 		listener, err := NewListener(context.Background(), relayURL, ListenerConfig{
-			Name:            e.name,
-			OwnerPrivateKey: e.ownerPrivateKey,
-			UDPEnabled:      e.udpEnabled,
-			BanMITM:         e.banMITM,
-			Metadata:        e.metadata.Copy(),
-			RootCAPEM:       append([]byte(nil), e.rootCAPEM...),
-			relaySet:        e.relaySet,
+			Identity:   e.identity.Copy(),
+			UDPEnabled: e.udpEnabled,
+			BanMITM:    e.banMITM,
+			Metadata:   e.metadata.Copy(),
+			RootCAPEM:  append([]byte(nil), e.rootCAPEM...),
+			relaySet:   e.relaySet,
 		})
 		if err != nil {
 			if failOnError {
@@ -367,7 +374,7 @@ func (e *Exposure) runListenerAcceptLoop(listener *Listener) {
 					log.Warn().
 						Err(err).
 						Str("relay_url", relayURL).
-						Str("lease_id", listener.LeaseID()).
+						Str("address", listener.Address()).
 						Msg("datagram accept failed")
 					return
 				}

@@ -49,9 +49,11 @@ Portal also checks that the relay is preserving TLS passthrough. The Portal clie
 
 ```bash
 git clone https://github.com/gosuda/portal
-cd portal
+cd portal && cp .env.example .env
 docker compose up
 ```
+
+The Docker setup persists both the relay identity JSON and relay certificates under `./.portal-certs`. Keep that directory on persistent storage if you want a stable relay address and ACME state across restarts.
 
 For deployment to a public domain, see [docs/deployment.md](docs/deployment.md).
 

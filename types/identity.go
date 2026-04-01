@@ -1,10 +1,75 @@
 package types
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
-const DiscoveryPollInterval = 1 * time.Minute
+type Identity struct {
+	Name       string `json:"name,omitempty"`
+	Address    string `json:"address,omitempty"`
+	PublicKey  string `json:"-"`
+	PrivateKey string `json:"-"`
+}
+
+func (i Identity) Copy() Identity {
+	return Identity{
+		Name:       i.Name,
+		Address:    i.Address,
+		PublicKey:  i.PublicKey,
+		PrivateKey: i.PrivateKey,
+	}
+}
+
+const IdentityKeySeparator = ":"
+
+func (i Identity) Key() string {
+	name := strings.TrimSpace(strings.ToLower(i.Name))
+	address := strings.TrimSpace(strings.ToLower(i.Address))
+	if name == "" && address == "" {
+		return ""
+	}
+	return name + IdentityKeySeparator + address
+}
+
+type Lease struct {
+	Identity
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	BPS         int64
+	ClientIP    string
+	ReportedIP  string
+	Hostname    string
+	UDPEnabled  bool
+	Metadata    LeaseMetadata
+	Ready       int
+	IsApproved  bool
+	IsBanned    bool
+	IsDenied    bool
+	IsIPBanned  bool
+}
+
+type LeaseMetadata struct {
+	Description string   `json:"description,omitempty"`
+	Owner       string   `json:"owner,omitempty"`
+	Thumbnail   string   `json:"thumbnail,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Hide        bool     `json:"hide,omitempty"`
+}
+
+func (m LeaseMetadata) Copy() LeaseMetadata {
+	return LeaseMetadata{
+		Description: m.Description,
+		Owner:       m.Owner,
+		Thumbnail:   m.Thumbnail,
+		Tags:        append([]string(nil), m.Tags...),
+		Hide:        m.Hide,
+	}
+}
 
 type RelayDescriptor struct {
+	Identity
 	RelayID string `json:"relay_id"`
 
 	Sequence  uint64    `json:"sequence"`
@@ -24,6 +89,8 @@ type RelayDescriptor struct {
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
 }
+
+const DiscoveryPollInterval = 1 * time.Minute
 
 type RelayState struct {
 	Descriptor          RelayDescriptor `json:"descriptor"`

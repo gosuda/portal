@@ -297,6 +297,7 @@ func (f *Frontend) publicLeaseSnapshots() []types.Lease {
 		}
 
 		snapshot.ClientIP = ""
+		snapshot.Address = ""
 		snapshot.BPS = 0
 		snapshot.IsApproved = false
 		snapshot.IsBanned = false

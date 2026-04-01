@@ -53,7 +53,7 @@ type RelaySummary struct {
 type RelaySet struct {
 	mu                  sync.RWMutex
 	knownRelayURLs      []string
-	relayIDsByURL       map[string]string
+	relayKeysByURL      map[string]string
 	relays              map[string]RelayView
 	localByURL          map[string]RelayLocalState
 	lastStatusReachable map[string]bool
@@ -63,9 +63,9 @@ type RelaySet struct {
 
 func NewRelaySet() *RelaySet {
 	return &RelaySet{
-		relayIDsByURL: make(map[string]string),
-		relays:        make(map[string]RelayView),
-		localByURL:    make(map[string]RelayLocalState),
+		relayKeysByURL: make(map[string]string),
+		relays:         make(map[string]RelayView),
+		localByURL:     make(map[string]RelayLocalState),
 	}
 }
 
@@ -152,8 +152,8 @@ func (s *RelaySet) logStatusChange() {
 	for _, relayURL := range trackedRelayURLs {
 		summary.Known++
 		state := s.localByURL[relayURL]
-		relayID := s.relayIDsByURL[relayURL]
-		view, ok := s.relays[relayID]
+		relayKey := s.relayKeysByURL[relayURL]
+		view, ok := s.relays[relayKey]
 		expired := ok && relayExpiredAt(view, state, now) || !ok && state.Expired
 		if state.Banned {
 			summary.Banned++
@@ -236,13 +236,16 @@ func (s *RelaySet) BootstrapDescriptors() []types.RelayDescriptor {
 		if !ok || !state.Bootstrap {
 			continue
 		}
-		if relayID, ok := s.relayIDsByURL[relayURL]; ok {
-			if view, ok := s.relays[relayID]; ok && view.Descriptor.APIHTTPSAddr != "" {
+		if relayKey, ok := s.relayKeysByURL[relayURL]; ok {
+			if view, ok := s.relays[relayKey]; ok && view.Descriptor.APIHTTPSAddr != "" {
 				out = append(out, view.Descriptor)
 				continue
 			}
 		}
 		out = append(out, types.RelayDescriptor{
+			Identity: types.Identity{
+				Name: utils.PortalRootHost(relayURL),
+			},
 			RelayID:      relayURL,
 			APIHTTPSAddr: relayURL,
 			Version:      1,
@@ -442,9 +445,9 @@ func (s *RelaySet) Snapshot() map[string]types.RelayState {
 
 	now := time.Now().UTC()
 	snapshot := make(map[string]types.RelayState, len(s.relays))
-	for relayID, view := range s.relays {
+	for relayKey, view := range s.relays {
 		localState := s.localByURL[view.Descriptor.APIHTTPSAddr]
-		snapshot[relayID] = types.RelayState{
+		snapshot[relayKey] = types.RelayState{
 			Descriptor:          view.Descriptor,
 			Bootstrap:           localState.Bootstrap,
 			Advertised:          localState.Advertised,
@@ -492,34 +495,35 @@ func (s *RelaySet) registerDescriptor(desc types.RelayDescriptor, now time.Time)
 	if err != nil {
 		return "", false, false, err
 	}
-	if current, ok := s.relays[normalized.RelayID]; ok {
-		currentURL := current.Descriptor.APIHTTPSAddr
-		if currentURL != "" && currentURL != normalized.APIHTTPSAddr {
-			return "", false, false, errors.New("descriptor api_https_addr does not match known relay url")
-		}
+	relayKey := normalized.Key()
+	if relayKey == "" {
+		return "", false, false, errors.New("descriptor identity is required")
 	}
-	if knownRelayID, ok := s.relayIDsByURL[normalized.APIHTTPSAddr]; ok && knownRelayID != normalized.RelayID {
-		return "", false, false, errors.New("descriptor relay_id does not match known relay")
+	if knownRelayKey, ok := s.relayKeysByURL[normalized.APIHTTPSAddr]; ok && knownRelayKey != relayKey {
+		return "", false, false, errors.New("descriptor identity does not match known relay url")
 	}
 
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 
-	relayID := normalized.RelayID
-	view, ok := s.relays[relayID]
+	view, ok := s.relays[relayKey]
 	added := !ok
 	if !ok {
 		view.FirstSeenAt = now
 	}
+	previousURL := view.Descriptor.APIHTTPSAddr
 	previousDescriptor := view.Descriptor
 	view.Descriptor = normalized
 	view.LastSeenAt = now
-	s.relays[relayID] = view
-	s.relayIDsByURL[normalized.APIHTTPSAddr] = relayID
+	s.relays[relayKey] = view
+	s.relayKeysByURL[normalized.APIHTTPSAddr] = relayKey
+	if previousURL != "" && previousURL != normalized.APIHTTPSAddr {
+		delete(s.relayKeysByURL, previousURL)
+	}
 
 	changed := added || !reflect.DeepEqual(previousDescriptor, normalized)
-	return relayID, added, changed, nil
+	return relayKey, added, changed, nil
 }
 
 func relayDiscoveryURLs(selfDescriptor types.RelayDescriptor, relayDescriptors []types.RelayDescriptor) []string {
@@ -538,17 +542,17 @@ func relayDiscoveryURLs(selfDescriptor types.RelayDescriptor, relayDescriptors [
 	return relayURLs
 }
 
-func (s *RelaySet) applyDiscoveryDescriptors(targetRelayID, targetURL string, selfDescriptor types.RelayDescriptor, relayDescriptors []types.RelayDescriptor, now time.Time) (relaySetChanged bool, addedRelayCount int, err error) {
+func (s *RelaySet) applyDiscoveryDescriptors(targetIdentity types.Identity, targetURL string, selfDescriptor types.RelayDescriptor, relayDescriptors []types.RelayDescriptor, now time.Time) (relaySetChanged bool, addedRelayCount int, err error) {
 	if s == nil {
 		return false, 0, nil
 	}
-	if strings.TrimSpace(targetRelayID) == "" {
-		return false, 0, errors.New("target relay id is required")
+	if strings.TrimSpace(targetIdentity.Name) == "" && strings.TrimSpace(targetIdentity.Address) == "" {
+		return false, 0, errors.New("target relay identity is required")
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	if err := ValidateDescriptorTarget(selfDescriptor, targetRelayID, targetURL); err != nil {
+	if err := ValidateDescriptorTarget(selfDescriptor, targetIdentity, targetURL); err != nil {
 		return false, 0, err
 	}
 
@@ -593,17 +597,14 @@ func (s *RelaySet) applyDiscoveryDescriptors(targetRelayID, targetURL string, se
 	return relaySetChanged, addedRelayCount, nil
 }
 
-func (s *RelaySet) ApplyRelayDiscoveryResponse(targetRelayID, targetURL string, resp types.DiscoveryResponse, now time.Time) (relayURLs []string, relaySetChanged bool, addedRelayCount int, warnErr error, err error) {
+func (s *RelaySet) ApplyRelayDiscoveryResponse(targetIdentity types.Identity, targetURL string, resp types.DiscoveryResponse, now time.Time) (relayURLs []string, relaySetChanged bool, addedRelayCount int, warnErr error, err error) {
 	selfDescriptor, relayDescriptors, validateErr := ValidateRelayDiscoveryResponse(resp, now)
 	warnErr = validateErr
-	if selfDescriptor.RelayID == "" {
+	if selfDescriptor.Key() == "" {
 		return nil, false, 0, warnErr, validateErr
 	}
-	if selfDescriptor.RelayID != strings.TrimSpace(targetRelayID) {
-		return nil, false, 0, warnErr, errors.New("relay discovery response relay_id mismatch")
-	}
 	s.mu.Lock()
-	relaySetChanged, addedRelayCount, err = s.applyDiscoveryDescriptors(targetRelayID, targetURL, selfDescriptor, relayDescriptors, now)
+	relaySetChanged, addedRelayCount, err = s.applyDiscoveryDescriptors(targetIdentity, targetURL, selfDescriptor, relayDescriptors, now)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, false, 0, warnErr, err
@@ -611,14 +612,11 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetRelayID, targetURL string, 
 	return relayDiscoveryURLs(selfDescriptor, relayDescriptors), relaySetChanged, addedRelayCount, warnErr, nil
 }
 
-func (s *RelaySet) ApplyOverlayRelayDiscoveryResponse(targetRelayID, targetURL string, resp types.DiscoveryResponse, now time.Time) (relayURLs []string, relaySetChanged bool, addedRelayCount int, warnErr error, err error) {
+func (s *RelaySet) ApplyOverlayRelayDiscoveryResponse(targetIdentity types.Identity, targetURL string, resp types.DiscoveryResponse, now time.Time) (relayURLs []string, relaySetChanged bool, addedRelayCount int, warnErr error, err error) {
 	selfDescriptor, relayDescriptors, validateErr := ValidateRelayDiscoveryResponse(resp, now)
 	warnErr = validateErr
-	if selfDescriptor.RelayID == "" {
+	if selfDescriptor.Key() == "" {
 		return nil, false, 0, warnErr, validateErr
-	}
-	if selfDescriptor.RelayID != strings.TrimSpace(targetRelayID) {
-		return nil, false, 0, warnErr, errors.New("relay discovery response relay_id mismatch")
 	}
 	if err := RequireOverlayRelayDescriptor(selfDescriptor); err != nil {
 		return nil, false, 0, warnErr, err
@@ -636,7 +634,7 @@ func (s *RelaySet) ApplyOverlayRelayDiscoveryResponse(targetRelayID, targetURL s
 	}
 
 	s.mu.Lock()
-	relaySetChanged, addedRelayCount, err = s.applyDiscoveryDescriptors(targetRelayID, targetURL, selfDescriptor, filteredRelayDescriptors, now)
+	relaySetChanged, addedRelayCount, err = s.applyDiscoveryDescriptors(targetIdentity, targetURL, selfDescriptor, filteredRelayDescriptors, now)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, false, 0, warnErr, err
@@ -644,7 +642,7 @@ func (s *RelaySet) ApplyOverlayRelayDiscoveryResponse(targetRelayID, targetURL s
 	return relayDiscoveryURLs(selfDescriptor, filteredRelayDescriptors), relaySetChanged, addedRelayCount, warnErr, nil
 }
 
-func (s *RelaySet) RegisterBootstrapRelayURLs(inputs []string, now time.Time) ([]string, error) {
+func (s *RelaySet) RegisterBootstrapRelayURLs(inputs []string) ([]string, error) {
 	if s == nil || len(inputs) == 0 {
 		return nil, nil
 	}
@@ -660,10 +658,6 @@ func (s *RelaySet) RegisterBootstrapRelayURLs(inputs []string, now time.Time) ([
 	if len(normalized) == 0 {
 		return nil, nil
 	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -685,9 +679,6 @@ func (s *RelaySet) RegisterBootstrapRelayURLs(inputs []string, now time.Time) ([
 		state.Bootstrap = true
 		state.Reachable = false
 		s.localByURL[relayURL] = state
-		if descriptor, err := SeedDescriptor(relayURL); err == nil {
-			_, _, _, _ = s.registerDescriptor(descriptor, now)
-		}
 	}
 	s.logStatusChange()
 	if len(added) == 0 {
@@ -696,12 +687,12 @@ func (s *RelaySet) RegisterBootstrapRelayURLs(inputs []string, now time.Time) ([
 	return added, nil
 }
 
-func (s *RelaySet) RecordDiscoveryFailure(relayID, relayURL string, err error, recoveryFailures int, now time.Time) (expired bool, expireReason string, consecutiveFailures int) {
+func (s *RelaySet) RecordDiscoveryFailure(identity types.Identity, relayURL string, err error, recoveryFailures int, now time.Time) (expired bool, expireReason string, consecutiveFailures int) {
 	if s == nil {
 		return false, "", 0
 	}
-	relayID = strings.TrimSpace(relayID)
-	if relayID == "" {
+	relayKey := identity.Key()
+	if relayKey == "" {
 		return false, "", 0
 	}
 	relayURL = strings.TrimSpace(relayURL)
@@ -715,7 +706,7 @@ func (s *RelaySet) RecordDiscoveryFailure(relayID, relayURL string, err error, r
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	view, ok := s.relays[relayID]
+	view, ok := s.relays[relayKey]
 	if !ok {
 		return false, "", 0
 	}

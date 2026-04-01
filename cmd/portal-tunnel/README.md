@@ -39,6 +39,7 @@ Custom relay and metadata example:
 ```text
 portal expose localhost:8080 \
   --name myapp \
+  --identity-path ~/.config/portal/myapp.identity.json \
   --relays https://portal.example.com \
   --description "Service description" \
   --tags tag1,tag2 \
@@ -74,6 +75,7 @@ Flags:
 --relays          Portal relay API URLs (comma-separated, https only)
 --discovery       Include public registry relays and discover additional relay bootstraps
 --ban-mitm        Ban relay when the MITM self-probe detects TLS termination
+--identity-path   Identity JSON file path; created automatically when missing
 --name            Public hostname prefix (single DNS label); auto-generated when omitted
 --description     Service description metadata
 --tags            Service tags metadata (comma-separated)
@@ -105,7 +107,9 @@ Legacy execution compatibility has been removed:
 
 ## Notes
 
-- Multiple relay URLs are registered independently. Each relay gets its own lease ID and public URLs.
+- `portal expose` loads or creates the signing identity at `identity.json` by default. Reusing the same `--identity-path` keeps the same address across runs.
+- Use different `--identity-path` values when you want separate local identities.
+- Multiple relay URLs are registered independently. Each relay gets its own lease registration and public URLs.
 - Relay publishes each service at `<name>.<portal root host>`.
 - The tunnel consumes one aggregate SDK listener, so the CLI no longer manages per-relay listener loops itself.
 - Relay startup and reconnect failures are retried independently in the background. A relay that is down does not stop healthy relays from continuing to serve traffic.

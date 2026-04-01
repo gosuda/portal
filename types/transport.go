@@ -15,7 +15,7 @@ var ErrDatagramTooSmall = errors.New("datagram too small to decode")
 type DatagramFrame struct {
 	FlowID   uint32
 	Payload  []byte
-	LeaseID  string
+	Address  string
 	RelayURL string
 	UDPAddr  string
 }

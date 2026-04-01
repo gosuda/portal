@@ -105,10 +105,11 @@ Example:
 PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
+IDENTITY_PATH=/portal-certs/identity.json
 WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
-KEYLESS_DIR=./.portal-certs
+KEYLESS_DIR=/portal-certs
 ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 ```
@@ -116,7 +117,8 @@ CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
 Route53 example:
 
 ```bash
-KEYLESS_DIR=./.portal-certs
+IDENTITY_PATH=/portal-certs/identity.json
+KEYLESS_DIR=/portal-certs
 ACME_DNS_PROVIDER=route53
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
@@ -132,7 +134,9 @@ Notes:
 - Portal uses the `PORTAL_URL` host for public lease hostnames
 - `WIREGUARD_ENDPOINT` is optional. When empty, Portal advertises `PORTAL_URL` host with `DISCOVERY_PORT`
 - Set `WIREGUARD_ENDPOINT` explicitly only when relay-peer discovery UDP is exposed on a different address than `PORTAL_URL`
-- `KEYLESS_DIR` stores relay certificate material
+- `IDENTITY_PATH` stores the relay identity JSON inside the container
+- `KEYLESS_DIR` stores relay certificate material inside the container
+- The Docker Compose stack stores both the relay identity JSON and ACME state under `./.portal-certs` on the host
 
 If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
 
@@ -143,6 +147,16 @@ TRUST_PROXY_HEADERS=true
 If your proxy source addresses are public or you want a stricter allowlist, also set `TRUSTED_PROXY_CIDRS`.
 
 ### 3.2 Start Relay
+
+When using the published Docker image, create the bind-mount directory first and make it writable by UID `65532` (`nonroot` in the distroless image):
+
+```bash
+mkdir -p ./.portal-certs
+sudo chown 65532:65532 ./.portal-certs
+chmod 755 ./.portal-certs
+```
+
+Then start the stack:
 
 ```bash
 docker compose up -d

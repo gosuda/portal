@@ -251,24 +251,38 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		case strings.HasPrefix(path, types.PathAdminLeasesPrefix):
 			rest := strings.TrimPrefix(path, types.PathAdminLeasesPrefix)
 			parts := strings.Split(rest, "/")
-			if len(parts) != 2 {
+			if len(parts) != 3 {
 				http.NotFound(w, r)
 				return
 			}
 
-			leaseID, err := utils.DecodeBase64URLString(parts[0])
+			name, err := utils.DecodeBase64URLString(parts[0])
 			if err != nil {
-				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidLeaseID, "invalid lease ID")
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
 				return
 			}
+			address, err := utils.DecodeBase64URLString(parts[1])
+			if err != nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidAddress, "invalid address")
+				return
+			}
+			identity, err := utils.NormalizeIdentity(types.Identity{
+				Name:    name,
+				Address: address,
+			})
+			if err != nil {
+				utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "invalid identity")
+				return
+			}
+			identityKey := identity.Key()
 
-			switch parts[1] {
+			switch parts[2] {
 			case "ban":
 				switch r.Method {
 				case http.MethodPost:
-					runtime.BanLease(leaseID)
+					runtime.BanIdentity(identityKey)
 				case http.MethodDelete:
-					runtime.UnbanLease(leaseID)
+					runtime.UnbanIdentity(identityKey)
 				default:
 					methodNotAllowed.Write(w)
 					return
@@ -286,9 +300,9 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
 						return
 					}
-					runtime.BPSManager().SetLeaseBPS(leaseID, req.BPS)
+					runtime.BPSManager().SetIdentityBPS(identityKey, req.BPS)
 				case http.MethodDelete:
-					runtime.BPSManager().DeleteLeaseBPS(leaseID)
+					runtime.BPSManager().DeleteIdentityBPS(identityKey)
 				default:
 					methodNotAllowed.Write(w)
 					return
@@ -299,10 +313,10 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				approver := runtime.Approver()
 				switch r.Method {
 				case http.MethodPost:
-					approver.Approve(leaseID)
-					approver.Undeny(leaseID)
+					approver.Approve(identityKey)
+					approver.Undeny(identityKey)
 				case http.MethodDelete:
-					approver.Revoke(leaseID)
+					approver.Revoke(identityKey)
 				default:
 					methodNotAllowed.Write(w)
 					return
@@ -313,9 +327,9 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				approver := runtime.Approver()
 				switch r.Method {
 				case http.MethodPost:
-					approver.Deny(leaseID)
+					approver.Deny(identityKey)
 				case http.MethodDelete:
-					approver.Undeny(leaseID)
+					approver.Undeny(identityKey)
 				default:
 					methodNotAllowed.Write(w)
 					return
@@ -425,15 +439,15 @@ func saveAdminState(path string, runtime *policy.Runtime, landingPageEnabled boo
 }
 
 type persistedAdminState struct {
-	ApprovalMode       string           `json:"approval_mode"`
-	ApprovedLeases     []string         `json:"approved_leases,omitempty"`
-	DeniedLeases       []string         `json:"denied_leases,omitempty"`
-	BannedLeases       []string         `json:"banned_leases,omitempty"`
-	BannedIPs          []string         `json:"banned_ips,omitempty"`
-	LeaseBPS           map[string]int64 `json:"lease_bps,omitempty"`
-	UDPEnabled         *bool            `json:"udp_enabled,omitempty"`
-	UDPMaxLeases       *int             `json:"udp_max_leases,omitempty"`
-	LandingPageEnabled *bool            `json:"landing_page_enabled,omitempty"`
+	ApprovalMode         string           `json:"approval_mode"`
+	ApprovedIdentityKeys []string         `json:"approved_identity_keys,omitempty"`
+	DeniedIdentityKeys   []string         `json:"denied_identity_keys,omitempty"`
+	BannedIdentityKeys   []string         `json:"banned_identity_keys,omitempty"`
+	BannedIPs            []string         `json:"banned_ips,omitempty"`
+	IdentityBPS          map[string]int64 `json:"identity_bps,omitempty"`
+	UDPEnabled           *bool            `json:"udp_enabled,omitempty"`
+	UDPMaxLeases         *int             `json:"udp_max_leases,omitempty"`
+	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
 func persistedStateFromRuntime(runtime *policy.Runtime, landingPageEnabled bool) persistedAdminState {
@@ -441,15 +455,15 @@ func persistedStateFromRuntime(runtime *policy.Runtime, landingPageEnabled bool)
 	udpEnabled := runtime.IsUDPEnabled()
 	udpMaxLeases := runtime.UDPMaxLeases()
 	return persistedAdminState{
-		ApprovalMode:       string(approver.Mode()),
-		ApprovedLeases:     approver.ApprovedLeases(),
-		DeniedLeases:       approver.DeniedLeases(),
-		BannedLeases:       runtime.BannedLeases(),
-		BannedIPs:          runtime.IPFilter().BannedIPs(),
-		LeaseBPS:           runtime.BPSManager().LeaseBPSLimits(),
-		UDPEnabled:         &udpEnabled,
-		UDPMaxLeases:       &udpMaxLeases,
-		LandingPageEnabled: &landingPageEnabled,
+		ApprovalMode:         string(approver.Mode()),
+		ApprovedIdentityKeys: approver.ApprovedKeys(),
+		DeniedIdentityKeys:   approver.DeniedKeys(),
+		BannedIdentityKeys:   runtime.BannedIdentityKeys(),
+		BannedIPs:            runtime.IPFilter().BannedIPs(),
+		IdentityBPS:          runtime.BPSManager().IdentityBPSLimits(),
+		UDPEnabled:           &udpEnabled,
+		UDPMaxLeases:         &udpMaxLeases,
+		LandingPageEnabled:   &landingPageEnabled,
 	}
 }
 
@@ -469,10 +483,13 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 			return err
 		}
 	}
-	runtime.Approver().SetDecisions(s.ApprovedLeases, s.DeniedLeases)
-	runtime.SetBannedLeases(s.BannedLeases)
+	runtime.Approver().SetDecisions(
+		utils.NormalizeIdentityKeys(s.ApprovedIdentityKeys),
+		utils.NormalizeIdentityKeys(s.DeniedIdentityKeys),
+	)
+	runtime.SetBannedIdentityKeys(utils.NormalizeIdentityKeys(s.BannedIdentityKeys))
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
-	runtime.BPSManager().SetLeaseBPSLimits(s.LeaseBPS)
+	runtime.BPSManager().SetIdentityBPSLimits(utils.NormalizeIdentityKeyBPS(s.IdentityBPS))
 	switch {
 	case s.UDPEnabled != nil && s.UDPMaxLeases != nil:
 		runtime.SetUDPPolicy(*s.UDPEnabled, *s.UDPMaxLeases)

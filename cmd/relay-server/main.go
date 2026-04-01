@@ -38,7 +38,7 @@ type relayServerConfig struct {
 	LandingPageEnabled  bool
 	Bootstraps          string
 	DiscoveryEnabled    bool
-	OwnerPrivateKey     string
+	IdentityPath        string
 	WireGuardPrivateKey string
 	DiscoveryPort       int
 	WireGuardEndpoint   string
@@ -67,7 +67,7 @@ func runServeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
-	utils.StringFlagEnv(fs, &cfg.OwnerPrivateKey, "owner-private-key", "", "relay owner private key used to derive a discovery address", "OWNER_PRIVATE_KEY")
+	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "identity.json", "relay identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.WireGuardPrivateKey, "wireguard-private-key", "", "wireguard private key for relay peer overlay", "WIREGUARD_PRIVATE_KEY")
 	utils.IntFlagEnv(fs, &cfg.DiscoveryPort, "discovery-port", 0, utils.ParsePortNumber, "public UDP listen port advertised for relay-peer discovery overlay (defaults to 51820 when wireguard is enabled)", "DISCOVERY_PORT")
 	utils.StringFlagEnv(fs, &cfg.WireGuardEndpoint, "wireguard-endpoint", "", "explicit public WireGuard endpoint advertised for relay peer overlay (host:port or ip:port); defaults to PORTAL_URL host + DISCOVERY_PORT when empty", "WIREGUARD_ENDPOINT")
@@ -99,6 +99,7 @@ func runServeCommand(args []string) error {
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("portal_url", cfg.PortalURL).
+		Str("identity_path", cfg.IdentityPath).
 		Str("admin_settings_path", cfg.AdminSettingsPath).
 		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
@@ -120,7 +121,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 
 	server, err := portal.NewServer(portal.ServerConfig{
 		PortalURL:           cfg.PortalURL,
-		OwnerPrivateKey:     cfg.OwnerPrivateKey,
+		IdentityPath:        cfg.IdentityPath,
 		Bootstraps:          bootstraps,
 		WireGuardPrivateKey: cfg.WireGuardPrivateKey,
 		DiscoveryPort:       cfg.DiscoveryPort,

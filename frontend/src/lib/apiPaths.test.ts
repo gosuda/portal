@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { API_PATHS, adminLeasePath, encodeLeaseID } from "@/lib/apiPaths";
+import { API_PATHS, adminLeasePath, encodePathPart } from "@/lib/apiPaths";
 
 describe("API_PATHS contract alignment", () => {
   it("keeps admin snapshot path aligned", () => {
@@ -19,19 +19,27 @@ describe("API_PATHS contract alignment", () => {
     });
   });
 
-  it("encodes lease IDs as base64url path segments", () => {
-    const leaseId = "peer:legacy/123";
-    const expected = Buffer.from(leaseId)
+  it("encodes lease identities as base64url path segments", () => {
+    const name = "relay-1";
+    const address = "0x00000000000000000000000000000000000000A1";
+    const expectedName = Buffer.from(name)
       .toString("base64")
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
-    const encoded = encodeLeaseID(leaseId);
+    const expectedAddress = Buffer.from(address)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const encodedName = encodePathPart(name);
+    const encodedAddress = encodePathPart(address);
 
-    expect(encoded).toBe(expected);
-    expect(encoded).not.toContain("=");
-    expect(adminLeasePath(encoded, "approve")).toBe(
-      `${API_PATHS.admin.leases}/${encodeURIComponent(encoded)}/approve`
+    expect(encodedName).toBe(expectedName);
+    expect(encodedAddress).toBe(expectedAddress);
+    expect(encodedAddress).not.toContain("=");
+    expect(adminLeasePath(name, address, "approve")).toBe(
+      `${API_PATHS.admin.leases}/${encodeURIComponent(encodedName)}/${encodeURIComponent(encodedAddress)}/approve`
     );
   });
 

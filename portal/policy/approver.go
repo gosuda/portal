@@ -13,17 +13,17 @@ const (
 )
 
 type Approver struct {
-	approvedLeases map[string]struct{}
-	deniedLeases   map[string]struct{}
-	approvalMode   Mode
-	mu             sync.RWMutex
+	approvedKeys map[string]struct{}
+	deniedKeys   map[string]struct{}
+	approvalMode Mode
+	mu           sync.RWMutex
 }
 
 func NewApprover() *Approver {
 	return &Approver{
-		approvalMode:   ModeAuto,
-		approvedLeases: make(map[string]struct{}),
-		deniedLeases:   make(map[string]struct{}),
+		approvalMode: ModeAuto,
+		approvedKeys: make(map[string]struct{}),
+		deniedKeys:   make(map[string]struct{}),
 	}
 }
 
@@ -43,90 +43,90 @@ func (a *Approver) SetMode(mode Mode) error {
 	return nil
 }
 
-func (a *Approver) IsApproved(leaseID string) bool {
+func (a *Approver) IsApproved(key string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	_, ok := a.approvedLeases[leaseID]
+	_, ok := a.approvedKeys[key]
 	return ok
 }
 
-func (a *Approver) Approve(leaseID string) {
+func (a *Approver) Approve(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.approvedLeases[leaseID] = struct{}{}
-	delete(a.deniedLeases, leaseID)
+	a.approvedKeys[key] = struct{}{}
+	delete(a.deniedKeys, key)
 }
 
-func (a *Approver) Revoke(leaseID string) {
+func (a *Approver) Revoke(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.approvedLeases, leaseID)
+	delete(a.approvedKeys, key)
 }
 
-func (a *Approver) ApprovedLeases() []string {
+func (a *Approver) ApprovedKeys() []string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make([]string, 0, len(a.approvedLeases))
-	for leaseID := range a.approvedLeases {
-		out = append(out, leaseID)
+	out := make([]string, 0, len(a.approvedKeys))
+	for key := range a.approvedKeys {
+		out = append(out, key)
 	}
 	return out
 }
 
-func (a *Approver) IsDenied(leaseID string) bool {
+func (a *Approver) IsDenied(key string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	_, ok := a.deniedLeases[leaseID]
+	_, ok := a.deniedKeys[key]
 	return ok
 }
 
-func (a *Approver) Deny(leaseID string) {
+func (a *Approver) Deny(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.deniedLeases[leaseID] = struct{}{}
-	delete(a.approvedLeases, leaseID)
+	a.deniedKeys[key] = struct{}{}
+	delete(a.approvedKeys, key)
 }
 
-func (a *Approver) Undeny(leaseID string) {
+func (a *Approver) Undeny(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.deniedLeases, leaseID)
+	delete(a.deniedKeys, key)
 }
 
-func (a *Approver) DeniedLeases() []string {
+func (a *Approver) DeniedKeys() []string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	out := make([]string, 0, len(a.deniedLeases))
-	for leaseID := range a.deniedLeases {
-		out = append(out, leaseID)
+	out := make([]string, 0, len(a.deniedKeys))
+	for key := range a.deniedKeys {
+		out = append(out, key)
 	}
 	return out
 }
 
-func (a *Approver) SetDecisions(approvedLeases, deniedLeases []string) {
+func (a *Approver) SetDecisions(approvedKeys, deniedKeys []string) {
 	if a == nil {
 		return
 	}
 
-	approved := make(map[string]struct{}, len(approvedLeases))
-	for _, leaseID := range approvedLeases {
-		if leaseID == "" {
+	approved := make(map[string]struct{}, len(approvedKeys))
+	for _, key := range approvedKeys {
+		if key == "" {
 			continue
 		}
-		approved[leaseID] = struct{}{}
+		approved[key] = struct{}{}
 	}
 
-	denied := make(map[string]struct{}, len(deniedLeases))
-	for _, leaseID := range deniedLeases {
-		if leaseID == "" {
+	denied := make(map[string]struct{}, len(deniedKeys))
+	for _, key := range deniedKeys {
+		if key == "" {
 			continue
 		}
-		delete(approved, leaseID)
-		denied[leaseID] = struct{}{}
+		delete(approved, key)
+		denied[key] = struct{}{}
 	}
 
 	a.mu.Lock()
-	a.approvedLeases = approved
-	a.deniedLeases = denied
+	a.approvedKeys = approved
+	a.deniedKeys = denied
 	a.mu.Unlock()
 }

@@ -37,15 +37,18 @@ export const ROUTE_PATHS = {
   adminLogin: "/admin/login",
 } as const;
 
-export function encodeLeaseID(leaseID: string): string {
-  return btoa(leaseID).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export function encodePathPart(value: string): string {
+  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function adminLeasePath(
-  encodedLeaseID: string,
+  name: string,
+  address: string,
   action: "ban" | "bps" | "approve" | "deny"
 ): string {
-  return `${API_PATHS.admin.leases}/${encodeURIComponent(encodedLeaseID)}/${action}`;
+  const encodedName = encodePathPart(name);
+  const encodedAddress = encodePathPart(address);
+  return `${API_PATHS.admin.leases}/${encodeURIComponent(encodedName)}/${encodeURIComponent(encodedAddress)}/${action}`;
 }
 
 export function adminIPBanPath(ip: string): string {

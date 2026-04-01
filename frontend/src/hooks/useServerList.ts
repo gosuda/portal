@@ -10,10 +10,11 @@ function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
   return ssrData.map((row, index) => {
     const metadata = parseLeaseMetadata(row.Metadata);
     const hostname = row.Hostname || "";
+    const serviceName = row.name || "";
 
     return {
       id: index + 1,
-      name: row.Name || hostname || "(unnamed)",
+      name: serviceName || hostname || "(unnamed)",
       description: metadata.description || "",
       tags: metadata.tags,
       thumbnail: metadata.thumbnail || "",

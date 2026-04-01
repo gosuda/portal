@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -36,6 +37,9 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 		t.Fatalf("DeriveWireGuardOverlayIPv4() error = %v", err)
 	}
 	desc, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
+		Identity: types.Identity{
+			Name: utils.PortalRootHost(relayURL),
+		},
 		RelayID:             relayURL,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
@@ -54,11 +58,17 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 	return desc
 }
 
+func tempIdentityPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "relay_identity.json")
+}
+
 func TestNewServerGeneratesWireGuardWhenDiscoveryEnabled(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:        "https://portal.example.com",
+		IdentityPath:     tempIdentityPath(t),
 		DiscoveryEnabled: true,
 	})
 	if err != nil {
@@ -83,6 +93,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
+		IdentityPath:  tempIdentityPath(t),
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
@@ -141,11 +152,12 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 }
 
-func TestServerStartDiscoveryOmitsOwnerIdentityFields(t *testing.T) {
+func TestServerStartDiscoveryIncludesIdentityAndOmitsSignerFields(t *testing.T) {
 	t.Parallel()
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:        "https://localhost:4017",
+		IdentityPath:     tempIdentityPath(t),
 		ACME:             acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr:    "127.0.0.1:0",
 		SNIListenAddr:    "127.0.0.1:0",
@@ -189,7 +201,13 @@ func TestServerStartDiscoveryOmitsOwnerIdentityFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read /discovery response: %v", err)
 	}
-	for _, key := range []string{"owner_address", "signer_public_key", "descriptor_signature"} {
+	for _, key := range []string{"\"address\"", "\"name\"", "signer_public_key", "descriptor_signature"} {
+		if key == "\"address\"" || key == "\"name\"" {
+			if !strings.Contains(string(body), key) {
+				t.Fatalf("/discovery body = %q, want %q present", string(body), key)
+			}
+			continue
+		}
 		if strings.Contains(string(body), key) {
 			t.Fatalf("/discovery body = %q, want %q omitted", string(body), key)
 		}
@@ -201,6 +219,7 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://portal.example.com",
+		IdentityPath:  tempIdentityPath(t),
 		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
@@ -224,6 +243,7 @@ func TestNewServerDerivesWireGuardConfigFromPrivateKey(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:           "https://portal.example.com",
+		IdentityPath:        tempIdentityPath(t),
 		WireGuardPrivateKey: strings.Repeat("33", 32),
 		DiscoveryPort:       41011,
 	})
@@ -264,6 +284,7 @@ func TestNewServerIgnoresDiscoveryPortWithoutWireGuardKey(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://portal.example.com",
+		IdentityPath:  tempIdentityPath(t),
 		DiscoveryPort: 51820,
 	})
 	if err != nil {
@@ -279,6 +300,7 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:    "https://portal.example.com",
+		IdentityPath: tempIdentityPath(t),
 		UDPPortCount: 1,
 	})
 	if err != nil {
@@ -286,8 +308,10 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	}
 
 	resp, err := server.registerLease(types.RegisterChallengeRequest{
-		Name:         "Demo-App",
-		OwnerAddress: server.ownerIdentity.Address,
+		Identity: types.Identity{
+			Name:    "Demo-App",
+			Address: server.identity.Address,
+		},
 	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
@@ -298,9 +322,9 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 		t.Fatalf("registerLease() hostname = %q, want %q", resp.Hostname, wantHostname)
 	}
 
-	record, err := server.registry.FindByID(resp.LeaseID)
+	record, err := server.registry.Find(resp.Identity)
 	if err != nil {
-		t.Fatalf("registry.FindByID() error = %v, want registered lease", err)
+		t.Fatalf("registry.Find() error = %v, want registered lease", err)
 	}
 	snapshot := server.registry.Snapshot(record)
 	if snapshot.Name != "demo-app" {
@@ -316,6 +340,7 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:    "https://portal.example.com",
+		IdentityPath: tempIdentityPath(t),
 		UDPPortCount: 10,
 	})
 	if err != nil {
@@ -324,22 +349,24 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	server.registry.policy.SetUDPPolicy(true, 0)
 
 	resp, err := server.registerLease(types.RegisterChallengeRequest{
-		Name:         "demo-udp",
-		OwnerAddress: server.ownerIdentity.Address,
-		UDPEnabled:   true,
+		Identity: types.Identity{
+			Name:    "demo-udp",
+			Address: server.identity.Address,
+		},
+		UDPEnabled: true,
 	}, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("registerLease() error = %v", err)
 	}
 	t.Cleanup(func() {
-		if record, err := server.registry.FindByID(resp.LeaseID); err == nil {
+		if record, err := server.registry.Find(resp.Identity); err == nil {
 			record.Close()
 		}
 	})
 
-	record, err := server.registry.FindByID(resp.LeaseID)
+	record, err := server.registry.Find(resp.Identity)
 	if err != nil {
-		t.Fatalf("registry.FindByID() error = %v, want registered lease", err)
+		t.Fatalf("registry.Find() error = %v, want registered lease", err)
 	}
 	if record.stream == nil {
 		t.Fatal("stream = nil, want stream runtime")
@@ -360,6 +387,7 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:           "https://portal.example.com",
+		IdentityPath:        tempIdentityPath(t),
 		Bootstraps:          []string{"https://bootstrap.example.com"},
 		WireGuardPrivateKey: strings.Repeat("23", 32),
 		DiscoveryPort:       41022,
@@ -373,7 +401,7 @@ func TestServerUpsertDiscoverySeedURLsSkipsLocalRelayHosts(t *testing.T) {
 		"https://localhost:4017",
 		"https://relay-a.example.com",
 		"https://127.0.0.1:4017",
-	}, time.Now().UTC())
+	})
 	if err != nil {
 		t.Fatalf("UpsertSeedURLs() error = %v", err)
 	}
@@ -416,6 +444,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:           "https://portal.example.com",
+		IdentityPath:        tempIdentityPath(t),
 		Bootstraps:          []string{"https://bootstrap.example.com"},
 		WireGuardPrivateKey: strings.Repeat("24", 32),
 		DiscoveryPort:       41023,
@@ -428,18 +457,18 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	bootstrapDesc := mustRelayDescriptor(t, "https://bootstrap.example.com")
 	relayADesc := mustRelayDescriptor(t, "https://relay-a.example.com")
 
-	applyDiscovery := func(targetRelayID, targetURL string, resp types.DiscoveryResponse, requireSelfOverlay bool) (bool, int, error, error) {
+	applyDiscovery := func(targetIdentity types.Identity, targetURL string, resp types.DiscoveryResponse, requireSelfOverlay bool) (bool, int, error, error) {
 		now := time.Now().UTC()
 		if requireSelfOverlay {
-			_, updated, added, warnErr, err := server.relaySet.ApplyOverlayRelayDiscoveryResponse(targetRelayID, targetURL, resp, now)
+			_, updated, added, warnErr, err := server.relaySet.ApplyOverlayRelayDiscoveryResponse(targetIdentity, targetURL, resp, now)
 			return updated, added, warnErr, err
 		}
-		_, updated, added, warnErr, err := server.relaySet.ApplyRelayDiscoveryResponse(targetRelayID, targetURL, resp, now)
+		_, updated, added, warnErr, err := server.relaySet.ApplyRelayDiscoveryResponse(targetIdentity, targetURL, resp, now)
 		return updated, added, warnErr, err
 	}
 
 	resultUpdated, resultAdded, warnErr, err := applyDiscovery(
-		bootstrapDesc.RelayID,
+		bootstrapDesc.Identity,
 		bootstrapDesc.APIHTTPSAddr,
 		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: bootstrapDesc},
 		false,
@@ -458,7 +487,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	}
 
 	resultUpdated, resultAdded, warnErr, err = applyDiscovery(
-		bootstrapDesc.RelayID,
+		bootstrapDesc.Identity,
 		bootstrapDesc.APIHTTPSAddr,
 		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: bootstrapDesc, Relays: []types.RelayDescriptor{relayADesc}},
 		false,
@@ -529,7 +558,7 @@ func TestServerRecordVerifiedDiscoveryPeerRequiresDirectConfirmation(t *testing.
 	}
 
 	resultUpdated, resultAdded, warnErr, err = applyDiscovery(
-		relayADesc.RelayID,
+		relayADesc.Identity,
 		relayADesc.APIHTTPSAddr,
 		types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: relayADesc},
 		true,
@@ -569,6 +598,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 
 	server, err := NewServer(ServerConfig{
 		PortalURL:     "https://localhost:4017",
+		IdentityPath:  tempIdentityPath(t),
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",

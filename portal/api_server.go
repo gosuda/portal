@@ -104,7 +104,7 @@ func (s *Server) apiHandler(base *http.ServeMux, keylessSignerHandler http.Handl
 func (s *Server) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, map[string]any{
 		"service": "portal-relay",
-		"root":    s.rootHost,
+		"root":    s.identity.Name,
 	})
 }
 
@@ -138,7 +138,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	ingressAddr := s.rootHost
+	ingressAddr := s.identity.Name
 	if s.cfg.SNIPort != 0 && s.cfg.SNIPort != 443 {
 		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
 	}
@@ -148,6 +148,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		s.wgConfig.OverlayIPv4 != ""
 
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
+		Identity:            s.identity.Copy(),
 		RelayID:             s.cfg.PortalURL,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
@@ -263,7 +264,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 	}
 	domain := strings.TrimSpace(r.Host)
 	if domain == "" {
-		domain = s.rootHost
+		domain = s.identity.Name
 	}
 	registerURI := (&url.URL{
 		Scheme: scheme,
@@ -309,7 +310,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.ownerIdentity.PublicKey, s.cfg.PortalURL, strings.TrimSpace(req.LeaseID), time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, req.Identity, time.Now().UTC())
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
 		return
@@ -319,19 +320,19 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
 	}
-	record, err := s.registry.Renew(strings.TrimSpace(req.LeaseID), ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
+	record, err := s.registry.Renew(claims.Identity, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
 		leaseLookupError(err).Write(w)
 		return
 	}
-	nextAccessToken, _, err := auth.IssueLeaseAccessToken(s.ownerIdentity.PrivateKey, s.ownerIdentity.Address, s.cfg.PortalURL, claims.Subject, record.ID, ttl)
+	nextAccessToken, _, err := auth.IssueLeaseAccessToken(s.identity.PrivateKey, s.identity.Address, s.cfg.PortalURL, record.Copy(), ttl)
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
 		return
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
-		LeaseID:     record.ID,
+		Identity:    record.Copy(),
 		ExpiresAt:   record.ExpiresAt,
 		AccessToken: nextAccessToken,
 	})
@@ -346,12 +347,13 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.ownerIdentity.PublicKey, s.cfg.PortalURL, strings.TrimSpace(req.LeaseID), time.Now().UTC()); err != nil {
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, req.Identity, time.Now().UTC())
+	if err != nil {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
 		return
 	}
 
-	record, err := s.registry.Unregister(strings.TrimSpace(req.LeaseID))
+	record, err := s.registry.Unregister(claims.Identity)
 	if err != nil {
 		leaseLookupError(err).Write(w)
 		return
@@ -372,14 +374,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	leaseID := strings.TrimSpace(r.URL.Query().Get("lease_id"))
+	identity := types.Identity{
+		Name:    r.URL.Query().Get("name"),
+		Address: r.URL.Query().Get("address"),
+	}
 	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
 		return
 	}
 
-	lease, err := s.admitLeaseByID(leaseID, token, false)
+	lease, err := s.admitLeaseByIdentity(identity, token, false)
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaseNotFound):
@@ -424,16 +429,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err := lease.stream.OfferConn(conn); err != nil {
 		log.Warn().
 			Err(err).
-			Str("lease_id", lease.ID).
+			Str("address", lease.Address).
 			Str("lease_name", lease.Name).
 			Str("remote_addr", remoteAddr).
 			Msg("sdk reverse rejected")
 		return
 	}
 
-	s.registry.Touch(lease.ID, clientIP, time.Now())
+	s.registry.Touch(lease.Copy(), clientIP, time.Now())
 	log.Info().
-		Str("lease_id", lease.ID).
+		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", remoteAddr).
 		Int("ready", lease.stream.ReadyCount()).
@@ -454,13 +459,13 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	if msg.LeaseID == "" || msg.AccessToken == "" {
+	if msg.Identity.Key() == "" || msg.AccessToken == "" {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
 
-	lease, err := s.admitLeaseByID(msg.LeaseID, msg.AccessToken, true)
+	lease, err := s.admitLeaseByIdentity(msg.Identity, msg.AccessToken, true)
 	switch {
 	case err == nil:
 	case errors.Is(err, errLeaseNotFound):
@@ -492,24 +497,24 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 	}
 
 	_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: true})
-	s.registry.Touch(lease.ID, conn.RemoteAddr().String(), time.Now())
+	s.registry.Touch(lease.Copy(), conn.RemoteAddr().String(), time.Now())
 	log.Info().
 		Str("component", "quic-tunnel-listener").
-		Str("lease_id", lease.ID).
+		Str("address", lease.Address).
 		Str("lease_name", lease.Name).
 		Str("remote_addr", conn.RemoteAddr().String()).
 		Msg("quic tunnel connected")
 }
 
-func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*leaseRecord, error) {
-	lease, err := s.registry.FindByID(leaseID)
+func (s *Server) admitLeaseByIdentity(identity types.Identity, token string, requireDatagram bool) (*leaseRecord, error) {
+	lease, err := s.registry.Find(identity)
 	if err != nil {
 		return nil, err
 	}
-	if !s.registry.policy.IsLeaseRoutable(lease.ID) {
+	if !s.registry.policy.IsIdentityRoutable(lease.Key()) {
 		return nil, errLeaseRejected
 	}
-	if _, err := auth.VerifyLeaseAccessToken(token, s.ownerIdentity.PublicKey, s.cfg.PortalURL, leaseID, time.Now().UTC()); err != nil {
+	if _, err := auth.VerifyLeaseAccessToken(token, s.identity.PublicKey, s.cfg.PortalURL, lease.Copy(), time.Now().UTC()); err != nil {
 		return nil, errUnauthorized
 	}
 	if lease.stream == nil || (requireDatagram && lease.datagram == nil) {
@@ -519,14 +524,14 @@ func (s *Server) admitLeaseByID(leaseID, token string, requireDatagram bool) (*l
 }
 
 func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, reportedIP string) (types.RegisterResponse, error) {
-	name, err := utils.NormalizeDNSLabel(req.Name)
+	identity, err := utils.NormalizeIdentity(req.Identity)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
 	if s.registry.policy.IPFilter().IsIPBanned(clientIP) {
 		return types.RegisterResponse{}, errIPBanned
 	}
-	hostname, err := utils.LeaseHostname(name, s.rootHost)
+	hostname, err := utils.LeaseHostname(identity.Name, s.identity.Name)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -534,13 +539,6 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	ttl := defaultLeaseTTL
 	if req.TTL > 0 {
 		ttl = time.Duration(req.TTL) * time.Second
-	}
-	ownerAddress := strings.TrimSpace(req.OwnerAddress)
-	if ownerAddress != "" {
-		ownerAddress, err = utils.NormalizeEVMAddress(ownerAddress)
-		if err != nil {
-			return types.RegisterResponse{}, fmt.Errorf("normalize owner address: %w", err)
-		}
 	}
 
 	if req.UDPEnabled {
@@ -554,38 +552,36 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 			return types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
-	leaseID := utils.RandomID("lease_")
-	accessToken, claims, err := auth.IssueLeaseAccessToken(s.ownerIdentity.PrivateKey, s.ownerIdentity.Address, s.cfg.PortalURL, ownerAddress, leaseID, ttl)
+	accessToken, claims, err := auth.IssueLeaseAccessToken(s.identity.PrivateKey, s.identity.Address, s.cfg.PortalURL, identity, ttl)
 	if err != nil {
 		return types.RegisterResponse{}, err
 	}
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
+	identityKey := identity.Key()
 	record := &leaseRecord{
 		Lease: types.Lease{
-			ID:           leaseID,
-			Name:         name,
-			Hostname:     hostname,
-			Metadata:     req.Metadata,
-			OwnerAddress: ownerAddress,
-			ExpiresAt:    expiresAt,
-			FirstSeenAt:  issuedAt,
-			LastSeenAt:   issuedAt,
-			ClientIP:     clientIP,
-			ReportedIP:   utils.SanitizeReportedIP(reportedIP),
-			UDPEnabled:   req.UDPEnabled,
+			Identity:    identity,
+			Hostname:    hostname,
+			Metadata:    req.Metadata,
+			ExpiresAt:   expiresAt,
+			FirstSeenAt: issuedAt,
+			LastSeenAt:  issuedAt,
+			ClientIP:    clientIP,
+			ReportedIP:  utils.SanitizeReportedIP(reportedIP),
+			UDPEnabled:  req.UDPEnabled,
 		},
-		stream: transport.NewRelayStream(leaseID, defaultIdleKeepalive, defaultReadyQueueLimit),
+		stream: transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 	if req.UDPEnabled {
 		if s.ports == nil {
 			return types.RegisterResponse{}, errors.New("udp port allocation not available")
 		}
-		port, err := s.ports.Allocate(name)
+		port, err := s.ports.Allocate(identity.Name)
 		if err != nil {
 			return types.RegisterResponse{}, err
 		}
-		record.datagram = transport.NewRelayDatagram(leaseID, port)
+		record.datagram = transport.NewRelayDatagram(identityKey, port)
 		record.ports = s.ports
 	}
 
@@ -600,7 +596,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	}
 
 	resp := types.RegisterResponse{
-		LeaseID:     leaseID,
+		Identity:    record.Copy(),
 		Hostname:    hostname,
 		Metadata:    record.Metadata,
 		ExpiresAt:   expiresAt,
@@ -608,7 +604,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		UDPEnabled:  record.UDPEnabled,
 	}
 	if record.datagram != nil {
-		resp.UDPAddr = fmt.Sprintf("%s:%d", s.rootHost, record.datagram.UDPPort())
+		resp.UDPAddr = fmt.Sprintf("%s:%d", s.identity.Name, record.datagram.UDPPort())
 	}
 
 	return resp, nil

@@ -12,16 +12,14 @@ export interface ServerData {
   ExpiresAt: string;
   FirstSeenAt: string;
   LastSeenAt: string;
-  ID: string;
-  Name: string;
+  name?: string;
+  address?: string;
   BPS?: number;
   ClientIP: string;
   ReportedIP?: string;
   Hostname: string;
   Metadata: unknown;
   Ready: number;
-  Transport?: string;
-  UDPPort?: number;
   IsApproved?: boolean;
   IsBanned?: boolean;
   IsDenied?: boolean;
