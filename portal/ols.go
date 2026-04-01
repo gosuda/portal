@@ -3,6 +3,7 @@ package portal
 import (
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 )
 
@@ -60,13 +61,19 @@ func (m *OLSManager) reconfigure(n int) {
 		m.grid[i] = make([]*OLSNode, n)
 	}
 
-	// Assign nodes to grid
+	// Assign nodes to grid (deterministically)
+	ids := make([]string, 0, len(m.nodes))
+	for id := range m.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
 	count := 0
-	for _, node := range m.nodes {
+	for _, id := range ids {
 		if count >= n*n {
 			break
 		}
-		m.grid[count/n][count%n] = node
+		m.grid[count/n][count%n] = m.nodes[id]
 		count++
 	}
 
@@ -75,29 +82,23 @@ func (m *OLSManager) reconfigure(n int) {
 }
 
 // generateMOLS constructs a pair of orthogonal latin squares of order n.
-// It uses recursive composition to build larger squares from smaller components.
 func generateMOLS(n int) ([][]int, [][]int) {
 	if n < 2 {
 		return [][]int{{0}}, [][]int{{0}}
 	}
 
-	// Base case: Prime or small order
 	if isPrime(n) {
 		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
 	}
 
-	// Recursive step: Find factors m, k such that n = m * k
 	m, k := findFactors(n)
 	if m == 1 {
-		// Fallback if no good factors found (should not happen for n >= 2)
 		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
 	}
 
-	// Recurse to get MOLS for components
 	a1, a2 := generateMOLS(m)
 	b1, b2 := generateMOLS(k)
 
-	// Compose the components into a larger square (Kronecker product style)
 	return composeMOLS(a1, b1), composeMOLS(a2, b2)
 }
 
@@ -112,7 +113,6 @@ func generateBaseMOLS(n, step int) [][]int {
 	return ls
 }
 
-// composeMOLS combines two squares of order m and k into a square of order m*k.
 func composeMOLS(a, b [][]int) [][]int {
 	m := len(a)
 	k := len(b)
@@ -121,8 +121,6 @@ func composeMOLS(a, b [][]int) [][]int {
 	for i := 0; i < n; i++ {
 		res[i] = make([]int, n)
 		for j := 0; j < n; j++ {
-			// (i, j) in n x n grid maps to
-			// (i/k, j/k) in m x m grid and (i%k, j%k) in k x k grid
 			valA := a[i/k][j/k]
 			valB := b[i%k][j%k]
 			res[i][j] = valA*k + valB
@@ -227,7 +225,8 @@ func (m *OLSManager) checkAndRotate() {
 	rowVar := variance(rowLoad)
 	colVar := variance(colLoad)
 
-	if rowVar > colVar*2 {
+	// If row imbalance exceeds col imbalance significantly, rotate
+	if rowVar > colVar*1.5 {
 		m.rotation = (m.rotation + 90) % 360
 	}
 }

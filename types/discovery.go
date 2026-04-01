@@ -23,8 +23,9 @@ type RelayDescriptor struct {
 	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
-}
 
+	Load float64 `json:"load,omitempty"`
+	}
 type RelayState struct {
 	Descriptor          RelayDescriptor `json:"descriptor"`
 	Bootstrap           bool            `json:"bootstrap,omitempty"`

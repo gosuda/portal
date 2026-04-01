@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
@@ -79,6 +80,7 @@ type Server struct {
 	trustedProxyCIDRs []*net.IPNet
 	relaySet          *discovery.RelaySet
 	olsManager        *OLSManager
+	activeConns       int64
 	shutdownOnce      sync.Once
 }
 
@@ -446,7 +448,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 
 							targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
 							if err == nil {
-								BridgeConns(wrappedConn, targetConn)
+								s.BridgeConns(wrappedConn, targetConn)
 								return
 							}
 							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target")
@@ -465,7 +467,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 						_ = wrappedConn.Close()
 						return
 					}
-					BridgeConns(wrappedConn, upstream)
+					s.BridgeConns(wrappedConn, upstream)
 					return
 				}
 
@@ -484,7 +486,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				BridgeConns(wrappedConn, session)
+				s.BridgeConns(wrappedConn, session)
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
 			return nil
@@ -698,7 +700,10 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	}
 }
 
-func BridgeConns(left, right net.Conn) {
+func (s *Server) BridgeConns(left, right net.Conn) {
+	atomic.AddInt64(&s.activeConns, 1)
+	defer atomic.AddInt64(&s.activeConns, -1)
+
 	defer left.Close()
 	defer right.Close()
 
@@ -731,6 +736,14 @@ func (s *Server) updateOLSFromRelaySet() {
 		}
 	}
 	s.olsManager.UpdateNodes(nodes)
+
+	// Update loads
+	s.olsManager.UpdateLoad(s.cfg.PortalURL, float64(atomic.LoadInt64(&s.activeConns)))
+	for id, state := range snapshot {
+		if !state.Expired {
+			s.olsManager.UpdateLoad(id, state.Descriptor.Load)
+		}
+	}
 }
 
 func closeWrite(conn net.Conn) {

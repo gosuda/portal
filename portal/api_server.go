@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -143,6 +144,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		WireGuardEndpoint:   strings.TrimSpace(s.wgConfig.Endpoint),
 		OverlayIPv4:         strings.TrimSpace(s.wgConfig.OverlayIPv4),
 		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
+		Load:                float64(atomic.LoadInt64(&s.activeConns)),
 	})
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
