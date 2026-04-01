@@ -181,7 +181,7 @@ func TestLeaseRegistryRunJanitorRejectsNonPositiveInterval(t *testing.T) {
 	t.Parallel()
 
 	registry := newLeaseRegistry(policy.NewRuntime())
-	err := registry.RunJanitor(context.Background(), 0)
+	err := registry.RunJanitor(context.Background(), 0, nil)
 	if err == nil {
 		t.Fatal("RunJanitor() error = nil, want validation error")
 	}

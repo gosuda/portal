@@ -60,6 +60,8 @@ Required permissions:
 
 - `Zone:Read`
 - `DNS:Edit`
+- optional when `ENS_GASLESS_ENABLED=true`:
+  - `Zone Settings:Edit`
 
 Scope:
 
@@ -95,6 +97,27 @@ Equivalent relay flags:
 - `--aws-region`
 - `--aws-hosted-zone-id`
 
+When `ENS_GASLESS_ENABLED=true` and the hosted zone does not already have an active Route53 key-signing key (KSK), also provide:
+
+- `AWS_DNSSEC_KMS_KEY_ARN`
+- optional `DNSSEC_KSK_NAME`
+
+### 2.4 Optional ENS Gasless Automation
+
+Portal can optionally enable ENS gasless DNS import for the managed zone and lease hostnames.
+
+- This is not required for normal Portal deployment.
+- Enable it only when you specifically need ENS gasless DNS import.
+- Portal manages DNSSEC as part of this mode.
+- Cloudflare can enable zone signing directly, but some registrars still require publishing the returned DS record.
+- Route53 requires a compatible KMS key ARN when no active KSK already exists, and the registrar may still require the DS record.
+- New lease hostnames such as `app.portal.example.com` are published automatically when they register and are cleaned up on unregister or expiry.
+- ENS gasless import still depends on DNSSEC being valid for the domain.
+- By default Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <address>`.
+- The address is derived automatically from the relay identity for the base domain and from each lease identity for lease hostnames.
+- This enables offchain gasless DNSSEC usage in ENS-aware clients. It does not perform an onchain ENS claim transaction.
+- Keep `ENS_GASLESS_ENABLED=false` unless you intend to use ENS gasless DNS import.
+
 ## 3. Run Relay Server
 
 ### 3.1 Create `.env` at repository root
@@ -112,6 +135,7 @@ ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/portal-certs
 ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
+ENS_GASLESS_ENABLED=false
 ```
 
 Route53 example:
@@ -126,6 +150,11 @@ AWS_SESSION_TOKEN=...
 AWS_REGION=us-east-1
 # Optional override
 AWS_HOSTED_ZONE_ID=Z1234567890ABC
+# Required only for ENS gasless automation when no ACTIVE KSK already exists.
+AWS_DNSSEC_KMS_KEY_ARN=arn:aws:kms:...
+# Optional override
+DNSSEC_KSK_NAME=portal_ksk
+ENS_GASLESS_ENABLED=false
 ```
 
 Notes:

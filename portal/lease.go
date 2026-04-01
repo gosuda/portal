@@ -52,7 +52,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	return out
 }
 
-func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) error {
+func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration, onExpired func(*leaseRecord)) error {
 	if interval <= 0 {
 		return errors.New("janitor interval must be positive")
 	}
@@ -65,7 +65,7 @@ func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			r.cleanupExpired(time.Now())
+			r.cleanupExpired(time.Now(), onExpired)
 		}
 	}
 }
@@ -246,7 +246,7 @@ func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time
 	return record
 }
 
-func (r *leaseRegistry) cleanupExpired(now time.Time) {
+func (r *leaseRegistry) cleanupExpired(now time.Time, onExpired func(*leaseRecord)) {
 	expiredLeases := r.removeExpired(now)
 	r.mu.Lock()
 	for challengeID, challenge := range r.registerChallenges {
@@ -256,6 +256,9 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) {
 	}
 	r.mu.Unlock()
 	for _, lease := range expiredLeases {
+		if onExpired != nil {
+			onExpired(lease)
+		}
 		lease.Close()
 	}
 }

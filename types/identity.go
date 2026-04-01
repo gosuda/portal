@@ -111,3 +111,9 @@ type DesiredPeer struct {
 	WireGuardEndpoint  string   `json:"wireguard_endpoint"`
 	AllowedIPs         []string `json:"allowed_ips,omitempty"`
 }
+
+type DNSSECStatus struct {
+	State    string `json:"state,omitempty"`
+	DSRecord string `json:"ds_record,omitempty"`
+	Message  string `json:"message,omitempty"`
+}

@@ -28,36 +28,44 @@ import (
 )
 
 const (
-	fullChainFileName      = "fullchain.pem"
-	keyFileName            = "privatekey.pem"
-	accountKeyFileName     = "acme-account.key"
-	registrationFileName   = "acme-registration.json"
-	defaultACMEEmailPrefix = "acme@"
-	defaultRenewInterval   = 24 * time.Hour
-	defaultDNSSyncInterval = 10 * time.Minute
-	defaultSyncTimeout     = 2 * time.Minute
+	fullChainFileName         = "fullchain.pem"
+	keyFileName               = "privatekey.pem"
+	accountKeyFileName        = "acme-account.key"
+	registrationFileName      = "acme-registration.json"
+	gaslessENSTXTPrefix       = "ENS1 "
+	defaultENSGaslessResolver = "0x238A8F792dFA6033814B18618aD4100654aeef01"
+	defaultACMEEmailPrefix    = "acme@"
+	defaultRenewInterval      = 24 * time.Hour
+	defaultDNSSyncInterval    = 10 * time.Minute
+	defaultSyncTimeout        = 2 * time.Minute
 )
 
 type Config struct {
 	BaseDomain         string
 	KeyDir             string
 	DNSProvider        string
+	ENSGaslessEnabled  bool
+	ENSGaslessAddress  string
 	CloudflareToken    string
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 	AWSSessionToken    string
 	AWSRegion          string
 	AWSHostedZoneID    string
+	AWSKMSKeyARN       string
+	DNSSECKSKName      string
 }
 
 type Manager struct {
-	stopCh    chan struct{}
-	cfg       Config
-	wg        sync.WaitGroup
-	mu        sync.RWMutex
-	dns       DNSProvider
-	startOnce sync.Once
-	stopOnce  sync.Once
+	stopCh        chan struct{}
+	cfg           Config
+	wg            sync.WaitGroup
+	mu            sync.RWMutex
+	dns           DNSProvider
+	startOnce     sync.Once
+	stopOnce      sync.Once
+	dnssecLogOnce sync.Once
+	ensLogOnce    sync.Once
 }
 
 type provisionConfig struct {
@@ -80,12 +88,25 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.BaseDomain = strings.TrimPrefix(utils.NormalizeHostname(cfg.BaseDomain), "*.")
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
+	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
 	cfg.AWSAccessKeyID = strings.TrimSpace(cfg.AWSAccessKeyID)
 	cfg.AWSSecretAccessKey = strings.TrimSpace(cfg.AWSSecretAccessKey)
 	cfg.AWSSessionToken = strings.TrimSpace(cfg.AWSSessionToken)
 	cfg.AWSRegion = strings.TrimSpace(cfg.AWSRegion)
 	cfg.AWSHostedZoneID = strings.TrimSpace(cfg.AWSHostedZoneID)
+	cfg.AWSKMSKeyARN = strings.TrimSpace(cfg.AWSKMSKeyARN)
+	cfg.DNSSECKSKName = strings.TrimSpace(cfg.DNSSECKSKName)
+	if cfg.ENSGaslessEnabled {
+		if cfg.ENSGaslessAddress == "" {
+			return nil, errors.New("ens gasless address is required when ens gasless import is enabled")
+		}
+		address, err := utils.NormalizeEVMAddress(cfg.ENSGaslessAddress)
+		if err != nil {
+			return nil, fmt.Errorf("normalize ens gasless address: %w", err)
+		}
+		cfg.ENSGaslessAddress = address
+	}
 
 	if cfg.KeyDir == "" {
 		return nil, errors.New("acme key directory is required")
@@ -108,6 +129,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		AWSSessionToken:    cfg.AWSSessionToken,
 		AWSRegion:          cfg.AWSRegion,
 		AWSHostedZoneID:    cfg.AWSHostedZoneID,
+		AWSKMSKeyARN:       cfg.AWSKMSKeyARN,
+		DNSSECKSKName:      cfg.DNSSECKSKName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create acme dns provider: %w", err)
@@ -287,6 +310,35 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	if m.dns == nil {
 		return errors.New("acme dns provider is required")
 	}
+	if m.cfg.ENSGaslessEnabled {
+		status, err := m.dns.EnsureDNSSEC(ctx, m.cfg.BaseDomain)
+		if err != nil {
+			return fmt.Errorf("ensure dnssec: %w", err)
+		}
+		m.dnssecLogOnce.Do(func() {
+			event := log.Info().
+				Str("provider", m.dns.Name()).
+				Str("base_domain", m.cfg.BaseDomain).
+				Str("state", strings.TrimSpace(status.State))
+			if strings.TrimSpace(status.DSRecord) != "" {
+				event = event.Str("ds_record", strings.TrimSpace(status.DSRecord))
+			}
+			if strings.TrimSpace(status.Message) != "" {
+				event = event.Str("message", strings.TrimSpace(status.Message))
+			}
+			event.Msg("dnssec configured")
+		})
+		if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
+			return fmt.Errorf("ensure ens gasless txt: %w", err)
+		}
+		m.ensLogOnce.Do(func() {
+			log.Info().
+				Str("provider", m.dns.Name()).
+				Str("base_domain", m.cfg.BaseDomain).
+				Str("address", m.cfg.ENSGaslessAddress).
+				Msg("ens gasless dns import configured")
+		})
+	}
 
 	publicIP, err := utils.ResolvePublicIPv4(ctx)
 	if err != nil {
@@ -294,6 +346,56 @@ func (m *Manager) syncDNS(ctx context.Context) error {
 	}
 
 	return m.dns.EnsureARecords(ctx, m.cfg.BaseDomain, publicIP)
+}
+
+func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address string) error {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return nil
+	}
+	if m.dns == nil {
+		return errors.New("acme dns provider is required")
+	}
+
+	hostname = utils.NormalizeHostname(hostname)
+	if hostname == "" {
+		return errors.New("hostname is required")
+	}
+	if !hostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
+	}
+
+	address, err := utils.NormalizeEVMAddress(address)
+	if err != nil {
+		return fmt.Errorf("normalize ens gasless address: %w", err)
+	}
+	return m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address))
+}
+
+func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) {
+		return nil
+	}
+	if m.dns == nil {
+		return errors.New("acme dns provider is required")
+	}
+
+	hostname = utils.NormalizeHostname(hostname)
+	if hostname == "" {
+		return nil
+	}
+	if !hostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+		return nil
+	}
+	return m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix)
+}
+
+func hostnameMatchesBaseDomain(hostname, baseDomain string) bool {
+	hostname = utils.NormalizeHostname(hostname)
+	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
+	if hostname == "" || baseDomain == "" {
+		return false
+	}
+	return hostname == baseDomain || strings.HasSuffix(hostname, "."+baseDomain)
 }
 
 func (m *Manager) shouldRenew() bool {

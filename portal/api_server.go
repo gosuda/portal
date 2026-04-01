@@ -357,6 +357,15 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		leaseLookupError(err).Write(w)
 		return
 	}
+	deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	if err := s.deleteLeaseENSGasless(deleteCtx, record); err != nil {
+		log.Warn().
+			Err(err).
+			Str("hostname", record.Hostname).
+			Str("address", record.Address).
+			Msg("delete lease ens gasless txt")
+	}
 	if record != nil {
 		record.Close()
 	}
@@ -588,6 +597,13 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	}
 
 	if err := s.registry.Register(record); err != nil {
+		record.Close()
+		return types.RegisterResponse{}, err
+	}
+	syncCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	if err := s.syncLeaseENSGasless(syncCtx, record); err != nil {
+		_, _ = s.registry.Unregister(record.Copy())
 		record.Close()
 		return types.RegisterResponse{}, err
 	}

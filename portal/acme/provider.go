@@ -9,6 +9,7 @@ import (
 
 	"github.com/gosuda/portal/v2/portal/acme/cloudflare"
 	"github.com/gosuda/portal/v2/portal/acme/route53"
+	"github.com/gosuda/portal/v2/types"
 )
 
 const (
@@ -24,12 +25,17 @@ type DNSProviderConfig struct {
 	AWSSessionToken    string
 	AWSRegion          string
 	AWSHostedZoneID    string
+	AWSKMSKeyARN       string
+	DNSSECKSKName      string
 }
 
 type DNSProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
 	EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error
+	EnsureTXTRecord(ctx context.Context, name, value string) error
+	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
+	EnsureDNSSEC(ctx context.Context, baseDomain string) (types.DNSSECStatus, error)
 }
 
 func NewDNSProvider(cfg DNSProviderConfig) (DNSProvider, error) {
@@ -43,6 +49,8 @@ func NewDNSProvider(cfg DNSProviderConfig) (DNSProvider, error) {
 			SessionToken:    cfg.AWSSessionToken,
 			Region:          cfg.AWSRegion,
 			HostedZoneID:    cfg.AWSHostedZoneID,
+			KMSKeyARN:       cfg.AWSKMSKeyARN,
+			DNSSECKSKName:   cfg.DNSSECKSKName,
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported acme dns provider: %q", cfg.Type)

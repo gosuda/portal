@@ -227,7 +227,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		group.Go(s.overlay.Serve)
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
-	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
+	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second, s.cleanupExpiredLeaseDNS) })
 	if s.cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
@@ -398,6 +398,9 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
+	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
+		acmeCfg.ENSGaslessAddress = s.identity.Address
+	}
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
@@ -424,6 +427,35 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 	}
 
 	return apiTLS, manager, nil
+}
+
+func (s *Server) syncLeaseENSGasless(ctx context.Context, lease *leaseRecord) error {
+	if s == nil || s.acmeManager == nil || lease == nil {
+		return nil
+	}
+	return s.acmeManager.SyncENSGaslessHostname(ctx, lease.Hostname, lease.Address)
+}
+
+func (s *Server) deleteLeaseENSGasless(ctx context.Context, lease *leaseRecord) error {
+	if s == nil || s.acmeManager == nil || lease == nil {
+		return nil
+	}
+	return s.acmeManager.DeleteENSGaslessHostname(ctx, lease.Hostname)
+}
+
+func (s *Server) cleanupExpiredLeaseDNS(lease *leaseRecord) {
+	if s == nil || lease == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	if err := s.deleteLeaseENSGasless(ctx, lease); err != nil {
+		log.Warn().
+			Err(err).
+			Str("hostname", lease.Hostname).
+			Str("address", lease.Address).
+			Msg("delete expired lease ens gasless txt")
+	}
 }
 
 func (s *Server) runSNIListener(ctx context.Context) error {

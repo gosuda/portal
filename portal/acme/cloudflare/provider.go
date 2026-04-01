@@ -11,6 +11,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 
+	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
@@ -55,6 +56,17 @@ type recordResult struct {
 	Result  dnsRecord  `json:"result"`
 	Errors  []apiError `json:"errors"`
 	Success bool       `json:"success"`
+}
+
+type dnssecDetails struct {
+	DS     string `json:"ds"`
+	Status string `json:"status"`
+}
+
+type dnssecResult struct {
+	Result  dnssecDetails `json:"result"`
+	Errors  []apiError    `json:"errors"`
+	Success bool          `json:"success"`
 }
 
 func New(token string) *Provider {
@@ -105,11 +117,117 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	}
 
 	for _, name := range []string{baseDomain, "*." + baseDomain} {
-		if err := ensureARecord(ctx, p.token, zoneID, name, publicIPv4); err != nil {
+		if err := ensureDNSRecord(ctx, p.token, zoneID, name, "A", publicIPv4); err != nil {
 			return fmt.Errorf("ensure A record for %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("txt record value is required")
+	}
+
+	zoneID, err := findZoneID(ctx, p.token, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+	if err := ensureTXTRecord(ctx, p.token, zoneID, name, value); err != nil {
+		return fmt.Errorf("ensure TXT record for %s: %w", name, err)
+	}
+	return nil
+}
+
+func (p *Provider) DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+	matchPrefix = strings.TrimSpace(matchPrefix)
+	if matchPrefix == "" {
+		return errors.New("txt record match prefix is required")
+	}
+
+	zoneID, err := findZoneID(ctx, p.token, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+
+	records, err := listDNSRecords(ctx, p.token, zoneID, name, "TXT")
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if !strings.EqualFold(record.Name, name) || !strings.HasPrefix(strings.TrimSpace(record.Content), matchPrefix) {
+			continue
+		}
+		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+			return fmt.Errorf("delete TXT record %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (types.DNSSECStatus, error) {
+	if p == nil {
+		return types.DNSSECStatus{}, errors.New("cloudflare provider is nil")
+	}
+	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
+	if baseDomain == "" {
+		return types.DNSSECStatus{}, errors.New("base domain is required")
+	}
+	if p.token == "" {
+		return types.DNSSECStatus{}, errors.New("cloudflare token is required")
+	}
+
+	zoneID, err := findZoneID(ctx, p.token, baseDomain)
+	if err != nil {
+		return types.DNSSECStatus{}, fmt.Errorf("find cloudflare zone: %w", err)
+	}
+
+	details, err := getDNSSEC(ctx, p.token, zoneID)
+	if err != nil {
+		return types.DNSSECStatus{}, fmt.Errorf("get cloudflare dnssec status: %w", err)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(details.Status)) {
+	case "active", "pending":
+	default:
+		if err := enableDNSSEC(ctx, p.token, zoneID); err != nil {
+			return types.DNSSECStatus{}, fmt.Errorf("enable cloudflare dnssec: %w", err)
+		}
+		details, err = getDNSSEC(ctx, p.token, zoneID)
+		if err != nil {
+			return types.DNSSECStatus{}, fmt.Errorf("refresh cloudflare dnssec status: %w", err)
+		}
+	}
+
+	status := types.DNSSECStatus{
+		State:    strings.TrimSpace(details.Status),
+		DSRecord: strings.TrimSpace(details.DS),
+	}
+	if status.DSRecord != "" {
+		status.Message = "publish the DS record at the registrar if Cloudflare Registrar does not manage the zone"
+	}
+	return status, nil
 }
 
 func findZoneID(ctx context.Context, token, domain string) (string, error) {
@@ -129,8 +247,8 @@ func findZoneID(ctx context.Context, token, domain string) (string, error) {
 	return "", fmt.Errorf("no cloudflare zone found for %s", domain)
 }
 
-func ensureARecord(ctx context.Context, token, zoneID, name, ip string) error {
-	records, err := listDNSRecords(ctx, token, zoneID, name, "A")
+func ensureDNSRecord(ctx context.Context, token, zoneID, name, recordType, content string) error {
+	records, err := listDNSRecords(ctx, token, zoneID, name, recordType)
 	if err != nil {
 		return err
 	}
@@ -139,13 +257,29 @@ func ensureARecord(ctx context.Context, token, zoneID, name, ip string) error {
 		if !strings.EqualFold(record.Name, name) {
 			continue
 		}
-		if record.Content == ip {
+		if record.Content == content {
 			return nil
 		}
-		return updateDNSRecord(ctx, token, zoneID, record.ID, name, ip)
+		return updateDNSRecord(ctx, token, zoneID, record.ID, recordType, name, content)
 	}
 
-	return createDNSRecord(ctx, token, zoneID, name, ip)
+	return createDNSRecord(ctx, token, zoneID, recordType, name, content)
+}
+
+func ensureTXTRecord(ctx context.Context, token, zoneID, name, value string) error {
+	records, err := listDNSRecords(ctx, token, zoneID, name, "TXT")
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if !strings.EqualFold(record.Name, name) {
+			continue
+		}
+		if strings.TrimSpace(record.Content) == value {
+			return nil
+		}
+	}
+	return createDNSRecord(ctx, token, zoneID, "TXT", name, value)
 }
 
 func listZones(ctx context.Context, token, name string) ([]zone, error) {
@@ -181,14 +315,45 @@ func listDNSRecords(ctx context.Context, token, zoneID, name, recordType string)
 	return out.Result, nil
 }
 
-func createDNSRecord(ctx context.Context, token, zoneID, name, ip string) error {
+func getDNSSEC(ctx context.Context, token, zoneID string) (dnssecDetails, error) {
+	endpoint := fmt.Sprintf("%s/zones/%s/dnssec", apiBase, zoneID)
+
+	var out dnssecResult
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodGet, endpoint, nil, cloudflareHeaders(token), &out); err != nil {
+		return dnssecDetails{}, err
+	}
+	if !out.Success {
+		return dnssecDetails{}, wrapErrors(out.Errors)
+	}
+	return out.Result, nil
+}
+
+func enableDNSSEC(ctx context.Context, token, zoneID string) error {
+	endpoint := fmt.Sprintf("%s/zones/%s/dnssec", apiBase, zoneID)
+	body := map[string]any{
+		"status": "active",
+	}
+
+	var out dnssecResult
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPatch, endpoint, body, cloudflareHeaders(token), &out); err != nil {
+		return err
+	}
+	if !out.Success {
+		return wrapErrors(out.Errors)
+	}
+	return nil
+}
+
+func createDNSRecord(ctx context.Context, token, zoneID, recordType, name, content string) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records", apiBase, zoneID)
 	body := map[string]any{
-		"type":    "A",
+		"type":    recordType,
 		"name":    name,
-		"content": ip,
+		"content": content,
 		"ttl":     1,
-		"proxied": false,
+	}
+	if strings.EqualFold(recordType, "A") {
+		body["proxied"] = false
 	}
 
 	var out recordResult
@@ -201,18 +366,33 @@ func createDNSRecord(ctx context.Context, token, zoneID, name, ip string) error 
 	return nil
 }
 
-func updateDNSRecord(ctx context.Context, token, zoneID, recordID, name, ip string) error {
+func updateDNSRecord(ctx context.Context, token, zoneID, recordID, recordType, name, content string) error {
 	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
 	body := map[string]any{
-		"type":    "A",
+		"type":    recordType,
 		"name":    name,
-		"content": ip,
+		"content": content,
 		"ttl":     1,
-		"proxied": false,
+	}
+	if strings.EqualFold(recordType, "A") {
+		body["proxied"] = false
 	}
 
 	var out recordResult
 	if err := utils.HTTPDoJSON(ctx, nil, http.MethodPut, endpoint, body, cloudflareHeaders(token), &out); err != nil {
+		return err
+	}
+	if !out.Success {
+		return wrapErrors(out.Errors)
+	}
+	return nil
+}
+
+func deleteDNSRecord(ctx context.Context, token, zoneID, recordID string) error {
+	endpoint := fmt.Sprintf("%s/zones/%s/dns_records/%s", apiBase, zoneID, recordID)
+
+	var out recordResult
+	if err := utils.HTTPDoJSON(ctx, nil, http.MethodDelete, endpoint, nil, cloudflareHeaders(token), &out); err != nil {
 		return err
 	}
 	if !out.Success {
