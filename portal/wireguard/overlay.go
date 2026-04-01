@@ -161,6 +161,13 @@ func (o *Overlay) DialContext(ctx context.Context, network, address string) (net
 	return o.stack.DialContext(ctx, network, address)
 }
 
+func (o *Overlay) ListenTCP(port int) (net.Listener, error) {
+	if o == nil || o.stack == nil {
+		return nil, errors.New("overlay is not initialized")
+	}
+	return o.stack.ListenTCP(port)
+}
+
 func (o *Overlay) Sync(selfRelayID string, snapshot map[string]types.RelayState) error {
 	if o == nil || o.stack == nil {
 		return nil

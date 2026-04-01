@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -562,4 +564,20 @@ func NormalizeIPPrefixes(inputs []string) []string {
 		out = append(out, normalized)
 	}
 	return out
+}
+
+func MarshalJSON(v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+func UnmarshalJSON(data []byte, v any) error {
+	return json.Unmarshal(data, v)
+}
+
+func PutUint32(b []byte, v uint32) {
+	binary.BigEndian.PutUint32(b, v)
+}
+
+func Uint32(b []byte) uint32 {
+	return binary.BigEndian.Uint32(b)
 }

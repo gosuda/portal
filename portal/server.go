@@ -69,6 +69,7 @@ type Server struct {
 	acmeManager       *acme.Manager
 	quicTunnel        *quic.Listener
 	overlay           *wireguard.Overlay
+	interRelayListener net.Listener
 	cancel            context.CancelFunc
 	group             *errgroup.Group
 	registry          *leaseRegistry
@@ -81,7 +82,122 @@ type Server struct {
 	relaySet          *discovery.RelaySet
 	olsManager        *policy.OLSManager
 	activeConns       int64
+	bytesIn           int64
+	bytesOut          int64
+	connCount         int64
+	lastConnRateCheck time.Time
+	connRate          float64
 	shutdownOnce      sync.Once
+}
+
+func (s *Server) writeRouteContext(conn net.Conn, ctx *policy.RouteContext) error {
+	data, err := utils.MarshalJSON(ctx)
+	if err != nil {
+		return err
+	}
+	// [Magic 4 bytes: 'PORT'][Length 4 bytes][JSON]
+	header := make([]byte, 8)
+	copy(header[0:4], "PORT")
+	utils.PutUint32(header[4:8], uint32(len(data)))
+	if _, err := conn.Write(header); err != nil {
+		return err
+	}
+	_, err = conn.Write(data)
+	return err
+}
+
+func (s *Server) readRouteContext(conn net.Conn) (*policy.RouteContext, error) {
+	header := make([]byte, 8)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, err
+	}
+	if string(header[0:4]) != "PORT" {
+		return nil, fmt.Errorf("invalid inter-relay magic")
+	}
+	length := utils.Uint32(header[4:8])
+	if length > 65536 {
+		return nil, fmt.Errorf("inter-relay context too large")
+	}
+	data := make([]byte, length)
+	if _, err := io.ReadFull(conn, data); err != nil {
+		return nil, err
+	}
+	var ctx policy.RouteContext
+	if err := utils.UnmarshalJSON(data, &ctx); err != nil {
+		return nil, err
+	}
+	return &ctx, nil
+}
+
+func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
+	for {
+		conn, err := s.interRelayListener.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return err
+		}
+		go func(conn net.Conn) {
+			defer conn.Close()
+			routeCtx, err := s.readRouteContext(conn)
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to read inter-relay route context")
+				return
+			}
+
+			// Append self to visited and increment hop count
+			routeCtx.Visited = append(routeCtx.Visited, s.cfg.PortalURL)
+			routeCtx.HopCount++
+
+			clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
+			if err != nil {
+				return
+			}
+			serverName := utils.NormalizeHostname(clientHello.ServerName)
+			if serverName == "" {
+				_ = wrappedConn.Close()
+				return
+			}
+
+			// Re-route or handle locally
+			targetID, err := s.olsManager.GetTargetNodeID(conn.RemoteAddr().String(), serverName, routeCtx)
+			if err == nil && targetID != s.cfg.PortalURL {
+				// Proxy further (multi-hop)
+				snapshot := s.relaySet.Snapshot()
+				if targetState, ok := snapshot[targetID]; ok && targetState.Descriptor.SupportsOverlayPeer && targetState.Descriptor.OverlayIPv4 != "" {
+					proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, "7778")
+					targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
+					if err == nil {
+						err = s.writeRouteContext(targetConn, routeCtx)
+						if err == nil {
+							s.BridgeConns(wrappedConn, targetConn)
+							s.olsManager.MarkSuccess(targetID)
+							return
+						}
+						_ = targetConn.Close()
+					}
+					s.olsManager.MarkFailure(targetID)
+				}
+			}
+
+			// Handle locally
+			record, ok := s.registry.Lookup(serverName)
+			if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsLeaseRoutable(record.ID) || record.stream == nil {
+				_ = wrappedConn.Close()
+				return
+			}
+
+			claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+			defer cancel()
+			session, err := record.stream.Claim(claimCtx)
+			if err != nil {
+				_ = wrappedConn.Close()
+				return
+			}
+			s.BridgeConns(wrappedConn, session)
+		}(conn)
+	}
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -165,6 +281,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
 		olsManager:        policy.NewOLSManager(),
+		lastConnRateCheck: time.Now(),
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -238,6 +355,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(s.runAPIServer)
 	if s.overlay != nil {
 		group.Go(s.overlay.Serve)
+	}
+	if s.interRelayListener != nil {
+		group.Go(func() error { return s.runInterRelayProxyListener(groupCtx) })
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
@@ -424,7 +544,12 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				if s.olsManager != nil {
 					// Use client remote address as clientID for hashing
 					clientID := conn.RemoteAddr().String()
-					targetID, err := s.olsManager.GetTargetNodeID(clientID, serverName)
+					routeCtx := &policy.RouteContext{
+						OriginNodeID: s.cfg.PortalURL,
+						Visited:      []string{s.cfg.PortalURL},
+						HopCount:     0,
+					}
+					targetID, err := s.olsManager.GetTargetNodeID(clientID, serverName, routeCtx)
 					if err == nil && targetID != s.cfg.PortalURL && s.overlay != nil {
 						// Target is another node. Proxy to it.
 						log.Debug().
@@ -436,15 +561,21 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 						// Check if we can reach target via overlay
 						snapshot := s.relaySet.Snapshot()
 						if targetState, ok := snapshot[targetID]; ok && targetState.Descriptor.SupportsOverlayPeer && targetState.Descriptor.OverlayIPv4 != "" {
-							// Use overlay address
-							_, port, _ := net.SplitHostPort(s.cfg.SNIListenAddr)
-							proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, port)
+							// Proxy to inter-relay port 7778
+							proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, "7778")
 
 							targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
 							if err == nil {
-								s.BridgeConns(wrappedConn, targetConn)
-								return
+								// Send RouteContext before raw TLS
+								err = s.writeRouteContext(targetConn, routeCtx)
+								if err == nil {
+									s.BridgeConns(wrappedConn, targetConn)
+									s.olsManager.MarkSuccess(targetID)
+									return
+								}
+								_ = targetConn.Close()
 							}
+							s.olsManager.MarkFailure(targetID)
 							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target via overlay")
 						}
 					}
@@ -555,12 +686,20 @@ func (s *Server) startOverlay() error {
 		return fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
+	interRelayListener, err := overlay.ListenTCP(7778)
+	if err != nil {
+		_ = overlay.Shutdown(context.Background())
+		return fmt.Errorf("listen inter-relay proxy: %w", err)
+	}
+
 	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+		_ = interRelayListener.Close()
 		_ = overlay.Shutdown(context.Background())
 		return fmt.Errorf("sync wireguard peers: %w", err)
 	}
 
 	s.overlay = overlay
+	s.interRelayListener = interRelayListener
 	return nil
 }
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
@@ -696,6 +835,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 
 func (s *Server) BridgeConns(left, right net.Conn) {
 	atomic.AddInt64(&s.activeConns, 1)
+	atomic.AddInt64(&s.connCount, 1)
 	defer atomic.AddInt64(&s.activeConns, -1)
 
 	defer left.Close()
@@ -703,12 +843,14 @@ func (s *Server) BridgeConns(left, right net.Conn) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := io.Copy(right, left)
+		n, err := io.Copy(right, left)
+		atomic.AddInt64(&s.bytesIn, n)
 		closeWrite(right)
 		return err
 	})
 	group.Go(func() error {
-		_, err := io.Copy(left, right)
+		n, err := io.Copy(left, right)
+		atomic.AddInt64(&s.bytesOut, n)
 		closeWrite(left)
 		return err
 	})
@@ -729,11 +871,27 @@ func (s *Server) updateOLSFromRelaySet() {
 	}
 	s.olsManager.UpdateNodes(nodes)
 
-	// Update loads
-	s.olsManager.UpdateLoad(s.cfg.PortalURL, float64(atomic.LoadInt64(&s.activeConns)))
+	// Update local load
+	now := time.Now()
+	diff := now.Sub(s.lastConnRateCheck).Seconds()
+	if diff >= 5.0 {
+		count := atomic.SwapInt64(&s.connCount, 0)
+		s.connRate = float64(count) / diff
+		s.lastConnRateCheck = now
+	}
+
+	localLoad := policy.NodeLoad{
+		ActiveConns: atomic.LoadInt64(&s.activeConns),
+		BytesIn:     atomic.LoadInt64(&s.bytesIn),
+		BytesOut:    atomic.LoadInt64(&s.bytesOut),
+		ConnRate:    s.connRate,
+	}
+	s.olsManager.UpdateLoad(s.cfg.PortalURL, localLoad, 0, now.Unix())
+
+	// Update peer loads from relay set
 	for id, state := range snapshot {
 		if !state.Expired {
-			s.olsManager.UpdateLoad(id, state.Descriptor.Load)
+			s.olsManager.UpdateLoad(id, policy.NodeLoad{}, state.Descriptor.LoadScore, state.Descriptor.LastUpdated)
 		}
 	}
 }

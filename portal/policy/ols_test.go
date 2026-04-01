@@ -20,7 +20,7 @@ func TestOLSManager(t *testing.T) {
 		t.Errorf("expected n=2, got %d", m.n)
 	}
 
-	targetID, err := m.GetTargetNodeID("client1", "lease1")
+	targetID, err := m.GetTargetNodeID("client1", "lease1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,10 +29,10 @@ func TestOLSManager(t *testing.T) {
 	}
 
 	// Test rotation
-	m.UpdateLoad("node1", 100.0)
-	m.UpdateLoad("node2", 100.0)
-	m.UpdateLoad("node3", 0.0)
-	m.UpdateLoad("node4", 0.0)
+	m.UpdateLoad("node1", NodeLoad{ActiveConns: 100}, 0, 0)
+	m.UpdateLoad("node2", NodeLoad{ActiveConns: 100}, 0, 0)
+	m.UpdateLoad("node3", NodeLoad{ActiveConns: 0}, 0, 0)
+	m.UpdateLoad("node4", NodeLoad{ActiveConns: 0}, 0, 0)
 
 	// After load imbalance, it should eventually rotate if threshold met
 	if m.rotation == 0 {

@@ -25,6 +25,10 @@ type RelayDescriptor struct {
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
 
 	Load float64 `json:"load,omitempty"`
+
+	// Enhanced load model
+	LoadScore   float64 `json:"load_score,omitempty"`
+	LastUpdated int64   `json:"last_updated,omitempty"`
 }
 type RelayState struct {
 	Descriptor          RelayDescriptor `json:"descriptor"`
