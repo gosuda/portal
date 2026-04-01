@@ -39,7 +39,7 @@ func TestOLSManager(t *testing.T) {
 	// Row loads: (100+100)=200, (0+0)=0 -> mean 100, var (100^2 + 100^2)/2 = 10000
 	// Col loads: (100+0)=100, (100+0)=100 -> mean 100, var (0^2 + 0^2)/2 = 0
 	// 10000 > 0*2, so it should rotate!
-	
+
 	if m.rotation == 0 {
 		t.Error("expected rotation, got 0")
 	}

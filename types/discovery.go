@@ -25,7 +25,7 @@ type RelayDescriptor struct {
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
 
 	Load float64 `json:"load,omitempty"`
-	}
+}
 type RelayState struct {
 	Descriptor          RelayDescriptor `json:"descriptor"`
 	Bootstrap           bool            `json:"bootstrap,omitempty"`
