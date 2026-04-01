@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ServerData } from "@/hooks/useSSRData";
+import type { AdminLeaseData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import type { BanFilter } from "@/components/ServerListView";
 import {
@@ -25,7 +25,7 @@ type LandingPageSettingsResponse = {
 type AdminSnapshotResponse = {
   approval_mode?: ApprovalMode;
   landing_page_enabled?: boolean;
-  leases?: ServerData[];
+  leases?: AdminLeaseData[];
   udp?: { enabled: boolean; max_leases: number };
 };
 
@@ -89,12 +89,12 @@ function buildIdentityKey(name: string, address: string): string {
 }
 
 function resolveLeaseIdentity(
-  rows: ServerData[],
+  rows: AdminLeaseData[],
   identityKey: string
 ): { name: string; address: string } {
   const match = rows.find((row) => {
     const name = (row.name || "").trim();
-    const address = (row.address || "").trim();
+    const address = row.address.trim();
     return buildIdentityKey(name, address) === identityKey;
   });
   if (!match) {
@@ -103,18 +103,18 @@ function resolveLeaseIdentity(
 
   return {
     name: (match.name || "").trim(),
-    address: (match.address || "").trim(),
+    address: match.address.trim(),
   };
 }
 
 function toAdminServer(
-  row: ServerData,
+  row: AdminLeaseData,
   index: number
 ): AdminServer {
   const metadata = parseLeaseMetadata(row.Metadata);
   const hostname = row.Hostname || "";
   const serviceName = row.name || "";
-  const address = (row.address || "").trim();
+  const address = row.address.trim();
 
   return {
     id: index + 1,
@@ -130,13 +130,13 @@ function toAdminServer(
     firstSeen: row.FirstSeenAt || undefined,
     identityKey: buildIdentityKey(serviceName, address),
     address,
-    isBanned: row.IsBanned || false,
-    bps: row.BPS || 0,
-    isApproved: row.IsApproved || false,
-    isDenied: row.IsDenied || false,
-    ip: row.ClientIP || "",
-    displayIP: row.ReportedIP || row.ClientIP || "",
-    isIPBanned: row.IsIPBanned || false,
+    isBanned: row.IsBanned,
+    bps: row.BPS,
+    isApproved: row.IsApproved,
+    isDenied: row.IsDenied,
+    ip: row.ClientIP,
+    displayIP: row.ReportedIP || row.ClientIP,
+    isIPBanned: row.IsIPBanned,
   };
 }
 
@@ -160,7 +160,7 @@ function dedupeStrings(values: string[]): string[] {
 }
 
 interface AdminSnapshot {
-  serverData: ServerData[];
+  serverData: AdminLeaseData[];
   approvalMode: ApprovalMode;
   landingPageEnabled: boolean;
   udpSettings: UDPSettings;
@@ -182,7 +182,7 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
 }
 
 export function useAdmin() {
-  const [serverData, setServerData] = useState<ServerData[]>([]);
+  const [serverData, setServerData] = useState<AdminLeaseData[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [landingPageEnabled, setLandingPageEnabled] = useState(true);
   const [udpSettings, setUDPSettings] = useState<UDPSettings>({ enabled: false, maxLeases: 0 });
@@ -299,13 +299,13 @@ export function useAdmin() {
     const normalizedBPS = Math.max(0, Math.trunc(bps));
     const previousBPS =
       serverData.find((row) =>
-        buildIdentityKey((row.name || "").trim(), (row.address || "").trim()) ===
+        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
         identityKey
       )?.BPS ?? 0;
 
     setServerData((prev) =>
       prev.map((row) =>
-        buildIdentityKey((row.name || "").trim(), (row.address || "").trim()) ===
+        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
         identityKey
           ? { ...row, BPS: normalizedBPS }
           : row
@@ -328,7 +328,7 @@ export function useAdmin() {
     } catch (err) {
       setServerData((prev) =>
         prev.map((row) =>
-          buildIdentityKey((row.name || "").trim(), (row.address || "").trim()) ===
+          buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
           identityKey
             ? { ...row, BPS: previousBPS }
             : row

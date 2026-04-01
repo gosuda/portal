@@ -18,15 +18,13 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	runtime := policy.NewRuntime()
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		Lease: types.Lease{
-			Identity: types.Identity{
-				Name:    "demo",
-				Address: "addr-1",
-			},
-			Hostname:  "demo.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "demo",
+			Address: "addr-1",
 		},
-		stream: transport.NewRelayStream("addr-1", time.Minute, 1),
+		Hostname:  "demo.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-1", time.Minute, 1),
 	}
 
 	if err := registry.Register(record); err != nil {
@@ -70,15 +68,13 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 
 	registry := newLeaseRegistry(policy.NewRuntime())
 	wildcardLease := &leaseRecord{
-		Lease: types.Lease{
-			Identity: types.Identity{
-				Name:    "wildcard",
-				Address: "addr-wildcard",
-			},
-			Hostname:  "*.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "wildcard",
+			Address: "addr-wildcard",
 		},
-		stream: transport.NewRelayStream("addr-wildcard", time.Minute, 1),
+		Hostname:  "*.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-wildcard", time.Minute, 1),
 	}
 	if err := registry.Register(wildcardLease); err != nil {
 		t.Fatalf("Register(wildcard) error = %v", err)
@@ -92,15 +88,13 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	}
 
 	conflict := &leaseRecord{
-		Lease: types.Lease{
-			Identity: types.Identity{
-				Name:    "conflict",
-				Address: "addr-conflict",
-			},
-			Hostname:  "*.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "conflict",
+			Address: "addr-conflict",
 		},
-		stream: transport.NewRelayStream("addr-conflict", time.Minute, 1),
+		Hostname:  "*.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-conflict", time.Minute, 1),
 	}
 	err := registry.Register(conflict)
 	if !errors.Is(err, errHostnameConflict) {
@@ -118,16 +112,14 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		Lease: types.Lease{
-			Identity: types.Identity{
-				Name:    "demo",
-				Address: "addr-policy",
-			},
-			Hostname:  "demo.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
-			ClientIP:  "203.0.113.20",
+		Identity: types.Identity{
+			Name:    "demo",
+			Address: "addr-policy",
 		},
-		stream: transport.NewRelayStream("addr-policy", time.Minute, 1),
+		Hostname:  "demo.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		ClientIP:  "203.0.113.20",
+		stream:    transport.NewRelayStream("addr-policy", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
@@ -137,9 +129,9 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 		t.Fatal("policy.IsIdentityRoutable() = true, want false before approval")
 	}
 
-	snapshot := registry.Snapshot(record)
+	snapshot := registry.AdminSnapshot(record)
 	if snapshot.IsApproved {
-		t.Fatal("Snapshot().IsApproved = true, want false before approval")
+		t.Fatal("AdminSnapshot().IsApproved = true, want false before approval")
 	}
 	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.20" {
 		t.Fatalf("Register() lease IP = %q, want %q", got, "203.0.113.20")
@@ -150,9 +142,9 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 		t.Fatal("policy.IsIdentityRoutable() = false, want true after approval")
 	}
 
-	snapshot = registry.Snapshot(record)
+	snapshot = registry.AdminSnapshot(record)
 	if !snapshot.IsApproved {
-		t.Fatal("Snapshot().IsApproved = false, want true after approval")
+		t.Fatal("AdminSnapshot().IsApproved = false, want true after approval")
 	}
 }
 
@@ -161,15 +153,13 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 
 	registry := newLeaseRegistry(policy.NewRuntime())
 	record := &leaseRecord{
-		Lease: types.Lease{
-			Identity: types.Identity{
-				Name:    "expired",
-				Address: "addr-expired",
-			},
-			Hostname:  "expired.example.com",
-			ExpiresAt: time.Now().Add(-time.Second),
+		Identity: types.Identity{
+			Name:    "expired",
+			Address: "addr-expired",
 		},
-		stream: transport.NewRelayStream("addr-expired", time.Minute, 1),
+		Hostname:  "expired.example.com",
+		ExpiresAt: time.Now().Add(-time.Second),
+		stream:    transport.NewRelayStream("addr-expired", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)

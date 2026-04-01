@@ -1,13 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ServerData } from "@/hooks/useSSRData";
+import type { AdminLeaseData } from "@/hooks/useSSRData";
 import { useAdmin } from "@/hooks/useAdmin";
 import { API_PATHS, adminLeasePath } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 
 type DeferredAdminSnapshot = {
-  leases: ServerData[];
+  leases: AdminLeaseData[];
   approval_mode: "auto" | "manual";
 };
 
@@ -43,7 +43,7 @@ vi.mock("@/lib/apiClient", async () => {
   };
 });
 
-function buildLease(address: string, name: string = "relay-1"): ServerData {
+function buildLease(address: string, name: string = "relay-1"): AdminLeaseData {
   return {
     ExpiresAt: "2026-03-03T01:00:00Z",
     FirstSeenAt: "2026-03-02T00:00:00Z",

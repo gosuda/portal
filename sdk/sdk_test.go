@@ -122,7 +122,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 		}
 	})
 	waitForSDKTest(t, func() bool {
-		return listener.Address() == challengeReq.Identity.Address
+		return listener.Hostname() == "127.0.0.1"
 	})
 
 	if challengeReq.TTL != 42 {

@@ -193,7 +193,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIData(w, http.StatusOK, types.AdminSnapshotResponse{
 			ApprovalMode:       string(runtime.Approver().Mode()),
 			LandingPageEnabled: f.isLandingPageEnabled(),
-			Leases:             f.adminLeaseSnapshots(),
+			Leases:             f.server.AdminLeaseSnapshots(),
 			UDP: types.AdminUDPSettingsResponse{
 				Enabled:   runtime.IsUDPEnabled(),
 				MaxLeases: runtime.UDPMaxLeases(),

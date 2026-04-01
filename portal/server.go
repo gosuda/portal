@@ -335,13 +335,47 @@ func (s *Server) LeaseSnapshots() []types.Lease {
 	s.registry.mu.RLock()
 	defer s.registry.mu.RUnlock()
 
+	now := time.Now()
 	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
 	for _, record := range s.registry.leasesByKey {
 		records = append(records, record)
 	}
 	snapshots := make([]types.Lease, 0, len(records))
 	for _, record := range records {
-		snapshots = append(snapshots, s.registry.Snapshot(record))
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		adminSnapshot := s.registry.AdminSnapshot(record)
+		since := time.Duration(0)
+		if !adminSnapshot.LastSeenAt.IsZero() {
+			since = max(now.Sub(adminSnapshot.LastSeenAt), 0)
+		}
+		if adminSnapshot.IsBanned || adminSnapshot.IsDenied || !adminSnapshot.IsApproved || adminSnapshot.Metadata.Hide {
+			continue
+		}
+		if adminSnapshot.Ready == 0 && since >= 3*time.Minute {
+			continue
+		}
+		snapshots = append(snapshots, adminSnapshot.Lease)
+	}
+	return snapshots
+}
+
+func (s *Server) AdminLeaseSnapshots() []types.AdminLease {
+	s.registry.mu.RLock()
+	defer s.registry.mu.RUnlock()
+
+	now := time.Now()
+	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
+	for _, record := range s.registry.leasesByKey {
+		records = append(records, record)
+	}
+	snapshots := make([]types.AdminLease, 0, len(records))
+	for _, record := range records {
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		snapshots = append(snapshots, s.registry.AdminSnapshot(record))
 	}
 	return snapshots
 }

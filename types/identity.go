@@ -32,24 +32,6 @@ func (i Identity) Key() string {
 	return name + IdentityKeySeparator + address
 }
 
-type Lease struct {
-	Identity
-	ExpiresAt   time.Time
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
-	BPS         int64
-	ClientIP    string
-	ReportedIP  string
-	Hostname    string
-	UDPEnabled  bool
-	Metadata    LeaseMetadata
-	Ready       int
-	IsApproved  bool
-	IsBanned    bool
-	IsDenied    bool
-	IsIPBanned  bool
-}
-
 type LeaseMetadata struct {
 	Description string   `json:"description,omitempty"`
 	Owner       string   `json:"owner,omitempty"`
@@ -66,6 +48,29 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 		Tags:        append([]string(nil), m.Tags...),
 		Hide:        m.Hide,
 	}
+}
+
+type Lease struct {
+	Name        string `json:"name,omitempty"`
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	Hostname    string
+	UDPEnabled  bool
+	Metadata    LeaseMetadata
+	Ready       int
+}
+
+type AdminLease struct {
+	Lease
+	Address    string `json:"address,omitempty"`
+	BPS        int64
+	ClientIP   string
+	ReportedIP string
+	IsApproved bool
+	IsBanned   bool
+	IsDenied   bool
+	IsIPBanned bool
 }
 
 type RelayDescriptor struct {

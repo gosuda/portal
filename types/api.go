@@ -147,7 +147,7 @@ type AdminAuthStatusResponse struct {
 type AdminSnapshotResponse struct {
 	ApprovalMode       string                   `json:"approval_mode"`
 	LandingPageEnabled bool                     `json:"landing_page_enabled"`
-	Leases             []Lease                  `json:"leases,omitempty"`
+	Leases             []AdminLease             `json:"leases,omitempty"`
 	UDP                AdminUDPSettingsResponse `json:"udp"`
 }
 

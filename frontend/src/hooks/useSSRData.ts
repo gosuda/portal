@@ -8,30 +8,33 @@ export interface Metadata {
   hide: boolean;
 }
 
-export interface ServerData {
+export interface PublicLeaseData {
   ExpiresAt: string;
   FirstSeenAt: string;
   LastSeenAt: string;
   name?: string;
-  address?: string;
-  BPS?: number;
-  ClientIP: string;
-  ReportedIP?: string;
   Hostname: string;
   Metadata: unknown;
   Ready: number;
-  IsApproved?: boolean;
-  IsBanned?: boolean;
-  IsDenied?: boolean;
-  IsIPBanned?: boolean;
+}
+
+export interface AdminLeaseData extends PublicLeaseData {
+  address: string;
+  BPS: number;
+  ClientIP: string;
+  ReportedIP: string;
+  IsApproved: boolean;
+  IsBanned: boolean;
+  IsDenied: boolean;
+  IsIPBanned: boolean;
 }
 
 /**
  * useSSRData hook reads server data injected by Go SSR
  * The data is embedded in a <script id="__SSR_DATA__"> tag in the HTML
  */
-export function useSSRData(): ServerData[] {
-  const [data, setData] = useState<ServerData[]>([]);
+export function useSSRData(): PublicLeaseData[] {
+  const [data, setData] = useState<PublicLeaseData[]>([]);
 
   useEffect(() => {
     const ssrScript = document.getElementById("__SSR_DATA__");

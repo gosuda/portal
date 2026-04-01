@@ -294,28 +294,56 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 		return types.Lease{}
 	}
 
-	snapshot := record.Lease
-	snapshot.Metadata = snapshot.Metadata.Copy()
-	clientIP := record.ClientIP
-	identityKey := record.Key()
-	snapshot.BPS = r.policy.BPSManager().IdentityBPS(identityKey)
+	snapshot := types.Lease{
+		Name:        record.Name,
+		ExpiresAt:   record.ExpiresAt,
+		FirstSeenAt: record.FirstSeenAt,
+		LastSeenAt:  record.LastSeenAt,
+		Hostname:    record.Hostname,
+		UDPEnabled:  record.UDPEnabled,
+		Metadata:    record.Metadata.Copy(),
+	}
 	if record.stream != nil {
 		snapshot.Ready = record.stream.ReadyCount()
 	}
-	snapshot.IsApproved = r.policy.EffectiveApproval(identityKey)
-	snapshot.IsBanned = r.policy.IsIdentityBanned(identityKey)
-	snapshot.IsDenied = r.policy.IsIdentityDenied(identityKey)
-	snapshot.IsIPBanned = r.policy.IPFilter().IsIPBanned(clientIP)
 	return snapshot
 }
 
 type leaseRecord struct {
-	types.Lease
-	datagram  *transport.RelayDatagram
-	ports     *transport.PortAllocator
-	stream    *transport.RelayStream
-	startErr  error
-	startOnce sync.Once
+	types.Identity
+	ExpiresAt   time.Time
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+	ClientIP    string
+	ReportedIP  string
+	Hostname    string
+	UDPEnabled  bool
+	Metadata    types.LeaseMetadata
+	datagram    *transport.RelayDatagram
+	ports       *transport.PortAllocator
+	stream      *transport.RelayStream
+	startErr    error
+	startOnce   sync.Once
+}
+
+func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
+	if record == nil {
+		return types.AdminLease{}
+	}
+
+	clientIP := record.ClientIP
+	identityKey := record.Key()
+	return types.AdminLease{
+		Lease:      r.Snapshot(record),
+		Address:    record.Address,
+		BPS:        r.policy.BPSManager().IdentityBPS(identityKey),
+		ClientIP:   clientIP,
+		ReportedIP: record.ReportedIP,
+		IsApproved: r.policy.EffectiveApproval(identityKey),
+		IsBanned:   r.policy.IsIdentityBanned(identityKey),
+		IsDenied:   r.policy.IsIdentityDenied(identityKey),
+		IsIPBanned: r.policy.IPFilter().IsIPBanned(clientIP),
+	}
 }
 
 func (r *leaseRecord) Start() error {

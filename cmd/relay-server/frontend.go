@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gosuda/portal/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal/v2/portal"
@@ -194,7 +193,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 func (f *Frontend) injectServerData(htmlContent string) string {
 	var snapshots []types.Lease
 	if f.server != nil {
-		snapshots = f.publicLeaseSnapshots()
+		snapshots = f.server.LeaseSnapshots()
 	}
 	jsonData, err := json.Marshal(snapshots)
 	if err != nil {
@@ -255,57 +254,6 @@ func (f *Frontend) setLandingPageEnabled(enabled bool) {
 		return
 	}
 	f.landingPageEnabled.Store(enabled)
-}
-
-func (f *Frontend) adminLeaseSnapshots() []types.Lease {
-	snapshots := f.server.LeaseSnapshots()
-	if len(snapshots) == 0 {
-		return nil
-	}
-	now := time.Now()
-	filtered := make([]types.Lease, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if now.After(snapshot.ExpiresAt) {
-			continue
-		}
-		filtered = append(filtered, snapshot)
-	}
-	return filtered
-}
-
-func (f *Frontend) publicLeaseSnapshots() []types.Lease {
-	snapshots := f.server.LeaseSnapshots()
-	if len(snapshots) == 0 {
-		return nil
-	}
-
-	now := time.Now()
-	filtered := make([]types.Lease, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if now.After(snapshot.ExpiresAt) {
-			continue
-		}
-		since := time.Duration(0)
-		if !snapshot.LastSeenAt.IsZero() {
-			since = max(now.Sub(snapshot.LastSeenAt), 0)
-		}
-		if snapshot.IsBanned || snapshot.IsDenied || !snapshot.IsApproved || snapshot.Metadata.Hide {
-			continue
-		}
-		if snapshot.Ready == 0 && since >= 3*time.Minute {
-			continue
-		}
-
-		snapshot.ClientIP = ""
-		snapshot.Address = ""
-		snapshot.BPS = 0
-		snapshot.IsApproved = false
-		snapshot.IsBanned = false
-		snapshot.IsDenied = false
-		snapshot.IsIPBanned = false
-		filtered = append(filtered, snapshot)
-	}
-	return filtered
 }
 
 func getContentType(ext string) string {

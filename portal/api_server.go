@@ -559,18 +559,16 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	expiresAt := claims.Expiry.Time().UTC()
 	identityKey := identity.Key()
 	record := &leaseRecord{
-		Lease: types.Lease{
-			Identity:    identity,
-			Hostname:    hostname,
-			Metadata:    req.Metadata,
-			ExpiresAt:   expiresAt,
-			FirstSeenAt: issuedAt,
-			LastSeenAt:  issuedAt,
-			ClientIP:    clientIP,
-			ReportedIP:  utils.SanitizeReportedIP(reportedIP),
-			UDPEnabled:  req.UDPEnabled,
-		},
-		stream: transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit),
+		Identity:    identity,
+		Hostname:    hostname,
+		Metadata:    req.Metadata.Copy(),
+		ExpiresAt:   expiresAt,
+		FirstSeenAt: issuedAt,
+		LastSeenAt:  issuedAt,
+		ClientIP:    clientIP,
+		ReportedIP:  utils.SanitizeReportedIP(reportedIP),
+		UDPEnabled:  req.UDPEnabled,
+		stream:      transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit),
 	}
 	if req.UDPEnabled {
 		if s.ports == nil {
@@ -597,7 +595,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	resp := types.RegisterResponse{
 		Identity:    record.Copy(),
 		Hostname:    hostname,
-		Metadata:    record.Metadata,
+		Metadata:    record.Metadata.Copy(),
 		ExpiresAt:   expiresAt,
 		AccessToken: accessToken,
 		UDPEnabled:  record.UDPEnabled,
