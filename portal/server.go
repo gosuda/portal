@@ -78,6 +78,7 @@ type Server struct {
 	rootHost          string
 	trustedProxyCIDRs []*net.IPNet
 	relaySet          *discovery.RelaySet
+	olsManager        *OLSManager
 	shutdownOnce      sync.Once
 }
 
@@ -161,6 +162,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ownerIdentity:     ownerIdentity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
+		olsManager:        NewOLSManager(),
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -169,6 +171,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Initial OLS update with self
+		s.olsManager.UpdateNodes(map[string]string{
+			s.cfg.PortalURL: s.cfg.PortalURL,
+		})
 	}
 
 	return s, nil
@@ -414,6 +420,44 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
+				// OLS Load Balancing
+				if s.olsManager != nil {
+					// Use client remote address as clientID for hashing
+					clientID := conn.RemoteAddr().String()
+					target, err := s.olsManager.GetTargetNode(clientID, serverName)
+					if err == nil && target.ID != s.cfg.PortalURL && s.overlay != nil {
+						// Target is another node. Proxy to it.
+						log.Debug().
+							Str("client_addr", clientID).
+							Str("server_name", serverName).
+							Str("target_id", target.ID).
+							Msg("proxying to OLS target node")
+
+						// Check if we can reach target via overlay
+						snapshot := s.relaySet.Snapshot()
+						if targetState, ok := snapshot[target.ID]; ok && targetState.Descriptor.SupportsOverlayPeer {
+							overlayClient := s.overlay.Client()
+							// Proxy logic: in v2, we might want a simple TCP proxy or a protocol-aware one.
+							// For simplicity, we can try to dial the target's SNI port.
+							dialer := &net.Dialer{Timeout: 5 * time.Second}
+							// Use overlay address if available, or API address
+							proxyAddr := targetState.Descriptor.IngressTLSAddr
+							if targetState.Descriptor.OverlayIPv4 != "" {
+								// Assume SNI port is same
+								_, port, _ := net.SplitHostPort(s.cfg.SNIListenAddr)
+								proxyAddr = net.JoinHostPort(targetState.Descriptor.OverlayIPv4, port)
+							}
+
+							targetConn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+							if err == nil {
+								BridgeConns(wrappedConn, targetConn)
+								return
+							}
+							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target")
+						}
+					}
+				}
+
 				if serverName == s.rootHost {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
@@ -548,10 +592,13 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			var relaySetChanged bool
 			var warnErr error
 			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, now)
-			if relaySetChanged && s.overlay != nil {
-				if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
-					if warnErr == nil {
-						warnErr = syncErr
+			if relaySetChanged {
+				s.updateOLSFromRelaySet()
+				if s.overlay != nil {
+					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
+						if warnErr == nil {
+							warnErr = syncErr
+						}
 					}
 				}
 			}
@@ -599,6 +646,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 						var snapshot map[string]types.RelayState
 						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.RelayID, relay.APIHTTPSAddr, resp, now)
 						if relaySetChanged {
+							s.updateOLSFromRelaySet()
 							snapshot = s.relaySet.Snapshot()
 							if syncErr := s.overlay.Sync(s.cfg.PortalURL, snapshot); syncErr != nil {
 								if warnErr == nil {
@@ -670,6 +718,23 @@ func BridgeConns(left, right net.Conn) {
 		return err
 	})
 	_ = group.Wait()
+}
+
+func (s *Server) updateOLSFromRelaySet() {
+	if s.olsManager == nil || s.relaySet == nil {
+		return
+	}
+	snapshot := s.relaySet.Snapshot()
+	nodes := make(map[string]string)
+	// Add self
+	nodes[s.cfg.PortalURL] = s.cfg.PortalURL
+	// Add other reachable relays
+	for id, state := range snapshot {
+		if !state.Expired {
+			nodes[id] = state.Descriptor.APIHTTPSAddr
+		}
+	}
+	s.olsManager.UpdateNodes(nodes)
 }
 
 func closeWrite(conn net.Conn) {
