@@ -151,9 +151,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Msg("generated relay owner private key; set OWNER_PRIVATE_KEY unique identity")
 	}
 
-	policy := policy.NewRuntime()
-	policy.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
-	registry := newLeaseRegistry(policy)
+	policyRuntime := policy.NewRuntime()
+	policyRuntime.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
+	registry := newLeaseRegistry(policyRuntime)
 	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 
 	s := &Server{
