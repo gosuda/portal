@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,10 +17,10 @@ import (
 )
 
 func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
-	const address = "0x00000000000000000000000000000000000000A1"
-
 	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
 	registerReqCh := make(chan types.RegisterRequest, 1)
+	var mu sync.RWMutex
+	var registeredIdentity types.Identity
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -34,6 +35,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
+			mu.Lock()
+			registeredIdentity = challengeReq.Identity.Copy()
+			mu.Unlock()
 			select {
 			case challengeReqCh <- challengeReq:
 			default:
@@ -51,6 +55,9 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			select {
 			case registerReqCh <- registerReq:
 			default:
@@ -58,7 +65,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					Identity:    types.Identity{Name: "demo-app", Address: address},
+					Identity:    identity,
 					Hostname:    "127.0.0.1",
 					Metadata:    types.LeaseMetadata{Description: "demo"},
 					AccessToken: "jwt-register-1",
@@ -70,9 +77,12 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: types.Identity{Name: "demo-app", Address: address}, AccessToken: "jwt-renew-1"},
+				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-1"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -112,7 +122,7 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 		}
 	})
 	waitForSDKTest(t, func() bool {
-		return listener.Address() == address
+		return listener.Address() == challengeReq.Identity.Address
 	})
 
 	if challengeReq.TTL != 42 {
@@ -136,8 +146,8 @@ func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
 	if registerReq.SIWESignature == "" {
 		t.Fatal("register request SIWESignature = empty, want signature")
 	}
-	if listener.Address() != address {
-		t.Fatalf("Address() = %q, want %q", listener.Address(), address)
+	if listener.Address() != challengeReq.Identity.Address {
+		t.Fatalf("Address() = %q, want %q", listener.Address(), challengeReq.Identity.Address)
 	}
 	if got := listener.Hostname(); got != "127.0.0.1" {
 		t.Fatalf("Hostname() = %q, want %q", got, "127.0.0.1")
@@ -165,8 +175,6 @@ func TestExposeNoRelayInputs(t *testing.T) {
 }
 
 func TestExposeResolvesPrivateKey(t *testing.T) {
-	const address = "0x00000000000000000000000000000000000000A2"
-
 	privateKey := strings.Repeat("11", 32)
 	identity, err := utils.ResolveSecp256k1Identity(privateKey)
 	if err != nil {
@@ -208,7 +216,7 @@ func TestExposeResolvesPrivateKey(t *testing.T) {
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					Identity:    types.Identity{Name: "demo", Address: address},
+					Identity:    types.Identity{Name: identity.Name, Address: identity.Address},
 					Hostname:    "127.0.0.1",
 					AccessToken: "jwt-register-2",
 				},
@@ -221,7 +229,7 @@ func TestExposeResolvesPrivateKey(t *testing.T) {
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: types.Identity{Name: "demo", Address: address}, AccessToken: "jwt-renew-2"},
+				Data: types.RenewResponse{Identity: types.Identity{Name: identity.Name, Address: identity.Address}, AccessToken: "jwt-renew-2"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -259,9 +267,9 @@ func TestExposeResolvesPrivateKey(t *testing.T) {
 }
 
 func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
-	const address = "0x00000000000000000000000000000000000000A3"
-
 	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
+	var mu sync.RWMutex
+	var registeredIdentity types.Identity
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case types.PathSDKDomain:
@@ -276,6 +284,9 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
+			mu.Lock()
+			registeredIdentity = challengeReq.Identity.Copy()
+			mu.Unlock()
 			select {
 			case challengeReqCh <- challengeReq:
 			default:
@@ -293,10 +304,13 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
 				OK: true,
 				Data: types.RegisterResponse{
-					Identity:    types.Identity{Name: "demo", Address: address},
+					Identity:    identity,
 					Hostname:    "127.0.0.1",
 					AccessToken: "jwt-register-3",
 				},
@@ -307,9 +321,12 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
+			mu.RLock()
+			identity := registeredIdentity.Copy()
+			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: types.Identity{Name: "demo", Address: address}, AccessToken: "jwt-renew-3"},
+				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-3"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
