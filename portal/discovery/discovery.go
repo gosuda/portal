@@ -19,7 +19,6 @@ const defaultRequestTimeout = 15 * time.Second
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
 	desc.Name = utils.NormalizeHostname(desc.Name)
 	desc.Address = strings.TrimSpace(desc.Address)
-	desc.RelayID = strings.TrimSpace(desc.RelayID)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
 	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
@@ -37,9 +36,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
 		desc.APIHTTPSAddr = normalized
-		if desc.RelayID == "" {
-			desc.RelayID = normalized
-		}
 	}
 	if desc.Address != "" {
 		normalized, err := utils.NormalizeEVMAddress(desc.Address)
@@ -77,8 +73,6 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	switch {
 	case normalized.Name == "":
 		return types.RelayDescriptor{}, errors.New("identity.name is required")
-	case normalized.RelayID == "":
-		return types.RelayDescriptor{}, errors.New("relay_id is required")
 	case normalized.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
 	case normalized.Sequence == 0:
@@ -224,7 +218,6 @@ func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
 		Identity: types.Identity{
 			Name: utils.PortalRootHost(normalized),
 		},
-		RelayID:      normalized,
 		APIHTTPSAddr: normalized,
 		Version:      1,
 	}, nil

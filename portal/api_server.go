@@ -149,7 +149,6 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		Identity:            s.identity.Copy(),
-		RelayID:             s.cfg.PortalURL,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
 		IssuedAt:            now,

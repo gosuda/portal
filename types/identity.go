@@ -70,7 +70,6 @@ func (m LeaseMetadata) Copy() LeaseMetadata {
 
 type RelayDescriptor struct {
 	Identity
-	RelayID string `json:"relay_id"`
 
 	Sequence  uint64    `json:"sequence"`
 	Version   uint32    `json:"version"`
@@ -103,7 +102,6 @@ type RelayState struct {
 }
 
 type DesiredPeer struct {
-	RelayID            string   `json:"relay_id"`
 	WireGuardPublicKey string   `json:"wireguard_public_key"`
 	WireGuardEndpoint  string   `json:"wireguard_endpoint"`
 	AllowedIPs         []string `json:"allowed_ips,omitempty"`

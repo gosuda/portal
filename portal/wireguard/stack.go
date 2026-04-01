@@ -132,9 +132,10 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 	nextPeerEndpoints := map[string]string{}
 
 	for _, peer := range peers {
+		peerKey := strings.TrimSpace(peer.WireGuardPublicKey)
 		publicKeyHex, err := utils.WireGuardKeyHex(peer.WireGuardPublicKey)
 		if err != nil {
-			return fmt.Errorf("normalize peer %q public key: %w", peer.RelayID, err)
+			return fmt.Errorf("normalize peer %q public key: %w", peerKey, err)
 		}
 
 		resolvedEndpoint := ""
@@ -145,10 +146,10 @@ func (s *stack) ApplyPeers(peers []types.DesiredPeer) error {
 				currentEndpoint := s.peerEndpoints[publicKeyHex]
 				s.mu.Unlock()
 				if currentEndpoint != "" {
-					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w; using current endpoint %q", peer.RelayID, err, currentEndpoint))
+					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w; using current endpoint %q", peerKey, err, currentEndpoint))
 					resolvedEndpoint = currentEndpoint
 				} else {
-					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w", peer.RelayID, err))
+					warnErr = errors.Join(warnErr, fmt.Errorf("resolve peer %q endpoint: %w", peerKey, err))
 					continue
 				}
 			}

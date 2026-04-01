@@ -9,15 +9,14 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-func mustRelayDescriptor(t *testing.T, relayID, relayURL string) types.RelayDescriptor {
+func mustRelayDescriptor(t *testing.T, relayName, relayURL string) types.RelayDescriptor {
 	t.Helper()
 
 	now := time.Now().UTC()
 	desc, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
 		Identity: types.Identity{
-			Name: relayID,
+			Name: relayName,
 		},
-		RelayID:      relayID,
 		Sequence:     uint64(now.UnixMilli()),
 		Version:      1,
 		IssuedAt:     now,
@@ -171,7 +170,7 @@ func TestExposurePinDiscoveredDescriptorAllowsURLChangeForSameIdentity(t *testin
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	changedURL := mustRelayDescriptor(t, desc.RelayID, "https://relay-b.example")
+	changedURL := mustRelayDescriptor(t, desc.Name, "https://relay-b.example")
 	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want nil for same relay identity", err)

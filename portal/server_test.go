@@ -40,7 +40,6 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 		Identity: types.Identity{
 			Name: utils.PortalRootHost(relayURL),
 		},
-		RelayID:             relayURL,
 		Sequence:            uint64(now.UnixMilli()),
 		Version:             1,
 		IssuedAt:            now,

@@ -519,7 +519,7 @@ func (s *Server) startOverlay() error {
 		return fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
-	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+	if err := overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); err != nil {
 		_ = overlay.Shutdown(context.Background())
 		return fmt.Errorf("sync wireguard peers: %w", err)
 	}
@@ -550,7 +550,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			var warnErr error
 			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.Identity, bootstrap.APIHTTPSAddr, resp, now)
 			if relaySetChanged && s.overlay != nil {
-				if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
+				if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil {
 					if warnErr == nil {
 						warnErr = syncErr
 					}
@@ -601,7 +601,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, now)
 						if relaySetChanged {
 							snapshot = s.relaySet.Snapshot()
-							if syncErr := s.overlay.Sync(s.cfg.PortalURL, snapshot); syncErr != nil {
+							if syncErr := s.overlay.Sync(s.identity.Key(), snapshot); syncErr != nil {
 								if warnErr == nil {
 									warnErr = syncErr
 								}
@@ -624,7 +624,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 				}
 				expired, expireReason, consecutiveFailures := s.relaySet.RecordDiscoveryFailure(relay.Identity, relay.APIHTTPSAddr, failureErr, defaultWGRecoveryFailures, time.Now().UTC())
 				if expired {
-					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
+					if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
 						failureErr = syncErr
 					}
 				}

@@ -39,13 +39,11 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=go-builder /src/bin/relay-server /usr/bin/relay-server
 
-WORKDIR /tmp
-
 ENV PORTAL_URL=https://localhost:4017
-ENV IDENTITY_PATH=/tmp/.portal-certs/identity.json
+ENV IDENTITY_PATH=/portal-certs/identity.json
 ENV ADMIN_SECRET_KEY=
-ENV SNI_PORT=:443
-ENV KEYLESS_DIR=/tmp/.portal-certs
+ENV SNI_PORT=443
+ENV KEYLESS_DIR=/portal-certs
 ENV CLOUDFLARE_TOKEN=
 ENV TZ=UTC
 

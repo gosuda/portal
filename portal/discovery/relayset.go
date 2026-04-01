@@ -246,7 +246,6 @@ func (s *RelaySet) BootstrapDescriptors() []types.RelayDescriptor {
 			Identity: types.Identity{
 				Name: utils.PortalRootHost(relayURL),
 			},
-			RelayID:      relayURL,
 			APIHTTPSAddr: relayURL,
 			Version:      1,
 		})

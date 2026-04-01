@@ -154,21 +154,21 @@ func (o *Overlay) Client() *http.Client {
 	}
 }
 
-func (o *Overlay) Sync(selfRelayID string, snapshot map[string]types.RelayState) error {
+func (o *Overlay) Sync(selfIdentityKey string, snapshot map[string]types.RelayState) error {
 	if o == nil || o.stack == nil {
 		return nil
 	}
-	return o.stack.ApplyPeers(peersForSnapshot(selfRelayID, snapshot))
+	return o.stack.ApplyPeers(peersForSnapshot(selfIdentityKey, snapshot))
 }
 
-func peersForSnapshot(selfRelayID string, snapshot map[string]types.RelayState) []types.DesiredPeer {
+func peersForSnapshot(selfIdentityKey string, snapshot map[string]types.RelayState) []types.DesiredPeer {
 	peers := make([]types.DesiredPeer, 0, len(snapshot))
 	for _, state := range snapshot {
 		if state.Expired {
 			continue
 		}
 		desc := state.Descriptor
-		if desc.RelayID == selfRelayID || !desc.SupportsOverlayPeer {
+		if desc.Key() == selfIdentityKey || !desc.SupportsOverlayPeer {
 			continue
 		}
 		if desc.WireGuardPublicKey == "" || desc.WireGuardEndpoint == "" || desc.OverlayIPv4 == "" {
@@ -178,14 +178,13 @@ func peersForSnapshot(selfRelayID string, snapshot map[string]types.RelayState) 
 		allowedIPs := []string{desc.OverlayIPv4 + "/32"}
 		allowedIPs = append(allowedIPs, desc.OverlayCIDRs...)
 		peers = append(peers, types.DesiredPeer{
-			RelayID:            desc.RelayID,
 			WireGuardPublicKey: desc.WireGuardPublicKey,
 			WireGuardEndpoint:  desc.WireGuardEndpoint,
 			AllowedIPs:         allowedIPs,
 		})
 	}
 	sort.Slice(peers, func(i, j int) bool {
-		return peers[i].RelayID < peers[j].RelayID
+		return peers[i].WireGuardPublicKey < peers[j].WireGuardPublicKey
 	})
 	return peers
 }
