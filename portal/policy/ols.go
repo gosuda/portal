@@ -1,4 +1,4 @@
-package portal
+package policy
 
 import (
 	"fmt"
@@ -9,9 +9,8 @@ import (
 
 // OLSNode represents a node in the grid.
 type OLSNode struct {
-	ID      string
-	Address string
-	Load    float64
+	ID   string
+	Load float64
 }
 
 // OLSManager manages the grid topology using recursive composition.
@@ -36,13 +35,18 @@ func NewOLSManager() *OLSManager {
 }
 
 // UpdateNodes updates the set of nodes and reconfigures the grid.
-func (m *OLSManager) UpdateNodes(nodes map[string]string) {
+func (m *OLSManager) UpdateNodes(ids []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	oldNodes := m.nodes
 	m.nodes = make(map[string]*OLSNode)
-	for id, addr := range nodes {
-		m.nodes[id] = &OLSNode{ID: id, Address: addr}
+	for _, id := range ids {
+		if node, ok := oldNodes[id]; ok {
+			m.nodes[id] = node
+		} else {
+			m.nodes[id] = &OLSNode{ID: id}
+		}
 	}
 
 	N := len(m.nodes)
@@ -150,12 +154,12 @@ func findFactors(n int) (int, int) {
 	return 1, n
 }
 
-func (m *OLSManager) GetTargetNode(clientID, leaseID string) (*OLSNode, error) {
+func (m *OLSManager) GetTargetNodeID(clientID, leaseID string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	if m.n < 2 {
-		return nil, fmt.Errorf("grid not initialized")
+		return "", fmt.Errorf("grid not initialized")
 	}
 
 	i := hashString(clientID) % m.n
@@ -167,10 +171,10 @@ func (m *OLSManager) GetTargetNode(clientID, leaseID string) (*OLSNode, error) {
 	row, col = m.applyRotation(row, col)
 
 	if m.grid[row][col] == nil {
-		return nil, fmt.Errorf("node not found at %d,%d", row, col)
+		return "", fmt.Errorf("node not found at %d,%d", row, col)
 	}
 
-	return m.grid[row][col], nil
+	return m.grid[row][col].ID, nil
 }
 
 func (m *OLSManager) applyRotation(row, col int) (int, int) {

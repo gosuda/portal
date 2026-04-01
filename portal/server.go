@@ -79,7 +79,7 @@ type Server struct {
 	rootHost          string
 	trustedProxyCIDRs []*net.IPNet
 	relaySet          *discovery.RelaySet
-	olsManager        *OLSManager
+	olsManager        *policy.OLSManager
 	activeConns       int64
 	shutdownOnce      sync.Once
 }
@@ -164,7 +164,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		ownerIdentity:     ownerIdentity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
-		olsManager:        NewOLSManager(),
+		olsManager:        policy.NewOLSManager(),
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -174,9 +174,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return nil, err
 		}
 		// Initial OLS update with self
-		s.olsManager.UpdateNodes(map[string]string{
-			s.cfg.PortalURL: s.cfg.PortalURL,
-		})
+		s.olsManager.UpdateNodes([]string{s.cfg.PortalURL})
 	}
 
 	return s, nil
@@ -426,32 +424,28 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				if s.olsManager != nil {
 					// Use client remote address as clientID for hashing
 					clientID := conn.RemoteAddr().String()
-					target, err := s.olsManager.GetTargetNode(clientID, serverName)
-					if err == nil && target.ID != s.cfg.PortalURL && s.overlay != nil {
+					targetID, err := s.olsManager.GetTargetNodeID(clientID, serverName)
+					if err == nil && targetID != s.cfg.PortalURL && s.overlay != nil {
 						// Target is another node. Proxy to it.
 						log.Debug().
 							Str("client_addr", clientID).
 							Str("server_name", serverName).
-							Str("target_id", target.ID).
+							Str("target_id", targetID).
 							Msg("proxying to OLS target node")
 
 						// Check if we can reach target via overlay
 						snapshot := s.relaySet.Snapshot()
-						if targetState, ok := snapshot[target.ID]; ok && targetState.Descriptor.SupportsOverlayPeer {
-							// Use overlay address if available, or API address
-							proxyAddr := targetState.Descriptor.IngressTLSAddr
-							if targetState.Descriptor.OverlayIPv4 != "" {
-								// Assume SNI port is same
-								_, port, _ := net.SplitHostPort(s.cfg.SNIListenAddr)
-								proxyAddr = net.JoinHostPort(targetState.Descriptor.OverlayIPv4, port)
-							}
+						if targetState, ok := snapshot[targetID]; ok && targetState.Descriptor.SupportsOverlayPeer && targetState.Descriptor.OverlayIPv4 != "" {
+							// Use overlay address
+							_, port, _ := net.SplitHostPort(s.cfg.SNIListenAddr)
+							proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, port)
 
 							targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
 							if err == nil {
 								s.BridgeConns(wrappedConn, targetConn)
 								return
 							}
-							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target")
+							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target via overlay")
 						}
 					}
 				}
@@ -726,13 +720,11 @@ func (s *Server) updateOLSFromRelaySet() {
 		return
 	}
 	snapshot := s.relaySet.Snapshot()
-	nodes := make(map[string]string)
-	// Add self
-	nodes[s.cfg.PortalURL] = s.cfg.PortalURL
+	nodes := []string{s.cfg.PortalURL}
 	// Add other reachable relays
 	for id, state := range snapshot {
 		if !state.Expired {
-			nodes[id] = state.Descriptor.APIHTTPSAddr
+			nodes = append(nodes, id)
 		}
 	}
 	s.olsManager.UpdateNodes(nodes)
