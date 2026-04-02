@@ -76,13 +76,12 @@ type RegisterChallengeResponse struct {
 }
 
 type RegisterResponse struct {
-	Identity    Identity      `json:"identity"`
-	ExpiresAt   time.Time     `json:"expires_at"`
-	Hostname    string        `json:"hostname"`
-	Metadata    LeaseMetadata `json:"metadata"`
-	AccessToken string        `json:"access_token"`
-	UDPAddr     string        `json:"udp_addr,omitempty"`
-	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
+	Identity    Identity  `json:"identity"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Hostname    string    `json:"hostname"`
+	AccessToken string    `json:"access_token"`
+	UDPAddr     string    `json:"udp_addr,omitempty"`
+	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
@@ -93,8 +92,7 @@ type DiscoveryResponse struct {
 }
 
 type QUICControlMessage struct {
-	Identity    Identity `json:"identity"`
-	AccessToken string   `json:"access_token"`
+	AccessToken string `json:"access_token"`
 }
 
 type QUICControlResponse struct {
@@ -103,21 +101,18 @@ type QUICControlResponse struct {
 }
 
 type RenewRequest struct {
-	Identity    Identity `json:"identity"`
-	AccessToken string   `json:"access_token"`
-	TTL         int      `json:"ttl,omitempty"`
-	ReportedIP  string   `json:"reported_ip,omitempty"`
+	AccessToken string `json:"access_token"`
+	TTL         int    `json:"ttl,omitempty"`
+	ReportedIP  string `json:"reported_ip,omitempty"`
 }
 
 type RenewResponse struct {
-	Identity    Identity  `json:"identity"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	AccessToken string    `json:"access_token"`
 }
 
 type UnregisterRequest struct {
-	Identity    Identity `json:"identity"`
-	AccessToken string   `json:"access_token"`
+	AccessToken string `json:"access_token"`
 }
 
 type DomainResponse struct {

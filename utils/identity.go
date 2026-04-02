@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/gosuda/portal/v2/types"
@@ -104,22 +103,12 @@ func SaveIdentity(path string, identity types.Identity) error {
 	if err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(storedIdentity{
+	if err := WriteJSONFile(path, storedIdentity{
 		Name:       normalized.Name,
 		Address:    normalized.Address,
 		PublicKey:  normalized.PublicKey,
 		PrivateKey: normalized.PrivateKey,
-	}, "", "  ")
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return fmt.Errorf("create identity directory: %w", err)
-		}
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	}, 0o600); err != nil {
 		return fmt.Errorf("write identity file: %w", err)
 	}
 	return nil
@@ -130,13 +119,27 @@ func LoadIdentity(path string) (types.Identity, error) {
 	if path == "" {
 		return types.Identity{}, errors.New("identity path is required")
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var payload storedIdentity
+	if err := ReadJSONFile(path, &payload); err != nil {
 		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
 	}
+	return NormalizeStoredIdentity(types.Identity{
+		Name:       payload.Name,
+		Address:    payload.Address,
+		PublicKey:  payload.PublicKey,
+		PrivateKey: payload.PrivateKey,
+	})
+}
+
+func ParseIdentityJSON(raw string) (types.Identity, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return types.Identity{}, errors.New("identity json is required")
+	}
+
 	var payload storedIdentity
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return types.Identity{}, err
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
 	}
 	return NormalizeStoredIdentity(types.Identity{
 		Name:       payload.Name,
@@ -204,6 +207,42 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	return loaded, true, nil
 }
 
+func ResolveListenerIdentity(identity types.Identity, identityPath, identityJSON string) (types.Identity, bool, error) {
+	identityPath = strings.TrimSpace(identityPath)
+	identityJSON = strings.TrimSpace(identityJSON)
+	if identityJSON != "" {
+		provided, err := ParseIdentityJSON(identityJSON)
+		if err != nil {
+			return types.Identity{}, false, err
+		}
+		if identityPath != "" {
+			if err := SaveIdentity(identityPath, provided); err != nil {
+				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+			}
+			provided, err = LoadIdentity(identityPath)
+			if err != nil {
+				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+			}
+		}
+		resolved, err := ResolveLeaseIdentity(provided)
+		return resolved, false, err
+	}
+	if identityPath == "" {
+		resolved, err := ResolveLeaseIdentity(identity)
+		return resolved, false, err
+	}
+
+	loaded, created, err := LoadOrCreateIdentity(identityPath, identity)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	resolved, err := ResolveLeaseIdentity(loaded)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	return resolved, created, nil
+}
+
 func NormalizeIdentityKey(raw string) string {
 	key := strings.ToLower(strings.TrimSpace(raw))
 	if key == "" {
@@ -217,27 +256,7 @@ func NormalizeIdentityKey(raw string) string {
 }
 
 func NormalizeIdentityKeys(inputs []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{}, len(inputs))
-	out := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		key := NormalizeIdentityKey(input)
-		if key == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, key)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+	return normalizeUniqueStrings(inputs, NormalizeIdentityKey)
 }
 
 func NormalizeIdentityKeyBPS(inputs map[string]int64) map[string]int64 {

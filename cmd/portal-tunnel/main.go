@@ -36,6 +36,7 @@ type exposeFlags struct {
 	discovery    bool
 	banMITM      bool
 	identityPath string
+	identityJSON string
 	name         string
 	desc         string
 	tags         string
@@ -56,6 +57,7 @@ func runExposeCommand(args []string) error {
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include public registry relays and discover additional relay bootstraps")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", true, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
@@ -90,6 +92,15 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
 	}
+	if flags.name == "" && strings.TrimSpace(flags.identityJSON) != "" {
+		identity, err := utils.ParseIdentityJSON(flags.identityJSON)
+		if err != nil {
+			return fmt.Errorf("parse --identity-json: %w", err)
+		}
+		if strings.TrimSpace(identity.Name) != "" {
+			flags.name = identity.Name
+		}
+	}
 	if flags.name == "" {
 		storedIdentity, err := utils.LoadIdentity(flags.identityPath)
 		if err == nil && strings.TrimSpace(storedIdentity.Name) != "" {
@@ -110,25 +121,19 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid service name: %w", err)
 	}
-	identity, createdIdentity, err := utils.LoadOrCreateIdentity(flags.identityPath, types.Identity{Name: flags.name})
-	if err != nil {
-		return fmt.Errorf("load tunnel identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().Str("identity_path", flags.identityPath).Str("address", identity.Address).Msg("generated tunnel identity and saved it to disk")
-	}
-
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:  utils.SplitCSV(flags.relayCSV),
-		Identity:   identity,
-		TargetAddr: flags.targetAddr,
-		UDPAddr:    flags.udpAddr,
-		UDPEnabled: flags.udp,
-		BanMITM:    flags.banMITM,
-		Discovery:  flags.discovery,
+		RelayURLs:    utils.SplitCSV(flags.relayCSV),
+		IdentityPath: flags.identityPath,
+		IdentityJSON: flags.identityJSON,
+		Name:         flags.name,
+		TargetAddr:   flags.targetAddr,
+		UDPAddr:      flags.udpAddr,
+		UDPEnabled:   flags.udp,
+		BanMITM:      flags.banMITM,
+		Discovery:    flags.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),

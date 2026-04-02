@@ -309,7 +309,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, req.Identity, time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, time.Now().UTC())
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
 		return
@@ -331,7 +331,6 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.WriteAPIData(w, http.StatusOK, types.RenewResponse{
-		Identity:    record.Copy(),
 		ExpiresAt:   record.ExpiresAt,
 		AccessToken: nextAccessToken,
 	})
@@ -346,7 +345,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, req.Identity, time.Now().UTC())
+	claims, err := auth.VerifyLeaseAccessToken(req.AccessToken, s.identity.PublicKey, s.cfg.PortalURL, time.Now().UTC())
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, errUnauthorized.Error())
 		return
@@ -356,6 +355,15 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		leaseLookupError(err).Write(w)
 		return
+	}
+	deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	if err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, record.Hostname); err != nil {
+		log.Warn().
+			Err(err).
+			Str("hostname", record.Hostname).
+			Str("address", record.Address).
+			Msg("delete lease ens gasless txt")
 	}
 	if record != nil {
 		record.Close()
@@ -373,17 +381,13 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	identity := types.Identity{
-		Name:    r.URL.Query().Get("name"),
-		Address: r.URL.Query().Get("address"),
-	}
 	token := strings.TrimSpace(r.Header.Get(types.HeaderAccessToken))
 	clientIP, ok := s.extractAllowedClientIP(w, r)
 	if !ok {
 		return
 	}
 
-	lease, err := s.admitLeaseByIdentity(identity, token, false)
+	lease, err := s.admitLeaseByToken(token, false)
 	if err != nil {
 		switch {
 		case errors.Is(err, errLeaseNotFound):
@@ -458,13 +462,13 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
-	if msg.Identity.Key() == "" || msg.AccessToken == "" {
+	if strings.TrimSpace(msg.AccessToken) == "" {
 		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
 
-	lease, err := s.admitLeaseByIdentity(msg.Identity, msg.AccessToken, true)
+	lease, err := s.admitLeaseByToken(msg.AccessToken, true)
 	switch {
 	case err == nil:
 	case errors.Is(err, errLeaseNotFound):
@@ -505,16 +509,17 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		Msg("quic tunnel connected")
 }
 
-func (s *Server) admitLeaseByIdentity(identity types.Identity, token string, requireDatagram bool) (*leaseRecord, error) {
-	lease, err := s.registry.Find(identity)
+func (s *Server) admitLeaseByToken(token string, requireDatagram bool) (*leaseRecord, error) {
+	claims, err := auth.VerifyLeaseAccessToken(token, s.identity.PublicKey, s.cfg.PortalURL, time.Now().UTC())
+	if err != nil {
+		return nil, errUnauthorized
+	}
+	lease, err := s.registry.Find(claims.Identity)
 	if err != nil {
 		return nil, err
 	}
 	if !s.registry.policy.IsIdentityRoutable(lease.Key()) {
 		return nil, errLeaseRejected
-	}
-	if _, err := auth.VerifyLeaseAccessToken(token, s.identity.PublicKey, s.cfg.PortalURL, lease.Copy(), time.Now().UTC()); err != nil {
-		return nil, errUnauthorized
 	}
 	if lease.stream == nil || (requireDatagram && lease.datagram == nil) {
 		return nil, errTransportMismatch
@@ -591,11 +596,17 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		record.Close()
 		return types.RegisterResponse{}, err
 	}
+	syncCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+	defer cancel()
+	if err := s.acmeManager.SyncENSGaslessHostname(syncCtx, record.Hostname, record.Address); err != nil {
+		_, _ = s.registry.Unregister(record.Copy())
+		record.Close()
+		return types.RegisterResponse{}, err
+	}
 
 	resp := types.RegisterResponse{
 		Identity:    record.Copy(),
 		Hostname:    hostname,
-		Metadata:    record.Metadata.Copy(),
 		ExpiresAt:   expiresAt,
 		AccessToken: accessToken,
 		UDPEnabled:  record.UDPEnabled,

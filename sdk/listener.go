@@ -108,7 +108,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
-			return l.api.openQUICSession(ctx, state.Identity, state.AccessToken)
+			return l.api.openQUICSession(ctx, state.AccessToken)
 		})
 	}
 
@@ -127,7 +127,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 				go l.stream.RunLoop(
 					ctx,
 					func(ctx context.Context) (net.Conn, error) {
-						return l.api.openReverseSession(ctx, l.identity.Copy())
+						return l.api.openReverseSession(ctx)
 					},
 					func() *tls.Config {
 						l.mu.Lock()
@@ -206,7 +206,7 @@ func (l *Listener) Close() error {
 
 		if api != nil && registered && identity.Key() != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			closeErr = errors.Join(closeErr, api.unregisterLease(ctx, identity))
+			closeErr = errors.Join(closeErr, api.unregisterLease(ctx))
 			cancel()
 		}
 		if tlsCloser != nil {
@@ -423,7 +423,7 @@ func (l *Listener) runRenewLoop(ctx context.Context) {
 
 func (l *Listener) renewLease(ctx context.Context) error {
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err := l.api.renewLease(requestCtx, l.identity.Copy(), l.leaseTTL)
+	err := l.api.renewLease(requestCtx, l.leaseTTL)
 	cancel()
 	if err == nil {
 		return nil
@@ -446,7 +446,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 	if l.datagram != nil && !resp.UDPEnabled {
-		_ = l.api.unregisterLease(context.Background(), resp.Identity)
+		_ = l.api.unregisterLease(context.Background())
 		return &types.APIRequestError{
 			Code:    types.APIErrorCodeFeatureUnavailable,
 			Message: "relay did not enable required udp support",
@@ -454,12 +454,12 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	}
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
-		_ = l.api.unregisterLease(context.Background(), resp.Identity)
+		_ = l.api.unregisterLease(context.Background())
 		return err
 	}
 
 	if ctx.Err() != nil {
-		_ = l.api.unregisterLease(context.Background(), resp.Identity)
+		_ = l.api.unregisterLease(context.Background())
 		if tlsCloser != nil {
 			_ = tlsCloser.Close()
 		}
@@ -469,7 +469,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	l.mu.Lock()
 	if ctx.Err() != nil {
 		l.mu.Unlock()
-		_ = l.api.unregisterLease(context.Background(), resp.Identity)
+		_ = l.api.unregisterLease(context.Background())
 		if tlsCloser != nil {
 			_ = tlsCloser.Close()
 		}
@@ -481,7 +481,6 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	l.identity.Address = resp.Identity.Address
 	l.hostname = resp.Hostname
 	l.udpAddr = resp.UDPAddr
-	l.metadata = resp.Metadata.Copy()
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
 	l.mu.Unlock()

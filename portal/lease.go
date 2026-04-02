@@ -52,24 +52,6 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 	return out
 }
 
-func (r *leaseRegistry) RunJanitor(ctx context.Context, interval time.Duration) error {
-	if interval <= 0 {
-		return errors.New("janitor interval must be positive")
-	}
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			r.cleanupExpired(time.Now())
-		}
-	}
-}
-
 func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	host = utils.NormalizeHostname(host)
 	if host == "" {
@@ -246,21 +228,7 @@ func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time
 	return record
 }
 
-func (r *leaseRegistry) cleanupExpired(now time.Time) {
-	expiredLeases := r.removeExpired(now)
-	r.mu.Lock()
-	for challengeID, challenge := range r.registerChallenges {
-		if challenge == nil || challenge.Expired(now) {
-			delete(r.registerChallenges, challengeID)
-		}
-	}
-	r.mu.Unlock()
-	for _, lease := range expiredLeases {
-		lease.Close()
-	}
-}
-
-func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
+func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -271,6 +239,11 @@ func (r *leaseRegistry) removeExpired(now time.Time) []*leaseRecord {
 			delete(r.leasesByKey, key)
 			r.routes.Delete(record.Hostname)
 			r.policy.ForgetIdentity(key)
+		}
+	}
+	for challengeID, challenge := range r.registerChallenges {
+		if challenge == nil || challenge.Expired(now) {
+			delete(r.registerChallenges, challengeID)
 		}
 	}
 	return expired
@@ -334,15 +307,16 @@ func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
 	clientIP := record.ClientIP
 	identityKey := record.Key()
 	return types.AdminLease{
-		Lease:      r.Snapshot(record),
-		Address:    record.Address,
-		BPS:        r.policy.BPSManager().IdentityBPS(identityKey),
-		ClientIP:   clientIP,
-		ReportedIP: record.ReportedIP,
-		IsApproved: r.policy.EffectiveApproval(identityKey),
-		IsBanned:   r.policy.IsIdentityBanned(identityKey),
-		IsDenied:   r.policy.IsIdentityDenied(identityKey),
-		IsIPBanned: r.policy.IPFilter().IsIPBanned(clientIP),
+		Lease:       r.Snapshot(record),
+		IdentityKey: identityKey,
+		Address:     record.Address,
+		BPS:         r.policy.BPSManager().IdentityBPS(identityKey),
+		ClientIP:    clientIP,
+		ReportedIP:  record.ReportedIP,
+		IsApproved:  r.policy.EffectiveApproval(identityKey),
+		IsBanned:    r.policy.IsIdentityBanned(identityKey),
+		IsDenied:    r.policy.IsIdentityDenied(identityKey),
+		IsIPBanned:  r.policy.IPFilter().IsIPBanned(clientIP),
 	}
 }
 

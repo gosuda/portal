@@ -61,7 +61,11 @@ func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath st
 		auth:              newAdminAuth(adminSecret),
 		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
 	}
-	frontend.setLandingPageEnabled(state.landingPageEnabled(defaultLandingPageEnabled))
+	landingPageEnabled := defaultLandingPageEnabled
+	if state.LandingPageEnabled != nil {
+		landingPageEnabled = *state.LandingPageEnabled
+	}
+	frontend.setLandingPageEnabled(landingPageEnabled)
 	return frontend, nil
 }
 

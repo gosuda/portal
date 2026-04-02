@@ -63,14 +63,15 @@ type Lease struct {
 
 type AdminLease struct {
 	Lease
-	Address    string `json:"address,omitempty"`
-	BPS        int64
-	ClientIP   string
-	ReportedIP string
-	IsApproved bool
-	IsBanned   bool
-	IsDenied   bool
-	IsIPBanned bool
+	IdentityKey string `json:"identity_key,omitempty"`
+	Address     string `json:"address,omitempty"`
+	BPS         int64
+	ClientIP    string
+	ReportedIP  string
+	IsApproved  bool
+	IsBanned    bool
+	IsDenied    bool
+	IsIPBanned  bool
 }
 
 type RelayDescriptor struct {
@@ -110,4 +111,10 @@ type DesiredPeer struct {
 	WireGuardPublicKey string   `json:"wireguard_public_key"`
 	WireGuardEndpoint  string   `json:"wireguard_endpoint"`
 	AllowedIPs         []string `json:"allowed_ips,omitempty"`
+}
+
+type DNSSECStatus struct {
+	State    string `json:"state,omitempty"`
+	DSRecord string `json:"ds_record,omitempty"`
+	Message  string `json:"message,omitempty"`
 }

@@ -51,11 +51,6 @@ type apiClient struct {
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
-	identity, err := utils.ResolveLeaseIdentity(cfg.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, err
@@ -74,7 +69,7 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		dialTimeout:    dialTimeout,
 		requestTimeout: requestTimeout,
 		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
-		identity:       identity,
+		identity:       cfg.Identity.Copy(),
 		metadata:       cfg.Metadata.Copy(),
 	}, nil
 }
@@ -191,7 +186,7 @@ func (a *apiClient) ensureCompatible(ctx context.Context, httpClient *http.Clien
 	return nil
 }
 
-func (a *apiClient) renewLease(ctx context.Context, identity types.Identity, ttl time.Duration) error {
+func (a *apiClient) renewLease(ctx context.Context, ttl time.Duration) error {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return err
 	}
@@ -205,7 +200,6 @@ func (a *apiClient) renewLease(ctx context.Context, identity types.Identity, ttl
 
 	var resp types.RenewResponse
 	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRenew, types.RenewRequest{
-		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 		TTL:         int(ttl / time.Second),
 		ReportedIP:  a.reportedIP(ctx),
@@ -216,13 +210,6 @@ func (a *apiClient) renewLease(ctx context.Context, identity types.Identity, ttl
 	if resp.AccessToken == "" {
 		return errors.New("relay did not return renewed access token")
 	}
-	renewedIdentity, err := utils.NormalizeIdentity(resp.Identity)
-	if err != nil {
-		return err
-	}
-	if renewedIdentity.Key() != a.identity.Key() {
-		return errors.New("relay returned mismatched renewed lease identity")
-	}
 
 	a.mu.Lock()
 	if a.accessToken == accessToken {
@@ -232,17 +219,16 @@ func (a *apiClient) renewLease(ctx context.Context, identity types.Identity, ttl
 	return nil
 }
 
-func (a *apiClient) unregisterLease(ctx context.Context, identity types.Identity) error {
+func (a *apiClient) unregisterLease(ctx context.Context) error {
 	a.mu.RLock()
 	accessToken := a.accessToken
 	a.mu.RUnlock()
 	return utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKUnregister, types.UnregisterRequest{
-		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 	}, nil, nil)
 }
 
-func (a *apiClient) openReverseSession(ctx context.Context, identity types.Identity) (net.Conn, error) {
+func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
@@ -257,15 +243,9 @@ func (a *apiClient) openReverseSession(ctx context.Context, identity types.Ident
 		return nil, err
 	}
 
-	connectURL := utils.ResolveAPIURL(a.baseURL, types.PathSDKConnect)
-	query := connectURL.Query()
-	query.Set("name", identity.Name)
-	query.Set("address", identity.Address)
-	connectURL.RawQuery = query.Encode()
-
 	req := &http.Request{
 		Method: http.MethodGet,
-		URL:    connectURL,
+		URL:    utils.ResolveAPIURL(a.baseURL, types.PathSDKConnect),
 		Host:   a.baseURL.Host,
 		Header: make(http.Header),
 	}
@@ -321,7 +301,7 @@ func (c *bufferedConn) Read(p []byte) (int, error) {
 }
 
 // openQUICSession opens a QUIC connection to the relay for datagram transport.
-func (a *apiClient) openQUICSession(ctx context.Context, identity types.Identity, accessToken string) (*quic.Conn, error) {
+func (a *apiClient) openQUICSession(ctx context.Context, accessToken string) (*quic.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
@@ -348,7 +328,6 @@ func (a *apiClient) openQUICSession(ctx context.Context, identity types.Identity
 	}
 
 	controlMsg := types.QUICControlMessage{
-		Identity:    identity.Copy(),
 		AccessToken: accessToken,
 	}
 	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {

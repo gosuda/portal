@@ -165,24 +165,24 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	for _, lease := range registry.removeExpired(time.Now()) {
+	for _, lease := range registry.cleanupExpired(time.Now()) {
 		lease.Close()
 	}
 
 	if _, ok := registry.Lookup("expired.example.com"); ok {
-		t.Fatal("Lookup() after removeExpired() = true, want false")
+		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
 	if _, err := record.stream.Claim(context.Background()); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("Claim() after removeExpired() error = %v, want %v", err, net.ErrClosed)
+		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, net.ErrClosed)
 	}
 }
 
-func TestLeaseRegistryRunJanitorRejectsNonPositiveInterval(t *testing.T) {
+func TestServerRunLeaseJanitorRejectsNonPositiveInterval(t *testing.T) {
 	t.Parallel()
 
-	registry := newLeaseRegistry(policy.NewRuntime())
-	err := registry.RunJanitor(context.Background(), 0)
+	server := &Server{registry: newLeaseRegistry(policy.NewRuntime())}
+	err := server.runLeaseJanitor(context.Background(), 0)
 	if err == nil {
-		t.Fatal("RunJanitor() error = nil, want validation error")
+		t.Fatal("runLeaseJanitor() error = nil, want validation error")
 	}
 }

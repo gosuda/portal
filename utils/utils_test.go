@@ -135,6 +135,16 @@ func TestParseCIDRsRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestDomainCandidates(t *testing.T) {
+	t.Parallel()
+
+	got := DomainCandidates("portal.example.com")
+	want := []string{"portal.example.com", "example.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DomainCandidates() = %v, want %v", got, want)
+	}
+}
+
 func TestNormalizeTargetAddr(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +154,17 @@ func TestNormalizeTargetAddr(t *testing.T) {
 	}
 	if got != "127.0.0.1:80" {
 		t.Fatalf("NormalizeTargetAddr() = %q, want %q", got, "127.0.0.1:80")
+	}
+}
+
+func TestValidateIPv4(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateIPv4("203.0.113.10"); err != nil {
+		t.Fatalf("ValidateIPv4() error = %v", err)
+	}
+	if err := ValidateIPv4("not-an-ip"); err == nil {
+		t.Fatal("ValidateIPv4() error = nil, want invalid ip error")
 	}
 }
 

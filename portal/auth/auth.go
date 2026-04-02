@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -193,7 +192,7 @@ func VerifyRegisterChallengeMessage(messageText, signature, domain, nonce string
 }
 
 func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.Identity, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
-	privateKeyBytes, err := decodePrivateKeyHex(privateKeyHex)
+	privateKey, _, err := utils.ParseSecp256k1PrivateKeyHex(privateKeyHex, false)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -206,7 +205,7 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.I
 		Algorithm: leaseTokenAlgorithm,
 		Key: &es256kOpaqueSigner{
 			keyID:      strings.TrimSpace(keyID),
-			privateKey: secp256k1.PrivKeyFromBytes(privateKeyBytes),
+			privateKey: privateKey,
 		},
 	}, (&jose.SignerOptions{}).WithType("JWT"))
 	if err != nil {
@@ -235,18 +234,8 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.I
 	return token, claims, nil
 }
 
-func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, identity types.Identity, now time.Time) (LeaseAccessTokenClaims, error) {
-	pubKeyText := strings.TrimSpace(publicKeyHex)
-	if pubKeyText == "" {
-		return LeaseAccessTokenClaims{}, errors.New("public key is required")
-	}
-	pubKeyText = utils.TrimHexPrefix(pubKeyText)
-
-	pubKeyBytes, err := hex.DecodeString(pubKeyText)
-	if err != nil {
-		return LeaseAccessTokenClaims{}, err
-	}
-	publicKey, err := secp256k1.ParsePubKey(pubKeyBytes)
+func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
+	publicKey, err := utils.ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
@@ -268,15 +257,6 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, identity types.I
 		return LeaseAccessTokenClaims{}, errors.New("lease access token identity does not match subject")
 	}
 	claims.Identity = normalizedClaimsIdentity
-	if identity.Key() != "" {
-		normalizedIdentity, err := utils.NormalizeIdentity(identity)
-		if err != nil {
-			return LeaseAccessTokenClaims{}, err
-		}
-		if claims.Subject != normalizedIdentity.Key() {
-			return LeaseAccessTokenClaims{}, errors.New("lease access token identity does not match request")
-		}
-	}
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      strings.TrimSpace(issuer),
 		AnyAudience: jwt.Audience{leaseAccessTokenAudience},
@@ -285,17 +265,4 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, identity types.I
 		return LeaseAccessTokenClaims{}, err
 	}
 	return claims, nil
-}
-
-func decodePrivateKeyHex(privateKeyHex string) ([]byte, error) {
-	trimmed := strings.TrimSpace(privateKeyHex)
-	trimmed = utils.TrimHexPrefix(trimmed)
-	decoded, err := hex.DecodeString(trimmed)
-	if err != nil {
-		return nil, err
-	}
-	if len(decoded) != secp256k1.PrivKeyBytesLen {
-		return nil, errors.New("secp256k1 private key must be 32 bytes")
-	}
-	return decoded, nil
 }

@@ -63,11 +63,13 @@ UDP client
 
 ### Operational Constraints
 
-- For non-localhost deployments, ACME management supports only `cloudflare` and `route53`.
+- For non-localhost deployments, relay TLS can run from manual certificate files in `KEYLESS_DIR` or from managed ACME.
+- When managed ACME is enabled, supported DNS providers are `cloudflare`, `gcloud`, and `route53`.
+- ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync.
 - Relay, tunnel, and demo-app identities are persisted as JSON at `IDENTITY_PATH` / `--identity-path`. Missing files are generated automatically and stored with `name`, `address`, `public_key`, and `private_key`.
-- Non-localhost ACME keeps both root and wildcard DNS A records in sync.
+- Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
 - Relay certificate material lives under `KEYLESS_DIR` as `fullchain.pem` and `privatekey.pem`.
-- Localhost uses the development certificate path instead of DNS-provider-managed ACME.
+- Localhost uses the development certificate path instead of public managed/manual certificate setup.
 
 ## Connection Model
 
@@ -80,13 +82,13 @@ Portal has three distinct network roles:
   - `POST /sdk/unregister`
   - `GET /sdk/domain`
 - **Reverse session connection**
-  - `GET /sdk/connect?name=...&address=...`
+  - `GET /sdk/connect`
   - HTTP/1.1 only
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
   - QUIC to the relay URL host:port with ALPN `portal-tunnel`
-  - authenticated by a first-stream control message carrying `identity` + `access_token`
+  - authenticated by a first-stream control message carrying `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
 That distinction matters because `/sdk/connect` stops being ordinary HTTP once hijacked, while the UDP backhaul is a separate internal QUIC carrier.
@@ -110,10 +112,10 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `transport.RelayDatagram`: per-lease raw UDP socket plus QUIC DATAGRAM bridge runtime
 - `transport.PortAllocator`: count-based UDP port allocator with sticky name-based reservation and grace period
 - `transport.datagramSession`: internal QUIC DATAGRAM bind/send/receive primitive shared by relay and SDK datagram runtimes
-- `acme`: Cloudflare/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
+- `acme`: Cloudflare/Google Cloud DNS/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 - `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
-- `discovery`: signed relay descriptor publication and relay-set synchronization
+- `discovery`: relay descriptor publication over relay HTTPS plus relay-set synchronization
 - `wireguard`: optional relay overlay network used to reach peer relay APIs over internal overlay IPs and keep relay peer state synchronized
 - `Server` additionally owns `quicTunnel` (QUIC listener, ALPN `portal-tunnel`) when UDP transport is enabled
 
@@ -162,7 +164,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 ### Raw reverse transport (TLS only)
 
 1. SDK/tunnel registers one lease per relay through `POST /sdk/register/challenge` followed by `POST /sdk/register`.
-2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?name=...&address=...`.
+2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect`.
 3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease stream ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A stream client connects to the relay SNI listener.
@@ -190,7 +192,7 @@ Result: this is a detect-only signal by default. It raises the cost of adaptive 
 2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` and admin has enabled UDP), allocates a UDP port via `PortAllocator`, and creates a `transport.RelayDatagram` for the lease.
 3. Registration response includes `udp_addr` (public UDP endpoint) and `access_token`. There is no separate `quic_addr`; the SDK dials QUIC to the relay URL host:port.
 4. SDK `transport.ClientDatagram` opens a QUIC connection with ALPN `portal-tunnel` and QUIC DATAGRAM support enabled.
-5. Authentication: SDK sends `{identity, access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
+5. Authentication: SDK sends `{access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
 6. External UDP client sends a packet to `udp_addr` -> `RelayDatagram.readLoop` -> `TouchFlow` (assigns flow ID) -> `SendDatagram` -> QUIC DATAGRAM frame.
 7. SDK-side `datagramSession.receiveLoop` decodes frames -> `Listener.AcceptDatagram()` -> `Exposure.AcceptDatagram()` -> `proxyExposureDatagrams` -> local UDP target.
 8. Return path: local response -> `Exposure.SendDatagram()` -> `Listener.SendDatagram()` -> `ClientDatagram.Send()` -> QUIC DATAGRAM -> `RelayDatagram.dispatch()` -> `conn.WriteToUDP` to the original client.
@@ -205,6 +207,9 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 ## WireGuard Overlay and Discovery
 
 - Discovery starts from bootstrap relay URLs over normal public HTTPS.
+- Discovery descriptors are currently transport-authenticated by the queried relay endpoint, not by embedded descriptor signatures.
+- Current discovery validation covers protocol version, descriptor normalization, required fields, expiry, target URL/identity matching, and overlay field sanity only.
+- Descriptor `identity.address` is a relay claim inside discovery. Independent `domain -> address` verification comes from optional ENS/DNSSEC evidence, not from the discovery payload itself.
 - Each relay publishes a descriptor over relay HTTPS that may advertise:
   - `wireguard_public_key`
   - `wireguard_endpoint`
@@ -265,7 +270,7 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 
 ### 2. Reverse Connect
 
-- `GET /sdk/connect?name=...&address=...`
+- `GET /sdk/connect`
 - Requires HTTP/1.1
 - Requires `X-Portal-Access-Token` header with the lease access token
 - Relay validates:
@@ -277,13 +282,13 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 ### 3. Renew
 
 - `POST /sdk/renew`
-- Requires `identity` + `access_token`
+- Requires `access_token`
 - Extends lease TTL and returns a refreshed `access_token`
 
 ### 4. Unregister
 
 - `POST /sdk/unregister`
-- Requires `identity` + `access_token`
+- Requires `access_token`
 - Removes the lease, routes, and ready reverse sessions
 
 ## Routing Behavior
@@ -348,10 +353,12 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Relay admin/API TLS uses the certificate in `KEYLESS_DIR`
   - `fullchain.pem`
   - `privatekey.pem`
-- For non-localhost deployments, ACME DNS-01 currently supports `cloudflare` and `route53`, and keeps:
+- For non-localhost deployments, Portal can either use those files directly or manage them through ACME.
+- When ACME is enabled, DNS-01 currently supports `cloudflare`, `gcloud`, and `route53`, and keeps:
   - root host A record
   - wildcard host A record
   - relay certificate renewal
+- When manual certificate files are present and valid, Portal uses them instead of provisioning a new certificate, but can still use `ACME_DNS_PROVIDER` for ENS gasless DNSSEC/TXT automation.
 - SDK/tunnel fetches the relay certificate chain from the relay root host, verifies that the leaf covers tenant hostnames, and builds a tenant-side `tls.Config` with a remote signer backed by `/v1/sign`
 - During tenant TLS handshake, the SDK/tunnel endpoint acts as the TLS server and derives tenant session keys locally; the relay only signs handshake digests and does not receive tenant TLS traffic secrets
 - Relay control-plane TLS and reverse-session setup still terminate on the relay's admin/API listener and are not protected by the tenant keyless TLS path
@@ -369,7 +376,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
 - Per-lease UDP port allocation with sticky name-based reservation
-- QUIC tunnel authentication via control stream (`identity` + lease access token)
+- QUIC tunnel authentication via control stream (`access_token`)
 
 ## ADRs
 

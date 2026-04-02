@@ -227,7 +227,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		group.Go(s.overlay.Serve)
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
-	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
+	group.Go(func() error { return s.runLeaseJanitor(groupCtx, 5*time.Second) })
 	if s.cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
@@ -252,8 +252,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Str("acme_dns_provider", s.cfg.ACME.DNSProvider).
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
 		Bool("wireguard_enabled", s.wgConfig.PrivateKey != "").
-		Bool("udp_enabled", s.cfg.UDPPortCount > 0).
-		Bool("acme_enabled", !strings.HasSuffix(s.identity.Name, "localhost") && s.identity.Name != "127.0.0.1" && s.identity.Name != "::1")
+		Bool("udp_enabled", s.cfg.UDPPortCount > 0)
 	if s.quicTunnel != nil {
 		logEvent = logEvent.Str("internal_quic_tunnel_addr", s.quicTunnel.Addr().String())
 	}
@@ -285,6 +284,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		for _, lease := range s.registry.CloseAll() {
 			if lease != nil {
+				if s.acmeManager != nil {
+					deleteCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+					if err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, lease.Hostname); err != nil {
+						log.Warn().
+							Err(err).
+							Str("hostname", lease.Hostname).
+							Str("address", lease.Address).
+							Msg("delete lease ens gasless txt during shutdown")
+					}
+					cancel()
+				}
 				lease.Close()
 			}
 		}
@@ -398,6 +408,9 @@ func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, 
 		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
 	acmeCfg.BaseDomain = s.identity.Name
+	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
+		acmeCfg.ENSGaslessAddress = s.identity.Address
+	}
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
@@ -484,6 +497,36 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 			return nil
 		default:
 			return err
+		}
+	}
+}
+
+func (s *Server) runLeaseJanitor(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return errors.New("janitor interval must be positive")
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for _, lease := range s.registry.cleanupExpired(time.Now()) {
+				deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+				err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, lease.Hostname)
+				cancel()
+				if err != nil {
+					log.Warn().
+						Err(err).
+						Str("hostname", lease.Hostname).
+						Str("address", lease.Address).
+						Msg("delete expired lease ens gasless txt")
+				}
+				lease.Close()
+			}
 		}
 	}
 }

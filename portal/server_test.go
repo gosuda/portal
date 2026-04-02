@@ -2,11 +2,19 @@ package portal
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -60,6 +68,48 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 func tempIdentityPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "relay_identity.json")
+}
+
+func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
+	t.Helper()
+
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(now.UnixNano()),
+		Subject: pkix.Name{
+			CommonName: baseDomain,
+		},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(90 * 24 * time.Hour),
+		DNSNames:              []string{baseDomain, "*." + baseDomain},
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate() error = %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(privateKey)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey() error = %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	if err := os.WriteFile(filepath.Join(keyDir, "fullchain.pem"), certPEM, 0o644); err != nil {
+		t.Fatalf("WriteFile(cert) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(keyDir, "privatekey.pem"), keyPEM, 0o600); err != nil {
+		t.Fatalf("WriteFile(key) error = %v", err)
+	}
 }
 
 func TestNewServerGeneratesWireGuardWhenDiscoveryEnabled(t *testing.T) {
@@ -148,6 +198,54 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	if signResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServerStartUsesManualCertificateWithoutACMEProvider(t *testing.T) {
+	t.Parallel()
+
+	keyDir := t.TempDir()
+	writeManualRelayCertificate(t, keyDir, "portal.example.com")
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:     "https://portal.example.com",
+		IdentityPath:  tempIdentityPath(t),
+		ACME:          acme.Config{KeyDir: keyDir},
+		APIListenAddr: "127.0.0.1:0",
+		SNIListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
+	if err != nil {
+		t.Fatalf("GET /healthz error = %v", err)
+	}
+	defer healthResp.Body.Close()
+
+	if healthResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d, want %d", healthResp.StatusCode, http.StatusOK)
 	}
 }
 

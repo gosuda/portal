@@ -48,12 +48,17 @@ type relayServerConfig struct {
 	AdminSettingsPath   string
 	KeylessDir          string
 	ACMEDNSProvider     string
+	ENSGaslessEnabled   bool
 	CloudflareToken     string
+	GCPProjectID        string
+	GCPManagedZone      string
 	AWSAccessKeyID      string
 	AWSSecretAccessKey  string
 	AWSSessionToken     string
 	AWSRegion           string
 	AWSHostedZoneID     string
+	AWSDNSSECKMSKeyARN  string
+	DNSSECKSKName       string
 }
 
 func runServeCommand(args []string) error {
@@ -77,13 +82,18 @@ func runServeCommand(args []string) error {
 
 	utils.StringFlagEnv(fs, &cfg.KeylessDir, "keyless-dir", "./.portal-certs", "directory path for relay keyless materials", "KEYLESS_DIR")
 	utils.StringFlagEnv(fs, &cfg.AdminSettingsPath, "admin-settings-path", "admin_settings.json", "admin settings file path", "ADMIN_SETTINGS_PATH")
-	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "cloudflare", "ACME DNS provider for DNS-01 and A-record sync (cloudflare|route53)", "ACME_DNS_PROVIDER")
+	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|route53); leave empty to use manual fullchain.pem/privatekey.pem from KEYLESS_DIR", "ACME_DNS_PROVIDER")
+	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
+	utils.StringFlagEnv(fs, &cfg.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
 	utils.StringFlagEnv(fs, &cfg.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
 	utils.StringFlagEnv(fs, &cfg.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
 	utils.StringFlagEnv(fs, &cfg.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
+	utils.StringFlagEnv(fs, &cfg.AWSDNSSECKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
+	utils.StringFlagEnv(fs, &cfg.DNSSECKSKName, "dnssec-ksk-name", "", "optional key-signing key name override for Route53 DNSSEC automation", "DNSSEC_KSK_NAME")
 
 	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -103,6 +113,8 @@ func runServeCommand(args []string) error {
 		Str("admin_settings_path", cfg.AdminSettingsPath).
 		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
+		Str("acme_dns_provider", cfg.ACMEDNSProvider).
+		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Msg("configured relay server")
@@ -129,12 +141,17 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,
+			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
 			CloudflareToken:    cfg.CloudflareToken,
+			GCPProjectID:       cfg.GCPProjectID,
+			GCPManagedZone:     cfg.GCPManagedZone,
 			AWSAccessKeyID:     cfg.AWSAccessKeyID,
 			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
 			AWSSessionToken:    cfg.AWSSessionToken,
 			AWSRegion:          cfg.AWSRegion,
 			AWSHostedZoneID:    cfg.AWSHostedZoneID,
+			AWSKMSKeyARN:       cfg.AWSDNSSECKMSKeyARN,
+			DNSSECKSKName:      cfg.DNSSECKSKName,
 		},
 		APIPort:           cfg.APIPort,
 		SNIPort:           cfg.SNIPort,
