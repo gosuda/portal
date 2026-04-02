@@ -232,6 +232,7 @@ export function ServerListView({
   const [officialRegistryRelays, setOfficialRegistryRelays] = useState<
     OfficialRegistryRelay[] | null
   >(null);
+  const [latestReleaseVersion, setLatestReleaseVersion] = useState("");
   const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(
     new Set()
   );
@@ -314,6 +315,14 @@ export function ServerListView({
 
     let cancelled = false;
     setOfficialRegistryRelays(null);
+
+    void fetchLatestReleaseVersion()
+      .then((version) => {
+        if (!cancelled) {
+          setLatestReleaseVersion(version);
+        }
+      })
+      .catch(() => {});
 
     void loadOfficialRegistryRelayURLs(OFFICIAL_REGISTRY_SOURCE_URL)
       .then((relayURLs) => {
@@ -847,9 +856,17 @@ export function ServerListView({
                                     Disconnected
                                   </span>
                                 ) : relay.releaseVersion ? (
-                                  <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
-                                    {relay.releaseVersion}
-                                  </span>
+                                  <>
+                                    <span className="rounded-full bg-background px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted ring-1 ring-border">
+                                      {relay.releaseVersion}
+                                    </span>
+                                    {latestReleaseVersion &&
+                                      relay.releaseVersion === latestReleaseVersion && (
+                                        <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-600 ring-1 ring-emerald-500/30 dark:text-emerald-400 dark:ring-emerald-400/30">
+                                          Latest
+                                        </span>
+                                      )}
+                                  </>
                                 ) : null}
                               </div>
                             </div>
