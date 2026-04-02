@@ -47,6 +47,7 @@ type Exposure struct {
 type ExposeConfig struct {
 	RelayURLs    []string
 	IdentityPath string
+	IdentityJSON string
 	Name         string
 	TargetAddr   string
 	UDPAddr      string
@@ -65,7 +66,11 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		return nil, err
 	}
 
-	identity, createdIdentity, err := utils.ResolveListenerIdentity(types.Identity{Name: cfg.Name}, cfg.IdentityPath)
+	identity, createdIdentity, err := utils.ResolveListenerIdentity(
+		types.Identity{Name: cfg.Name},
+		cfg.IdentityPath,
+		cfg.IdentityJSON,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}

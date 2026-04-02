@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -130,6 +131,24 @@ func LoadIdentity(path string) (types.Identity, error) {
 	})
 }
 
+func ParseIdentityJSON(raw string) (types.Identity, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return types.Identity{}, errors.New("identity json is required")
+	}
+
+	var payload storedIdentity
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
+	}
+	return NormalizeStoredIdentity(types.Identity{
+		Name:       payload.Name,
+		Address:    payload.Address,
+		PublicKey:  payload.PublicKey,
+		PrivateKey: payload.PrivateKey,
+	})
+}
+
 func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -188,8 +207,26 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	return loaded, true, nil
 }
 
-func ResolveListenerIdentity(identity types.Identity, identityPath string) (types.Identity, bool, error) {
+func ResolveListenerIdentity(identity types.Identity, identityPath, identityJSON string) (types.Identity, bool, error) {
 	identityPath = strings.TrimSpace(identityPath)
+	identityJSON = strings.TrimSpace(identityJSON)
+	if identityJSON != "" {
+		provided, err := ParseIdentityJSON(identityJSON)
+		if err != nil {
+			return types.Identity{}, false, err
+		}
+		if identityPath != "" {
+			if err := SaveIdentity(identityPath, provided); err != nil {
+				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+			}
+			provided, err = LoadIdentity(identityPath)
+			if err != nil {
+				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+			}
+		}
+		resolved, err := ResolveLeaseIdentity(provided)
+		return resolved, false, err
+	}
 	if identityPath == "" {
 		resolved, err := ResolveLeaseIdentity(identity)
 		return resolved, false, err
