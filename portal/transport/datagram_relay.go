@@ -128,12 +128,12 @@ func (a *PortAllocator) sortedInsertLocked(port int) {
 
 // Datagram owns the UDP and QUIC datagram runtime for one lease.
 type RelayDatagram struct {
-	leaseID   string
-	port      int
-	session   *datagramSession
-	flowTable map[uint32]*flowState
-	addrIndex map[string]uint32
-	nextFlow  uint32
+	identityKey string
+	port        int
+	session     *datagramSession
+	flowTable   map[uint32]*flowState
+	addrIndex   map[string]uint32
+	nextFlow    uint32
 
 	conn *net.UDPConn
 
@@ -142,15 +142,15 @@ type RelayDatagram struct {
 	mu        sync.Mutex
 }
 
-func NewRelayDatagram(leaseID string, port int) *RelayDatagram {
+func NewRelayDatagram(identityKey string, port int) *RelayDatagram {
 	d := &RelayDatagram{
-		leaseID: leaseID,
-		port:    port,
+		identityKey: identityKey,
+		port:        port,
 		session: newDatagramSession(256, true, func(err error) {
 			log.Warn().
 				Err(err).
 				Str("component", "quic-flow-mux").
-				Str("lease_id", leaseID).
+				Str("identity_key", identityKey).
 				Msg("quic receive loop ended")
 		}),
 		flowTable: make(map[uint32]*flowState),
@@ -180,7 +180,7 @@ func (d *RelayDatagram) Start(ctx context.Context) error {
 
 	log.Info().
 		Str("component", "udp-relay").
-		Str("lease_id", d.leaseID).
+		Str("identity_key", d.identityKey).
 		Int("port", d.port).
 		Msg("udp relay started")
 
@@ -202,7 +202,7 @@ func (d *RelayDatagram) Close() {
 		}
 		log.Info().
 			Str("component", "udp-relay").
-			Str("lease_id", d.leaseID).
+			Str("identity_key", d.identityKey).
 			Int("port", d.port).
 			Msg("udp relay stopped")
 	})
@@ -215,7 +215,7 @@ func (d *RelayDatagram) Register(conn *quic.Conn) error {
 
 	log.Info().
 		Str("component", "quic-flow-mux").
-		Str("lease_id", d.leaseID).
+		Str("identity_key", d.identityKey).
 		Str("remote_addr", conn.RemoteAddr().String()).
 		Msg("quic tunnel connection registered")
 	return nil
@@ -290,7 +290,7 @@ func (d *RelayDatagram) dispatch(frame types.DatagramFrame) {
 		log.Warn().
 			Err(err).
 			Str("component", "quic-flow-mux").
-			Str("lease_id", d.leaseID).
+			Str("identity_key", d.identityKey).
 			Uint32("flow_id", frame.FlowID).
 			Msg("flow writeback failed")
 		d.forgetFlow(frame.FlowID)
@@ -360,7 +360,7 @@ func (d *RelayDatagram) readLoop(ctx context.Context) {
 			}
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("lease_id", d.leaseID).
+				Str("identity_key", d.identityKey).
 				Err(err).
 				Msg("readLoop exiting: unexpected read error")
 			return
@@ -376,7 +376,7 @@ func (d *RelayDatagram) readLoop(ctx context.Context) {
 		if err := d.SendDatagram(flowID, payload); err != nil {
 			log.Warn().
 				Str("component", "udp-relay").
-				Str("lease_id", d.leaseID).
+				Str("identity_key", d.identityKey).
 				Err(err).
 				Uint32("flow_id", flowID).
 				Int("bytes", n).

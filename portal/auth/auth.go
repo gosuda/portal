@@ -2,7 +2,6 @@ package auth
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -33,8 +32,8 @@ var (
 const leaseTokenAlgorithm = jose.SignatureAlgorithm("ES256K")
 
 type LeaseAccessTokenClaims struct {
-	LeaseID string `json:"lease_id"`
 	jwt.Claims
+	Identity types.Identity `json:"identity"`
 }
 
 type es256kOpaqueSigner struct {
@@ -43,7 +42,7 @@ type es256kOpaqueSigner struct {
 }
 
 func (s *es256kOpaqueSigner) Public() *jose.JSONWebKey {
-	return &jose.JSONWebKey{KeyID: strings.TrimSpace(s.keyID)}
+	return &jose.JSONWebKey{KeyID: s.keyID}
 }
 
 func (s *es256kOpaqueSigner) Algs() []jose.SignatureAlgorithm {
@@ -116,42 +115,38 @@ type RegisterChallenge struct {
 }
 
 func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string, now time.Time, ttl time.Duration) (*RegisterChallenge, error) {
-	name, err := utils.NormalizeDNSLabel(req.Name)
+	normalizedIdentity, err := utils.NormalizeIdentity(req.Identity)
 	if err != nil {
 		return nil, err
-	}
-
-	ownerAddress, err := utils.NormalizeEVMAddress(req.OwnerAddress)
-	if err != nil {
-		return nil, fmt.Errorf("normalize owner address: %w", err)
 	}
 
 	challengeID := utils.RandomID("rch_")
 	nonce := siwe.GenerateNonce()
 	expiresAt := now.UTC().Add(ttl)
-	siweMessage, err := BuildRegisterChallengeMessage(domain, ownerAddress, uri, challengeID, nonce, now.UTC(), expiresAt)
+	siweMessage, err := BuildRegisterChallengeMessage(domain, normalizedIdentity.Address, uri, challengeID, nonce, now.UTC(), expiresAt)
 	if err != nil {
 		return nil, err
+	}
+
+	normalizedRequest := types.RegisterChallengeRequest{
+		Identity:   normalizedIdentity,
+		Metadata:   req.Metadata.Copy(),
+		TTL:        req.TTL,
+		UDPEnabled: req.UDPEnabled,
 	}
 
 	return &RegisterChallenge{
 		ChallengeID: challengeID,
 		ExpiresAt:   expiresAt,
-		Request: types.RegisterChallengeRequest{
-			Name:         name,
-			Metadata:     req.Metadata.Copy(),
-			OwnerAddress: ownerAddress,
-			TTL:          req.TTL,
-			UDPEnabled:   req.UDPEnabled,
-		},
+		Request:     normalizedRequest,
 		SIWEMessage: siweMessage,
 		domain:      strings.TrimSpace(domain),
 		nonce:       nonce,
 	}, nil
 }
 
-func BuildRegisterChallengeMessage(domain, ownerAddress, uri, challengeID, nonce string, issuedAt, expiresAt time.Time) (string, error) {
-	message, err := siwe.InitMessage(domain, ownerAddress, uri, nonce, map[string]interface{}{
+func BuildRegisterChallengeMessage(domain, address, uri, challengeID, nonce string, issuedAt, expiresAt time.Time) (string, error) {
+	message, err := siwe.InitMessage(domain, address, uri, nonce, map[string]interface{}{
 		"statement":      registerStatement,
 		"chainId":        1,
 		"issuedAt":       issuedAt.UTC().Format(time.RFC3339),
@@ -196,12 +191,12 @@ func VerifyRegisterChallengeMessage(messageText, signature, domain, nonce string
 	return err
 }
 
-func IssueLeaseAccessToken(privateKeyHex, keyID, issuer, ownerAddress, leaseID string, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
-	privateKeyBytes, err := decodePrivateKeyHex(privateKeyHex)
+func IssueLeaseAccessToken(privateKeyHex, keyID, issuer string, identity types.Identity, ttl time.Duration) (string, LeaseAccessTokenClaims, error) {
+	privateKey, _, err := utils.ParseSecp256k1PrivateKeyHex(privateKeyHex, false)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
-	normalizedOwnerAddress, err := utils.NormalizeEVMAddress(ownerAddress)
+	normalizedIdentity, err := utils.NormalizeIdentity(identity)
 	if err != nil {
 		return "", LeaseAccessTokenClaims{}, err
 	}
@@ -210,7 +205,7 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer, ownerAddress, leaseID s
 		Algorithm: leaseTokenAlgorithm,
 		Key: &es256kOpaqueSigner{
 			keyID:      strings.TrimSpace(keyID),
-			privateKey: secp256k1.PrivKeyFromBytes(privateKeyBytes),
+			privateKey: privateKey,
 		},
 	}, (&jose.SignerOptions{}).WithType("JWT"))
 	if err != nil {
@@ -220,16 +215,16 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer, ownerAddress, leaseID s
 	now := time.Now().UTC()
 	expiresAt := now.Add(ttl)
 	claims := LeaseAccessTokenClaims{
-		LeaseID: strings.TrimSpace(leaseID),
 		Claims: jwt.Claims{
 			Issuer:    strings.TrimSpace(issuer),
-			Subject:   normalizedOwnerAddress,
+			Subject:   normalizedIdentity.Key(),
 			Audience:  jwt.Audience{leaseAccessTokenAudience},
 			ID:        utils.RandomID("tok_"),
 			IssuedAt:  jwt.NewNumericDate(now),
 			NotBefore: jwt.NewNumericDate(now),
 			Expiry:    jwt.NewNumericDate(expiresAt),
 		},
+		Identity: normalizedIdentity,
 	}
 
 	token, err := jwt.Signed(signer).Claims(claims).Serialize()
@@ -239,20 +234,8 @@ func IssueLeaseAccessToken(privateKeyHex, keyID, issuer, ownerAddress, leaseID s
 	return token, claims, nil
 }
 
-func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now time.Time) (LeaseAccessTokenClaims, error) {
-	pubKeyText := strings.TrimSpace(publicKeyHex)
-	if pubKeyText == "" {
-		return LeaseAccessTokenClaims{}, errors.New("public key is required")
-	}
-	if strings.HasPrefix(strings.ToLower(pubKeyText), "0x") {
-		pubKeyText = pubKeyText[2:]
-	}
-
-	pubKeyBytes, err := hex.DecodeString(pubKeyText)
-	if err != nil {
-		return LeaseAccessTokenClaims{}, err
-	}
-	publicKey, err := secp256k1.ParsePubKey(pubKeyBytes)
+func VerifyLeaseAccessToken(token, publicKeyHex, issuer string, now time.Time) (LeaseAccessTokenClaims, error) {
+	publicKey, err := utils.ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
@@ -266,9 +249,14 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 	if err := parsed.Claims(&es256kOpaqueVerifier{publicKey: publicKey}, &claims); err != nil {
 		return LeaseAccessTokenClaims{}, err
 	}
-	if strings.TrimSpace(leaseID) != "" && claims.LeaseID != strings.TrimSpace(leaseID) {
-		return LeaseAccessTokenClaims{}, errors.New("lease access token lease id does not match request")
+	normalizedClaimsIdentity, err := utils.NormalizeIdentity(claims.Identity)
+	if err != nil {
+		return LeaseAccessTokenClaims{}, err
 	}
+	if normalizedClaimsIdentity.Key() != claims.Subject {
+		return LeaseAccessTokenClaims{}, errors.New("lease access token identity does not match subject")
+	}
+	claims.Identity = normalizedClaimsIdentity
 	if err := claims.ValidateWithLeeway(jwt.Expected{
 		Issuer:      strings.TrimSpace(issuer),
 		AnyAudience: jwt.Audience{leaseAccessTokenAudience},
@@ -277,19 +265,4 @@ func VerifyLeaseAccessToken(token, publicKeyHex, issuer, leaseID string, now tim
 		return LeaseAccessTokenClaims{}, err
 	}
 	return claims, nil
-}
-
-func decodePrivateKeyHex(privateKeyHex string) ([]byte, error) {
-	trimmed := strings.TrimSpace(privateKeyHex)
-	if strings.HasPrefix(strings.ToLower(trimmed), "0x") {
-		trimmed = trimmed[2:]
-	}
-	decoded, err := hex.DecodeString(trimmed)
-	if err != nil {
-		return nil, err
-	}
-	if len(decoded) != secp256k1.PrivKeyBytesLen {
-		return nil, errors.New("secp256k1 private key must be 32 bytes")
-	}
-	return decoded, nil
 }

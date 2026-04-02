@@ -8,16 +8,16 @@ services:
     ports:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
       - "${SNI_PORT:-443}:${SNI_PORT:-443}"
-      - "${DISCOVERY_PORT:-51820}:${DISCOVERY_PORT:-51820}/udp"
+      # - "${DISCOVERY_PORT:-51820}:${DISCOVERY_PORT:-51820}/udp"
       # Uncomment below when enabling UDP transport (UDP_PORT_COUNT > 0):
       # - "${SNI_PORT:-443}:${SNI_PORT:-443}/udp"
       # - "50000-50009:50000-50009/udp"  # adjust range to match UDP_PORT_COUNT
     environment:
-      # Public routing and discovery
+      # Public routing, discovery, and relay identity persistence
       PORTAL_URL: ${PORTAL_URL:-https://localhost:${API_PORT:-4017}}
       BOOTSTRAPS: ${BOOTSTRAPS:-}
       DISCOVERY: ${DISCOVERY:-true}
-      OWNER_PRIVATE_KEY: ${OWNER_PRIVATE_KEY:-}
+      IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs/identity.json}
       WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
       DISCOVERY_PORT: ${DISCOVERY_PORT:-51820}
       WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-}
@@ -36,15 +36,23 @@ services:
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
 
       # TLS/ACME and keyless materials
-      KEYLESS_DIR: /.portal-certs
-      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-cloudflare}
+      KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
+      ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
+      ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED:-false}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCP_MANAGED_ZONE: ${GCP_MANAGED_ZONE:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_REGION: ${AWS_REGION:-}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
       AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
+      AWS_DNSSEC_KMS_KEY_ARN: ${AWS_DNSSEC_KMS_KEY_ARN:-}
+      DNSSEC_KSK_NAME: ${DNSSEC_KSK_NAME:-}
     volumes:
-      - ${KEYLESS_DIR:-./.portal-certs}:/.portal-certs
+      - ./.portal-certs:${KEYLESS_DIR:-/portal-certs}
+      # Uncomment when using a Google Cloud service account file for gcloud automation.
+      # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped

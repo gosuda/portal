@@ -5,21 +5,21 @@ import (
 )
 
 type Runtime struct {
-	approver     *Approver
-	bpsManager   *BPSManager
-	ipFilter     *IPFilter
-	bannedLeases map[string]struct{}
-	udpEnabled   bool
-	udpMaxLeases int
-	mu           sync.RWMutex
+	approver           *Approver
+	bpsManager         *BPSManager
+	ipFilter           *IPFilter
+	bannedIdentityKeys map[string]struct{}
+	udpEnabled         bool
+	udpMaxLeases       int
+	mu                 sync.RWMutex
 }
 
 func NewRuntime() *Runtime {
 	return &Runtime{
-		approver:     NewApprover(),
-		bpsManager:   NewBPSManager(),
-		ipFilter:     NewIPFilter(),
-		bannedLeases: make(map[string]struct{}),
+		approver:           NewApprover(),
+		bpsManager:         NewBPSManager(),
+		ipFilter:           NewIPFilter(),
+		bannedIdentityKeys: make(map[string]struct{}),
 	}
 }
 
@@ -44,90 +44,90 @@ func (r *Runtime) BPSManager() *BPSManager {
 	return r.bpsManager
 }
 
-func (r *Runtime) BanLease(leaseID string) {
-	if r == nil || leaseID == "" {
+func (r *Runtime) BanIdentity(key string) {
+	if r == nil || key == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.bannedLeases[leaseID] = struct{}{}
+	r.bannedIdentityKeys[key] = struct{}{}
 }
 
-func (r *Runtime) UnbanLease(leaseID string) {
-	if r == nil || leaseID == "" {
+func (r *Runtime) UnbanIdentity(key string) {
+	if r == nil || key == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.bannedLeases, leaseID)
+	delete(r.bannedIdentityKeys, key)
 }
 
-func (r *Runtime) IsLeaseBanned(leaseID string) bool {
-	if r == nil || leaseID == "" {
+func (r *Runtime) IsIdentityBanned(key string) bool {
+	if r == nil || key == "" {
 		return false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	_, ok := r.bannedLeases[leaseID]
+	_, ok := r.bannedIdentityKeys[key]
 	return ok
 }
 
-func (r *Runtime) BannedLeases() []string {
+func (r *Runtime) BannedIdentityKeys() []string {
 	if r == nil {
 		return nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.bannedLeases))
-	for leaseID := range r.bannedLeases {
-		out = append(out, leaseID)
+	out := make([]string, 0, len(r.bannedIdentityKeys))
+	for key := range r.bannedIdentityKeys {
+		out = append(out, key)
 	}
 	return out
 }
 
-func (r *Runtime) SetBannedLeases(leaseIDs []string) {
+func (r *Runtime) SetBannedIdentityKeys(keys []string) {
 	if r == nil {
 		return
 	}
 
-	bannedLeases := make(map[string]struct{}, len(leaseIDs))
-	for _, leaseID := range leaseIDs {
-		if leaseID == "" {
+	bannedIdentityKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key == "" {
 			continue
 		}
-		bannedLeases[leaseID] = struct{}{}
+		bannedIdentityKeys[key] = struct{}{}
 	}
 
 	r.mu.Lock()
-	r.bannedLeases = bannedLeases
+	r.bannedIdentityKeys = bannedIdentityKeys
 	r.mu.Unlock()
 }
 
-func (r *Runtime) EffectiveApproval(leaseID string) bool {
-	if r == nil || r.approver == nil || leaseID == "" {
+func (r *Runtime) EffectiveApproval(key string) bool {
+	if r == nil || r.approver == nil || key == "" {
 		return true
 	}
 	if r.approver.Mode() == ModeAuto {
 		return true
 	}
-	return r.approver.IsApproved(leaseID)
+	return r.approver.IsApproved(key)
 }
 
-func (r *Runtime) IsLeaseDenied(leaseID string) bool {
-	if r == nil || r.approver == nil || leaseID == "" {
+func (r *Runtime) IsIdentityDenied(key string) bool {
+	if r == nil || r.approver == nil || key == "" {
 		return false
 	}
-	return r.approver.IsDenied(leaseID)
+	return r.approver.IsDenied(key)
 }
 
-func (r *Runtime) IsLeaseRoutable(leaseID string) bool {
+func (r *Runtime) IsIdentityRoutable(key string) bool {
 	if r == nil {
 		return true
 	}
-	if r.IsLeaseBanned(leaseID) || r.IsLeaseDenied(leaseID) {
+	if r.IsIdentityBanned(key) || r.IsIdentityDenied(key) {
 		return false
 	}
-	return r.EffectiveApproval(leaseID)
+	return r.EffectiveApproval(key)
 }
 
 func (r *Runtime) SetUDPPolicy(enabled bool, maxLeases int) {
@@ -158,14 +158,14 @@ func (r *Runtime) UDPMaxLeases() int {
 	return r.udpMaxLeases
 }
 
-func (r *Runtime) ForgetLease(leaseID string) {
+func (r *Runtime) ForgetIdentity(key string) {
 	if r == nil {
 		return
 	}
 	if r.ipFilter != nil {
-		r.ipFilter.RemoveLeaseIP(leaseID)
+		r.ipFilter.RemoveIdentityIP(key)
 	}
 	if r.bpsManager != nil {
-		r.bpsManager.DeleteLeaseBPS(leaseID)
+		r.bpsManager.DeleteIdentityBPS(key)
 	}
 }

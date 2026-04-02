@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gosuda/portal/v2/cmd/portal-tunnel/installer"
 	"github.com/gosuda/portal/v2/portal"
@@ -62,7 +61,11 @@ func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath st
 		auth:              newAdminAuth(adminSecret),
 		adminSettingsPath: strings.TrimSpace(adminSettingsPath),
 	}
-	frontend.setLandingPageEnabled(state.landingPageEnabled(defaultLandingPageEnabled))
+	landingPageEnabled := defaultLandingPageEnabled
+	if state.LandingPageEnabled != nil {
+		landingPageEnabled = *state.LandingPageEnabled
+	}
+	frontend.setLandingPageEnabled(landingPageEnabled)
 	return frontend, nil
 }
 
@@ -76,7 +79,7 @@ func (f *Frontend) Handler() *http.ServeMux {
 		f.ServeAppStatic(w, r, "")
 	})
 	mux.HandleFunc(types.PathAppPrefix, func(w http.ResponseWriter, r *http.Request) {
-		f.ServeAppStatic(w, r, strings.TrimPrefix(strings.TrimSpace(r.URL.Path), types.PathAppPrefix))
+		f.ServeAppStatic(w, r, strings.TrimPrefix(r.URL.Path, types.PathAppPrefix))
 	})
 	mux.HandleFunc(types.PathAssetsPrefix, func(w http.ResponseWriter, r *http.Request) {
 		f.ServeAsset(w, r, strings.TrimPrefix(r.URL.Path, "/"), "")
@@ -194,7 +197,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 func (f *Frontend) injectServerData(htmlContent string) string {
 	var snapshots []types.Lease
 	if f.server != nil {
-		snapshots = f.publicLeaseSnapshots()
+		snapshots = f.server.LeaseSnapshots()
 	}
 	jsonData, err := json.Marshal(snapshots)
 	if err != nil {
@@ -205,14 +208,13 @@ func (f *Frontend) injectServerData(htmlContent string) string {
 }
 
 func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		utils.WriteAPIError(w, http.StatusMethodNotAllowed, types.APIErrorCodeMethodNotAllowed, "method not allowed")
+	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
 	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
 	if hostname == "" {
-		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "hostname is required")
+		utils.InvalidRequestMessage("hostname is required").Write(w)
 		return
 	}
 
@@ -256,56 +258,6 @@ func (f *Frontend) setLandingPageEnabled(enabled bool) {
 		return
 	}
 	f.landingPageEnabled.Store(enabled)
-}
-
-func (f *Frontend) adminLeaseSnapshots() []types.Lease {
-	snapshots := f.server.LeaseSnapshots()
-	if len(snapshots) == 0 {
-		return nil
-	}
-	now := time.Now()
-	filtered := make([]types.Lease, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if now.After(snapshot.ExpiresAt) {
-			continue
-		}
-		filtered = append(filtered, snapshot)
-	}
-	return filtered
-}
-
-func (f *Frontend) publicLeaseSnapshots() []types.Lease {
-	snapshots := f.server.LeaseSnapshots()
-	if len(snapshots) == 0 {
-		return nil
-	}
-
-	now := time.Now()
-	filtered := make([]types.Lease, 0, len(snapshots))
-	for _, snapshot := range snapshots {
-		if now.After(snapshot.ExpiresAt) {
-			continue
-		}
-		since := time.Duration(0)
-		if !snapshot.LastSeenAt.IsZero() {
-			since = max(now.Sub(snapshot.LastSeenAt), 0)
-		}
-		if snapshot.IsBanned || snapshot.IsDenied || !snapshot.IsApproved || snapshot.Metadata.Hide {
-			continue
-		}
-		if snapshot.Ready == 0 && since >= 3*time.Minute {
-			continue
-		}
-
-		snapshot.ClientIP = ""
-		snapshot.BPS = 0
-		snapshot.IsApproved = false
-		snapshot.IsBanned = false
-		snapshot.IsDenied = false
-		snapshot.IsIPBanned = false
-		filtered = append(filtered, snapshot)
-	}
-	return filtered
 }
 
 func getContentType(ext string) string {

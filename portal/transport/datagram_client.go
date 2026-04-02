@@ -13,7 +13,7 @@ import (
 )
 
 type ClientDatagramState struct {
-	LeaseID     string
+	Identity    types.Identity
 	AccessToken string
 }
 
@@ -54,7 +54,7 @@ func (d *ClientDatagram) RunLoop(
 			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
-				Str("lease_id", state.LeaseID).
+				Str("address", state.Identity.Address).
 				Msg("quic datagram plane unavailable; retrying")
 			if !utils.SleepOrDone(ctx, 2*time.Second) {
 				d.session.Stop("listener context closed")
@@ -65,7 +65,7 @@ func (d *ClientDatagram) RunLoop(
 
 		log.Info().
 			Str("component", "sdk-datagram-plane").
-			Str("lease_id", state.LeaseID).
+			Str("address", state.Identity.Address).
 			Str("remote_addr", conn.RemoteAddr().String()).
 			Msg("quic tunnel connected")
 
@@ -77,7 +77,7 @@ func (d *ClientDatagram) RunLoop(
 			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
-				Str("lease_id", state.LeaseID).
+				Str("address", state.Identity.Address).
 				Msg("quic datagram plane did not bind cleanly; retrying")
 			if !utils.SleepOrDone(ctx, time.Second) {
 				return

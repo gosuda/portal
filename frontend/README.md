@@ -130,11 +130,11 @@ Relay server exposes:
 
 Admin endpoints use a JSON envelope contract (`{ ok, data, error }`) and reject malformed or non-JSON responses with explicit API client errors.
 
-Admin lease ID contract:
+Admin address contract:
 
-- `/admin/snapshot` returns `leases`, `banned_leases`, and `approval_mode` in one envelope payload.
-- `leases` rows inside the snapshot return plain lease IDs in `Peer`.
-- Frontend only Base64URL-encodes lease IDs when constructing admin action routes (`/admin/leases/{encodedLeaseID}/{action}`).
+- `/admin/snapshot` returns `leases` and `approval_mode` in one envelope payload.
+- `leases` rows inside the admin snapshot include the normalized identity `address`; public SSR snapshots omit it.
+- Frontend only Base64URL-encodes addresses when constructing admin action routes (`/admin/leases/{encodedAddress}/{action}`).
 
 ### SDK-Related Runtime Contract
 

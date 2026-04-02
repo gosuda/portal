@@ -1,19 +1,20 @@
 import { useMemo } from "react";
 import { useSSRData } from "@/hooks/useSSRData";
-import type { ServerData } from "@/hooks/useSSRData";
+import type { PublicLeaseData } from "@/hooks/useSSRData";
 import { useList, type BaseServer } from "@/hooks/useList";
 import { parseLeaseMetadata } from "@/lib/metadata";
 
 export type ClientServer = BaseServer;
 
-function convertSSRDataToServers(ssrData: ServerData[]): ClientServer[] {
+function convertSSRDataToServers(ssrData: PublicLeaseData[]): ClientServer[] {
   return ssrData.map((row, index) => {
     const metadata = parseLeaseMetadata(row.Metadata);
     const hostname = row.Hostname || "";
+    const serviceName = row.name || "";
 
     return {
       id: index + 1,
-      name: row.Name || hostname || "(unnamed)",
+      name: serviceName || hostname || "(unnamed)",
       description: metadata.description || "",
       tags: metadata.tags,
       thumbnail: metadata.thumbnail || "",

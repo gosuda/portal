@@ -151,31 +151,31 @@ interface ServerListViewProps {
   landingPageEnabled?: boolean;
   onBanFilterChange?: (value: BanFilter) => void;
   onBanStatusChange?: (
-    leaseId: string,
+    identityKey: string,
     isBan: boolean
   ) => void | Promise<void>;
-  onBPSChange?: (leaseId: string, bps: number) => void | Promise<void>;
+  onBPSChange?: (identityKey: string, bps: number) => void | Promise<void>;
   onApprovalModeChange?: (mode: ApprovalMode) => void;
   onLandingPageEnabledChange?: (enabled: boolean) => void | Promise<void>;
   udpSettings?: UDPSettings;
   onUDPSettingsChange?: (settings: UDPSettings) => void | Promise<void>;
   onApproveStatusChange?: (
-    leaseId: string,
+    identityKey: string,
     approve: boolean
   ) => void | Promise<void>;
   onDenyStatusChange?: (
-    leaseId: string,
+    identityKey: string,
     deny: boolean
   ) => void | Promise<void>;
   onIPBanStatusChange?: (ip: string, isBan: boolean) => void | Promise<void>;
-  onBulkApprove?: (leaseIds: string[]) => void | Promise<void>;
-  onBulkDeny?: (leaseIds: string[]) => void | Promise<void>;
-  onBulkBan?: (leaseIds: string[]) => void | Promise<void>;
+  onBulkApprove?: (identityKeys: string[]) => void | Promise<void>;
+  onBulkDeny?: (identityKeys: string[]) => void | Promise<void>;
+  onBulkBan?: (identityKeys: string[]) => void | Promise<void>;
   onLogout?: () => void;
 }
 
 function isAdminServer(server: ListServer): server is AdminServer {
-  return "peerId" in server;
+  return "address" in server;
 }
 
 function toAdminServer(server: ListServer): AdminServer | undefined {
@@ -219,27 +219,27 @@ export function ServerListView({
   const [officialRegistryRelays, setOfficialRegistryRelays] = useState<
     OfficialRegistryRelay[] | null
   >(null);
-  const [selectedLeaseIds, setSelectedLeaseIds] = useState<Set<string>>(
+  const [selectedIdentityKeys, setSelectedIdentityKeys] = useState<Set<string>>(
     new Set()
   );
   const serverItems = filteredServers as ListServer[];
   const favoriteIds = useMemo(() => new Set(favorites), [favorites]);
   const showLandingHero = !isAdmin && landingPageEnabled;
 
-  const handleToggleSelect = (leaseId: string) => {
-    setSelectedLeaseIds((prev) => {
+  const handleToggleSelect = (identityKey: string) => {
+    setSelectedIdentityKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(leaseId)) {
-        next.delete(leaseId);
+      if (next.has(identityKey)) {
+        next.delete(identityKey);
       } else {
-        next.add(leaseId);
+        next.add(identityKey);
       }
       return next;
     });
   };
 
   const handleClearSelection = () => {
-    setSelectedLeaseIds(new Set());
+    setSelectedIdentityKeys(new Set());
   };
 
   const serverRows = useMemo(
@@ -251,14 +251,14 @@ export function ServerListView({
     [serverItems]
   );
 
-  const allLeaseIds = useMemo(
+  const allIdentityKeys = useMemo(
     () => [
       ...new Set(
         serverRows
-        .map(({ adminServer }) => adminServer?.peerId)
+          .map(({ adminServer }) => adminServer?.identityKey)
           .filter(
-            (leaseId): leaseId is string =>
-              typeof leaseId === "string" && leaseId.trim().length > 0
+            (identityKey): identityKey is string =>
+              typeof identityKey === "string" && identityKey.trim().length > 0
           )
       ),
     ],
@@ -266,16 +266,16 @@ export function ServerListView({
   );
 
   useEffect(() => {
-    const validLeaseIDs = new Set(allLeaseIds);
-    setSelectedLeaseIds((prev) => {
+    const validIdentityKeys = new Set(allIdentityKeys);
+    setSelectedIdentityKeys((prev) => {
       if (prev.size === 0) {
         return prev;
       }
 
       const next = new Set<string>();
-      prev.forEach((leaseId) => {
-        if (validLeaseIDs.has(leaseId)) {
-          next.add(leaseId);
+      prev.forEach((identityKey) => {
+        if (validIdentityKeys.has(identityKey)) {
+          next.add(identityKey);
         }
       });
 
@@ -285,13 +285,13 @@ export function ServerListView({
 
       return next;
     });
-  }, [allLeaseIds]);
+  }, [allIdentityKeys]);
 
   useEffect(() => {
     if (isAdmin) {
       return;
     }
-    setSelectedLeaseIds((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedIdentityKeys((prev) => (prev.size === 0 ? prev : new Set()));
   }, [isAdmin]);
 
   useEffect(() => {
@@ -366,27 +366,27 @@ export function ServerListView({
 
   const officialRegistryList = officialRegistryRelays ?? [];
   const isAllSelected =
-    allLeaseIds.length > 0 &&
-    allLeaseIds.every((id) => selectedLeaseIds.has(id));
+    allIdentityKeys.length > 0 &&
+    allIdentityKeys.every((identityKey) => selectedIdentityKeys.has(identityKey));
   const officialRegistryAvailable = officialRegistryList.length > 0;
 
   const handleSelectAll = () => {
     if (isAllSelected) {
-      setSelectedLeaseIds(new Set());
+      setSelectedIdentityKeys(new Set());
     } else {
-      setSelectedLeaseIds(new Set(allLeaseIds));
+      setSelectedIdentityKeys(new Set(allIdentityKeys));
     }
   };
 
   const runBulkAction = async (
-    handler?: (leaseIds: string[]) => void | Promise<void>
+    handler?: (identityKeys: string[]) => void | Promise<void>
   ) => {
-    if (!handler || selectedLeaseIds.size === 0) {
+    if (!handler || selectedIdentityKeys.size === 0) {
       return;
     }
 
     try {
-      await handler(Array.from(selectedLeaseIds));
+      await handler(Array.from(selectedIdentityKeys));
       handleClearSelection();
     } catch (err) {
       console.error("Failed bulk admin action", err);
@@ -542,7 +542,7 @@ export function ServerListView({
     adminServer?: AdminServer;
   }) => {
     const isSelected = adminServer
-      ? selectedLeaseIds.has(adminServer.peerId)
+      ? selectedIdentityKeys.has(adminServer.identityKey)
       : false;
 
     return (
@@ -571,7 +571,8 @@ export function ServerListView({
         isFavorite={favoriteIds.has(server.id)}
         onToggleFavorite={onToggleFavorite}
         showAdminControls={isAdmin && !!adminServer}
-        leaseId={adminServer?.peerId}
+        identityKey={adminServer?.identityKey}
+        address={adminServer?.address}
         isBanned={adminServer?.isBanned}
         isApproved={adminServer?.isApproved}
         isDenied={adminServer?.isDenied}
@@ -579,7 +580,6 @@ export function ServerListView({
         ip={adminServer?.ip}
         displayIP={adminServer?.displayIP}
         isIPBanned={adminServer?.isIPBanned}
-        transport={adminServer?.transport}
         onBanStatusChange={onBanStatusChange}
         onBPSChange={onBPSChange}
         onApproveStatusChange={onApproveStatusChange}
@@ -910,8 +910,8 @@ export function ServerListView({
 
       {isAdmin && (
         <FloatingActionBar
-          selectedCount={selectedLeaseIds.size}
-          totalCount={allLeaseIds.length}
+          selectedCount={selectedIdentityKeys.size}
+          totalCount={allIdentityKeys.length}
           isAllSelected={isAllSelected}
           onSelectAll={handleSelectAll}
           onApprove={handleBulkApprove}

@@ -1,13 +1,13 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ServerData } from "@/hooks/useSSRData";
+import type { AdminLeaseData } from "@/hooks/useSSRData";
 import { useAdmin } from "@/hooks/useAdmin";
-import { API_PATHS, adminLeasePath, encodeLeaseID } from "@/lib/apiPaths";
+import { API_PATHS, adminLeasePath } from "@/lib/apiPaths";
 import { APIClientError, apiClient } from "@/lib/apiClient";
 
 type DeferredAdminSnapshot = {
-  leases: ServerData[];
+  leases: AdminLeaseData[];
   approval_mode: "auto" | "manual";
 };
 
@@ -43,15 +43,17 @@ vi.mock("@/lib/apiClient", async () => {
   };
 });
 
-function buildLease(peer: string): ServerData {
+function buildLease(address: string, name: string = "relay-1"): AdminLeaseData {
   return {
     ExpiresAt: "2026-03-03T01:00:00Z",
     FirstSeenAt: "2026-03-02T00:00:00Z",
     LastSeenAt: "2026-03-03T00:00:00Z",
-    ID: peer,
-    Name: "relay-1",
+    identity_key: `${name.toLowerCase()}:${address.toLowerCase()}`,
+    address,
+    name,
     BPS: 1024,
     ClientIP: "203.0.113.10",
+    ReportedIP: "",
     Hostname: "relay.example.com",
     Metadata: {
       description: "relay",
@@ -62,7 +64,7 @@ function buildLease(peer: string): ServerData {
     },
     Ready: 1,
     IsApproved: true,
-    IsBanned: peer === "peer-a",
+    IsBanned: address === "0x00000000000000000000000000000000000000A1",
     IsDenied: false,
     IsIPBanned: false,
   };
@@ -85,7 +87,7 @@ describe("useAdmin", () => {
     mockGet.mockImplementation(async (path: string) => {
       if (path === API_PATHS.admin.snapshot) {
         return {
-          leases: [buildLease("peer-a")],
+          leases: [buildLease("0x00000000000000000000000000000000000000A1")],
           approval_mode: "not-a-mode",
         } as never;
       }
@@ -103,7 +105,7 @@ describe("useAdmin", () => {
 
     expect(result.current.error).toBe("");
     expect(result.current.approvalMode).toBe("auto");
-    expect(result.current.servers[0]?.peerId).toBe("peer-a");
+    expect(result.current.servers[0]?.address).toBe("0x00000000000000000000000000000000000000A1");
     expect(result.current.servers[0]?.isBanned).toBe(true);
     expect(result.current.servers[0]?.bps).toBe(1024);
   });
@@ -158,18 +160,22 @@ describe("useAdmin", () => {
     });
   });
 
-  it("encodes peer IDs for action routes", async () => {
+  it("encodes addresses for action routes", async () => {
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
-    const plainLeaseID = "deadbeefcafebabe";
+    const identityKey = "relay-1:0x00000000000000000000000000000000000000a1";
 
     await act(async () => {
-      await result.current.handleApproveStatus(plainLeaseID, true);
+      await result.current.handleApproveStatus(identityKey, true);
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
     expect(calledPaths).toContain(
-      adminLeasePath(encodeLeaseID(plainLeaseID), "approve"),
+      adminLeasePath(
+        "relay-1",
+        "0x00000000000000000000000000000000000000A1",
+        "approve"
+      ),
     );
   });
 
@@ -178,11 +184,18 @@ describe("useAdmin", () => {
     await waitForLoaded(result);
 
     await act(async () => {
-      await result.current.handleBPSChange("peer-a", 4096);
+      await result.current.handleBPSChange(
+        "relay-1:0x00000000000000000000000000000000000000a1",
+        4096
+      );
     });
 
     expect(mockPost).toHaveBeenCalledWith(
-      adminLeasePath(encodeLeaseID("peer-a"), "bps"),
+      adminLeasePath(
+        "relay-1",
+        "0x00000000000000000000000000000000000000A1",
+        "bps"
+      ),
       { bps: 4096 },
     );
   });
@@ -200,7 +213,7 @@ describe("useAdmin", () => {
       getCalls++;
       if (getCalls === 1) {
         return Promise.resolve({
-          leases: [buildLease("peer-a")],
+          leases: [buildLease("0x00000000000000000000000000000000000000A1")],
           approval_mode: "auto",
         } as never);
       }
@@ -214,11 +227,14 @@ describe("useAdmin", () => {
 
     let pending: Promise<void> | undefined;
     await act(async () => {
-      pending = result.current.handleBPSChange("peer-a", 2048);
+      pending = result.current.handleBPSChange(
+        "relay-1:0x00000000000000000000000000000000000000a1",
+        2048
+      );
       await Promise.resolve();
       expect(result.current.loading).toBe(false);
       resolveRefresh?.({
-        leases: [{ ...buildLease("peer-a"), BPS: 2048 }],
+        leases: [{ ...buildLease("0x00000000000000000000000000000000000000A1"), BPS: 2048 }],
         approval_mode: "auto",
       });
       await pending;
@@ -227,25 +243,38 @@ describe("useAdmin", () => {
     expect(result.current.servers[0]?.bps).toBe(2048);
   });
 
-  it("bulk deny posts deduped lease IDs to action routes", async () => {
+  it("bulk deny posts deduped addresses to action routes", async () => {
+    mockGet.mockImplementation(async (path: string) => {
+      if (path === API_PATHS.admin.snapshot) {
+        return {
+          leases: [
+            buildLease("0x00000000000000000000000000000000000000A1", "relay-1"),
+            buildLease("0x00000000000000000000000000000000000000B2", "relay-2"),
+          ],
+          approval_mode: "auto",
+        } as never;
+      }
+      throw new Error(`Unexpected GET path: ${path}`);
+    });
+
     const { result } = renderHook(() => useAdmin());
     await waitForLoaded(result);
-    const normalizedPeerA = encodeLeaseID("peer-a");
-    const normalizedPeerB = encodeLeaseID("peer-b");
+    const addressA = "0x00000000000000000000000000000000000000A1";
+    const addressB = "0x00000000000000000000000000000000000000B2";
 
     await act(async () => {
       await result.current.handleBulkDeny([
-        "peer-a",
-        "peer-a",
-        "peer-b",
+        "relay-1:0x00000000000000000000000000000000000000a1",
+        "relay-1:0x00000000000000000000000000000000000000a1",
+        "relay-2:0x00000000000000000000000000000000000000b2",
       ]);
     });
 
     const calledPaths = mockPost.mock.calls.map(([path]) => path as string);
     expect(calledPaths).toEqual(
       expect.arrayContaining([
-        adminLeasePath(normalizedPeerA, "deny"),
-        adminLeasePath(normalizedPeerB, "deny"),
+        adminLeasePath("relay-1", addressA, "deny"),
+        adminLeasePath("relay-2", addressB, "deny"),
       ]),
     );
 

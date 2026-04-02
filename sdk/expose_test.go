@@ -9,12 +9,14 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-func mustRelayDescriptor(t *testing.T, relayID, relayURL string) types.RelayDescriptor {
+func mustRelayDescriptor(t *testing.T, relayName, relayURL string) types.RelayDescriptor {
 	t.Helper()
 
 	now := time.Now().UTC()
 	desc, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
-		RelayID:      relayID,
+		Identity: types.Identity{
+			Name: relayName,
+		},
 		Sequence:     uint64(now.UnixMilli()),
 		Version:      1,
 		IssuedAt:     now,
@@ -160,17 +162,17 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 	}
 }
 
-func TestExposurePinDiscoveredDescriptorRejectsURLChange(t *testing.T) {
+func TestExposurePinDiscoveredDescriptorAllowsURLChangeForSameIdentity(t *testing.T) {
 	exposure := &Exposure{relaySet: discovery.NewRelaySet()}
 	desc := mustRelayDescriptor(t, "relay-a", "https://relay-a.example")
 
-	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
+	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
-	changedURL := mustRelayDescriptor(t, desc.RelayID, "https://relay-b.example")
-	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.RelayID, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
-	if err == nil {
-		t.Fatal("ApplyRelayDiscoveryResponse() error = nil, want pinned relay url mismatch")
+	changedURL := mustRelayDescriptor(t, desc.Name, "https://relay-b.example")
+	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want nil for same relay identity", err)
 	}
 }

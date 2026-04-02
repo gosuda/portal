@@ -19,7 +19,7 @@ var errStreamFull = errors.New("stream ready queue full")
 
 type RelayStream struct {
 	notify       chan struct{}
-	leaseID      string
+	identityKey  string
 	ready        []*relaySession
 	idleInterval time.Duration
 	readyLimit   int
@@ -27,9 +27,9 @@ type RelayStream struct {
 	mu           sync.Mutex
 }
 
-func NewRelayStream(leaseID string, idleInterval time.Duration, readyLimit int) *RelayStream {
+func NewRelayStream(identityKey string, idleInterval time.Duration, readyLimit int) *RelayStream {
 	return &RelayStream{
-		leaseID:      leaseID,
+		identityKey:  identityKey,
 		idleInterval: idleInterval,
 		readyLimit:   readyLimit,
 		notify:       make(chan struct{}, 1),
@@ -133,7 +133,7 @@ func (b *RelayStream) watchSession(session *relaySession) {
 	}
 	readyCount = len(b.ready)
 	log.Info().
-		Str("lease_id", b.leaseID).
+		Str("identity_key", b.identityKey).
 		Str("remote_addr", session.remoteAddrString()).
 		Int("ready", readyCount).
 		Msg("sdk reverse disconnected")

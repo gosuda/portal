@@ -9,24 +9,44 @@ You need:
 - A public domain, for example `example.com`
 - A public Linux server with a static public IPv4
 - Docker and Docker Compose
-- A supported DNS provider account for ACME DNS-01 automation: `cloudflare` or `route53`
+- Optional for managed ACME DNS-01 automation or Portal-managed ENS TXT sync: a supported DNS provider account for `cloudflare`, `gcloud`, or `route53`
 - Open inbound ports:
   - `443/tcp`
   - `4017/tcp`
   - optional for UDP transport:
     - `4017/udp`
-    - `50000+/udp` (see section 4)
+    - `50000+/udp` (see section 5)
 
-## 2. DNS Provider Setup
+## 2. Certificate and DNS Mode
 
-### 2.1 Choose ACME DNS provider
+Choose one of these modes:
+
+- Manual certificate mode
+  - Leave `ACME_DNS_PROVIDER` empty.
+  - Place `fullchain.pem` and `privatekey.pem` in `KEYLESS_DIR`.
+  - Portal uses the files as-is and does not modify DNS or renew the certificate.
+- Manual certificate + gasless mode
+  - Place `fullchain.pem` and `privatekey.pem` in `KEYLESS_DIR`.
+  - Set `ACME_DNS_PROVIDER`.
+  - Portal keeps the manual certificate files, skips ACME certificate issuance, and still uses the provider for DNSSEC + ENS TXT automation.
+- Managed ACME mode
+  - Set `ACME_DNS_PROVIDER` to `cloudflare`, `gcloud`, or `route53`.
+  - Portal manages root/wildcard A records and certificate renewal.
+  - If ENS gasless is enabled, Portal also manages DNSSEC.
+
+If you only need a relay and do not need Portal-managed DNS or automatic renewal, manual certificate mode is the simplest option.
+
+## 3. Managed ACME Provider Setup
+
+### 3.1 Choose ACME DNS provider
 
 Set `ACME_DNS_PROVIDER` to one of:
 
 - `cloudflare`
+- `gcloud`
 - `route53`
 
-### 2.2 Cloudflare setup
+### 3.2 Cloudflare setup
 
 #### Add domain to Cloudflare
 
@@ -60,6 +80,8 @@ Required permissions:
 
 - `Zone:Read`
 - `DNS:Edit`
+- optional when `ENS_GASLESS_ENABLED=true` and `ACME_DNS_PROVIDER=cloudflare`:
+  - `Zone Settings:Edit`
 
 Scope:
 
@@ -67,7 +89,7 @@ Scope:
 
 Save the token for `CLOUDFLARE_TOKEN`.
 
-### 2.3 Route53 setup
+### 3.3 Route53 setup
 
 Create or select a public hosted zone that covers your relay host.
 
@@ -95,28 +117,146 @@ Equivalent relay flags:
 - `--aws-region`
 - `--aws-hosted-zone-id`
 
-## 3. Run Relay Server
+When `ENS_GASLESS_ENABLED=true` and `ACME_DNS_PROVIDER=route53` and the hosted zone does not already have an active Route53 key-signing key (KSK), also provide:
 
-### 3.1 Create `.env` at repository root
+- `AWS_DNSSEC_KMS_KEY_ARN`
+- optional `DNSSEC_KSK_NAME`
 
-Example:
+### 3.4 Google Cloud DNS setup
+
+Create or select a public Cloud DNS managed zone that covers your relay host.
+
+Portal uses standard Google Application Default Credentials (ADC) for both Cloud DNS API access and lego DNS-01. Examples:
+
+- `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-dns.json` with a mounted service account JSON file
+- an attached service account or workload identity on GCE, GKE, or Cloud Run
+
+Optional environment variables:
+
+- `GCP_PROJECT_ID`
+- `GCP_MANAGED_ZONE`
+- `GOOGLE_APPLICATION_CREDENTIALS`
+
+Equivalent relay flags:
+
+- `--gcp-project-id`
+- `--gcp-managed-zone`
+
+Notes:
+
+- `GCP_PROJECT_ID` is optional when ADC or GCE metadata already exposes the project id.
+- `GCP_MANAGED_ZONE` is optional, but useful when the credentials can edit a specific managed zone without permission to list all zones.
+- `GOOGLE_APPLICATION_CREDENTIALS` should point to the in-container path when you run Portal in Docker with a mounted service account JSON file.
+- Portal only targets public Cloud DNS managed zones.
+
+### 3.5 Optional ENS Gasless Automation
+
+Portal can optionally enable ENS gasless DNS import for the base domain and lease hostnames.
+
+- This is not required for normal Portal deployment.
+- Enable it only when you specifically need ENS gasless DNS import.
+- ENS gasless automation requires `ACME_DNS_PROVIDER`.
+- Portal uses that provider for both DNSSEC automation and ENS TXT create/delete.
+- If valid manual certificate files already exist in `KEYLESS_DIR`, Portal keeps using them and does not force ACME certificate issuance just because `ACME_DNS_PROVIDER` is set.
+- Cloudflare can enable zone signing directly, but some registrars still require publishing the returned DS record.
+- Google Cloud DNS can enable zone signing directly, but the registrar may still require publishing the returned DS record.
+- Route53 requires a compatible KMS key ARN when no active KSK already exists, and the registrar may still require the DS record.
+- New lease hostnames such as `app.portal.example.com` are published automatically when they register and are cleaned up on unregister or expiry.
+- ENS gasless import still depends on DNSSEC being valid for the domain.
+- By default Portal writes `ENS1 0x238A8F792dFA6033814B18618aD4100654aeef01 <address>`.
+- The address is derived automatically from the relay identity for the base domain and from each lease identity for lease hostnames.
+- This enables offchain gasless DNSSEC usage in ENS-aware clients. It does not perform an onchain ENS claim transaction.
+- Portal can automate provider-side DNS changes, but registrar-side DS publication is not always automatable. Expect a manual registrar step unless your registrar publishes DS records automatically.
+- Keep `ENS_GASLESS_ENABLED=false` unless you intend to use ENS gasless DNS import.
+
+Typical rollout:
+
+1. Set `ACME_DNS_PROVIDER` and the provider credentials.
+2. Set `ENS_GASLESS_ENABLED=true`.
+3. Start Portal and confirm the log contains both `dnssec configured` and `ens gasless dns import configured`.
+4. If the DNSSEC state is `pending`, publish the returned `DS` record at your registrar and wait for propagation.
+5. Re-check until the provider DNSSEC state becomes `active`.
+6. Verify external resolution with an ENS-aware client after DNSSEC is active.
+
+Registrar DS publication:
+
+- Cloudflare, Google Cloud DNS, and Route53 can sign the zone and return the DS record, but they do not control your registrar unless the domain is registered with the same provider.
+- If your registrar is separate, you must copy the DS values from the provider into the registrar's DNSSEC or DS configuration screen.
+- Example: if the domain is registered at Namecheap and delegated to Cloudflare nameservers, enable DNSSEC in Cloudflare first, then add the Cloudflare DS record in Namecheap under the domain's `Advanced DNS` DNSSEC section.
+- Until the registrar publishes the DS record at the parent zone, provider status typically stays `pending` and ENS gasless resolution may fail even though Portal already wrote the `ENS1 ...` TXT record.
+
+Verification checklist:
+
+- Provider DNSSEC status is `active`.
+- `dig +short DS example.com` returns the DS record from the parent zone.
+- `dig +short TXT example.com` returns the `ENS1 ...` TXT record.
+- ENS-aware resolution returns the expected address for the base domain and each lease hostname.
+
+## 4. Run Relay Server
+
+### 4.1 Create `.env` at repository root
+
+Manual certificate example:
 
 ```bash
 PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
+IDENTITY_PATH=/portal-certs/identity.json
 WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
-KEYLESS_DIR=./.portal-certs
+KEYLESS_DIR=/portal-certs
+ACME_DNS_PROVIDER=
+ENS_GASLESS_ENABLED=false
+```
+
+Place these files in `KEYLESS_DIR` before startup:
+
+```text
+/portal-certs/fullchain.pem
+/portal-certs/privatekey.pem
+```
+
+Manual certificate + gasless example:
+
+```bash
+PORTAL_URL=https://example.com
+BOOTSTRAPS=
+DISCOVERY=true
+IDENTITY_PATH=/portal-certs/identity.json
+WIREGUARD_ENDPOINT=
+SNI_PORT=443
+ADMIN_SECRET_KEY=your-admin-secret
+KEYLESS_DIR=/portal-certs
 ACME_DNS_PROVIDER=cloudflare
 CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
+ENS_GASLESS_ENABLED=true
+```
+
+In this mode, Portal keeps the manual certificate files but still manages DNSSEC and `ENS1 ...` TXT records through Cloudflare.
+
+Managed Cloudflare example:
+
+```bash
+PORTAL_URL=https://example.com
+BOOTSTRAPS=
+DISCOVERY=true
+IDENTITY_PATH=/portal-certs/identity.json
+WIREGUARD_ENDPOINT=
+SNI_PORT=443
+ADMIN_SECRET_KEY=your-admin-secret
+KEYLESS_DIR=/portal-certs
+ACME_DNS_PROVIDER=cloudflare
+CLOUDFLARE_TOKEN=cf_xxxxxxxxxxxxxxxxx
+ENS_GASLESS_ENABLED=false
 ```
 
 Route53 example:
 
 ```bash
-KEYLESS_DIR=./.portal-certs
+IDENTITY_PATH=/portal-certs/identity.json
+KEYLESS_DIR=/portal-certs
 ACME_DNS_PROVIDER=route53
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
@@ -124,6 +264,26 @@ AWS_SESSION_TOKEN=...
 AWS_REGION=us-east-1
 # Optional override
 AWS_HOSTED_ZONE_ID=Z1234567890ABC
+# Required only for ENS gasless automation when no ACTIVE KSK already exists.
+AWS_DNSSEC_KMS_KEY_ARN=arn:aws:kms:...
+# Optional override
+DNSSEC_KSK_NAME=portal_ksk
+ENS_GASLESS_ENABLED=false
+```
+
+Google Cloud DNS example:
+
+```bash
+IDENTITY_PATH=/portal-certs/identity.json
+KEYLESS_DIR=/portal-certs
+ACME_DNS_PROVIDER=gcloud
+# Optional when ADC does not expose the project id directly.
+GCP_PROJECT_ID=my-gcp-project
+# Optional override when the credentials cannot list managed zones.
+GCP_MANAGED_ZONE=portal-example-com
+# Standard ADC when using a mounted service account file.
+GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/gcp-dns.json
+ENS_GASLESS_ENABLED=false
 ```
 
 Notes:
@@ -132,7 +292,9 @@ Notes:
 - Portal uses the `PORTAL_URL` host for public lease hostnames
 - `WIREGUARD_ENDPOINT` is optional. When empty, Portal advertises `PORTAL_URL` host with `DISCOVERY_PORT`
 - Set `WIREGUARD_ENDPOINT` explicitly only when relay-peer discovery UDP is exposed on a different address than `PORTAL_URL`
-- `KEYLESS_DIR` stores relay certificate material
+- `IDENTITY_PATH` stores the relay identity JSON inside the container
+- `KEYLESS_DIR` stores relay certificate material inside the container
+- The Docker Compose stack stores relay identity JSON and certificate state under `./.portal-certs` on the host
 
 If the relay sits behind a reverse proxy or ingress and you want admin/auth and lease IP tracking to use the original client IP, set:
 
@@ -142,17 +304,41 @@ TRUST_PROXY_HEADERS=true
 
 If your proxy source addresses are public or you want a stricter allowlist, also set `TRUSTED_PROXY_CIDRS`.
 
-### 3.2 Start Relay
+### 4.2 Start Relay
+
+When using the published Docker image, create the bind-mount directory first and make it writable by UID `65532` (`nonroot` in the distroless image):
+
+```bash
+mkdir -p ./.portal-certs
+sudo chown 65532:65532 ./.portal-certs
+chmod 755 ./.portal-certs
+```
+
+If you use manual certificate mode, make sure `fullchain.pem` and `privatekey.pem` already exist in `./.portal-certs` before startup.
+
+If you use `ACME_DNS_PROVIDER=gcloud` with a service account JSON file under Docker Compose, mount the file into the container and set `GOOGLE_APPLICATION_CREDENTIALS` to the in-container path. Example:
+
+```yaml
+services:
+  portal:
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-dns.json
+    volumes:
+      - ./.portal-certs:/portal-certs
+      - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
+```
+
+Then start the stack:
 
 ```bash
 docker compose up -d
 ```
 
-## 4. Optional UDP Setup
+## 5. Optional UDP Setup
 
 UDP transport is disabled by default.
 
-### 4.1 Open UDP ports on your VM or host
+### 5.1 Open UDP ports on your VM or host
 
 Open these UDP ports in your cloud security group or firewall:
 
@@ -166,7 +352,7 @@ sudo ufw allow 4017/udp
 sudo ufw allow 50000:50009/udp
 ```
 
-### 4.2 Expose UDP ports in Docker
+### 5.2 Expose UDP ports in Docker
 
 If you use `network_mode: host`, the container uses host UDP ports directly.
 
@@ -178,7 +364,7 @@ ports:
   - "50000-50009:50000-50009/udp"
 ```
 
-### 4.3 Configure `UDP_PORT_COUNT`
+### 5.3 Configure `UDP_PORT_COUNT`
 
 Set `UDP_PORT_COUNT` in `.env` to the number of UDP leases you want to support.
 
@@ -194,7 +380,7 @@ That allocates lease UDP ports `50000-50009`.
 |---|---|---|
 | `UDP_PORT_COUNT` | `0` | Number of UDP ports to allocate, starting at port 50000 |
 
-### 4.4 Enable UDP in the admin panel
+### 5.4 Enable UDP in the admin panel
 
 After the relay starts, open `/admin`, enable UDP transport, and optionally set a max concurrent UDP lease limit.
 

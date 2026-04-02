@@ -16,12 +16,13 @@ import (
 	"github.com/gosuda/portal/v2/types"
 )
 
-func proxyExposure(ctx context.Context, exposure *sdk.Exposure, serviceName string) error {
+func proxyExposure(ctx context.Context, exposure *sdk.Exposure) error {
 	defer exposure.Close()
 	if len(exposure.ActiveRelayURLs()) == 0 {
 		return errors.New("no relay URLs provided")
 	}
 
+	identity := exposure.Identity()
 	tcpTarget := exposure.TargetAddr
 	udpTarget := exposure.UDPAddr
 	udpEnabled := udpTarget != ""
@@ -29,13 +30,13 @@ func proxyExposure(ctx context.Context, exposure *sdk.Exposure, serviceName stri
 	log.Info().
 		Str("release_version", types.ReleaseVersion).
 		Str("tcp_target", tcpTarget).
-		Str("service_name", serviceName).
+		Str("service_name", identity.Name).
 		Strs("relays", exposure.ActiveRelayURLs()).
 		Msg("starting portal tunnel; public URLs will be logged as relays become ready")
 	if udpEnabled {
 		log.Info().
 			Str("udp_target", udpTarget).
-			Str("service_name", serviceName).
+			Str("service_name", identity.Name).
 			Msg("udp relay enabled")
 	}
 
@@ -249,7 +250,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 
 	type flowKey struct {
 		flowID   uint32
-		leaseID  string
+		address  string
 		relayURL string
 	}
 	type flowEntry struct {
@@ -285,7 +286,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 	getOrCreateFlow := func(frame types.DatagramFrame) (*net.UDPConn, error) {
 		key := flowKey{
 			flowID:   frame.FlowID,
-			leaseID:  frame.LeaseID,
+			address:  frame.Address,
 			relayURL: frame.RelayURL,
 		}
 
@@ -314,7 +315,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			lastSeen: time.Now(),
 			frame: types.DatagramFrame{
 				FlowID:   frame.FlowID,
-				LeaseID:  frame.LeaseID,
+				Address:  frame.Address,
 				RelayURL: frame.RelayURL,
 				UDPAddr:  frame.UDPAddr,
 			},
@@ -332,7 +333,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 					log.Debug().
 						Err(err).
 						Uint32("flow_id", key.flowID).
-						Str("lease_id", key.leaseID).
+						Str("address", key.address).
 						Str("relay_url", key.relayURL).
 						Msg("local read ended")
 					return
@@ -354,7 +355,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 					log.Debug().
 						Err(sendErr).
 						Uint32("flow_id", key.flowID).
-						Str("lease_id", key.leaseID).
+						Str("address", key.address).
 						Str("relay_url", key.relayURL).
 						Msg("send datagram to relay failed")
 					return
@@ -381,7 +382,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 		log.Debug().
 			Uint32("flow_id", frame.FlowID).
 			Int("bytes", len(frame.Payload)).
-			Str("lease_id", frame.LeaseID).
+			Str("address", frame.Address).
 			Str("relay_url", frame.RelayURL).
 			Str("udp_addr", frame.UDPAddr).
 			Str("target", localAddr).
@@ -392,7 +393,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			log.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
-				Str("lease_id", frame.LeaseID).
+				Str("address", frame.Address).
 				Str("relay_url", frame.RelayURL).
 				Msg("dial local udp failed")
 			continue
@@ -402,7 +403,7 @@ func proxyExposureDatagrams(ctx context.Context, exposure *sdk.Exposure, localAd
 			log.Warn().
 				Err(err).
 				Uint32("flow_id", frame.FlowID).
-				Str("lease_id", frame.LeaseID).
+				Str("address", frame.Address).
 				Str("relay_url", frame.RelayURL).
 				Msg("write to local udp failed")
 		}

@@ -6,51 +6,51 @@ import (
 )
 
 type BPSManager struct {
-	leaseBPS map[string]int64
-	mu       sync.RWMutex
+	identityBPS map[string]int64
+	mu          sync.RWMutex
 }
 
 func NewBPSManager() *BPSManager {
 	return &BPSManager{
-		leaseBPS: make(map[string]int64),
+		identityBPS: make(map[string]int64),
 	}
 }
 
-func (m *BPSManager) LeaseBPS(leaseID string) int64 {
-	if m == nil || leaseID == "" {
+func (m *BPSManager) IdentityBPS(key string) int64 {
+	if m == nil || key == "" {
 		return 0
 	}
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.leaseBPS[leaseID]
+	return m.identityBPS[key]
 }
 
-func (m *BPSManager) SetLeaseBPS(leaseID string, bps int64) {
-	if m == nil || leaseID == "" {
+func (m *BPSManager) SetIdentityBPS(key string, bps int64) {
+	if m == nil || key == "" {
 		return
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if bps <= 0 {
-		delete(m.leaseBPS, leaseID)
+		delete(m.identityBPS, key)
 		return
 	}
-	m.leaseBPS[leaseID] = bps
+	m.identityBPS[key] = bps
 }
 
-func (m *BPSManager) DeleteLeaseBPS(leaseID string) {
-	if m == nil || leaseID == "" {
+func (m *BPSManager) DeleteIdentityBPS(key string) {
+	if m == nil || key == "" {
 		return
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.leaseBPS, leaseID)
+	delete(m.identityBPS, key)
 }
 
-func (m *BPSManager) LeaseBPSLimits() map[string]int64 {
+func (m *BPSManager) IdentityBPSLimits() map[string]int64 {
 	if m == nil {
 		return nil
 	}
@@ -58,25 +58,25 @@ func (m *BPSManager) LeaseBPSLimits() map[string]int64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	out := make(map[string]int64, len(m.leaseBPS))
-	maps.Copy(out, m.leaseBPS)
+	out := make(map[string]int64, len(m.identityBPS))
+	maps.Copy(out, m.identityBPS)
 	return out
 }
 
-func (m *BPSManager) SetLeaseBPSLimits(limits map[string]int64) {
+func (m *BPSManager) SetIdentityBPSLimits(limits map[string]int64) {
 	if m == nil {
 		return
 	}
 
 	next := make(map[string]int64, len(limits))
-	for leaseID, bps := range limits {
-		if leaseID == "" || bps <= 0 {
+	for key, bps := range limits {
+		if key == "" || bps <= 0 {
 			continue
 		}
-		next[leaseID] = bps
+		next[key] = bps
 	}
 
 	m.mu.Lock()
-	m.leaseBPS = next
+	m.identityBPS = next
 	m.mu.Unlock()
 }
