@@ -64,7 +64,7 @@ UDP client
 ### Operational Constraints
 
 - For non-localhost deployments, relay TLS can run from manual certificate files in `KEYLESS_DIR` or from managed ACME.
-- When managed ACME is enabled, supported DNS providers are only `cloudflare` and `route53`.
+- When managed ACME is enabled, supported DNS providers are `cloudflare`, `gcloud`, and `route53`.
 - ENS gasless automation reuses `ACME_DNS_PROVIDER` for DNSSEC and ENS TXT sync.
 - Relay, tunnel, and demo-app identities are persisted as JSON at `IDENTITY_PATH` / `--identity-path`. Missing files are generated automatically and stored with `name`, `address`, `public_key`, and `private_key`.
 - Managed non-localhost ACME keeps both root and wildcard DNS A records in sync.
@@ -112,7 +112,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `transport.RelayDatagram`: per-lease raw UDP socket plus QUIC DATAGRAM bridge runtime
 - `transport.PortAllocator`: count-based UDP port allocator with sticky name-based reservation and grace period
 - `transport.datagramSession`: internal QUIC DATAGRAM bind/send/receive primitive shared by relay and SDK datagram runtimes
-- `acme`: Cloudflare/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
+- `acme`: Cloudflare/Google Cloud DNS/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 - `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
 - `discovery`: signed relay descriptor publication and relay-set synchronization
@@ -351,7 +351,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
   - `fullchain.pem`
   - `privatekey.pem`
 - For non-localhost deployments, Portal can either use those files directly or manage them through ACME.
-- When ACME is enabled, DNS-01 currently supports `cloudflare` and `route53`, and keeps:
+- When ACME is enabled, DNS-01 currently supports `cloudflare`, `gcloud`, and `route53`, and keeps:
   - root host A record
   - wildcard host A record
   - relay certificate renewal

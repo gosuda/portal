@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -88,7 +87,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
-	if err := validateIPv4(publicIPv4); err != nil {
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
 		return err
 	}
 
@@ -249,7 +248,7 @@ func findHostedZoneID(ctx context.Context, client *awsroute53.Client, domain, ex
 		return "", errors.New("route53 client is nil")
 	}
 
-	candidates := domainCandidates(domain)
+	candidates := utils.DomainCandidates(domain)
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("invalid base domain for hosted zone lookup: %q", domain)
 	}
@@ -444,28 +443,6 @@ func deleteRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneI
 		},
 	})
 	return err
-}
-
-func validateIPv4(raw string) error {
-	ip := net.ParseIP(strings.TrimSpace(raw))
-	if ip == nil || ip.To4() == nil {
-		return fmt.Errorf("invalid ipv4 address: %q", raw)
-	}
-	return nil
-}
-
-func domainCandidates(domain string) []string {
-	normalized := utils.NormalizeHostname(domain)
-	parts := strings.Split(normalized, ".")
-	if len(parts) < 2 {
-		return nil
-	}
-
-	candidates := make([]string, 0, len(parts)-1)
-	for i := range len(parts) - 1 {
-		candidates = append(candidates, strings.Join(parts[i:], "."))
-	}
-	return candidates
 }
 
 func (p *Provider) awsRegion() string {

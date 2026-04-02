@@ -191,6 +191,20 @@ func NormalizeBaseDomain(domain string) string {
 	return strings.TrimPrefix(NormalizeHostname(domain), "*.")
 }
 
+func DomainCandidates(domain string) []string {
+	normalized := NormalizeHostname(domain)
+	parts := strings.Split(normalized, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+
+	candidates := make([]string, 0, len(parts)-1)
+	for i := range len(parts) - 1 {
+		candidates = append(candidates, strings.Join(parts[i:], "."))
+	}
+	return candidates
+}
+
 func HostnameMatchesBaseDomain(hostname, baseDomain string) bool {
 	hostname = NormalizeHostname(hostname)
 	baseDomain = NormalizeBaseDomain(baseDomain)
@@ -503,6 +517,14 @@ func AddrString(addr net.Addr) string {
 		return ""
 	}
 	return addr.String()
+}
+
+func ValidateIPv4(raw string) error {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil || ip.To4() == nil {
+		return fmt.Errorf("invalid ipv4 address: %q", raw)
+	}
+	return nil
 }
 
 func RandomHex(size int) (string, error) {

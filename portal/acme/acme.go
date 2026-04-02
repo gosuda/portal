@@ -46,6 +46,8 @@ type Config struct {
 	ENSGaslessEnabled  bool
 	ENSGaslessAddress  string
 	CloudflareToken    string
+	GCPProjectID       string
+	GCPManagedZone     string
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 	AWSSessionToken    string
@@ -79,6 +81,8 @@ func NewManager(cfg Config) (*Manager, error) {
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
 	cfg.CloudflareToken = strings.TrimSpace(cfg.CloudflareToken)
+	cfg.GCPProjectID = strings.TrimSpace(cfg.GCPProjectID)
+	cfg.GCPManagedZone = strings.TrimSpace(cfg.GCPManagedZone)
 	cfg.AWSAccessKeyID = strings.TrimSpace(cfg.AWSAccessKeyID)
 	cfg.AWSSecretAccessKey = strings.TrimSpace(cfg.AWSSecretAccessKey)
 	cfg.AWSSessionToken = strings.TrimSpace(cfg.AWSSessionToken)

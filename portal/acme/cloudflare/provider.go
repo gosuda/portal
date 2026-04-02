@@ -106,10 +106,10 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p.token == "" {
 		return errors.New("cloudflare token is required")
 	}
-	publicIPv4 = strings.TrimSpace(publicIPv4)
-	if publicIPv4 == "" {
-		return errors.New("public ipv4 is required")
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
 	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
 
 	zoneID, err := findZoneID(ctx, p.token, baseDomain)
 	if err != nil {

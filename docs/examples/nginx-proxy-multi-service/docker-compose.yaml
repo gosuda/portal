@@ -83,6 +83,9 @@ services:
       ACME_DNS_PROVIDER: ${ACME_DNS_PROVIDER:-}
       ENS_GASLESS_ENABLED: ${ENS_GASLESS_ENABLED:-false}
       CLOUDFLARE_TOKEN: ${CLOUDFLARE_TOKEN:-}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCP_MANAGED_ZONE: ${GCP_MANAGED_ZONE:-}
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
@@ -93,6 +96,8 @@ services:
       DNSSEC_KSK_NAME: ${DNSSEC_KSK_NAME:-}
     volumes:
       - ./.portal-certs:${KEYLESS_DIR:-/portal-certs}
+      # Uncomment when using a Google Cloud service account file for gcloud automation.
+      # - ./gcp-dns.json:/run/secrets/gcp-dns.json:ro
     restart: unless-stopped
 
   # ─── App A: backend ─────────────────────────────────────────────────────────

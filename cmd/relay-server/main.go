@@ -50,6 +50,8 @@ type relayServerConfig struct {
 	ACMEDNSProvider     string
 	ENSGaslessEnabled   bool
 	CloudflareToken     string
+	GCPProjectID        string
+	GCPManagedZone      string
 	AWSAccessKeyID      string
 	AWSSecretAccessKey  string
 	AWSSessionToken     string
@@ -80,9 +82,11 @@ func runServeCommand(args []string) error {
 
 	utils.StringFlagEnv(fs, &cfg.KeylessDir, "keyless-dir", "./.portal-certs", "directory path for relay keyless materials", "KEYLESS_DIR")
 	utils.StringFlagEnv(fs, &cfg.AdminSettingsPath, "admin-settings-path", "admin_settings.json", "admin settings file path", "ADMIN_SETTINGS_PATH")
-	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (cloudflare|route53); leave empty to use manual fullchain.pem/privatekey.pem from KEYLESS_DIR", "ACME_DNS_PROVIDER")
+	utils.StringFlagEnv(fs, &cfg.ACMEDNSProvider, "acme-dns-provider", "", "ACME DNS provider for managed DNS-01/A-record sync and ENS gasless DNSSEC/TXT automation (cloudflare|gcloud|route53); leave empty to use manual fullchain.pem/privatekey.pem from KEYLESS_DIR", "ACME_DNS_PROVIDER")
 	utils.BoolFlagEnv(fs, &cfg.ENSGaslessEnabled, "ens-gasless-enabled", false, "enable ENS gasless DNS import automation for the managed DNS zone and lease hostnames", "ENS_GASLESS_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.CloudflareToken, "cloudflare-token", "", "Cloudflare DNS API token (required when acme-dns-provider=cloudflare)", "CLOUDFLARE_TOKEN")
+	utils.StringFlagEnv(fs, &cfg.GCPProjectID, "gcp-project-id", "", "Google Cloud project id for Cloud DNS automation; auto-detected from ADC or GCE metadata when omitted", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCE_PROJECT")
+	utils.StringFlagEnv(fs, &cfg.GCPManagedZone, "gcp-managed-zone", "", "explicit Google Cloud DNS managed zone name or numeric ID override", "GCP_MANAGED_ZONE", "GCP_ZONE", "GCE_ZONE_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSAccessKeyID, "aws-access-key-id", "", "AWS access key ID for Route53 static credentials; uses the default AWS credential chain when omitted", "AWS_ACCESS_KEY_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSSecretAccessKey, "aws-secret-access-key", "", "AWS secret access key for Route53 static credentials", "AWS_SECRET_ACCESS_KEY")
 	utils.StringFlagEnv(fs, &cfg.AWSSessionToken, "aws-session-token", "", "AWS session token for Route53 temporary credentials", "AWS_SESSION_TOKEN")
@@ -139,6 +143,8 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			DNSProvider:        cfg.ACMEDNSProvider,
 			ENSGaslessEnabled:  cfg.ENSGaslessEnabled,
 			CloudflareToken:    cfg.CloudflareToken,
+			GCPProjectID:       cfg.GCPProjectID,
+			GCPManagedZone:     cfg.GCPManagedZone,
 			AWSAccessKeyID:     cfg.AWSAccessKeyID,
 			AWSSecretAccessKey: cfg.AWSSecretAccessKey,
 			AWSSessionToken:    cfg.AWSSessionToken,

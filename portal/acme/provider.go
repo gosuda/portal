@@ -8,12 +8,14 @@ import (
 	"github.com/go-acme/lego/v4/challenge"
 
 	"github.com/gosuda/portal/v2/portal/acme/cloudflare"
+	"github.com/gosuda/portal/v2/portal/acme/gcloud"
 	"github.com/gosuda/portal/v2/portal/acme/route53"
 	"github.com/gosuda/portal/v2/types"
 )
 
 const (
 	TypeCloudflare = "cloudflare"
+	TypeGCloud     = "gcloud"
 	TypeRoute53    = "route53"
 )
 
@@ -32,6 +34,11 @@ func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 		return nil, nil
 	case TypeCloudflare:
 		return cloudflare.New(cfg.CloudflareToken), nil
+	case TypeGCloud:
+		return gcloud.New(gcloud.Config{
+			ProjectID:   cfg.GCPProjectID,
+			ManagedZone: cfg.GCPManagedZone,
+		}), nil
 	case TypeRoute53:
 		return route53.New(route53.Config{
 			AccessKeyID:     cfg.AWSAccessKeyID,
