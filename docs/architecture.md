@@ -2,7 +2,7 @@
 
 ## Overview
 
-Portal publishes local services on public subdomains and optional UDP ports through a relay.
+Portal publishes local services on public subdomains, optional dedicated TCP ports, and optional UDP ports through a relay.
 Backends connect outward to the relay. Stream traffic is routed by SNI, and tenant TLS remains end-to-end between the client and the SDK or tunnel endpoint for the stream path.
 
 High-level path:
@@ -11,6 +11,12 @@ High-level path:
 Stream client
   -> Relay SNI listener (:443 by default)
   -> Claimed reverse session
+  -> SDK / portal-tunnel
+  -> Local service
+
+TCP port client
+  -> Relay lease TCP port (40000+ by default)
+  -> Claimed reverse session (raw TCP, no TLS)
   -> SDK / portal-tunnel
   -> Local service
 
@@ -50,6 +56,7 @@ UDP client
 - Reverse TCP marker bytes remain protocol state:
   - `0x00` = idle keepalive
   - `0x02` = TLS passthrough activation
+  - `0x03` = raw TCP activation (non-TLS port routing)
 - `/sdk/connect` remains HTTP/1.1 only.
 
 ### JSON and Shared Contract
@@ -109,8 +116,9 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `Server`: owns listeners, lease registry, API handlers, discovery, and shutdown lifecycle
 - `routeTable`: exact + single-label wildcard hostname lookup
 - `transport.RelayStream`: per-lease ready queue for reverse stream sessions
+- `transport.RelayTCPPort`: per-lease TCP listener on an allocated port; bridges incoming connections to reverse sessions using raw TCP (no TLS)
 - `transport.RelayDatagram`: per-lease raw UDP socket plus QUIC DATAGRAM bridge runtime
-- `transport.PortAllocator`: count-based UDP port allocator with sticky name-based reservation and grace period
+- `transport.PortAllocator`: count-based port allocator with sticky name-based reservation and grace period (shared by UDP and TCP port transport)
 - `transport.datagramSession`: internal QUIC DATAGRAM bind/send/receive primitive shared by relay and SDK datagram runtimes
 - `acme`: Cloudflare/Google Cloud DNS/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
@@ -150,8 +158,10 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - Creates one SDK listener per relay through the SDK and consumes one aggregate listener
 - Accepts claimed tenant connections from the relay
 - Proxies raw TCP to a local target passed to `portal expose`
+- Optionally requests a dedicated TCP port on the relay for raw TCP services when `--tcp` is enabled
 - Optionally proxies raw UDP to a separate local UDP target when `--udp` is enabled
 - Returns an HTTP 503 response when the local target is unavailable
+- `--tcp` flag (bool, default `false`): requests a dedicated TCP port on the relay for non-TLS services (e.g., Minecraft, game servers)
 - `--udp` flag (bool, default `false`): enables UDP relay in addition to TCP
 - `--udp-addr` flag (string): local UDP target address (`host:port` or port only); required when `--udp` is enabled
 - `--ban-mitm` flag (bool, default `false`): when enabled, TLS self-probe mismatches ban the relay for the current exposure instead of only logging
@@ -185,6 +195,24 @@ Result: the relay decides routing, but tenant TLS termination still happens at t
 7. Matching exporter values mean the probe observed passthrough for that connection. A mismatch is logged as suspected relay-side TLS termination. A timeout is logged as probe failure, not proof of MITM.
 
 Result: this is a detect-only signal by default. It raises the cost of adaptive relay-side TLS termination, but it does not prove passthrough for every user connection. Callers that need stricter behavior can opt into relay banning.
+
+### TCP Port Transport (non-TLS)
+
+1. SDK/tunnel requests a register challenge with `tcp_enabled=true`, signs the returned SIWE message, and then completes `POST /sdk/register`.
+2. Relay validates that the TCP port plane is enabled (server has `TCP_PORT_COUNT > 0` and admin has enabled TCP port), allocates a TCP port via `PortAllocator`, and creates a `transport.RelayTCPPort` for the lease.
+3. Registration response includes `tcp_addr` (public TCP endpoint, e.g., `hostname:40001`).
+4. `RelayTCPPort` starts a TCP listener on the allocated port.
+5. An external TCP client connects to `tcp_addr`.
+6. `RelayTCPPort.acceptLoop` accepts the connection and claims a reverse session from the lease `RelayStream` using `ClaimRaw` (writes `0x03` marker instead of `0x02`).
+7. SDK-side `ClientStream.runSession` receives `0x03`, calls `activateRaw` which passes the raw connection directly without TLS handshake.
+8. `RelayTCPPort.bridgeConns` copies data bidirectionally between the external client and the reverse session.
+
+```text
+Client --TCP--> [:40000+ Relay] --raw TCP--> [RelayTCPPort] --ClaimRaw--> [reverse session] --0x03--> [ClientStream] --> Local Service
+                                                                    <--bidirectional bridge--
+```
+
+Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP without TLS. This is ideal for non-TLS protocols like Minecraft, game servers, or any raw TCP service.
 
 ### UDP/QUIC Datagram Transport
 
@@ -239,6 +267,7 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
   - `metadata`
   - `ttl`
   - `udp_enabled`
+  - `tcp_enabled`
 - Challenge response fields:
   - `challenge_id`
   - `expires_at`
@@ -255,6 +284,7 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
   - `expires_at`
   - `access_token`
   - optional `udp_addr`
+  - optional `tcp_addr`
 - `access_token` is a relay-issued ES256K JWT signed by the relay identity key and validated with:
   - `iss = PORTAL_URL`
   - `aud = portal-sdk`
@@ -266,6 +296,10 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 - `APIErrorCodeUDPDisabled` (HTTP 403) when UDP is disabled by admin policy
 - `APIErrorCodeUDPCapacityExceeded` (HTTP 503) when the admin-configured max UDP lease limit is reached
 - `APIErrorCodeUDPPortExhausted` (HTTP 503) when the UDP port pool is exhausted
+- TCP port registration requires two conditions: server must have `TCP_PORT_COUNT > 0` and admin must enable TCP port in the admin panel
+- `APIErrorCodeTCPPortDisabled` (HTTP 403) when TCP port is disabled by admin policy
+- `APIErrorCodeTCPPortCapacityExceeded` (HTTP 503) when the admin-configured max TCP port lease limit is reached
+- `APIErrorCodeTCPPortExhausted` (HTTP 503) when the TCP port pool is exhausted
 - `PORTAL_URL` is normalized to its host component only; path/query segments are ignored for routing
 
 ### 2. Reverse Connect
@@ -334,7 +368,7 @@ Cross-package public contract lives in:
   - shared request/response DTOs
   - lease metadata
 - `types/error.go`
-  - shared API error codes
+  - shared API error codes (including TCP port: `tcp_port_disabled`, `tcp_port_exhausted`, `tcp_port_capacity_exceeded`)
   - shared MITM self-probe reason codes
 - `types/types.go`
   - shared headers
@@ -367,6 +401,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 
 - Reverse-only backend connectivity
 - One canonical raw TCP reverse transport
+- Dedicated TCP port allocation for non-TLS services with raw TCP bridging
 - Raw public UDP exposure with an internal QUIC datagram backhaul
 - Optional WireGuard relay overlay for relay discovery and peer synchronization
 - SNI-based routing with root-host fallback
@@ -375,7 +410,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - SIWE identity proof for registration plus relay-issued ES256K JWT access tokens for the lease lifecycle
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
-- Per-lease UDP port allocation with sticky name-based reservation
+- Per-lease UDP and TCP port allocation with sticky name-based reservation
 - QUIC tunnel authentication via control stream (`access_token`)
 
 ## ADRs
