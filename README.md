@@ -16,6 +16,20 @@
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
 - **Raw TCP and UDP transport**: Native TCP reverse sessions with optional UDP (no SSH or WebSocket)
 
+## Comparison
+
+| | Portal | ngrok | Cloudflare Tunnel | frp |
+|---|---|---|---|---|
+| End-to-end encryption | **Yes** | Optional | No | No |
+| TLS termination | Client-side | Edge (default) | Edge (always) | Server-side |
+| MITM detection | **Built-in** | No | No | No |
+| Self-hostable | **Yes** | Enterprise only | No | Yes |
+| Multi-relay failover | **Yes** | Managed | Built-in multi-DC | No |
+| Custom domain | **Yes** | Paid plans | Yes | Yes |
+| Transport | Raw TCP / UDP | HTTP/S, TCP, TLS | HTTP/S, TCP, UDP | HTTP/S, TCP, UDP |
+| Open source | **MIT** | No | Client only (Apache 2.0) | Apache 2.0 |
+| Account required | **No** (SIWE) | Yes | Yes | No |
+
 ## Quick Start
 
 ### Expose your local app:
