@@ -37,6 +37,7 @@ var (
 	errUDPCapacityExceeded     = errors.New(types.APIErrorCodeUDPCapacityExceeded)
 	errTCPPortDisabled         = errors.New(types.APIErrorCodeTCPPortDisabled)
 	errTCPPortCapacityExceeded = errors.New(types.APIErrorCodeTCPPortCapacityExceeded)
+	errTCPPortExhausted        = errors.New("no tcp ports available")
 )
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
@@ -159,7 +160,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		IngressTLSAddr:      ingressAddr,
 		SupportsTLS:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
-		SupportsTCP:         s.cfg.TCPPortCount > 0,
+		SupportsTCP:         true,
+		SupportsRawTCP:      s.cfg.TCPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
 		WireGuardPublicKey:  s.wgConfig.PublicKey,
 		WireGuardEndpoint:   s.wgConfig.Endpoint,
@@ -231,6 +233,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeHostnameConflict, err.Error())
 		case errors.Is(err, errIPBanned):
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, err.Error())
+		case errors.Is(err, errTCPPortExhausted):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTCPPortExhausted, err.Error())
 		case errors.Is(err, transport.ErrPortExhausted):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted, err.Error())
 		case errors.Is(err, errUDPDisabled):
@@ -616,6 +620,9 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		}
 		port, err := s.tcpPorts.Allocate(identity.Name)
 		if err != nil {
+			if errors.Is(err, transport.ErrPortExhausted) {
+				return types.RegisterResponse{}, errTCPPortExhausted
+			}
 			return types.RegisterResponse{}, err
 		}
 		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)

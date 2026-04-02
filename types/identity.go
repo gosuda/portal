@@ -94,7 +94,8 @@ type RelayDescriptor struct {
 
 	SupportsTLS         bool `json:"supports_tls,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
-	SupportsTCP         bool `json:"supports_tcp,omitempty"`
+	SupportsTCP         bool `json:"supports_tcp,omitempty"` // Deprecated: always true. Use SupportsRawTCP instead.
+	SupportsRawTCP      bool `json:"supports_raw_tcp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
 }
 
