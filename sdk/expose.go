@@ -45,15 +45,16 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs  []string
-	Identity   types.Identity
-	TargetAddr string
-	UDPAddr    string
-	UDPEnabled bool
-	BanMITM    bool
-	Discovery  bool
-	Metadata   types.LeaseMetadata
-	RootCAPEM  []byte
+	RelayURLs    []string
+	IdentityPath string
+	Name         string
+	TargetAddr   string
+	UDPAddr      string
+	UDPEnabled   bool
+	BanMITM      bool
+	Discovery    bool
+	Metadata     types.LeaseMetadata
+	RootCAPEM    []byte
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
@@ -64,9 +65,15 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		return nil, err
 	}
 
-	identity, err := utils.ResolveLeaseIdentity(cfg.Identity)
+	identity, createdIdentity, err := utils.ResolveListenerIdentity(types.Identity{Name: cfg.Name}, cfg.IdentityPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
+	}
+	if createdIdentity {
+		log.Info().
+			Str("identity_path", strings.TrimSpace(cfg.IdentityPath)).
+			Str("address", identity.Address).
+			Msg("generated tunnel identity and saved it to disk")
 	}
 	targetAddr, err := utils.NormalizeLoopbackTarget(cfg.TargetAddr)
 	if err != nil {

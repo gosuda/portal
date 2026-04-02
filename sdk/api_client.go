@@ -51,11 +51,6 @@ type apiClient struct {
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
-	identity, err := utils.ResolveLeaseIdentity(cfg.Identity)
-	if err != nil {
-		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, err
@@ -74,7 +69,7 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 		dialTimeout:    dialTimeout,
 		requestTimeout: requestTimeout,
 		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
-		identity:       identity,
+		identity:       cfg.Identity.Copy(),
 		metadata:       cfg.Metadata.Copy(),
 	}, nil
 }

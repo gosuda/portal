@@ -110,25 +110,18 @@ func runExposeCommand(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid service name: %w", err)
 	}
-	identity, createdIdentity, err := utils.LoadOrCreateIdentity(flags.identityPath, types.Identity{Name: flags.name})
-	if err != nil {
-		return fmt.Errorf("load tunnel identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().Str("identity_path", flags.identityPath).Str("address", identity.Address).Msg("generated tunnel identity and saved it to disk")
-	}
-
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:  utils.SplitCSV(flags.relayCSV),
-		Identity:   identity,
-		TargetAddr: flags.targetAddr,
-		UDPAddr:    flags.udpAddr,
-		UDPEnabled: flags.udp,
-		BanMITM:    flags.banMITM,
-		Discovery:  flags.discovery,
+		RelayURLs:    utils.SplitCSV(flags.relayCSV),
+		IdentityPath: flags.identityPath,
+		Name:         flags.name,
+		TargetAddr:   flags.targetAddr,
+		UDPAddr:      flags.udpAddr,
+		UDPEnabled:   flags.udp,
+		BanMITM:      flags.banMITM,
+		Discovery:    flags.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),

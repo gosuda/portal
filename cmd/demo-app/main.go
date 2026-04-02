@@ -146,19 +146,12 @@ func runHelpCommand(args []string) error {
 }
 
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {
-	identity, createdIdentity, err := utils.LoadOrCreateIdentity(cfg.identityPath, types.Identity{Name: cfg.name})
-	if err != nil {
-		return fmt.Errorf("load demo identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().Str("identity_path", cfg.identityPath).Str("address", identity.Address).Msg("generated demo identity and saved it to disk")
-	}
-
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs: utils.SplitCSV(cfg.relayURLs),
-		Identity:  identity,
-		BanMITM:   cfg.banMITM,
-		Discovery: cfg.discovery,
+		RelayURLs:    utils.SplitCSV(cfg.relayURLs),
+		IdentityPath: cfg.identityPath,
+		Name:         cfg.name,
+		BanMITM:      cfg.banMITM,
+		Discovery:    cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),
@@ -194,20 +187,13 @@ func runTCPDemo(ctx context.Context, cfg demoConfig) error {
 }
 
 func runUDPDemo(ctx context.Context, cfg demoConfig) error {
-	identity, createdIdentity, err := utils.LoadOrCreateIdentity(cfg.identityPath, types.Identity{Name: cfg.name})
-	if err != nil {
-		return fmt.Errorf("load demo identity: %w", err)
-	}
-	if createdIdentity {
-		log.Info().Str("identity_path", cfg.identityPath).Str("address", identity.Address).Msg("generated demo identity and saved it to disk")
-	}
-
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:  utils.SplitCSV(cfg.relayURLs),
-		Identity:   identity,
-		UDPEnabled: true,
-		BanMITM:    cfg.banMITM,
-		Discovery:  cfg.discovery,
+		RelayURLs:    utils.SplitCSV(cfg.relayURLs),
+		IdentityPath: cfg.identityPath,
+		Name:         cfg.name,
+		UDPEnabled:   true,
+		BanMITM:      cfg.banMITM,
+		Discovery:    cfg.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: cfg.desc,
 			Tags:        utils.SplitCSV(cfg.tags),

@@ -188,6 +188,24 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	return loaded, true, nil
 }
 
+func ResolveListenerIdentity(identity types.Identity, identityPath string) (types.Identity, bool, error) {
+	identityPath = strings.TrimSpace(identityPath)
+	if identityPath == "" {
+		resolved, err := ResolveLeaseIdentity(identity)
+		return resolved, false, err
+	}
+
+	loaded, created, err := LoadOrCreateIdentity(identityPath, identity)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	resolved, err := ResolveLeaseIdentity(loaded)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	return resolved, created, nil
+}
+
 func NormalizeIdentityKey(raw string) string {
 	key := strings.ToLower(strings.TrimSpace(raw))
 	if key == "" {
