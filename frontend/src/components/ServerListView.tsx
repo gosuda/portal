@@ -42,6 +42,19 @@ interface OfficialRegistryDocument {
 const OFFICIAL_REGISTRY_SOURCE_URL =
   "https://raw.githubusercontent.com/gosuda/portal/main/registry.json";
 const REPOSITORY_URL = "https://github.com/gosuda/portal";
+const GITHUB_LATEST_RELEASE_URL =
+  "https://api.github.com/repos/gosuda/portal/releases/latest";
+
+async function fetchLatestReleaseVersion(): Promise<string> {
+  const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+    headers: { Accept: "application/vnd.github.v3+json" },
+  });
+  if (!response.ok) {
+    return "";
+  }
+  const data = (await response.json()) as { tag_name?: string };
+  return typeof data.tag_name === "string" ? data.tag_name.trim() : "";
+}
 
 async function loadOfficialRegistryRelay(
   relayURL: string,
