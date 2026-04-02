@@ -115,7 +115,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `acme`: Cloudflare/Google Cloud DNS/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 - `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
-- `discovery`: signed relay descriptor publication and relay-set synchronization
+- `discovery`: relay descriptor publication over relay HTTPS plus relay-set synchronization
 - `wireguard`: optional relay overlay network used to reach peer relay APIs over internal overlay IPs and keep relay peer state synchronized
 - `Server` additionally owns `quicTunnel` (QUIC listener, ALPN `portal-tunnel`) when UDP transport is enabled
 
@@ -207,6 +207,9 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 ## WireGuard Overlay and Discovery
 
 - Discovery starts from bootstrap relay URLs over normal public HTTPS.
+- Discovery descriptors are currently transport-authenticated by the queried relay endpoint, not by embedded descriptor signatures.
+- Current discovery validation covers protocol version, descriptor normalization, required fields, expiry, target URL/identity matching, and overlay field sanity only.
+- Descriptor `identity.address` is a relay claim inside discovery. Independent `domain -> address` verification comes from optional ENS/DNSSEC evidence, not from the discovery payload itself.
 - Each relay publishes a descriptor over relay HTTPS that may advertise:
   - `wireguard_public_key`
   - `wireguard_endpoint`
