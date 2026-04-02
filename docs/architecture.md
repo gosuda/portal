@@ -82,13 +82,13 @@ Portal has three distinct network roles:
   - `POST /sdk/unregister`
   - `GET /sdk/domain`
 - **Reverse session connection**
-  - `GET /sdk/connect?name=...&address=...`
+  - `GET /sdk/connect`
   - HTTP/1.1 only
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
   - QUIC to the relay URL host:port with ALPN `portal-tunnel`
-  - authenticated by a first-stream control message carrying `identity` + `access_token`
+  - authenticated by a first-stream control message carrying `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
 That distinction matters because `/sdk/connect` stops being ordinary HTTP once hijacked, while the UDP backhaul is a separate internal QUIC carrier.
@@ -164,7 +164,7 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 ### Raw reverse transport (TLS only)
 
 1. SDK/tunnel registers one lease per relay through `POST /sdk/register/challenge` followed by `POST /sdk/register`.
-2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect?name=...&address=...`.
+2. SDK opens one or more reverse sessions per registered lease with `GET /sdk/connect`.
 3. Each relay hijacks `/sdk/connect` requests and places the connection in the per-lease stream ready queue.
 4. While idle, the relay writes `0x00` keepalive markers.
 5. A stream client connects to the relay SNI listener.
@@ -192,7 +192,7 @@ Result: this is a detect-only signal by default. It raises the cost of adaptive 
 2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` and admin has enabled UDP), allocates a UDP port via `PortAllocator`, and creates a `transport.RelayDatagram` for the lease.
 3. Registration response includes `udp_addr` (public UDP endpoint) and `access_token`. There is no separate `quic_addr`; the SDK dials QUIC to the relay URL host:port.
 4. SDK `transport.ClientDatagram` opens a QUIC connection with ALPN `portal-tunnel` and QUIC DATAGRAM support enabled.
-5. Authentication: SDK sends `{identity, access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
+5. Authentication: SDK sends `{access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
 6. External UDP client sends a packet to `udp_addr` -> `RelayDatagram.readLoop` -> `TouchFlow` (assigns flow ID) -> `SendDatagram` -> QUIC DATAGRAM frame.
 7. SDK-side `datagramSession.receiveLoop` decodes frames -> `Listener.AcceptDatagram()` -> `Exposure.AcceptDatagram()` -> `proxyExposureDatagrams` -> local UDP target.
 8. Return path: local response -> `Exposure.SendDatagram()` -> `Listener.SendDatagram()` -> `ClientDatagram.Send()` -> QUIC DATAGRAM -> `RelayDatagram.dispatch()` -> `conn.WriteToUDP` to the original client.
@@ -267,7 +267,7 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 
 ### 2. Reverse Connect
 
-- `GET /sdk/connect?name=...&address=...`
+- `GET /sdk/connect`
 - Requires HTTP/1.1
 - Requires `X-Portal-Access-Token` header with the lease access token
 - Relay validates:
@@ -279,13 +279,13 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
 ### 3. Renew
 
 - `POST /sdk/renew`
-- Requires `identity` + `access_token`
+- Requires `access_token`
 - Extends lease TTL and returns a refreshed `access_token`
 
 ### 4. Unregister
 
 - `POST /sdk/unregister`
-- Requires `identity` + `access_token`
+- Requires `access_token`
 - Removes the lease, routes, and ready reverse sessions
 
 ## Routing Behavior
@@ -373,7 +373,7 @@ Relay-local frontend asset filenames stay in `cmd/relay-server`, not `types/`.
 - Lease-local stream and datagram ownership through per-lease transport runtimes
 - Optional QUIC/UDP datagram transport coexisting with TCP on the same lease
 - Per-lease UDP port allocation with sticky name-based reservation
-- QUIC tunnel authentication via control stream (`identity` + lease access token)
+- QUIC tunnel authentication via control stream (`access_token`)
 
 ## ADRs
 

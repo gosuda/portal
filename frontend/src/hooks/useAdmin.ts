@@ -84,19 +84,11 @@ function toAdminErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function buildIdentityKey(name: string, address: string): string {
-  return `${name.trim().toLowerCase()}:${address.trim().toLowerCase()}`;
-}
-
 function resolveLeaseIdentity(
   rows: AdminLeaseData[],
   identityKey: string
 ): { name: string; address: string } {
-  const match = rows.find((row) => {
-    const name = (row.name || "").trim();
-    const address = row.address.trim();
-    return buildIdentityKey(name, address) === identityKey;
-  });
+  const match = rows.find((row) => row.identity_key.trim() === identityKey);
   if (!match) {
     throw new Error("Missing lease identity");
   }
@@ -128,7 +120,7 @@ function toAdminServer(
     link: hostname ? `https://${hostname}/` : "",
     lastUpdated: row.LastSeenAt || undefined,
     firstSeen: row.FirstSeenAt || undefined,
-    identityKey: buildIdentityKey(serviceName, address),
+    identityKey: row.identity_key.trim(),
     address,
     isBanned: row.IsBanned,
     bps: row.BPS,
@@ -298,15 +290,11 @@ export function useAdmin() {
     const identity = resolveLeaseIdentity(serverData, identityKey);
     const normalizedBPS = Math.max(0, Math.trunc(bps));
     const previousBPS =
-      serverData.find((row) =>
-        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
-        identityKey
-      )?.BPS ?? 0;
+      serverData.find((row) => row.identity_key.trim() === identityKey)?.BPS ?? 0;
 
     setServerData((prev) =>
       prev.map((row) =>
-        buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
-        identityKey
+        row.identity_key.trim() === identityKey
           ? { ...row, BPS: normalizedBPS }
           : row
       )
@@ -328,8 +316,7 @@ export function useAdmin() {
     } catch (err) {
       setServerData((prev) =>
         prev.map((row) =>
-          buildIdentityKey((row.name || "").trim(), row.address.trim()) ===
-          identityKey
+          row.identity_key.trim() === identityKey
             ? { ...row, BPS: previousBPS }
             : row
         )

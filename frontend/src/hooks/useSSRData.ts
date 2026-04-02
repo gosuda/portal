@@ -19,6 +19,7 @@ export interface PublicLeaseData {
 }
 
 export interface AdminLeaseData extends PublicLeaseData {
+  identity_key: string;
   address: string;
   BPS: number;
   ClientIP: string;

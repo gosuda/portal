@@ -307,15 +307,16 @@ func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
 	clientIP := record.ClientIP
 	identityKey := record.Key()
 	return types.AdminLease{
-		Lease:      r.Snapshot(record),
-		Address:    record.Address,
-		BPS:        r.policy.BPSManager().IdentityBPS(identityKey),
-		ClientIP:   clientIP,
-		ReportedIP: record.ReportedIP,
-		IsApproved: r.policy.EffectiveApproval(identityKey),
-		IsBanned:   r.policy.IsIdentityBanned(identityKey),
-		IsDenied:   r.policy.IsIdentityDenied(identityKey),
-		IsIPBanned: r.policy.IPFilter().IsIPBanned(clientIP),
+		Lease:       r.Snapshot(record),
+		IdentityKey: identityKey,
+		Address:     record.Address,
+		BPS:         r.policy.BPSManager().IdentityBPS(identityKey),
+		ClientIP:    clientIP,
+		ReportedIP:  record.ReportedIP,
+		IsApproved:  r.policy.EffectiveApproval(identityKey),
+		IsBanned:    r.policy.IsIdentityBanned(identityKey),
+		IsDenied:    r.policy.IsIdentityDenied(identityKey),
+		IsIPBanned:  r.policy.IPFilter().IsIPBanned(clientIP),
 	}
 }
 

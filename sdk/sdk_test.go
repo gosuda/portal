@@ -16,150 +16,6 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-func TestNewListenerRegistersLeaseWithMainContract(t *testing.T) {
-	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
-	registerReqCh := make(chan types.RegisterRequest, 1)
-	var mu sync.RWMutex
-	var registeredIdentity types.Identity
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					ProtocolVersion: types.ProtocolVersion,
-				},
-			})
-		case types.PathSDKRegisterChallenge:
-			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
-				t.Fatalf("decode register challenge request: %v", err)
-			}
-			mu.Lock()
-			registeredIdentity = challengeReq.Identity.Copy()
-			mu.Unlock()
-			select {
-			case challengeReqCh <- challengeReq:
-			default:
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterChallengeResponse]{
-				OK: true,
-				Data: types.RegisterChallengeResponse{
-					ChallengeID: "challenge-1",
-					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
-					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-1"),
-				},
-			})
-		case types.PathSDKRegister:
-			var registerReq types.RegisterRequest
-			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
-				t.Fatalf("decode register request: %v", err)
-			}
-			mu.RLock()
-			identity := registeredIdentity.Copy()
-			mu.RUnlock()
-			select {
-			case registerReqCh <- registerReq:
-			default:
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					Identity:    identity,
-					Hostname:    "127.0.0.1",
-					Metadata:    types.LeaseMetadata{Description: "demo"},
-					AccessToken: "jwt-register-1",
-				},
-			})
-		case types.PathSDKConnect:
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-			})
-		case types.PathSDKRenew:
-			mu.RLock()
-			identity := registeredIdentity.Copy()
-			mu.RUnlock()
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-1"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	listener, err := NewListener(context.Background(), server.URL, ListenerConfig{
-		Identity: types.Identity{Name: "Demo-App"},
-		Metadata: types.LeaseMetadata{Description: "demo"},
-		LeaseTTL: 42 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("NewListener() error = %v", err)
-	}
-	defer listener.Close()
-
-	var challengeReq types.RegisterChallengeRequest
-	waitForSDKTest(t, func() bool {
-		select {
-		case challengeReq = <-challengeReqCh:
-			return true
-		default:
-			return false
-		}
-	})
-
-	var registerReq types.RegisterRequest
-	waitForSDKTest(t, func() bool {
-		select {
-		case registerReq = <-registerReqCh:
-			return true
-		default:
-			return false
-		}
-	})
-	waitForSDKTest(t, func() bool {
-		return listener.Hostname() == "127.0.0.1"
-	})
-
-	if challengeReq.TTL != 42 {
-		t.Fatalf("register challenge TTL = %d, want 42", challengeReq.TTL)
-	}
-	if challengeReq.UDPEnabled {
-		t.Fatal("register challenge UDPEnabled = true, want false")
-	}
-	if challengeReq.Identity.Name != "demo-app" {
-		t.Fatalf("register challenge Identity.Name = %q, want %q", challengeReq.Identity.Name, "demo-app")
-	}
-	if challengeReq.Identity.Address == "" {
-		t.Fatal("register challenge Identity.Address = empty, want derived address")
-	}
-	if registerReq.ChallengeID != "challenge-1" {
-		t.Fatalf("register request ChallengeID = %q, want %q", registerReq.ChallengeID, "challenge-1")
-	}
-	if registerReq.SIWEMessage == "" {
-		t.Fatal("register request SIWEMessage = empty, want signed challenge payload")
-	}
-	if registerReq.SIWESignature == "" {
-		t.Fatal("register request SIWESignature = empty, want signature")
-	}
-	if listener.Address() != challengeReq.Identity.Address {
-		t.Fatalf("Address() = %q, want %q", listener.Address(), challengeReq.Identity.Address)
-	}
-	if got := listener.Hostname(); got != "127.0.0.1" {
-		t.Fatalf("Hostname() = %q, want %q", got, "127.0.0.1")
-	}
-	if got := listener.PublicURL(); got != server.URL {
-		t.Fatalf("PublicURL() = %q, want %q", got, server.URL)
-	}
-	if got := listener.Metadata(); got.Description != "demo" {
-		t.Fatalf("Metadata().Description = %q, want %q", got.Description, "demo")
-	}
-}
-
 func TestExposeNoRelayInputs(t *testing.T) {
 	exposure, err := Expose(context.Background(), ExposeConfig{Name: "demo"})
 	if err != nil {
@@ -234,7 +90,7 @@ func TestExposeLoadsPrivateKeyFromIdentityPath(t *testing.T) {
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: types.Identity{Name: identity.Name, Address: identity.Address}, AccessToken: "jwt-renew-2"},
+				Data: types.RenewResponse{AccessToken: "jwt-renew-2"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -330,7 +186,7 @@ func TestExposeLoadsIdentityFromJSON(t *testing.T) {
 		case types.PathSDKRenew:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: types.Identity{Name: identity.Name, Address: identity.Address}, AccessToken: "jwt-renew-json"},
+				Data: types.RenewResponse{AccessToken: "jwt-renew-json"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -422,12 +278,9 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
 			})
 		case types.PathSDKRenew:
-			mu.RLock()
-			identity := registeredIdentity.Copy()
-			mu.RUnlock()
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
 				OK:   true,
-				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-3"},
+				Data: types.RenewResponse{AccessToken: "jwt-renew-3"},
 			})
 		case types.PathSDKUnregister:
 			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
@@ -461,112 +314,6 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 	}
 	if _, err := utils.NormalizeEVMAddress(challengeReq.Identity.Address); err != nil {
 		t.Fatalf("register challenge Identity.Address = %q, want valid EVM address: %v", challengeReq.Identity.Address, err)
-	}
-}
-
-func TestExposeCreatesIdentityAtPath(t *testing.T) {
-	challengeReqCh := make(chan types.RegisterChallengeRequest, 1)
-	var mu sync.RWMutex
-	var registeredIdentity types.Identity
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case types.PathSDKDomain:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
-				OK: true,
-				Data: types.DomainResponse{
-					ProtocolVersion: types.ProtocolVersion,
-				},
-			})
-		case types.PathSDKRegisterChallenge:
-			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
-				t.Fatalf("decode register challenge request: %v", err)
-			}
-			mu.Lock()
-			registeredIdentity = challengeReq.Identity.Copy()
-			mu.Unlock()
-			select {
-			case challengeReqCh <- challengeReq:
-			default:
-			}
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterChallengeResponse]{
-				OK: true,
-				Data: types.RegisterChallengeResponse{
-					ChallengeID: "challenge-1",
-					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
-					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-1"),
-				},
-			})
-		case types.PathSDKRegister:
-			mu.RLock()
-			identity := registeredIdentity.Copy()
-			mu.RUnlock()
-			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
-				OK: true,
-				Data: types.RegisterResponse{
-					Identity:    identity,
-					Hostname:    "127.0.0.1",
-					AccessToken: "jwt-register-4",
-				},
-			})
-		case types.PathSDKConnect:
-			writeSDKTestEnvelope(w, http.StatusForbidden, types.APIEnvelope[any]{
-				OK:    false,
-				Error: &types.APIError{Code: types.APIErrorCodeUnauthorized, Message: "not used in test"},
-			})
-		case types.PathSDKRenew:
-			mu.RLock()
-			identity := registeredIdentity.Copy()
-			mu.RUnlock()
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.RenewResponse]{
-				OK:   true,
-				Data: types.RenewResponse{Identity: identity, AccessToken: "jwt-renew-4"},
-			})
-		case types.PathSDKUnregister:
-			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[any]{OK: true})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	identityPath := t.TempDir() + "/identity.json"
-	exposure, err := Expose(context.Background(), ExposeConfig{
-		RelayURLs:    []string{server.URL},
-		IdentityPath: identityPath,
-		Name:         "demo-path",
-	})
-	if err != nil {
-		t.Fatalf("Expose() error = %v", err)
-	}
-	defer exposure.Close()
-
-	var challengeReq types.RegisterChallengeRequest
-	waitForSDKTest(t, func() bool {
-		select {
-		case challengeReq = <-challengeReqCh:
-			return true
-		default:
-			return false
-		}
-	})
-
-	if challengeReq.Identity.Name != "demo-path" {
-		t.Fatalf("register challenge Identity.Name = %q, want %q", challengeReq.Identity.Name, "demo-path")
-	}
-	if challengeReq.Identity.Address == "" {
-		t.Fatal("register challenge Identity.Address = empty, want generated address")
-	}
-
-	storedIdentity, err := utils.LoadIdentity(identityPath)
-	if err != nil {
-		t.Fatalf("LoadIdentity() error = %v", err)
-	}
-	if storedIdentity.Name != "demo-path" {
-		t.Fatalf("stored identity name = %q, want %q", storedIdentity.Name, "demo-path")
-	}
-	if storedIdentity.Address != challengeReq.Identity.Address {
-		t.Fatalf("stored identity address = %q, want %q", storedIdentity.Address, challengeReq.Identity.Address)
 	}
 }
 

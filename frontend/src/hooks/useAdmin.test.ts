@@ -48,6 +48,7 @@ function buildLease(address: string, name: string = "relay-1"): AdminLeaseData {
     ExpiresAt: "2026-03-03T01:00:00Z",
     FirstSeenAt: "2026-03-02T00:00:00Z",
     LastSeenAt: "2026-03-03T00:00:00Z",
+    identity_key: `${name.toLowerCase()}:${address.toLowerCase()}`,
     address,
     name,
     BPS: 1024,

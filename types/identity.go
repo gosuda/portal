@@ -63,14 +63,15 @@ type Lease struct {
 
 type AdminLease struct {
 	Lease
-	Address    string `json:"address,omitempty"`
-	BPS        int64
-	ClientIP   string
-	ReportedIP string
-	IsApproved bool
-	IsBanned   bool
-	IsDenied   bool
-	IsIPBanned bool
+	IdentityKey string `json:"identity_key,omitempty"`
+	Address     string `json:"address,omitempty"`
+	BPS         int64
+	ClientIP    string
+	ReportedIP  string
+	IsApproved  bool
+	IsBanned    bool
+	IsDenied    bool
+	IsIPBanned  bool
 }
 
 type RelayDescriptor struct {
