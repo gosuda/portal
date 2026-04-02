@@ -27,6 +27,7 @@ type AdminSnapshotResponse = {
   landing_page_enabled?: boolean;
   leases?: AdminLeaseData[];
   udp?: { enabled: boolean; max_leases: number };
+  tcp_port?: { enabled: boolean; max_leases: number };
 };
 
 type LeaseActionResult = ApprovalModeResponse;
@@ -44,6 +45,11 @@ export interface AdminServer extends BaseServer {
 }
 
 export interface UDPSettings {
+  enabled: boolean;
+  maxLeases: number;
+}
+
+export interface TCPPortSettings {
   enabled: boolean;
   maxLeases: number;
 }
@@ -156,6 +162,7 @@ interface AdminSnapshot {
   approvalMode: ApprovalMode;
   landingPageEnabled: boolean;
   udpSettings: UDPSettings;
+  tcpPortSettings: TCPPortSettings;
 }
 
 async function loadAdminSnapshot(): Promise<AdminSnapshot> {
@@ -170,6 +177,10 @@ async function loadAdminSnapshot(): Promise<AdminSnapshot> {
       enabled: snapshot?.udp?.enabled ?? false,
       maxLeases: snapshot?.udp?.max_leases ?? 0,
     },
+    tcpPortSettings: {
+      enabled: snapshot?.tcp_port?.enabled ?? false,
+      maxLeases: snapshot?.tcp_port?.max_leases ?? 0,
+    },
   };
 }
 
@@ -178,6 +189,7 @@ export function useAdmin() {
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>("auto");
   const [landingPageEnabled, setLandingPageEnabled] = useState(true);
   const [udpSettings, setUDPSettings] = useState<UDPSettings>({ enabled: false, maxLeases: 0 });
+  const [tcpPortSettings, setTCPPortSettings] = useState<TCPPortSettings>({ enabled: false, maxLeases: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -188,6 +200,7 @@ export function useAdmin() {
     setApprovalMode(snapshot.approvalMode);
     setLandingPageEnabled(snapshot.landingPageEnabled);
     setUDPSettings(snapshot.udpSettings);
+    setTCPPortSettings(snapshot.tcpPortSettings);
   };
 
   const fetchData = async () => {
@@ -349,6 +362,19 @@ export function useAdmin() {
     });
   };
 
+  const handleTCPPortSettingsChange = async (settings: TCPPortSettings) => {
+    await runAdminAction(async () => {
+      const response = await apiClient.post<{ enabled: boolean; max_leases: number }>(
+        API_PATHS.admin.tcpPortSettings,
+        { enabled: settings.enabled, max_leases: settings.maxLeases }
+      );
+      setTCPPortSettings({
+        enabled: response?.enabled ?? settings.enabled,
+        maxLeases: response?.max_leases ?? settings.maxLeases,
+      });
+    });
+  };
+
   const handleLandingPageEnabledChange = async (enabled: boolean) => {
     await runAdminAction(async () => {
       const response = await apiClient.post<LandingPageSettingsResponse>(
@@ -424,6 +450,7 @@ export function useAdmin() {
     approvalMode,
     landingPageEnabled,
     udpSettings,
+    tcpPortSettings,
     loading,
     error,
     handleBanFilterChange,
@@ -432,6 +459,7 @@ export function useAdmin() {
     handleApprovalModeChange,
     handleLandingPageEnabledChange,
     handleUDPSettingsChange,
+    handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,

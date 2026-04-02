@@ -26,15 +26,17 @@ import (
 )
 
 var (
-	errFeatureUnavailable  = errors.New(types.APIErrorCodeFeatureUnavailable)
-	errHostnameConflict    = errors.New(types.APIErrorCodeHostnameConflict)
-	errIPBanned            = errors.New(types.APIErrorCodeIPBanned)
-	errLeaseNotFound       = errors.New(types.APIErrorCodeLeaseNotFound)
-	errLeaseRejected       = errors.New(types.APIErrorCodeLeaseRejected)
-	errTransportMismatch   = errors.New(types.APIErrorCodeTransportMismatch)
-	errUnauthorized        = errors.New(types.APIErrorCodeUnauthorized)
-	errUDPDisabled         = errors.New(types.APIErrorCodeUDPDisabled)
-	errUDPCapacityExceeded = errors.New(types.APIErrorCodeUDPCapacityExceeded)
+	errFeatureUnavailable      = errors.New(types.APIErrorCodeFeatureUnavailable)
+	errHostnameConflict        = errors.New(types.APIErrorCodeHostnameConflict)
+	errIPBanned                = errors.New(types.APIErrorCodeIPBanned)
+	errLeaseNotFound           = errors.New(types.APIErrorCodeLeaseNotFound)
+	errLeaseRejected           = errors.New(types.APIErrorCodeLeaseRejected)
+	errTransportMismatch       = errors.New(types.APIErrorCodeTransportMismatch)
+	errUnauthorized            = errors.New(types.APIErrorCodeUnauthorized)
+	errUDPDisabled             = errors.New(types.APIErrorCodeUDPDisabled)
+	errUDPCapacityExceeded     = errors.New(types.APIErrorCodeUDPCapacityExceeded)
+	errTCPPortDisabled         = errors.New(types.APIErrorCodeTCPPortDisabled)
+	errTCPPortCapacityExceeded = errors.New(types.APIErrorCodeTCPPortCapacityExceeded)
 )
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
@@ -155,8 +157,9 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:           now.Add(2 * types.DiscoveryPollInterval),
 		APIHTTPSAddr:        s.cfg.PortalURL,
 		IngressTLSAddr:      ingressAddr,
-		SupportsTCP:         true,
+		SupportsTLS:         true,
 		SupportsUDP:         s.cfg.UDPPortCount > 0,
+		SupportsTCP:         s.cfg.TCPPortCount > 0,
 		SupportsOverlayPeer: supportsOverlayPeer,
 		WireGuardPublicKey:  s.wgConfig.PublicKey,
 		WireGuardEndpoint:   s.wgConfig.Endpoint,
@@ -234,6 +237,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
 		case errors.Is(err, errUDPCapacityExceeded):
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
+		case errors.Is(err, errTCPPortDisabled):
+			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled, err.Error())
+		case errors.Is(err, errTCPPortCapacityExceeded):
+			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTCPPortCapacityExceeded, err.Error())
 		default:
 			utils.InvalidRequestError(err).Write(w)
 		}
@@ -272,6 +279,10 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 	}).String()
 
 	if req.UDPEnabled && (s.cfg.UDPPortCount <= 0 || s.group != nil && s.quicTunnel == nil) {
+		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
+		return
+	}
+	if req.TCPEnabled && s.cfg.TCPPortCount <= 0 {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -556,6 +567,17 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 			return types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
+	if req.TCPEnabled {
+		if s.cfg.TCPPortCount <= 0 {
+			return types.RegisterResponse{}, errFeatureUnavailable
+		}
+		if !s.registry.policy.IsTCPPortEnabled() {
+			return types.RegisterResponse{}, errTCPPortDisabled
+		}
+		if max := s.registry.policy.TCPPortMaxLeases(); max > 0 && s.registry.CountTCPPortLeases() >= max {
+			return types.RegisterResponse{}, errTCPPortCapacityExceeded
+		}
+	}
 	accessToken, claims, err := auth.IssueLeaseAccessToken(s.identity.PrivateKey, s.identity.Address, s.cfg.PortalURL, identity, ttl)
 	if err != nil {
 		return types.RegisterResponse{}, err
@@ -563,6 +585,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	issuedAt := claims.IssuedAt.Time().UTC()
 	expiresAt := claims.Expiry.Time().UTC()
 	identityKey := identity.Key()
+	stream := transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit)
 	record := &leaseRecord{
 		Identity:    identity,
 		Hostname:    hostname,
@@ -573,7 +596,8 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		ClientIP:    clientIP,
 		ReportedIP:  utils.SanitizeReportedIP(reportedIP),
 		UDPEnabled:  req.UDPEnabled,
-		stream:      transport.NewRelayStream(identityKey, defaultIdleKeepalive, defaultReadyQueueLimit),
+		TCPEnabled:  req.TCPEnabled,
+		stream:      stream,
 	}
 	if req.UDPEnabled {
 		if s.ports == nil {
@@ -585,6 +609,17 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		}
 		record.datagram = transport.NewRelayDatagram(identityKey, port)
 		record.ports = s.ports
+	}
+	if req.TCPEnabled {
+		if s.tcpPorts == nil {
+			return types.RegisterResponse{}, errors.New("tcp port allocation not available")
+		}
+		port, err := s.tcpPorts.Allocate(identity.Name)
+		if err != nil {
+			return types.RegisterResponse{}, err
+		}
+		record.tcpPort = transport.NewRelayTCPPort(identityKey, port, stream)
+		record.tcpPorts = s.tcpPorts
 	}
 
 	if err := record.Start(); err != nil {
@@ -610,9 +645,13 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		ExpiresAt:   expiresAt,
 		AccessToken: accessToken,
 		UDPEnabled:  record.UDPEnabled,
+		TCPEnabled:  record.TCPEnabled,
 	}
 	if record.datagram != nil {
 		resp.UDPAddr = fmt.Sprintf("%s:%d", s.identity.Name, record.datagram.UDPPort())
+	}
+	if record.tcpPort != nil {
+		resp.TCPAddr = fmt.Sprintf("%s:%d", s.identity.Name, record.tcpPort.TCPPort())
 	}
 
 	return resp, nil

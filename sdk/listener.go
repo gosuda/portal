@@ -24,6 +24,7 @@ import (
 type ListenerConfig struct {
 	Identity         types.Identity
 	UDPEnabled       bool
+	TCPEnabled       bool
 	BanMITM          bool
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
@@ -56,15 +57,16 @@ type Listener struct {
 	closeOnce    sync.Once
 	registerOnce sync.Once
 
-	banMITM   bool
-	identity  types.Identity
-	relaySet  *discovery.RelaySet
-	mu        sync.Mutex
-	hostname  string
-	udpAddr   string
-	metadata  types.LeaseMetadata
-	tlsConfig *tls.Config
-	tlsCloser io.Closer
+	banMITM    bool
+	tcpEnabled bool
+	identity   types.Identity
+	relaySet   *discovery.RelaySet
+	mu         sync.Mutex
+	hostname   string
+	udpAddr    string
+	metadata   types.LeaseMetadata
+	tlsConfig  *tls.Config
+	tlsCloser  io.Closer
 }
 
 // NewListener creates one relay listener and its dedicated relay transport for one relay URL.
@@ -95,6 +97,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		identity:    api.identity.Copy(),
 		metadata:    cfg.Metadata.Copy(),
 		banMITM:     cfg.BanMITM,
+		tcpEnabled:  cfg.TCPEnabled,
 		relaySet:    cfg.relaySet,
 	}
 	l.mitmManager = newMITMManager(listenerCtx, l)
@@ -441,7 +444,7 @@ func (l *Listener) renewLease(ctx context.Context) error {
 }
 
 func (l *Listener) registerAndConfigure(ctx context.Context) error {
-	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil)
+	resp, err := l.api.registerLease(ctx, l.leaseTTL, l.datagram != nil, l.tcpEnabled)
 	if err != nil {
 		return err
 	}

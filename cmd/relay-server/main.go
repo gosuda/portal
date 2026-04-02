@@ -35,6 +35,7 @@ type relayServerConfig struct {
 	APIPort             int
 	SNIPort             int
 	UDPPortCount        int
+	TCPPortCount        int
 	LandingPageEnabled  bool
 	Bootstraps          string
 	DiscoveryEnabled    bool
@@ -69,6 +70,7 @@ func runServeCommand(args []string) error {
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
 	utils.IntFlagEnv(fs, &cfg.UDPPortCount, "udp-port-count", 0, utils.ParseNonNegativeInt, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled)", "UDP_PORT_COUNT")
+	utils.IntFlagEnv(fs, &cfg.TCPPortCount, "tcp-port-count", 0, utils.ParseNonNegativeInt, "Number of TCP ports to allocate for raw TCP leases, starting at port 40000 (0=disabled)", "TCP_PORT_COUNT")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
@@ -117,6 +119,7 @@ func runServeCommand(args []string) error {
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
+		Bool("tcp_port_enabled", cfg.TCPPortCount > 0).
 		Msg("configured relay server")
 
 	ctx, stop := utils.SignalContext()
@@ -159,6 +162,7 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
 		UDPPortCount:      cfg.UDPPortCount,
+		TCPPortCount:      cfg.TCPPortCount,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)

@@ -67,6 +67,7 @@ type RegisterChallengeRequest struct {
 	Metadata   LeaseMetadata `json:"metadata"`
 	TTL        int           `json:"ttl,omitempty"`
 	UDPEnabled bool          `json:"udp_enabled,omitempty"`
+	TCPEnabled bool          `json:"tcp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
@@ -82,6 +83,8 @@ type RegisterResponse struct {
 	AccessToken string    `json:"access_token"`
 	UDPAddr     string    `json:"udp_addr,omitempty"`
 	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
+	TCPAddr     string    `json:"tcp_addr,omitempty"`
+	TCPEnabled  bool      `json:"tcp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
@@ -140,10 +143,11 @@ type AdminAuthStatusResponse struct {
 }
 
 type AdminSnapshotResponse struct {
-	ApprovalMode       string                   `json:"approval_mode"`
-	LandingPageEnabled bool                     `json:"landing_page_enabled"`
-	Leases             []AdminLease             `json:"leases,omitempty"`
-	UDP                AdminUDPSettingsResponse `json:"udp"`
+	ApprovalMode       string                       `json:"approval_mode"`
+	LandingPageEnabled bool                         `json:"landing_page_enabled"`
+	Leases             []AdminLease                 `json:"leases,omitempty"`
+	UDP                AdminUDPSettingsResponse     `json:"udp"`
+	TCPPort            AdminTCPPortSettingsResponse `json:"tcp_port"`
 }
 
 type AdminApprovalModeRequest struct {
@@ -172,6 +176,16 @@ type AdminUDPSettingsRequest struct {
 }
 
 type AdminUDPSettingsResponse struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+type AdminTCPPortSettingsRequest struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+type AdminTCPPortSettingsResponse struct {
 	Enabled   bool `json:"enabled"`
 	MaxLeases int  `json:"max_leases"`
 }

@@ -21,6 +21,7 @@ export function Admin() {
     approvalMode,
     landingPageEnabled,
     udpSettings,
+    tcpPortSettings,
     favorites,
     loading,
     error,
@@ -35,6 +36,7 @@ export function Admin() {
     handleApprovalModeChange,
     handleLandingPageEnabledChange,
     handleUDPSettingsChange,
+    handleTCPPortSettingsChange,
     handleApproveStatus,
     handleDenyStatus,
     handleIPBanStatus,
@@ -92,12 +94,14 @@ export function Admin() {
         approvalMode={approvalMode}
         landingPageEnabled={landingPageEnabled}
         udpSettings={udpSettings}
+        tcpPortSettings={tcpPortSettings}
         onBanFilterChange={handleBanFilterChange}
         onBanStatusChange={handleBanStatus}
         onBPSChange={handleBPSChange}
         onApprovalModeChange={handleApprovalModeChange}
         onLandingPageEnabledChange={handleLandingPageEnabledChange}
         onUDPSettingsChange={handleUDPSettingsChange}
+        onTCPPortSettingsChange={handleTCPPortSettingsChange}
         onApproveStatusChange={handleApproveStatus}
         onDenyStatusChange={handleDenyStatus}
         onIPBanStatusChange={handleIPBanStatus}

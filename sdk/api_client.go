@@ -83,7 +83,7 @@ func (a *apiClient) close() {
 	}
 }
 
-func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled bool) (types.RegisterResponse, error) {
+func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEnabled, tcpEnabled bool) (types.RegisterResponse, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return types.RegisterResponse{}, err
 	}
@@ -94,6 +94,7 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		Metadata:   a.metadata.Copy(),
 		TTL:        int(ttl / time.Second),
 		UDPEnabled: udpEnabled,
+		TCPEnabled: tcpEnabled,
 	}
 	if err := utils.HTTPDoAPIPath(ctx, a.httpClient, a.baseURL, http.MethodPost, types.PathSDKRegisterChallenge, challengeReq, nil, &challenge); err != nil {
 		return types.RegisterResponse{}, err

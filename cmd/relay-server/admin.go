@@ -185,6 +185,10 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				Enabled:   runtime.IsUDPEnabled(),
 				MaxLeases: runtime.UDPMaxLeases(),
 			},
+			TCPPort: types.AdminTCPPortSettingsResponse{
+				Enabled:   runtime.IsTCPPortEnabled(),
+				MaxLeases: runtime.TCPPortMaxLeases(),
+			},
 		})
 	case types.PathAdminLandingPage:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
@@ -216,6 +220,24 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		utils.WriteAPIData(w, http.StatusOK, types.AdminUDPSettingsResponse{
 			Enabled:   runtime.IsUDPEnabled(),
 			MaxLeases: runtime.UDPMaxLeases(),
+		})
+	case types.PathAdminTCPPort:
+		if !utils.RequireMethod(w, r, http.MethodPost) {
+			return
+		}
+		req, ok := utils.DecodeJSONRequestAs[types.AdminTCPPortSettingsRequest](w, r, 1<<16, invalidRequestBody)
+		if !ok {
+			return
+		}
+		if req.MaxLeases < 0 {
+			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
+			return
+		}
+		runtime.SetTCPPortPolicy(req.Enabled, req.MaxLeases)
+		saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
+		utils.WriteAPIData(w, http.StatusOK, types.AdminTCPPortSettingsResponse{
+			Enabled:   runtime.IsTCPPortEnabled(),
+			MaxLeases: runtime.TCPPortMaxLeases(),
 		})
 	case types.PathAdminApproval:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
@@ -412,6 +434,8 @@ func saveAdminState(path string, runtime *policy.Runtime, landingPageEnabled boo
 	approver := runtime.Approver()
 	udpEnabled := runtime.IsUDPEnabled()
 	udpMaxLeases := runtime.UDPMaxLeases()
+	tcpPortEnabled := runtime.IsTCPPortEnabled()
+	tcpPortMaxLeases := runtime.TCPPortMaxLeases()
 	payload := persistedAdminState{
 		ApprovalMode:         string(approver.Mode()),
 		ApprovedIdentityKeys: approver.ApprovedKeys(),
@@ -421,6 +445,8 @@ func saveAdminState(path string, runtime *policy.Runtime, landingPageEnabled boo
 		IdentityBPS:          runtime.BPSManager().IdentityBPSLimits(),
 		UDPEnabled:           &udpEnabled,
 		UDPMaxLeases:         &udpMaxLeases,
+		TCPPortEnabled:       &tcpPortEnabled,
+		TCPPortMaxLeases:     &tcpPortMaxLeases,
 		LandingPageEnabled:   &landingPageEnabled,
 	}
 	_ = utils.WriteJSONFile(path, payload, 0o600)
@@ -435,6 +461,8 @@ type persistedAdminState struct {
 	IdentityBPS          map[string]int64 `json:"identity_bps,omitempty"`
 	UDPEnabled           *bool            `json:"udp_enabled,omitempty"`
 	UDPMaxLeases         *int             `json:"udp_max_leases,omitempty"`
+	TCPPortEnabled       *bool            `json:"tcp_port_enabled,omitempty"`
+	TCPPortMaxLeases     *int             `json:"tcp_port_max_leases,omitempty"`
 	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
@@ -461,6 +489,14 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 		runtime.SetUDPPolicy(*s.UDPEnabled, runtime.UDPMaxLeases())
 	case s.UDPMaxLeases != nil:
 		runtime.SetUDPPolicy(runtime.IsUDPEnabled(), *s.UDPMaxLeases)
+	}
+	switch {
+	case s.TCPPortEnabled != nil && s.TCPPortMaxLeases != nil:
+		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, *s.TCPPortMaxLeases)
+	case s.TCPPortEnabled != nil:
+		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, runtime.TCPPortMaxLeases())
+	case s.TCPPortMaxLeases != nil:
+		runtime.SetTCPPortPolicy(runtime.IsTCPPortEnabled(), *s.TCPPortMaxLeases)
 	}
 	return nil
 }

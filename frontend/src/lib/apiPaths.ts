@@ -10,6 +10,7 @@ export const API_PATHS = {
     approvalMode: "/admin/settings/approval-mode",
     landingPage: "/admin/settings/landing-page",
     udpSettings: "/admin/settings/udp",
+    tcpPortSettings: "/admin/settings/tcp-port",
   },
   sdk: {
     prefix: "/sdk",

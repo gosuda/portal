@@ -12,6 +12,8 @@ services:
       # Uncomment below when enabling UDP transport (UDP_PORT_COUNT > 0):
       # - "${SNI_PORT:-443}:${SNI_PORT:-443}/udp"
       # - "50000-50009:50000-50009/udp"  # adjust range to match UDP_PORT_COUNT
+      # Uncomment below when enabling raw TCP port transport (TCP_PORT_COUNT > 0):
+      # - "40000-40009:40000-40009"  # adjust range to match TCP_PORT_COUNT
     environment:
       # Public routing, discovery, and relay identity persistence
       PORTAL_URL: ${PORTAL_URL:-https://localhost:${API_PORT:-4017}}
@@ -28,6 +30,8 @@ services:
 
       # UDP transport (0 = disabled, set count > 0 to enable QUIC tunnel + UDP ports)
       UDP_PORT_COUNT: ${UDP_PORT_COUNT:-0}
+      # Raw TCP port transport (0 = disabled, set count > 0 to allocate TCP ports for non-TLS services)
+      TCP_PORT_COUNT: ${TCP_PORT_COUNT:-0}
 
       # Admin/auth configuration
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}

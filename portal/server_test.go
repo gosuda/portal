@@ -56,7 +56,7 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 		WireGuardPublicKey:  wireGuardPublicKey,
 		WireGuardEndpoint:   net.JoinHostPort(utils.PortalRootHost(relayURL), "51820"),
 		OverlayIPv4:         overlayIPv4,
-		SupportsTCP:         true,
+		SupportsTLS:         true,
 		SupportsOverlayPeer: true,
 	})
 	if err != nil {

@@ -133,6 +133,15 @@ func (s *ClientStream) runSession(
 				onReady()
 			}
 			return true, nil
+		case types.MarkerRawTCPStart:
+			if err := s.activateRaw(ctx, conn); err != nil {
+				_ = conn.Close()
+				return true, err
+			}
+			if onReady != nil {
+				onReady()
+			}
+			return true, nil
 		default:
 			_ = conn.Close()
 			return false, fmt.Errorf("unexpected reverse marker: 0x%02x", marker[0])
@@ -161,6 +170,16 @@ func (s *ClientStream) activate(ctx context.Context, conn net.Conn, currentTLSCo
 		_ = tlsConn.Close()
 		return ctx.Err()
 	case s.accepted <- tlsConn:
+		return nil
+	}
+}
+
+func (s *ClientStream) activateRaw(ctx context.Context, conn net.Conn) error {
+	select {
+	case <-ctx.Done():
+		_ = conn.Close()
+		return ctx.Err()
+	case s.accepted <- conn:
 		return nil
 	}
 }

@@ -8,4 +8,5 @@ const (
 	HeaderAccessToken = "X-Portal-Access-Token"
 	MarkerKeepalive   = byte(0x00)
 	MarkerTLSStart    = byte(0x02)
+	MarkerRawTCPStart = byte(0x03)
 )
