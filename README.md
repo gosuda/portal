@@ -16,6 +16,19 @@
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
 - **Raw TCP and UDP transport**: Native TCP reverse sessions with optional UDP (no SSH or WebSocket)
 
+## Comparison
+
+| Feature | Portal | ngrok | Cloudflare Tunnel | frp |
+|---------|--------|-------|-------------------|-----|
+| End-to-end encryption | **Yes** — TLS terminates on your side | Optional — TLS passthrough available, but edge termination by default | No — Cloudflare always decrypts at edge | Tunnel TLS only — client↔server encryption, not end-to-end |
+| Account required | **No** — SIWE-based ownership | Yes | Yes | No |
+| Self-hostable relay | **Yes** | Enterprise only | No | Yes |
+| MITM detection | **Yes** — built-in TLS exporter check | No | No | No |
+| Multi-relay failover | **Yes** | Managed by ngrok | Yes — built-in multi-DC | No |
+| Custom domain | **Yes** | Paid plans only | Yes | Yes |
+| Open source | **Yes** — MIT | No | Client only (cloudflared, Apache 2.0) | Yes — Apache 2.0 |
+| Transport | Raw TCP / UDP | HTTP/S, TCP, TLS | HTTP/S, TCP, UDP (private network) | HTTP/S, TCP, UDP |
+
 ## Quick Start
 
 ### Expose your local app:
