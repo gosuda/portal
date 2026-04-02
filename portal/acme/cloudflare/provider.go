@@ -124,6 +124,64 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	return nil
 }
 
+func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+	publicIPv4 = strings.TrimSpace(publicIPv4)
+
+	zoneID, err := findZoneID(ctx, p.token, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+	if err := ensureDNSRecord(ctx, p.token, zoneID, name, "A", publicIPv4); err != nil {
+		return fmt.Errorf("ensure A record for %s: %w", name, err)
+	}
+	return nil
+}
+
+func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+	if p == nil {
+		return errors.New("cloudflare provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if p.token == "" {
+		return errors.New("cloudflare token is required")
+	}
+
+	zoneID, err := findZoneID(ctx, p.token, name)
+	if err != nil {
+		return fmt.Errorf("find cloudflare zone: %w", err)
+	}
+
+	records, err := listDNSRecords(ctx, p.token, zoneID, name, "A")
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if !strings.EqualFold(record.Name, name) {
+			continue
+		}
+		if err := deleteDNSRecord(ctx, p.token, zoneID, record.ID); err != nil {
+			return fmt.Errorf("delete A record %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("cloudflare provider is nil")

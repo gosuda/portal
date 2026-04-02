@@ -404,6 +404,9 @@ func (m *Manager) syncENSGasless(ctx context.Context) error {
 	if err := m.SyncENSGaslessHostname(ctx, m.cfg.BaseDomain, m.cfg.ENSGaslessAddress); err != nil {
 		return fmt.Errorf("ensure ens gasless txt: %w", err)
 	}
+	if err := m.syncTrackedENSGaslessHostARecords(ctx); err != nil {
+		return err
+	}
 	m.ensLogOnce.Do(func() {
 		log.Info().
 			Str("provider", m.dns.Name()).
@@ -434,6 +437,9 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if err != nil {
 		return fmt.Errorf("normalize ens gasless address: %w", err)
 	}
+	if err := m.syncENSGaslessHostnameARecord(ctx, hostname); err != nil {
+		return err
+	}
 	if err := m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address)); err != nil {
 		return err
 	}
@@ -463,6 +469,9 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 		return err
 	}
+	if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+		return err
+	}
 	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
 		filtered := hostnames[:0]
 		for _, tracked := range hostnames {
@@ -487,6 +496,11 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
 				remaining = append(remaining, hostname)
 				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
+				continue
+			}
+			if err := m.dns.DeleteARecord(ctx, hostname); err != nil {
+				remaining = append(remaining, hostname)
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless A record for %s: %w", hostname, err))
 			}
 		}
 		return remaining
@@ -494,6 +508,53 @@ func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist ens gasless hostnames: %w", err))
 	}
 	return cleanupErr
+}
+
+func (m *Manager) syncTrackedENSGaslessHostARecords(ctx context.Context) error {
+	hostnames, err := m.trackedENSGaslessHostnames()
+	if err != nil || len(hostnames) == 0 {
+		return err
+	}
+
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip: %w", err)
+	}
+	for _, hostname := range hostnames {
+		if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
+			return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) syncENSGaslessHostnameARecord(ctx context.Context, hostname string) error {
+	hostname = utils.NormalizeHostname(hostname)
+	if hostname == "" || hostname == m.cfg.BaseDomain {
+		return nil
+	}
+
+	publicIP, err := utils.ResolvePublicIPv4(ctx)
+	if err != nil {
+		return fmt.Errorf("detect public ip: %w", err)
+	}
+	if err := m.dns.EnsureARecord(ctx, hostname, publicIP); err != nil {
+		return fmt.Errorf("ensure ens gasless A record for %s: %w", hostname, err)
+	}
+	return nil
+}
+
+func (m *Manager) trackedENSGaslessHostnames() ([]string, error) {
+	if m == nil {
+		return nil, nil
+	}
+
+	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
+	var hostnames []string
+	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
+		return nil, err
+	}
+	return utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain), nil
 }
 
 func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
@@ -505,11 +566,10 @@ func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []strin
 	defer m.trackedMu.Unlock()
 
 	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
-	var hostnames []string
-	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
+	hostnames, err := m.trackedENSGaslessHostnames()
+	if err != nil {
 		return err
 	}
-	hostnames = utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain)
 	if update != nil {
 		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
 	}

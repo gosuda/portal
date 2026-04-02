@@ -109,6 +109,64 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	return nil
 }
 
+func (p *Provider) EnsureARecord(ctx context.Context, name, publicIPv4 string) error {
+	if p == nil {
+		return errors.New("route53 provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+	if err := utils.ValidateIPv4(publicIPv4); err != nil {
+		return err
+	}
+
+	client, err := newClient(ctx, p.cfg)
+	if err != nil {
+		return err
+	}
+
+	hostedZoneID, err := findHostedZoneID(ctx, client, name, p.cfg.HostedZoneID)
+	if err != nil {
+		return err
+	}
+	if err := upsertARecord(ctx, client, hostedZoneID, name, publicIPv4); err != nil {
+		return fmt.Errorf("upsert route53 A record %s: %w", name, err)
+	}
+	return nil
+}
+
+func (p *Provider) DeleteARecord(ctx context.Context, name string) error {
+	if p == nil {
+		return errors.New("route53 provider is nil")
+	}
+	name = utils.NormalizeHostname(name)
+	if name == "" {
+		return errors.New("record name is required")
+	}
+
+	client, err := newClient(ctx, p.cfg)
+	if err != nil {
+		return err
+	}
+
+	hostedZoneID, err := findHostedZoneID(ctx, client, name, p.cfg.HostedZoneID)
+	if err != nil {
+		return err
+	}
+	recordSet, err := getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeA)
+	if err != nil {
+		return err
+	}
+	if recordSet == nil {
+		return nil
+	}
+	if err := deleteRecordSet(ctx, client, hostedZoneID, recordSet, "Managed by Portal ENS cleanup"); err != nil {
+		return fmt.Errorf("delete route53 A record %s: %w", name, err)
+	}
+	return nil
+}
+
 func (p *Provider) EnsureTXTRecord(ctx context.Context, name, value string) error {
 	if p == nil {
 		return errors.New("route53 provider is nil")
@@ -396,6 +454,10 @@ func route53TXTContent(value string) string {
 }
 
 func getTXTRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string) (*route53types.ResourceRecordSet, error) {
+	return getRecordSet(ctx, client, hostedZoneID, name, route53types.RRTypeTxt)
+}
+
+func getRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneID, name string, recordType route53types.RRType) (*route53types.ResourceRecordSet, error) {
 	if client == nil {
 		return nil, errors.New("route53 client is nil")
 	}
@@ -407,7 +469,7 @@ func getTXTRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneI
 	out, err := client.ListResourceRecordSets(ctx, &awsroute53.ListResourceRecordSetsInput{
 		HostedZoneId:    aws.String(hostedZoneID),
 		StartRecordName: aws.String(fqdn),
-		StartRecordType: route53types.RRTypeTxt,
+		StartRecordType: recordType,
 		MaxItems:        aws.Int32(1),
 	})
 	if err != nil {
@@ -417,7 +479,7 @@ func getTXTRecordSet(ctx context.Context, client *awsroute53.Client, hostedZoneI
 		return nil, nil
 	}
 	recordSet := out.ResourceRecordSets[0]
-	if !strings.EqualFold(strings.TrimSpace(aws.ToString(recordSet.Name)), fqdn) || recordSet.Type != route53types.RRTypeTxt {
+	if !strings.EqualFold(strings.TrimSpace(aws.ToString(recordSet.Name)), fqdn) || recordSet.Type != recordType {
 		return nil, nil
 	}
 	return &recordSet, nil

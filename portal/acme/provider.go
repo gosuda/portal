@@ -23,6 +23,8 @@ type DNSProvider interface {
 	Name() string
 	ChallengeProvider(ctx context.Context) (challenge.Provider, error)
 	EnsureARecords(ctx context.Context, baseDomain, publicIPv4 string) error
+	EnsureARecord(ctx context.Context, name, publicIPv4 string) error
+	DeleteARecord(ctx context.Context, name string) error
 	EnsureTXTRecord(ctx context.Context, name, value string) error
 	DeleteTXTRecords(ctx context.Context, name, matchPrefix string) error
 	EnsureDNSSEC(ctx context.Context, baseDomain string) (types.DNSSECStatus, error)
