@@ -99,7 +99,7 @@ func (p *Provider) EnsureARecords(ctx context.Context, baseDomain, publicIPv4 st
 	if p == nil {
 		return errors.New("cloudflare provider is nil")
 	}
-	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
+	baseDomain = utils.NormalizeBaseDomain(baseDomain)
 	if baseDomain == "" {
 		return errors.New("base domain is required")
 	}
@@ -190,7 +190,7 @@ func (p *Provider) EnsureDNSSEC(ctx context.Context, baseDomain string) (types.D
 	if p == nil {
 		return types.DNSSECStatus{}, errors.New("cloudflare provider is nil")
 	}
-	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
+	baseDomain = utils.NormalizeBaseDomain(baseDomain)
 	if baseDomain == "" {
 		return types.DNSSECStatus{}, errors.New("base domain is required")
 	}

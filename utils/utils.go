@@ -2,7 +2,10 @@ package utils
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -184,6 +187,34 @@ func NormalizeHostname(host string) string {
 	return host
 }
 
+func NormalizeBaseDomain(domain string) string {
+	return strings.TrimPrefix(NormalizeHostname(domain), "*.")
+}
+
+func HostnameMatchesBaseDomain(hostname, baseDomain string) bool {
+	hostname = NormalizeHostname(hostname)
+	baseDomain = NormalizeBaseDomain(baseDomain)
+	if hostname == "" || baseDomain == "" {
+		return false
+	}
+	return hostname == baseDomain || strings.HasSuffix(hostname, "."+baseDomain)
+}
+
+func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	baseDomain = NormalizeBaseDomain(baseDomain)
+	return normalizeUniqueStrings(inputs, func(input string) string {
+		hostname := NormalizeHostname(input)
+		if hostname == "" || hostname == baseDomain || !HostnameMatchesBaseDomain(hostname, baseDomain) {
+			return ""
+		}
+		return hostname
+	})
+}
+
 // NormalizeURLPath canonicalizes URL paths to a rooted, slash-trimmed form.
 func NormalizeURLPath(raw string) string {
 	clean := path.Clean(strings.TrimSpace(raw))
@@ -216,7 +247,7 @@ func NormalizeRelayURLs(inputs ...string) ([]string, error) {
 		}
 	}
 
-	return uniqueURLs(out), nil
+	return normalizeUniqueStrings(out, strings.TrimSpace), nil
 }
 
 func FilterRelayURLs(inputs, excluded []string) []string {
@@ -332,30 +363,6 @@ func ExcludeLocalRelayURLs(inputs ...string) ([]string, error) {
 		return nil, nil
 	}
 	return filtered, nil
-}
-
-func uniqueURLs(inputs []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		input = strings.TrimSpace(input)
-		if input == "" {
-			continue
-		}
-		if _, ok := seen[input]; ok {
-			continue
-		}
-		seen[input] = struct{}{}
-		out = append(out, input)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 func LeaseHostname(name, rootHost string) (string, error) {
@@ -526,6 +533,28 @@ func ParseCertificatePEM(pemData []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(block.Bytes)
 }
 
+func ParsePrivateKeyPEM(keyPEM []byte) (crypto.PrivateKey, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, errors.New("invalid private key pem")
+	}
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		switch typed := key.(type) {
+		case *ecdsa.PrivateKey:
+			return typed, nil
+		case *rsa.PrivateKey:
+			return typed, nil
+		}
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, errors.New("unsupported private key type")
+}
+
 func SleepOrDone(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -547,26 +576,39 @@ func RandomID(prefix string) string {
 }
 
 func NormalizeIPPrefixes(inputs []string) []string {
-	if len(inputs) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(inputs))
-	out := make([]string, 0, len(inputs))
-	for _, input := range inputs {
+	return normalizeUniqueStrings(inputs, func(input string) string {
 		input = strings.TrimSpace(input)
 		if input == "" {
-			continue
+			return ""
 		}
 		prefix, err := netip.ParsePrefix(input)
 		if err != nil {
+			return ""
+		}
+		return prefix.String()
+	})
+}
+
+func normalizeUniqueStrings(inputs []string, normalize func(string) string) []string {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		normalized := normalize(input)
+		if normalized == "" {
 			continue
 		}
-		normalized := prefix.String()
 		if _, ok := seen[normalized]; ok {
 			continue
 		}
 		seen[normalized] = struct{}{}
 		out = append(out, normalized)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

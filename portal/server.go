@@ -284,6 +284,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		for _, lease := range s.registry.CloseAll() {
 			if lease != nil {
+				if s.acmeManager != nil {
+					deleteCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+					if err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, lease.Hostname); err != nil {
+						log.Warn().
+							Err(err).
+							Str("hostname", lease.Hostname).
+							Str("address", lease.Address).
+							Msg("delete lease ens gasless txt during shutdown")
+					}
+					cancel()
+				}
 				lease.Close()
 			}
 		}

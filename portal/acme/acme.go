@@ -6,9 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -28,16 +26,17 @@ import (
 )
 
 const (
-	fullChainFileName         = "fullchain.pem"
-	keyFileName               = "privatekey.pem"
-	accountKeyFileName        = "acme-account.key"
-	registrationFileName      = "acme-registration.json"
-	gaslessENSTXTPrefix       = "ENS1 "
-	defaultENSGaslessResolver = "0x238A8F792dFA6033814B18618aD4100654aeef01"
-	defaultACMEEmailPrefix    = "acme@"
-	defaultRenewInterval      = 24 * time.Hour
-	defaultDNSSyncInterval    = 10 * time.Minute
-	defaultSyncTimeout        = 2 * time.Minute
+	fullChainFileName           = "fullchain.pem"
+	keyFileName                 = "privatekey.pem"
+	accountKeyFileName          = "acme-account.key"
+	registrationFileName        = "acme-registration.json"
+	ensGaslessHostnamesFileName = "ens-gasless-hostnames.json"
+	gaslessENSTXTPrefix         = "ENS1 "
+	defaultENSGaslessResolver   = "0x238A8F792dFA6033814B18618aD4100654aeef01"
+	defaultACMEEmailPrefix      = "acme@"
+	defaultRenewInterval        = 24 * time.Hour
+	defaultDNSSyncInterval      = 10 * time.Minute
+	defaultSyncTimeout          = 2 * time.Minute
 )
 
 type Config struct {
@@ -65,6 +64,7 @@ type Manager struct {
 	stopOnce      sync.Once
 	dnssecLogOnce sync.Once
 	ensLogOnce    sync.Once
+	trackedMu     sync.Mutex
 }
 
 type acmeUser struct {
@@ -74,7 +74,7 @@ type acmeUser struct {
 }
 
 func NewManager(cfg Config) (*Manager, error) {
-	cfg.BaseDomain = strings.TrimPrefix(utils.NormalizeHostname(cfg.BaseDomain), "*.")
+	cfg.BaseDomain = utils.NormalizeBaseDomain(cfg.BaseDomain)
 	cfg.KeyDir = strings.TrimSpace(cfg.KeyDir)
 	cfg.DNSProvider = strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
 	cfg.ENSGaslessAddress = strings.TrimSpace(cfg.ENSGaslessAddress)
@@ -138,6 +138,9 @@ func (m *Manager) EnsureCertificate(ctx context.Context) (string, string, error)
 			return "", "", err
 		}
 		return m.TLSFiles()
+	}
+	if err := m.reconcileTrackedENSGaslessHostnames(ctx); err != nil {
+		return "", "", err
 	}
 	certFile, keyFile, manual, err := m.manualCertificateOverride()
 	if err != nil {
@@ -215,7 +218,7 @@ func (m *Manager) TLSFiles() (string, string, error) {
 	}
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
-	if !fileExists(certFile) || !fileExists(keyFile) {
+	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", errors.New("relay certificate files do not exist")
 	}
 	return certFile, keyFile, nil
@@ -231,9 +234,9 @@ func (m *Manager) ensureManualCertificate() (string, string, error) {
 		return "", "", fmt.Errorf("manual certificate mode requires %s and %s in %s or configure ACME_DNS_PROVIDER", fullChainFileName, keyFileName, m.cfg.KeyDir)
 	}
 
-	covered, err := m.manualCertificateCovered(certFile)
+	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("validate relay certificate: %w", err)
 	}
 	if !covered {
 		return "", "", fmt.Errorf("manual relay certificate must cover %s and *.%s", m.cfg.BaseDomain, m.cfg.BaseDomain)
@@ -247,15 +250,15 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	}
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
-	if !fileExists(certFile) || !fileExists(keyFile) {
+	if !utils.FileExists(certFile) || !utils.FileExists(keyFile) {
 		return "", "", false, nil
 	}
 	var err error
-	covered, err := m.manualCertificateCovered(certFile)
+	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, fmt.Errorf("validate relay certificate: %w", err)
 	}
-	hasACMEState := m.hasACMEState()
+	hasACMEState := utils.FileExists(filepath.Join(m.cfg.KeyDir, accountKeyFileName)) || utils.FileExists(filepath.Join(m.cfg.KeyDir, registrationFileName))
 	if !covered {
 		if !hasACMEState {
 			return "", "", false, fmt.Errorf("manual relay certificate must cover %s and *.%s", m.cfg.BaseDomain, m.cfg.BaseDomain)
@@ -268,21 +271,6 @@ func (m *Manager) manualCertificateOverride() (string, string, bool, error) {
 	return certFile, keyFile, true, nil
 }
 
-func (m *Manager) manualCertificateCovered(certFile string) (bool, error) {
-	covered, err := certCoversDomains(certFile, certificateDomains(m.cfg.BaseDomain))
-	if err != nil {
-		return false, fmt.Errorf("validate relay certificate: %w", err)
-	}
-	return covered, nil
-}
-
-func (m *Manager) hasACMEState() bool {
-	if m == nil {
-		return false
-	}
-	return fileExists(filepath.Join(m.cfg.KeyDir, accountKeyFileName)) || fileExists(filepath.Join(m.cfg.KeyDir, registrationFileName))
-}
-
 func (m *Manager) provision(ctx context.Context) error {
 	keyFile := filepath.Join(m.cfg.KeyDir, keyFileName)
 	certFile := filepath.Join(m.cfg.KeyDir, fullChainFileName)
@@ -291,7 +279,7 @@ func (m *Manager) provision(ctx context.Context) error {
 	domains := certificateDomains(m.cfg.BaseDomain)
 
 	for _, path := range []string{keyFile, certFile, accountKeyFile, registrationFile} {
-		if err := ensureParentDir(path); err != nil {
+		if err := utils.EnsureParentDir(path); err != nil {
 			return err
 		}
 	}
@@ -315,10 +303,10 @@ func (m *Manager) provision(ctx context.Context) error {
 		return errors.New("acme obtain response missing certificate or private key")
 	}
 
-	if err := writeFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
+	if err := utils.WriteFileAtomic(certFile, obtained.Certificate, 0o644); err != nil {
 		return fmt.Errorf("write certificate chain: %w", err)
 	}
-	if err := writeFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
+	if err := utils.WriteFileAtomic(keyFile, obtained.PrivateKey, 0o600); err != nil {
 		return fmt.Errorf("write private key: %w", err)
 	}
 	return nil
@@ -434,7 +422,7 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if hostname == "" {
 		return errors.New("hostname is required")
 	}
-	if !hostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return fmt.Errorf("hostname %q is outside acme base domain %q", hostname, m.cfg.BaseDomain)
 	}
 
@@ -442,7 +430,12 @@ func (m *Manager) SyncENSGaslessHostname(ctx context.Context, hostname, address 
 	if err != nil {
 		return fmt.Errorf("normalize ens gasless address: %w", err)
 	}
-	return m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address))
+	if err := m.dns.EnsureTXTRecord(ctx, hostname, gaslessENSTXTPrefix+defaultENSGaslessResolver+" "+strings.TrimSpace(address)); err != nil {
+		return err
+	}
+	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		return append(hostnames, hostname)
+	})
 }
 
 func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string) error {
@@ -457,19 +450,72 @@ func (m *Manager) DeleteENSGaslessHostname(ctx context.Context, hostname string)
 	if hostname == "" {
 		return nil
 	}
-	if !hostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
+	if !utils.HostnameMatchesBaseDomain(hostname, m.cfg.BaseDomain) {
 		return nil
 	}
-	return m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix)
+	if hostname == m.cfg.BaseDomain {
+		return nil
+	}
+	if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+		return err
+	}
+	return m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		filtered := hostnames[:0]
+		for _, tracked := range hostnames {
+			if tracked == hostname {
+				continue
+			}
+			filtered = append(filtered, tracked)
+		}
+		return filtered
+	})
 }
 
-func hostnameMatchesBaseDomain(hostname, baseDomain string) bool {
-	hostname = utils.NormalizeHostname(hostname)
-	baseDomain = strings.TrimPrefix(utils.NormalizeHostname(baseDomain), "*.")
-	if hostname == "" || baseDomain == "" {
-		return false
+func (m *Manager) reconcileTrackedENSGaslessHostnames(ctx context.Context) error {
+	if m == nil || !m.cfg.ENSGaslessEnabled || utils.IsLocalRelayHost(m.cfg.BaseDomain) || m.dns == nil {
+		return nil
 	}
-	return hostname == baseDomain || strings.HasSuffix(hostname, "."+baseDomain)
+
+	var cleanupErr error
+	if err := m.updateTrackedENSGaslessHostnames(func(hostnames []string) []string {
+		remaining := hostnames[:0]
+		for _, hostname := range hostnames {
+			if err := m.dns.DeleteTXTRecords(ctx, hostname, gaslessENSTXTPrefix); err != nil {
+				remaining = append(remaining, hostname)
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete ens gasless txt for %s: %w", hostname, err))
+			}
+		}
+		return remaining
+	}); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist ens gasless hostnames: %w", err))
+	}
+	return cleanupErr
+}
+
+func (m *Manager) updateTrackedENSGaslessHostnames(update func([]string) []string) error {
+	if m == nil {
+		return nil
+	}
+
+	m.trackedMu.Lock()
+	defer m.trackedMu.Unlock()
+
+	path := filepath.Join(m.cfg.KeyDir, ensGaslessHostnamesFileName)
+	var hostnames []string
+	if _, err := utils.ReadJSONFileIfExists(path, &hostnames); err != nil {
+		return err
+	}
+	hostnames = utils.NormalizeChildHostnames(hostnames, m.cfg.BaseDomain)
+	if update != nil {
+		hostnames = utils.NormalizeChildHostnames(update(hostnames), m.cfg.BaseDomain)
+	}
+	if len(hostnames) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return utils.WriteJSONFile(path, hostnames, 0o600)
 }
 
 func (m *Manager) shouldRenew() bool {
@@ -483,11 +529,7 @@ func certificateDomains(baseDomain string) []string {
 }
 
 func certNeedsRenewal(certFile string, domains []string) (bool, error) {
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return false, err
-	}
-	cert, err := utils.ParseCertificatePEM(certPEM)
+	cert, err := loadCertificate(certFile)
 	if err != nil {
 		return false, err
 	}
@@ -498,15 +540,19 @@ func certNeedsRenewal(certFile string, domains []string) (bool, error) {
 }
 
 func certCoversDomains(certFile string, domains []string) (bool, error) {
-	certPEM, err := os.ReadFile(certFile)
-	if err != nil {
-		return false, err
-	}
-	cert, err := utils.ParseCertificatePEM(certPEM)
+	cert, err := loadCertificate(certFile)
 	if err != nil {
 		return false, err
 	}
 	return certificateCoversDomains(cert, domains), nil
+}
+
+func loadCertificate(certFile string) (*x509.Certificate, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, err
+	}
+	return utils.ParseCertificatePEM(certPEM)
 }
 
 func certificateCoversDomains(cert *x509.Certificate, domains []string) bool {
@@ -533,15 +579,19 @@ func newClient(ctx context.Context, email, accountKeyFile, registrationFile stri
 	if err != nil {
 		return nil, fmt.Errorf("load acme account key: %w", err)
 	}
-	accountReg, err := loadRegistration(registrationFile)
-	if err != nil {
+
+	var accountReg registration.Resource
+	accountRegPtr := (*registration.Resource)(nil)
+	if ok, err := utils.ReadJSONFileIfExists(registrationFile, &accountReg); err != nil {
 		return nil, fmt.Errorf("load acme registration: %w", err)
+	} else if ok {
+		accountRegPtr = &accountReg
 	}
 
 	user := &acmeUser{
 		Email:        email,
 		Key:          accountKey,
-		Registration: accountReg,
+		Registration: accountRegPtr,
 	}
 
 	clientConfig := lego.NewConfig(user)
@@ -570,7 +620,7 @@ func newClient(ctx context.Context, email, accountKeyFile, registrationFile stri
 			return nil, fmt.Errorf("register acme account: %w", err)
 		}
 		user.Registration = reg
-		if err := saveRegistration(registrationFile, reg); err != nil {
+		if err := utils.WriteJSONFile(registrationFile, reg, 0o600); err != nil {
 			return nil, fmt.Errorf("persist acme registration: %w", err)
 		}
 	}
@@ -585,7 +635,7 @@ func (u *acmeUser) GetPrivateKey() crypto.PrivateKey        { return u.Key }
 func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 	keyPEM, err := os.ReadFile(path)
 	if err == nil {
-		return parsePEMPrivateKey(keyPEM)
+		return utils.ParsePrivateKeyPEM(keyPEM)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
@@ -600,101 +650,8 @@ func loadOrCreateAccountKey(path string) (crypto.PrivateKey, error) {
 		return nil, fmt.Errorf("marshal account key: %w", err)
 	}
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
-	if err := writeFileAtomic(path, keyPEM, 0o600); err != nil {
+	if err := utils.WriteFileAtomic(path, keyPEM, 0o600); err != nil {
 		return nil, fmt.Errorf("persist account key: %w", err)
 	}
 	return key, nil
-}
-
-func parsePEMPrivateKey(keyPEM []byte) (crypto.PrivateKey, error) {
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, errors.New("invalid private key pem")
-	}
-	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-		switch typed := key.(type) {
-		case *ecdsa.PrivateKey:
-			return typed, nil
-		case *rsa.PrivateKey:
-			return typed, nil
-		}
-	}
-	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-		return key, nil
-	}
-	return nil, errors.New("unsupported private key type")
-}
-
-func loadRegistration(path string) (*registration.Resource, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	var reg registration.Resource
-	if err := json.Unmarshal(raw, &reg); err != nil {
-		return nil, err
-	}
-	return &reg, nil
-}
-
-func saveRegistration(path string, reg *registration.Resource) error {
-	if reg == nil {
-		return nil
-	}
-	raw, err := json.MarshalIndent(reg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(path, raw, 0o600)
-}
-
-func ensureParentDir(path string) error {
-	dir := filepath.Dir(path)
-	if dir == "" || dir == "." {
-		return nil
-	}
-	return os.MkdirAll(dir, 0o700)
-}
-
-func fileExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
-	}
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, mode)
 }

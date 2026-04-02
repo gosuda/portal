@@ -70,20 +70,9 @@ func NormalizeEVMAddress(raw string) (string, error) {
 }
 
 func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
-	publicKeyHex := strings.TrimSpace(rawPublicKey)
-	if publicKeyHex == "" {
-		return "", errors.New("public key is required")
-	}
-	publicKeyHex = TrimHexPrefix(publicKeyHex)
-
-	decoded, err := hex.DecodeString(publicKeyHex)
+	publicKey, err := ParseSecp256k1PublicKeyHex(rawPublicKey)
 	if err != nil {
-		return "", errors.New("public key must be hex encoded")
-	}
-
-	publicKey, err := secp256k1.ParsePubKey(decoded)
-	if err != nil {
-		return "", errors.New("invalid secp256k1 public key")
+		return "", err
 	}
 
 	uncompressed := publicKey.SerializeUncompressed()
@@ -99,12 +88,11 @@ func AddressFromCompressedPublicKeyHex(rawPublicKey string) (string, error) {
 }
 
 func SignEthereumPersonalMessage(message, privateKeyHex string) (string, error) {
-	decoded, _, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, false)
+	privateKey, _, err := ParseSecp256k1PrivateKeyHex(privateKeyHex, false)
 	if err != nil {
 		return "", err
 	}
 
-	privateKey := secp256k1.PrivKeyFromBytes(decoded)
 	data := []byte(message)
 	prefix := []byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(data)))
 	hasher := sha3.NewLegacyKeccak256()
@@ -134,14 +122,9 @@ func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {
 		privateKeyHex = hex.EncodeToString(privateKey.Serialize())
 	}
 
-	decoded, normalizedKeyHex, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, true)
+	privateKey, normalizedKeyHex, err := ParseSecp256k1PrivateKeyHex(privateKeyHex, true)
 	if err != nil {
 		return types.Identity{}, err
-	}
-
-	privateKey := secp256k1.PrivKeyFromBytes(decoded)
-	if privateKey == nil {
-		return types.Identity{}, errors.New("invalid secp256k1 private key")
 	}
 
 	publicKeyHex := hex.EncodeToString(privateKey.PubKey().SerializeCompressed())
@@ -158,31 +141,20 @@ func ResolveSecp256k1Identity(rawPrivateKey string) (types.Identity, error) {
 }
 
 func SignSHA256Secp256k1DER(payload []byte, privateKeyHex string) (string, error) {
-	decoded, _, err := decodeSecp256k1PrivateKeyHex(privateKeyHex, false)
+	privateKey, _, err := ParseSecp256k1PrivateKeyHex(privateKeyHex, false)
 	if err != nil {
 		return "", err
 	}
 
 	hash := sha256.Sum256(payload)
-	privateKey := secp256k1.PrivKeyFromBytes(decoded)
 	signature := secp256k1ecdsa.Sign(privateKey, hash[:])
 	return hex.EncodeToString(signature.Serialize()), nil
 }
 
 func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string) error {
-	pubKeyText := strings.TrimSpace(publicKeyHex)
-	if pubKeyText == "" {
-		return errors.New("public key is required")
-	}
-	pubKeyText = TrimHexPrefix(pubKeyText)
-
-	pubKeyBytes, err := hex.DecodeString(pubKeyText)
+	pubKey, err := ParseSecp256k1PublicKeyHex(publicKeyHex)
 	if err != nil {
-		return errors.New("public key must be hex encoded")
-	}
-	pubKey, err := secp256k1.ParsePubKey(pubKeyBytes)
-	if err != nil {
-		return errors.New("invalid secp256k1 public key")
+		return err
 	}
 
 	sigText := strings.TrimSpace(signatureHex)
@@ -207,7 +179,26 @@ func VerifySHA256Secp256k1DER(payload []byte, publicKeyHex, signatureHex string)
 	return nil
 }
 
-func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, string, error) {
+func ParseSecp256k1PublicKeyHex(raw string) (*secp256k1.PublicKey, error) {
+	publicKeyHex := strings.TrimSpace(raw)
+	if publicKeyHex == "" {
+		return nil, errors.New("public key is required")
+	}
+	publicKeyHex = TrimHexPrefix(publicKeyHex)
+
+	decoded, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return nil, errors.New("public key must be hex encoded")
+	}
+
+	publicKey, err := secp256k1.ParsePubKey(decoded)
+	if err != nil {
+		return nil, errors.New("invalid secp256k1 public key")
+	}
+	return publicKey, nil
+}
+
+func ParseSecp256k1PrivateKeyHex(raw string, requireNonZero bool) (*secp256k1.PrivateKey, string, error) {
 	privateKeyHex := strings.TrimSpace(raw)
 	if privateKeyHex == "" {
 		return nil, "", errors.New("private key is required")
@@ -222,7 +213,11 @@ func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, stri
 		return nil, "", fmt.Errorf("secp256k1 private key must be %d bytes", secp256k1.PrivKeyBytesLen)
 	}
 	if !requireNonZero {
-		return decoded, privateKeyHex, nil
+		key := secp256k1.PrivKeyFromBytes(decoded)
+		if key == nil {
+			return nil, "", errors.New("invalid secp256k1 private key")
+		}
+		return key, privateKeyHex, nil
 	}
 
 	isZero := true
@@ -235,7 +230,11 @@ func decodeSecp256k1PrivateKeyHex(raw string, requireNonZero bool) ([]byte, stri
 	if isZero {
 		return nil, "", errors.New("secp256k1 private key must not be zero")
 	}
-	return decoded, privateKeyHex, nil
+	key := secp256k1.PrivKeyFromBytes(decoded)
+	if key == nil {
+		return nil, "", errors.New("invalid secp256k1 private key")
+	}
+	return key, privateKeyHex, nil
 }
 
 func NormalizeWireGuardPrivateKey(raw string) (string, error) {
