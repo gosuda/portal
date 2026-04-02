@@ -132,7 +132,7 @@ func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
 	for {
 		conn, err := s.interRelayListener.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil || strings.Contains(err.Error(), "endpoint is in invalid state") {
 				return nil
 			}
 			return err
@@ -182,7 +182,7 @@ func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
 
 			// Handle locally
 			record, ok := s.registry.Lookup(serverName)
-			if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsLeaseRoutable(record.ID) || record.stream == nil {
+			if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
 				_ = wrappedConn.Close()
 				return
 			}
