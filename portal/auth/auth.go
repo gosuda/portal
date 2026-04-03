@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
-	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/spruceid/siwe-go"
@@ -58,7 +58,7 @@ func (s *es256kOpaqueSigner) SignPayload(payload []byte, alg jose.SignatureAlgor
 	}
 
 	hash := sha256.Sum256(payload)
-	compact := secp256k1ecdsa.SignCompact(s.privateKey, hash[:], false)
+	compact := ecdsa.SignCompact(s.privateKey, hash[:], false)
 	if len(compact) != 65 {
 		return nil, errors.New("invalid compact signature length")
 	}
@@ -97,7 +97,7 @@ func (v *es256kOpaqueVerifier) VerifyPayload(payload []byte, signature []byte, a
 }
 
 func verifyRawSignature(hash []byte, r, s *secp256k1.ModNScalar, publicKey *secp256k1.PublicKey) error {
-	signature := secp256k1ecdsa.NewSignature(r, s)
+	signature := ecdsa.NewSignature(r, s)
 	if !signature.Verify(hash, publicKey) {
 		return errors.New("token signature is invalid")
 	}

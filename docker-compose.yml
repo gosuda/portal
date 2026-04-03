@@ -9,7 +9,6 @@ services:
       - "${API_PORT:-4017}:${API_PORT:-4017}"
       - "${SNI_PORT:-443}:${SNI_PORT:-443}"
       # Uncomment for UDP backhaul, public UDP lease ports, and raw TCP lease ports as needed.
-      # - "${DISCOVERY_PORT:-51820}:${DISCOVERY_PORT:-51820}/udp"
       # - "${SNI_PORT:-443}:${SNI_PORT:-443}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
@@ -19,9 +18,6 @@ services:
       BOOTSTRAPS: ${BOOTSTRAPS:-}
       DISCOVERY: ${DISCOVERY:-true}
       IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs/identity.json}
-      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
-      DISCOVERY_PORT: ${DISCOVERY_PORT:-51820}
-      WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-}
 
       # Listener ports (published to the host below)
       API_PORT: ${API_PORT:-4017}

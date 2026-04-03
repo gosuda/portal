@@ -47,7 +47,6 @@ services:
   # NAT-traversal relay server.
   # TCP (4017, 4443) is reached by nginx via 127.0.0.1.
   # SNI_PORT is set to 4443 to avoid conflicting with nginx on port 443.
-  # If you enable relay-peer discovery overlay, expose DISCOVERY_PORT/udp as well.
   # If you enable UDP, expose SNI_PORT/udp and MIN_PORT-MAX_PORT/udp as well.
   # If you enable raw TCP transport, expose MIN_PORT-MAX_PORT/tcp as well.
   portal:
@@ -56,7 +55,6 @@ services:
     ports:
       - "${API_PORT:-4017}:${API_PORT:-4017}/tcp"
       - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/tcp"
-      - "${DISCOVERY_PORT:-51820}:${DISCOVERY_PORT:-51820}/udp"
       # Uncomment below when enabling UDP transport (host SNI_PORT/udp is free — nginx only uses 443/tcp):
       # - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/udp"
       # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
@@ -73,9 +71,6 @@ services:
       # Use a non-443 port to avoid conflict with nginx on the host.
       SNI_PORT: ${SNI_PORT:-4443}
       IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs/identity.json}
-      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
-      DISCOVERY_PORT: ${DISCOVERY_PORT:-51820}
-      WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-}
 
       MIN_PORT: ${MIN_PORT:-0}
       MAX_PORT: ${MAX_PORT:-0}
