@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,8 @@ type ServerConfig struct {
 	TrustProxyHeaders   bool
 	DiscoveryEnabled    bool
 	UDPPortCount        int
+	I2PProxyURL         string
+	I2PDiscoveryOnly    bool
 }
 
 type Server struct {
@@ -78,6 +81,8 @@ type Server struct {
 	trustedProxyCIDRs []*net.IPNet
 	relaySet          *discovery.RelaySet
 	shutdownOnce      sync.Once
+	olsManager        *discovery.OLSManager
+	discoveryClient   *http.Client
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -155,6 +160,22 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		identity:          identity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
+		olsManager:        discovery.NewOLSManager(),
+	}
+	if cfg.I2PDiscoveryOnly {
+		proxyURL := strings.TrimSpace(cfg.I2PProxyURL)
+		if proxyURL != "" {
+			parsedProxy, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, fmt.Errorf("parse i2p proxy url: %w", err)
+			}
+			s.discoveryClient = &http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(parsedProxy),
+				},
+				Timeout: 15 * time.Second,
+			}
+		}
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -608,12 +629,16 @@ func (s *Server) startOverlay() error {
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(types.DiscoveryPollInterval)
 	defer ticker.Stop()
+	var round uint64
 
 	for {
 		bootstraps := s.relaySet.BootstrapDescriptors()
+		if s.olsManager != nil && len(bootstraps) > 1 {
+			bootstraps = s.olsManager.OrderDescriptors(bootstraps, nil, round)
+		}
 
 		for _, bootstrap := range bootstraps {
-			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, nil)
+			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, s.discoveryClient)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -656,6 +681,14 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		if s.overlay != nil {
 			overlayClient := s.overlay.Client()
 			syncableRelays := s.relaySet.SyncableDescriptors()
+			if s.olsManager != nil && len(syncableRelays) > 1 {
+				loadByURL := map[string]float64{}
+				snapshot := s.relaySet.Snapshot()
+				for _, relay := range syncableRelays {
+					loadByURL[relay.APIHTTPSAddr] = float64(snapshot[relay.Key()].ConsecutiveFailures)
+				}
+				syncableRelays = s.olsManager.OrderDescriptors(syncableRelays, loadByURL, round)
+			}
 
 			for _, relay := range syncableRelays {
 				var failureErr error
@@ -728,6 +761,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			round++
 		}
 	}
 }
