@@ -78,15 +78,49 @@ type Server struct {
 	wgConfig           wireguard.Config
 	cfg                ServerConfig
 	trustedProxyCIDRs  []*net.IPNet
-	relaySet     *discovery.RelaySet
-	ols          *ols.Engine
-	loadMgr      *policy.LoadManager
-	shutdownOnce sync.Once
+	relaySet           *discovery.RelaySet
+	ols                *ols.Engine
+	loadMgr            *policy.LoadManager
+	weightMgr          *policy.WeightManager
+	shutdownOnce       sync.Once
+}
+
+// snapshotPeerDialer implements ols.PeerDialer.  It concentrates all
+// WireGuard-specific knowledge in one place so that the OLS engine remains
+// protocol-agnostic.
+type snapshotPeerDialer struct {
+	snapshot map[string]types.RelayState
+	overlay  *wireguard.Overlay
+}
+
+// PeerAddr returns the inter-relay TCP address (host:port) for nodeID by
+// reading WireGuard overlay fields from the cached relay snapshot.
+func (d *snapshotPeerDialer) PeerAddr(nodeID string) (string, bool) {
+	if d == nil || d.overlay == nil {
+		return "", false
+	}
+	state, ok := d.snapshot[nodeID]
+	if !ok || state.Expired || !state.Descriptor.SupportsOverlayPeer || state.Descriptor.OverlayIPv4 == "" {
+		return "", false
+	}
+	return net.JoinHostPort(state.Descriptor.OverlayIPv4, fmt.Sprintf("%d", 7778)), true
+}
+
+// DialContext dials through the WireGuard overlay network.
+func (d *snapshotPeerDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return d.overlay.DialContext(ctx, network, address)
 }
 
 // localLoad returns the current server load snapshot for OLS accounting.
+// It merges raw connection metrics from LoadManager with the protocol-specific
+// latency signals collected by WeightManager.
 func (s *Server) localLoad() policy.NodeLoad {
-	return s.loadMgr.Snapshot()
+	load := s.loadMgr.Snapshot()
+	if s.weightMgr != nil {
+		wl := s.weightMgr.Collect()
+		load.AvgLatencyMs = wl.AvgLatencyMs
+	}
+	return load
 }
 
 func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
@@ -100,7 +134,8 @@ func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
 		}
 		go func(conn net.Conn) {
 			snapshot := s.relaySet.Snapshot()
-			s.ols.ServeInterRelayConn(ctx, conn, s.overlay, snapshot, s.serveLocalConn(ctx))
+			peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+			s.ols.ServeInterRelayConn(ctx, conn, peers, s.serveLocalConn(ctx))
 		}(conn)
 	}
 }
@@ -200,6 +235,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
 		loadMgr:           policy.NewLoadManager(),
+		weightMgr:         policy.NewWeightManager(),
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -510,13 +546,14 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				// OLS load balancing: route to best target node if applicable.
-				if s.ols != nil {
-					snapshot := s.relaySet.Snapshot()
-					if s.ols.RouteConn(ctx, wrappedConn, serverName, s.overlay, snapshot) {
-						return
-					}
+			// OLS load balancing: route to best target node if applicable.
+			if s.ols != nil {
+				snapshot := s.relaySet.Snapshot()
+				peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+				if s.ols.RouteConn(ctx, wrappedConn, serverName, peers) {
+					return
 				}
+			}
 
 				if serverName == s.identity.Name {
 					if s.apiListener == nil {

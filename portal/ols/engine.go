@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"time"
@@ -27,14 +26,36 @@ const (
 	maxRouteContextBytes = 65536
 )
 
-// Dialer is the subset of wireguard.Overlay used by the engine.
+// Dialer dials an outbound TCP connection.  It is a single-method subset of
+// net.Dialer and wireguard.Overlay, kept here so the engine does not import
+// either concrete type.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
+// PeerResolver maps a node identity key to the TCP dial address of its
+// inter-relay endpoint.  Implementations hide all transport-specific details
+// (WireGuard overlay IPs, peer key checks, etc.) from the engine.
+type PeerResolver interface {
+	// PeerAddr returns the host:port to dial for nodeID and true if the node
+	// is reachable as an overlay peer.  Returns "", false when the node
+	// cannot be reached (not configured, marked down, etc.).
+	PeerAddr(nodeID string) (addr string, ok bool)
+}
+
+// PeerDialer combines address resolution and connection dialing into a single
+// interface that the engine uses for inter-relay forwarding.  Callers that
+// implement both PeerResolver and Dialer satisfy PeerDialer.
+type PeerDialer interface {
+	PeerResolver
+	Dialer
+}
+
 // Engine encapsulates OLS routing: MOLS grid management, inter-relay protocol,
 // and connection forwarding decisions.  It is intentionally free of server
-// lifecycle concerns; the server owns listeners, metrics, and identity.
+// lifecycle concerns (listeners, WireGuard configuration, identity key
+// derivation) and transport-specific protocol details (overlay IP addresses,
+// WireGuard public keys, etc.).
 type Engine struct {
 	selfKey string
 	manager *policy.OLSManager
@@ -69,10 +90,13 @@ func (e *Engine) OnRelaySetChanged(localLoad policy.NodeLoad, snapshot map[strin
 }
 
 // RouteConn attempts to route conn to the best OLS target node.
+// peers resolves node identity keys to dial addresses and dials the connection;
+// it encapsulates all transport-specific knowledge so the engine remains
+// protocol-agnostic.
 // Returns true if conn was handled (proxied away); false means the caller
 // should serve it locally.
-func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string, overlay Dialer, snapshot map[string]types.RelayState) bool {
-	if overlay == nil {
+func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string, peers PeerDialer) bool {
+	if peers == nil {
 		return false
 	}
 	routeCtx := &policy.RouteContext{
@@ -83,12 +107,11 @@ func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string
 	if err != nil || targetID == e.selfKey {
 		return false
 	}
-	targetState, ok := snapshot[targetID]
-	if !ok || !targetState.Descriptor.SupportsOverlayPeer || targetState.Descriptor.OverlayIPv4 == "" {
+	proxyAddr, ok := peers.PeerAddr(targetID)
+	if !ok {
 		return false
 	}
-	proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, fmt.Sprintf("%d", interRelayPort))
-	targetConn, err := overlay.DialContext(ctx, "tcp", proxyAddr)
+	targetConn, err := peers.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		e.manager.MarkFailure(targetID)
 		log.Warn().Err(err).Str("target", proxyAddr).Msg("ols: failed to dial inter-relay target")
@@ -109,13 +132,12 @@ func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string
 }
 
 // ServeInterRelayConn handles one connection received on the inter-relay port.
-// serveLocal is called with the unwrapped conn when the connection should be
-// served by the local node.
+// peers resolves node addresses and dials; serveLocal is called with the
+// unwrapped connection when the hop should be served locally.
 func (e *Engine) ServeInterRelayConn(
 	ctx context.Context,
 	conn net.Conn,
-	overlay Dialer,
-	snapshot map[string]types.RelayState,
+	peers PeerDialer,
 	serveLocal func(serverName string, conn net.Conn),
 ) {
 	defer conn.Close()
@@ -138,15 +160,12 @@ func (e *Engine) ServeInterRelayConn(
 		return
 	}
 
-	// Attempt to re-route via OLS.
-	if overlay != nil {
+	// Attempt to re-route via OLS when peers are available.
+	if peers != nil {
 		targetID, routeErr := e.manager.GetTargetNodeID(conn.RemoteAddr().String(), serverName, routeCtx)
 		if routeErr == nil && targetID != e.selfKey {
-			if targetState, ok := snapshot[targetID]; ok &&
-				targetState.Descriptor.SupportsOverlayPeer &&
-				targetState.Descriptor.OverlayIPv4 != "" {
-				proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, fmt.Sprintf("%d", interRelayPort))
-				targetConn, dialErr := overlay.DialContext(ctx, "tcp", proxyAddr)
+			if proxyAddr, ok := peers.PeerAddr(targetID); ok {
+				targetConn, dialErr := peers.DialContext(ctx, "tcp", proxyAddr)
 				if dialErr == nil {
 					if writeErr := writeRouteContext(targetConn, routeCtx); writeErr == nil {
 						bridge(wrappedConn, targetConn)
