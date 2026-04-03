@@ -10,11 +10,11 @@ import (
 // OLSManager computes relay polling order from a non-linear load vector.
 //
 // Why this exists:
-// - We need deterministic redistribution without simple vector rotation.
-// - We keep selection in one owner so bootstrap and syncable relay polling share
-//   the same balancing contract.
-// - We apply inverse-load pre-distortion before OLS-style permutation so heavily
-//   loaded relays are naturally delayed while preserving one-pass fairness.
+//   - We need deterministic redistribution without simple vector rotation.
+//   - We keep selection in one owner so bootstrap and syncable relay polling share
+//     the same balancing contract.
+//   - We apply inverse-load pre-distortion before OLS-style permutation so heavily
+//     loaded relays are naturally delayed while preserving one-pass fairness.
 type OLSManager struct{}
 
 func NewOLSManager() *OLSManager {
@@ -24,14 +24,14 @@ func NewOLSManager() *OLSManager {
 // OrderDescriptors returns a deterministic OLS-based order for this round.
 //
 // Procedure:
-// 1) Build a non-linear load score f(x)=x^2 for each relay URL.
-// 2) Apply inverse pre-distortion by mapping y=f(x) back to approximately x.
-//    In practice we keep zero-safe behavior with sqrt(y+1), then rank by this
-//    compensated value (monotonic with respect to load).
-// 3) Convert compensated weights into a stable inverse permutation (least-loaded
-//    first, ties by URL).
-// 4) Feed the inverse permutation into a latin-square style affine map
-//    slot=(a*i+b) mod n where a is coprime with n (no rotation).
+//  1. Build a non-linear load score f(x)=x^2 for each relay URL.
+//  2. Apply inverse pre-distortion by mapping y=f(x) back to approximately x.
+//     In practice we keep zero-safe behavior with sqrt(y+1), then rank by this
+//     compensated value (monotonic with respect to load).
+//  3. Convert compensated weights into a stable inverse permutation (least-loaded
+//     first, ties by URL).
+//  4. Feed the inverse permutation into a latin-square style affine map
+//     slot=(a*i+b) mod n where a is coprime with n (no rotation).
 func (m *OLSManager) OrderDescriptors(relays []types.RelayDescriptor, loadByURL map[string]float64, round uint64) []types.RelayDescriptor {
 	if len(relays) <= 1 {
 		return relays
@@ -49,8 +49,8 @@ func (m *OLSManager) OrderDescriptors(relays []types.RelayDescriptor, loadByURL 
 	})
 
 	type weighted struct {
-		desc         types.RelayDescriptor
-		compensated  float64
+		desc        types.RelayDescriptor
+		compensated float64
 	}
 	weights := make([]weighted, 0, len(ordered))
 	for _, relay := range ordered {

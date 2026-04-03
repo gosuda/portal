@@ -322,8 +322,8 @@ func percentile99(data []float64) float64 {
 //	c.RecordBurst(burstScore)
 type NetworkContributor struct {
 	// Atomic fields for lock-free reads in the hot path.
-	burstScore  uint64 // math.Float64bits
-	lastDelayMs uint64 // math.Float64bits
+	burstScore   uint64 // math.Float64bits
+	lastDelayMs  uint64 // math.Float64bits
 	lastJitterMs uint64 // math.Float64bits
 }
 

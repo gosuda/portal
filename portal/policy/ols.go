@@ -16,10 +16,10 @@ const (
 
 	alpha = 0.2 // EWMA alpha
 
-	rotationTriggerRatio   = 1.05
+	rotationTriggerRatio    = 1.05
 	rotationAggressiveRatio = 1.5
-	rotationMinStepDeg     = 15.0
-	rotationMaxStepDeg     = 90.0
+	rotationMinStepDeg      = 15.0
+	rotationMaxStepDeg      = 90.0
 )
 
 // NodeLoad represents a node's load vector.

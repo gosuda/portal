@@ -17,9 +17,9 @@ import (
 var errNoConnection = errors.New("no quic connection registered")
 
 const (
-	maxDatagramSegments      = 64
-	reassemblyEntryTTL       = 30 * time.Second
-	reassemblyCleanupPeriod  = 5 * time.Second
+	maxDatagramSegments     = 64
+	reassemblyEntryTTL      = 30 * time.Second
+	reassemblyCleanupPeriod = 5 * time.Second
 )
 
 // datagramSession owns one active QUIC DATAGRAM connection and exposes decoded frames.
@@ -163,7 +163,7 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 		messageID uint64
 	}
 	type reassemblyEntry struct {
-		count      uint16
+		count       uint16
 		segments    map[uint16][]byte
 		totalBytes  int
 		lastUpdated time.Time
@@ -201,8 +201,8 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 			entry := reassembly[key]
 			if entry == nil {
 				entry = &reassemblyEntry{
-					count:      frame.SegmentCount,
-					segments:   make(map[uint16][]byte, int(frame.SegmentCount)),
+					count:       frame.SegmentCount,
+					segments:    make(map[uint16][]byte, int(frame.SegmentCount)),
 					lastUpdated: time.Now(),
 				}
 				reassembly[key] = entry
