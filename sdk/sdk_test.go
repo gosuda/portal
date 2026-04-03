@@ -317,6 +317,66 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 	}
 }
 
+func TestAPIClientRegisterLeaseRequiresSNIPortForUDP(t *testing.T) {
+	privateKey := strings.Repeat("33", 32)
+	identity, err := utils.ResolveSecp256k1Identity(privateKey)
+	if err != nil {
+		t.Fatalf("ResolveSecp256k1Identity() error = %v", err)
+	}
+	identity.Name = "demo-udp"
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case types.PathSDKDomain:
+			writeSDKTestEnvelope(w, http.StatusOK, types.APIEnvelope[types.DomainResponse]{
+				OK: true,
+				Data: types.DomainResponse{
+					ProtocolVersion: types.ProtocolVersion,
+				},
+			})
+		case types.PathSDKRegisterChallenge:
+			var challengeReq types.RegisterChallengeRequest
+			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
+				t.Fatalf("decode register challenge request: %v", err)
+			}
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterChallengeResponse]{
+				OK: true,
+				Data: types.RegisterChallengeResponse{
+					ChallengeID: "challenge-udp",
+					ExpiresAt:   time.Now().Add(time.Minute).UTC(),
+					SIWEMessage: mustSDKTestSIWEMessage(t, r, challengeReq.Identity.Address, "challenge-udp"),
+				},
+			})
+		case types.PathSDKRegister:
+			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
+				OK: true,
+				Data: types.RegisterResponse{
+					Identity:    types.Identity{Name: identity.Name, Address: identity.Address},
+					Hostname:    "127.0.0.1",
+					AccessToken: "jwt-register-udp",
+					UDPEnabled:  true,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	api, err := newApiClient(server.URL, ListenerConfig{Identity: identity})
+	if err != nil {
+		t.Fatalf("newApiClient() error = %v", err)
+	}
+
+	_, err = api.registerLease(context.Background(), 30*time.Second, true, false)
+	if err == nil {
+		t.Fatal("registerLease() error = nil, want missing sni port error")
+	}
+	if !strings.Contains(err.Error(), "sni port") {
+		t.Fatalf("registerLease() error = %v, want missing sni port error", err)
+	}
+}
+
 func mustSDKTestSIWEMessage(t *testing.T, r *http.Request, address, challengeID string) string {
 	t.Helper()
 

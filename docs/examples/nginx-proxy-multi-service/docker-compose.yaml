@@ -55,7 +55,8 @@ services:
   # TCP (4017, 4443) is reached by nginx via host.docker.internal.
   # SNI_PORT is 4443 to avoid conflicting with nginx on 443.
   # If you enable relay-peer discovery overlay, expose DISCOVERY_PORT/udp as well.
-  # If you enable UDP (UDP_PORT_COUNT > 0), expose SNI_PORT/udp and 50000+/udp as well.
+  # If you enable UDP, expose SNI_PORT/udp and MIN_PORT-MAX_PORT/udp as well.
+  # If you enable raw TCP transport, expose MIN_PORT-MAX_PORT/tcp as well.
   portal:
     image: ghcr.io/gosuda/portal:latest
     container_name: portal
@@ -63,20 +64,28 @@ services:
       - "${API_PORT:-4017}:${API_PORT:-4017}/tcp"
       - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/tcp"
       - "${DISCOVERY_PORT:-51820}:${DISCOVERY_PORT:-51820}/udp"
-      # Uncomment below when enabling UDP transport (host 443/udp is free — nginx only uses 443/tcp):
-      # - "443:${SNI_PORT:-4443}/udp"
-      # - "50000-50009:50000-50009/udp"  # adjust range to match UDP_PORT_COUNT
+      # Uncomment below when enabling UDP transport (host SNI_PORT/udp is free — nginx only uses 443/tcp):
+      # - "${SNI_PORT:-4443}:${SNI_PORT:-4443}/udp"
+      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}/udp"
+      # Uncomment below when enabling raw TCP port transport:
+      # - "${MIN_PORT:-40000}-${MAX_PORT:-40009}:${MIN_PORT:-40000}-${MAX_PORT:-40009}"
     stop_grace_period: 30s
     environment:
       PORTAL_URL: ${PORTAL_URL:-https://portal.example.com}
+      BOOTSTRAPS: ${BOOTSTRAPS:-}
+      DISCOVERY: ${DISCOVERY:-true}
       API_PORT: ${API_PORT:-4017}
       SNI_PORT: ${SNI_PORT:-4443}
       IDENTITY_PATH: ${IDENTITY_PATH:-/portal-certs/identity.json}
       WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:-}
       DISCOVERY_PORT: ${DISCOVERY_PORT:-51820}
       WIREGUARD_ENDPOINT: ${WIREGUARD_ENDPOINT:-}
-      UDP_PORT_COUNT: ${UDP_PORT_COUNT:-0}
+      MIN_PORT: ${MIN_PORT:-0}
+      MAX_PORT: ${MAX_PORT:-0}
+      UDP_ENABLED: ${UDP_ENABLED:-false}
+      TCP_ENABLED: ${TCP_ENABLED:-false}
       ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      LANDING_PAGE_ENABLED: ${LANDING_PAGE_ENABLED:-false}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-127.0.0.0/8}
       KEYLESS_DIR: ${KEYLESS_DIR:-/portal-certs}
@@ -93,7 +102,6 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
       AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
       AWS_DNSSEC_KMS_KEY_ARN: ${AWS_DNSSEC_KMS_KEY_ARN:-}
-      DNSSEC_KSK_NAME: ${DNSSEC_KSK_NAME:-}
     volumes:
       - ./.portal-certs:${KEYLESS_DIR:-/portal-certs}
       # Uncomment when using a Google Cloud service account file for gcloud automation.

@@ -81,6 +81,17 @@ func ParsePortNumber(raw string, fallback int) int {
 	return port
 }
 
+func ParseOptionalPortNumber(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	if raw == "0" {
+		return 0
+	}
+	return ParsePortNumber(raw, fallback)
+}
+
 func ParseNonNegativeInt(raw string, fallback int) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

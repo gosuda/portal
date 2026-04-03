@@ -158,10 +158,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt:           now.Add(2 * types.DiscoveryPollInterval),
 		APIHTTPSAddr:        s.cfg.PortalURL,
 		IngressTLSAddr:      ingressAddr,
-		SupportsTLS:         true,
-		SupportsUDP:         s.cfg.UDPPortCount > 0,
-		SupportsTCP:         true,
-		SupportsRawTCP:      s.cfg.TCPPortCount > 0,
+		SupportsUDP:         s.cfg.UDPEnabled && s.quicTunnel != nil,
+		SupportsTCP:         s.cfg.TCPEnabled,
 		SupportsOverlayPeer: supportsOverlayPeer,
 		WireGuardPublicKey:  s.wgConfig.PublicKey,
 		WireGuardEndpoint:   s.wgConfig.Endpoint,
@@ -282,11 +280,11 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 		Path:   types.PathSDKRegister,
 	}).String()
 
-	if req.UDPEnabled && (s.cfg.UDPPortCount <= 0 || s.group != nil && s.quicTunnel == nil) {
+	if req.UDPEnabled && (!s.cfg.UDPEnabled || s.group != nil && s.quicTunnel == nil) {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
-	if req.TCPEnabled && s.cfg.TCPPortCount <= 0 {
+	if req.TCPEnabled && !s.cfg.TCPEnabled {
 		utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, errFeatureUnavailable.Error())
 		return
 	}
@@ -561,7 +559,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 	}
 
 	if req.UDPEnabled {
-		if s.cfg.UDPPortCount <= 0 || s.group != nil && s.quicTunnel == nil {
+		if !s.cfg.UDPEnabled || s.group != nil && s.quicTunnel == nil {
 			return types.RegisterResponse{}, errFeatureUnavailable
 		}
 		if !s.registry.policy.IsUDPEnabled() {
@@ -572,7 +570,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		}
 	}
 	if req.TCPEnabled {
-		if s.cfg.TCPPortCount <= 0 {
+		if !s.cfg.TCPEnabled {
 			return types.RegisterResponse{}, errFeatureUnavailable
 		}
 		if !s.registry.policy.IsTCPPortEnabled() {
@@ -655,6 +653,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		TCPEnabled:  record.TCPEnabled,
 	}
 	if record.datagram != nil {
+		resp.SNIPort = s.cfg.SNIPort
 		resp.UDPAddr = fmt.Sprintf("%s:%d", s.identity.Name, record.datagram.UDPPort())
 	}
 	if record.tcpPort != nil {

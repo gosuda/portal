@@ -15,13 +15,13 @@ Stream client
   -> Local service
 
 TCP port client
-  -> Relay lease TCP port (40000+ by default)
+  -> Relay lease TCP port (within configured MIN_PORT-MAX_PORT)
   -> Claimed reverse session (raw TCP, no TLS)
   -> SDK / portal-tunnel
   -> Local service
 
 UDP client
-  -> Relay lease UDP port (50000+ by default)
+  -> Relay lease UDP port (within configured MIN_PORT-MAX_PORT)
   -> Internal QUIC tunnel
   -> SDK / portal-tunnel
   -> Local UDP service
@@ -55,8 +55,8 @@ UDP client
 - SNI wildcard matching is one level only. `*.parent.example.com` matches `foo.parent.example.com`, not deeper labels.
 - Reverse TCP marker bytes remain protocol state:
   - `0x00` = idle keepalive
+  - `0x01` = raw TCP activation (non-TLS port routing)
   - `0x02` = TLS passthrough activation
-  - `0x03` = raw TCP activation (non-TLS port routing)
 - `/sdk/connect` remains HTTP/1.1 only.
 
 ### JSON and Shared Contract
@@ -94,7 +94,7 @@ Portal has three distinct network roles:
   - hijacked into a long-lived raw TCP session
   - starts idle in the per-lease stream ready queue, then becomes the tenant data path when claimed
 - **Internal datagram tunnel**
-  - QUIC to the relay URL host:port with ALPN `portal-tunnel`
+  - QUIC to the relay URL host plus the relay-advertised `sni_port` from `POST /sdk/register` with ALPN `portal-tunnel`
   - authenticated by a first-stream control message carrying `access_token`
   - carries relay-to-SDK/tunnel datagram traffic only
 
@@ -118,7 +118,8 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `transport.RelayStream`: per-lease ready queue for reverse stream sessions
 - `transport.RelayTCPPort`: per-lease TCP listener on an allocated port; bridges incoming connections to reverse sessions using raw TCP (no TLS)
 - `transport.RelayDatagram`: per-lease raw UDP socket plus QUIC DATAGRAM bridge runtime
-- `transport.PortAllocator`: count-based port allocator with sticky name-based reservation and grace period (shared by UDP and TCP port transport)
+- `transport.PortAllocator`: range-based port allocator with sticky name-based reservation and grace period
+- UDP and raw TCP allocate independently from the same inclusive `MIN_PORT-MAX_PORT` range, so the same numeric port may exist on both protocols
 - `transport.datagramSession`: internal QUIC DATAGRAM bind/send/receive primitive shared by relay and SDK datagram runtimes
 - `acme`: Cloudflare/Google Cloud DNS/Route53-backed root/wildcard A-record sync + certificate provisioning/renewal for the relay root host and wildcard
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
@@ -199,16 +200,16 @@ Result: this is a detect-only signal by default. It raises the cost of adaptive 
 ### TCP Port Transport (non-TLS)
 
 1. SDK/tunnel requests a register challenge with `tcp_enabled=true`, signs the returned SIWE message, and then completes `POST /sdk/register`.
-2. Relay validates that the TCP port plane is enabled (server has `TCP_PORT_COUNT > 0` and admin has enabled TCP port), allocates a TCP port via `PortAllocator`, and creates a `transport.RelayTCPPort` for the lease.
+2. Relay validates that the TCP port plane is enabled (server has `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin has enabled TCP port), allocates a TCP port via `PortAllocator`, and creates a `transport.RelayTCPPort` for the lease.
 3. Registration response includes `tcp_addr` (public TCP endpoint, e.g., `hostname:40001`).
 4. `RelayTCPPort` starts a TCP listener on the allocated port.
 5. An external TCP client connects to `tcp_addr`.
-6. `RelayTCPPort.acceptLoop` accepts the connection and claims a reverse session from the lease `RelayStream` using `ClaimRaw` (writes `0x03` marker instead of `0x02`).
-7. SDK-side `ClientStream.runSession` receives `0x03`, calls `activateRaw` which passes the raw connection directly without TLS handshake.
+6. `RelayTCPPort.acceptLoop` accepts the connection and claims a reverse session from the lease `RelayStream` using `ClaimRaw` (writes `0x01` marker instead of `0x02`).
+7. SDK-side `ClientStream.runSession` receives `0x01`, calls `activateRaw` which passes the raw connection directly without TLS handshake.
 8. `RelayTCPPort.bridgeConns` copies data bidirectionally between the external client and the reverse session.
 
 ```text
-Client --TCP--> [:40000+ Relay] --raw TCP--> [RelayTCPPort] --ClaimRaw--> [reverse session] --0x03--> [ClientStream] --> Local Service
+Client --TCP--> [:MIN_PORT-MAX_PORT Relay] --raw TCP--> [RelayTCPPort] --ClaimRaw--> [reverse session] --0x01--> [ClientStream] --> Local Service
                                                                     <--bidirectional bridge--
 ```
 
@@ -217,8 +218,8 @@ Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP w
 ### UDP/QUIC Datagram Transport
 
 1. SDK/tunnel requests a register challenge with `udp_enabled=true`, signs the returned SIWE message, and then completes `POST /sdk/register`.
-2. Relay validates that the datagram plane is enabled (server has `UDP_PORT_COUNT > 0` and admin has enabled UDP), allocates a UDP port via `PortAllocator`, and creates a `transport.RelayDatagram` for the lease.
-3. Registration response includes `udp_addr` (public UDP endpoint) and `access_token`. There is no separate `quic_addr`; the SDK dials QUIC to the relay URL host:port.
+2. Relay validates that the datagram plane is enabled (server has `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin has enabled UDP), allocates a UDP port via `PortAllocator`, and creates a `transport.RelayDatagram` for the lease.
+3. Registration response includes `udp_addr` (public UDP endpoint), `access_token`, and `sni_port`. The SDK dials QUIC to the relay URL host on that `sni_port`.
 4. SDK `transport.ClientDatagram` opens a QUIC connection with ALPN `portal-tunnel` and QUIC DATAGRAM support enabled.
 5. Authentication: SDK sends `{access_token}` JSON on the first QUIC stream; the relay validates that lease access token before calling `RelayDatagram.Register(conn)`.
 6. External UDP client sends a packet to `udp_addr` -> `RelayDatagram.readLoop` -> `TouchFlow` (assigns flow ID) -> `SendDatagram` -> QUIC DATAGRAM frame.
@@ -226,7 +227,7 @@ Result: the relay allocates a dedicated TCP port per lease and bridges raw TCP w
 8. Return path: local response -> `Exposure.SendDatagram()` -> `Listener.SendDatagram()` -> `ClientDatagram.Send()` -> QUIC DATAGRAM -> `RelayDatagram.dispatch()` -> `conn.WriteToUDP` to the original client.
 
 ```text
-Client --UDP--> [:50000+ Relay] --DATAGRAM--> [RelayDatagram] --QUIC--> [ClientDatagram] --UDP--> Local Service
+Client --UDP--> [:MIN_PORT-MAX_PORT Relay] --DATAGRAM--> [RelayDatagram] --QUIC--> [ClientDatagram] --UDP--> Local Service
                                                           <--QUIC DATAGRAM return path--
 ```
 
@@ -292,11 +293,11 @@ Wire format (`types/transport.go`): `[flowID uvarint][payload bytes]`
   - `identity`
   - `iat`, `nbf`, `exp`
   - `jti`
-- UDP registration requires two conditions: server must have `UDP_PORT_COUNT > 0` and admin must enable UDP in the admin panel
+- UDP registration requires three conditions: server must have `UDP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin must enable UDP in the admin panel
 - `APIErrorCodeUDPDisabled` (HTTP 403) when UDP is disabled by admin policy
 - `APIErrorCodeUDPCapacityExceeded` (HTTP 503) when the admin-configured max UDP lease limit is reached
 - `APIErrorCodeUDPPortExhausted` (HTTP 503) when the UDP port pool is exhausted
-- TCP port registration requires two conditions: server must have `TCP_PORT_COUNT > 0` and admin must enable TCP port in the admin panel
+- TCP port registration requires three conditions: server must have `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and admin must enable TCP port in the admin panel
 - `APIErrorCodeTCPPortDisabled` (HTTP 403) when TCP port is disabled by admin policy
 - `APIErrorCodeTCPPortCapacityExceeded` (HTTP 503) when the admin-configured max TCP port lease limit is reached
 - `APIErrorCodeTCPPortExhausted` (HTTP 503) when the TCP port pool is exhausted

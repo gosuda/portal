@@ -49,7 +49,6 @@ func NewDNSProvider(providerType string, cfg Config) (DNSProvider, error) {
 			Region:          cfg.AWSRegion,
 			HostedZoneID:    cfg.AWSHostedZoneID,
 			KMSKeyARN:       cfg.AWSKMSKeyARN,
-			DNSSECKSKName:   cfg.DNSSECKSKName,
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported acme dns provider: %q", providerType)

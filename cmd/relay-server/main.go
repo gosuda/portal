@@ -34,8 +34,10 @@ type relayServerConfig struct {
 	PortalURL           string
 	APIPort             int
 	SNIPort             int
-	UDPPortCount        int
-	TCPPortCount        int
+	MinPort             int
+	MaxPort             int
+	UDPEnabled          bool
+	TCPEnabled          bool
 	LandingPageEnabled  bool
 	Bootstraps          string
 	DiscoveryEnabled    bool
@@ -59,7 +61,6 @@ type relayServerConfig struct {
 	AWSRegion           string
 	AWSHostedZoneID     string
 	AWSDNSSECKMSKeyARN  string
-	DNSSECKSKName       string
 }
 
 func runServeCommand(args []string) error {
@@ -69,8 +70,10 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.PortalURL, "portal-url", "https://localhost:4017", "portal base URL", "PORTAL_URL")
 	utils.IntFlagEnv(fs, &cfg.APIPort, "api-port", 4017, utils.ParsePortNumber, "Admin/API server port", "API_PORT")
 	utils.IntFlagEnv(fs, &cfg.SNIPort, "sni-port", 443, utils.ParsePortNumber, "TCP SNI router port number", "SNI_PORT")
-	utils.IntFlagEnv(fs, &cfg.UDPPortCount, "udp-port-count", 0, utils.ParseNonNegativeInt, "Number of UDP ports to allocate for leases, starting at port 50000 (0=disabled)", "UDP_PORT_COUNT")
-	utils.IntFlagEnv(fs, &cfg.TCPPortCount, "tcp-port-count", 0, utils.ParseNonNegativeInt, "Number of TCP ports to allocate for raw TCP leases, starting at port 40000 (0=disabled)", "TCP_PORT_COUNT")
+	utils.IntFlagEnv(fs, &cfg.MinPort, "min-port", 0, utils.ParseOptionalPortNumber, "inclusive minimum lease port shared by UDP and raw TCP transports (0=disabled)", "MIN_PORT")
+	utils.IntFlagEnv(fs, &cfg.MaxPort, "max-port", 0, utils.ParseOptionalPortNumber, "inclusive maximum lease port shared by UDP and raw TCP transports (0=disabled)", "MAX_PORT")
+	utils.BoolFlagEnv(fs, &cfg.UDPEnabled, "udp-enabled", false, "enable UDP relay transport; requires a valid --min-port/--max-port range", "UDP_ENABLED")
+	utils.BoolFlagEnv(fs, &cfg.TCPEnabled, "tcp-enabled", false, "enable raw TCP port transport; requires a valid --min-port/--max-port range", "TCP_ENABLED")
 	utils.BoolFlagEnv(fs, &cfg.LandingPageEnabled, "landing-page-enabled", false, "enable landing page by default when no admin setting has been saved yet", "LANDING_PAGE_ENABLED")
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
@@ -95,7 +98,6 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.AWSRegion, "aws-region", "", "AWS region for Route53 and Route53-backed DNS-01; defaults to us-east-1 when unset", "AWS_REGION", "AWS_DEFAULT_REGION")
 	utils.StringFlagEnv(fs, &cfg.AWSHostedZoneID, "aws-hosted-zone-id", "", "explicit Route53 hosted zone ID override", "AWS_HOSTED_ZONE_ID")
 	utils.StringFlagEnv(fs, &cfg.AWSDNSSECKMSKeyARN, "aws-dnssec-kms-key-arn", "", "AWS KMS key ARN used to create a Route53 DNSSEC key-signing key when needed", "AWS_DNSSEC_KMS_KEY_ARN")
-	utils.StringFlagEnv(fs, &cfg.DNSSECKSKName, "dnssec-ksk-name", "", "optional key-signing key name override for Route53 DNSSEC automation", "DNSSEC_KSK_NAME")
 
 	if err := utils.ParseFlagSet(fs, args, printRootUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -113,13 +115,15 @@ func runServeCommand(args []string) error {
 		Str("portal_url", cfg.PortalURL).
 		Str("identity_path", cfg.IdentityPath).
 		Str("admin_settings_path", cfg.AdminSettingsPath).
+		Int("min_port", cfg.MinPort).
+		Int("max_port", cfg.MaxPort).
 		Bool("landing_page_enabled", cfg.LandingPageEnabled).
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
-		Bool("udp_enabled", cfg.UDPPortCount > 0).
-		Bool("tcp_port_enabled", cfg.TCPPortCount > 0).
+		Bool("udp_enabled", cfg.UDPEnabled).
+		Bool("tcp_enabled", cfg.TCPEnabled).
 		Msg("configured relay server")
 
 	ctx, stop := utils.SignalContext()
@@ -154,15 +158,16 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 			AWSRegion:          cfg.AWSRegion,
 			AWSHostedZoneID:    cfg.AWSHostedZoneID,
 			AWSKMSKeyARN:       cfg.AWSDNSSECKMSKeyARN,
-			DNSSECKSKName:      cfg.DNSSECKSKName,
 		},
 		APIPort:           cfg.APIPort,
 		SNIPort:           cfg.SNIPort,
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
-		UDPPortCount:      cfg.UDPPortCount,
-		TCPPortCount:      cfg.TCPPortCount,
+		MinPort:           cfg.MinPort,
+		MaxPort:           cfg.MaxPort,
+		UDPEnabled:        cfg.UDPEnabled,
+		TCPEnabled:        cfg.TCPEnabled,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
@@ -211,7 +216,7 @@ func printRootUsage(w io.Writer) {
 			"relay-server",
 			"relay-server serve",
 			"relay-server --portal-url https://portal.example.com",
-			"relay-server --discovery --udp-port-count 100",
+			"relay-server --discovery --udp-enabled --min-port 40000 --max-port 40099",
 			"relay-server --landing-page-enabled",
 			"relay-server help",
 		},

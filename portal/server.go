@@ -34,8 +34,6 @@ const (
 	defaultReadyQueueLimit    = 8
 	defaultClientHelloWait    = 2 * time.Second
 	defaultControlBodyLimit   = 4 << 20
-	defaultUDPPortBase        = 50000
-	defaultTCPPortBase        = 40000
 	defaultWGRecoveryFailures = 3
 )
 
@@ -54,12 +52,13 @@ type ServerConfig struct {
 	SNIPort             int
 	APIListenAddr       string
 	SNIListenAddr       string
-	QUICListenAddr      string
 	TrustedProxyCIDRs   string
 	TrustProxyHeaders   bool
 	DiscoveryEnabled    bool
-	UDPPortCount        int
-	TCPPortCount        int
+	MinPort             int
+	MaxPort             int
+	UDPEnabled          bool
+	TCPEnabled          bool
 }
 
 type Server struct {
@@ -93,7 +92,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if rootHost == "" {
 		return nil, errors.New("root host is required")
 	}
-	cfg.QUICListenAddr = utils.StringOrDefault(cfg.QUICListenAddr, cfg.SNIListenAddr)
 	trustedProxyCIDRs, err := utils.ParseCIDRs(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		return nil, fmt.Errorf("parse trusted proxy cidrs: %w", err)
@@ -129,10 +127,26 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Msg("generated wireguard private key; set WIREGUARD_PRIVATE_KEY to preserve relay identity")
 	}
 
+	transportEnabled := cfg.UDPEnabled || cfg.TCPEnabled
+	hasPortRange := cfg.MinPort > 0 && cfg.MaxPort > 0
+	if transportEnabled {
+		switch {
+		case !hasPortRange:
+			return nil, errors.New("udp and tcp relay transport require a valid min port and max port range")
+		case cfg.MinPort > 65535 || cfg.MaxPort > 65535:
+			return nil, errors.New("min port and max port must be between 1 and 65535")
+		case cfg.MinPort > cfg.MaxPort:
+			return nil, errors.New("min port must be less than or equal to max port")
+		}
+	}
+
+	cfg.UDPEnabled = cfg.UDPEnabled && hasPortRange
+	cfg.TCPEnabled = cfg.TCPEnabled && hasPortRange
+
 	portMin, portMax := 0, 0
-	if cfg.UDPPortCount > 0 {
-		portMin = defaultUDPPortBase
-		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
+	if cfg.UDPEnabled {
+		portMin = cfg.MinPort
+		portMax = cfg.MaxPort
 	}
 
 	identity, generatedIdentity, err := utils.LoadOrCreateIdentity(cfg.IdentityPath, types.Identity{Name: rootHost})
@@ -147,14 +161,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}
 
 	tcpPortMin, tcpPortMax := 0, 0
-	if cfg.TCPPortCount > 0 {
-		tcpPortMin = defaultTCPPortBase
-		tcpPortMax = defaultTCPPortBase + cfg.TCPPortCount - 1
+	if cfg.TCPEnabled {
+		tcpPortMin = cfg.MinPort
+		tcpPortMax = cfg.MaxPort
 	}
 
 	policy := policy.NewRuntime()
-	policy.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
-	policy.SetTCPPortPolicy(cfg.TCPPortCount > 0, 0)
+	policy.SetUDPPolicy(cfg.UDPEnabled, 0)
+	policy.SetTCPPortPolicy(cfg.TCPEnabled, 0)
 	registry := newLeaseRegistry(policy)
 	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 	tcpPorts := transport.NewPortAllocator(tcpPortMin, tcpPortMax, 5*time.Minute)
@@ -245,7 +259,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	}
 	s.acmeManager.Start(serverCtx)
 
-	if s.cfg.UDPPortCount > 0 {
+	if s.cfg.UDPEnabled {
 		if err := s.startQUICTunnelListener(apiTLS); err != nil {
 			log.Warn().Err(err).Msg("quic tunnel listener disabled")
 		}
@@ -262,10 +276,12 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		Str("sni_addr", s.sniListener.Addr().String()).
 		Str("root_host", s.identity.Name).
 		Str("acme_dns_provider", s.cfg.ACME.DNSProvider).
+		Int("min_port", s.cfg.MinPort).
+		Int("max_port", s.cfg.MaxPort).
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
 		Bool("wireguard_enabled", s.wgConfig.PrivateKey != "").
-		Bool("udp_enabled", s.cfg.UDPPortCount > 0).
-		Bool("tcp_port_enabled", s.cfg.TCPPortCount > 0)
+		Bool("udp_enabled", s.cfg.UDPEnabled).
+		Bool("tcp_enabled", s.cfg.TCPEnabled)
 	if s.quicTunnel != nil {
 		logEvent = logEvent.Str("internal_quic_tunnel_addr", s.quicTunnel.Addr().String())
 	}
@@ -565,7 +581,7 @@ func (s *Server) startQUICTunnelListener(apiTLS keyless.TLSMaterialConfig) error
 		MaxIncomingStreams: 16,
 	}
 
-	listener, err := quic.ListenAddr(s.cfg.QUICListenAddr, tlsConf, quicConf)
+	listener, err := quic.ListenAddr(s.cfg.SNIListenAddr, tlsConf, quicConf)
 	if err != nil {
 		return fmt.Errorf("listen quic: %w", err)
 	}

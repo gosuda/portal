@@ -48,6 +48,7 @@ type apiClient struct {
 	accessToken      string
 	metadata         types.LeaseMetadata
 	resolvedPublicIP string
+	sniPort          int
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
@@ -126,8 +127,18 @@ func (a *apiClient) registerLease(ctx context.Context, ttl time.Duration, udpEna
 		return types.RegisterResponse{}, errors.New("relay returned mismatched lease identity")
 	}
 	resp.Identity = registeredIdentity
+
+	sniPort := 0
+	if udpEnabled {
+		if resp.SNIPort <= 0 {
+			return types.RegisterResponse{}, errors.New("relay did not return sni port for udp transport")
+		}
+		sniPort = resp.SNIPort
+	}
+
 	a.mu.Lock()
 	a.accessToken = resp.AccessToken
+	a.sniPort = sniPort
 	a.mu.Unlock()
 	return resp, nil
 }
@@ -316,7 +327,18 @@ func (a *apiClient) openQUICSession(ctx context.Context, accessToken string) (*q
 		MaxIdleTimeout:  60 * time.Second,
 	}
 
-	dialAddr := utils.EnsurePort(a.baseURL.Host)
+	a.mu.RLock()
+	sniPort := a.sniPort
+	a.mu.RUnlock()
+
+	if sniPort <= 0 {
+		return nil, errors.New("sni port is not available")
+	}
+	host := strings.TrimSpace(a.baseURL.Hostname())
+	if host == "" {
+		host = strings.TrimSpace(a.baseURL.Host)
+	}
+	dialAddr := net.JoinHostPort(host, fmt.Sprintf("%d", sniPort))
 	conn, err := quic.DialAddr(ctx, dialAddr, tlsConf, quicConf)
 	if err != nil {
 		return nil, fmt.Errorf("quic dial: %w", err)

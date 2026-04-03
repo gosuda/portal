@@ -81,6 +81,7 @@ type RegisterResponse struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	Hostname    string    `json:"hostname"`
 	AccessToken string    `json:"access_token"`
+	SNIPort     int       `json:"sni_port,omitempty"`
 	UDPAddr     string    `json:"udp_addr,omitempty"`
 	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
 	TCPAddr     string    `json:"tcp_addr,omitempty"`

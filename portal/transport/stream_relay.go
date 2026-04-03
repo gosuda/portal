@@ -70,7 +70,7 @@ func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
 }
 
 func (b *RelayStream) ClaimRaw(ctx context.Context) (net.Conn, error) {
-	return b.claimWithMarker(ctx, types.MarkerRawTCPStart)
+	return b.claimWithMarker(ctx, types.MarkerRawStart)
 }
 
 func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Conn, error) {

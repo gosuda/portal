@@ -133,7 +133,7 @@ func (s *ClientStream) runSession(
 				onReady()
 			}
 			return true, nil
-		case types.MarkerRawTCPStart:
+		case types.MarkerRawStart:
 			if err := s.activateRaw(ctx, conn); err != nil {
 				_ = conn.Close()
 				return true, err
