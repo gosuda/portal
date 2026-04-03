@@ -93,6 +93,10 @@ type RelayDescriptor struct {
 	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
+
+	Load        float64 `json:"load,omitempty"`
+	LoadScore   float64 `json:"load_score,omitempty"`
+	LastUpdated int64   `json:"last_updated,omitempty"`
 }
 
 const DiscoveryPollInterval = 1 * time.Minute

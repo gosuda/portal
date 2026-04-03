@@ -21,6 +21,7 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/portal/ols"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/portal/wireguard"
@@ -148,9 +149,9 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Msg("generated relay identity and saved it to disk")
 	}
 
-	policy := policy.NewRuntime()
-	policy.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
-	registry := newLeaseRegistry(policy)
+	policyRuntime := policy.NewRuntime()
+	policyRuntime.SetUDPPolicy(cfg.UDPPortCount > 0, 0)
+	registry := newLeaseRegistry(policyRuntime)
 	ports := transport.NewPortAllocator(portMin, portMax, 5*time.Minute)
 
 	s := &Server{
@@ -184,6 +185,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		s.ols = ols.New(identity.Key())
 	}
 
 	return s, nil
@@ -246,6 +248,9 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	group.Go(s.runAPIServer)
 	if s.overlay != nil {
 		group.Go(s.overlay.Serve)
+	}
+	if s.interRelayListener != nil {
+		group.Go(func() error { return s.runInterRelayProxyListener(groupCtx) })
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
 	group.Go(func() error { return s.runLeaseJanitor(groupCtx, 5*time.Second) })
@@ -482,6 +487,15 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
+			// OLS load balancing: route to best target node if applicable.
+			if s.ols != nil {
+				snapshot := s.relaySet.Snapshot()
+				peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+				if s.ols.RouteConn(ctx, wrappedConn, serverName, peers) {
+					return
+				}
+			}
+
 				if serverName == s.identity.Name {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
@@ -493,7 +507,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 						_ = wrappedConn.Close()
 						return
 					}
-					BridgeConns(wrappedConn, upstream)
+					s.BridgeConns(wrappedConn, upstream)
 					return
 				}
 
@@ -512,7 +526,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				BridgeConns(wrappedConn, session)
+				s.BridgeConns(wrappedConn, session)
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
 			return nil
@@ -617,12 +631,20 @@ func (s *Server) startOverlay() error {
 		return fmt.Errorf("start wireguard overlay: %w", err)
 	}
 
+	interRelayListener, err := overlay.ListenTCP(7778)
+	if err != nil {
+		_ = overlay.Shutdown(context.Background())
+		return fmt.Errorf("listen inter-relay proxy: %w", err)
+	}
+
 	if err := overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); err != nil {
+		_ = interRelayListener.Close()
 		_ = overlay.Shutdown(context.Background())
 		return fmt.Errorf("sync wireguard peers: %w", err)
 	}
 
 	s.overlay = overlay
+	s.interRelayListener = interRelayListener
 	return nil
 }
 
@@ -651,10 +673,15 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			var relaySetChanged bool
 			var warnErr error
 			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.Identity, bootstrap.APIHTTPSAddr, resp, now)
-			if relaySetChanged && s.overlay != nil {
-				if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil {
-					if warnErr == nil {
-						warnErr = syncErr
+			if relaySetChanged {
+				if s.ols != nil {
+					s.ols.OnRelaySetChanged(s.localLoad(), s.relaySet.Snapshot())
+				}
+				if s.overlay != nil {
+					if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil {
+						if warnErr == nil {
+							warnErr = syncErr
+						}
 					}
 				}
 			}
@@ -710,6 +737,9 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 						var snapshot map[string]types.RelayState
 						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, now)
 						if relaySetChanged {
+							if s.ols != nil {
+								s.ols.OnRelaySetChanged(s.localLoad(), s.relaySet.Snapshot())
+							}
 							snapshot = s.relaySet.Snapshot()
 							if syncErr := s.overlay.Sync(s.identity.Key(), snapshot); syncErr != nil {
 								if warnErr == nil {
@@ -766,18 +796,23 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	}
 }
 
-func BridgeConns(left, right net.Conn) {
+func (s *Server) BridgeConns(left, right net.Conn) {
+	s.loadMgr.RecordConnStart()
+	defer s.loadMgr.RecordConnEnd()
+
 	defer left.Close()
 	defer right.Close()
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := io.Copy(right, left)
+		n, err := io.Copy(right, left)
+		s.loadMgr.RecordBytesIn(n)
 		closeWrite(right)
 		return err
 	})
 	group.Go(func() error {
-		_, err := io.Copy(left, right)
+		n, err := io.Copy(left, right)
+		s.loadMgr.RecordBytesOut(n)
 		closeWrite(left)
 		return err
 	})
