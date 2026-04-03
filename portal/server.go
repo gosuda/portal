@@ -65,25 +65,29 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	sniListener       net.Listener
-	apiListener       net.Listener
-	apiServer         *http.Server
-	apiTLSClose       io.Closer
-	acmeManager       *acme.Manager
-	quicTunnel        *quic.Listener
-	overlay           *wireguard.Overlay
-	cancel            context.CancelFunc
-	group             *errgroup.Group
-	registry          *leaseRegistry
-	ports             *transport.PortAllocator
-	identity          types.Identity
-	wgConfig          wireguard.Config
-	cfg               ServerConfig
-	trustedProxyCIDRs []*net.IPNet
-	relaySet          *discovery.RelaySet
-	shutdownOnce      sync.Once
-	olsManager        *discovery.OLSManager
-	discoveryClient   *http.Client
+	sniListener        net.Listener
+	apiListener        net.Listener
+	apiServer          *http.Server
+	apiTLSClose        io.Closer
+	acmeManager        *acme.Manager
+	quicTunnel         *quic.Listener
+	overlay            *wireguard.Overlay
+	interRelayListener net.Listener
+	cancel             context.CancelFunc
+	group              *errgroup.Group
+	registry           *leaseRegistry
+	ports              *transport.PortAllocator
+	loadMgr            *policy.LoadManager
+	weightMgr          *policy.WeightManager
+	identity           types.Identity
+	wgConfig           wireguard.Config
+	cfg                ServerConfig
+	trustedProxyCIDRs  []*net.IPNet
+	relaySet           *discovery.RelaySet
+	shutdownOnce       sync.Once
+	olsManager         *discovery.OLSManager
+	ols                *ols.Engine
+	discoveryClient    *http.Client
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -158,6 +162,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		cfg:               cfg,
 		registry:          registry,
 		ports:             ports,
+		loadMgr:           policy.NewLoadManager(),
+		weightMgr:         policy.NewWeightManager(),
 		identity:          identity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
@@ -333,6 +339,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 				shutdownErr = err
 			}
 		}
+		if s.interRelayListener != nil {
+			if err := s.interRelayListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) && shutdownErr == nil {
+				shutdownErr = err
+			}
+		}
 		if s.apiServer != nil {
 			if err := s.apiServer.Shutdown(ctx); err != nil && shutdownErr == nil {
 				shutdownErr = err
@@ -487,14 +498,14 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-			// OLS load balancing: route to best target node if applicable.
-			if s.ols != nil {
-				snapshot := s.relaySet.Snapshot()
-				peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
-				if s.ols.RouteConn(ctx, wrappedConn, serverName, peers) {
-					return
+				// OLS load balancing: route to best target node if applicable.
+				if s.ols != nil && s.relaySet != nil && s.overlay != nil {
+					snapshot := s.relaySet.Snapshot()
+					peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+					if s.ols.RouteConn(ctx, wrappedConn, serverName, peers) {
+						return
+					}
 				}
-			}
 
 				if serverName == s.identity.Name {
 					if s.apiListener == nil {
@@ -531,6 +542,9 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 		case errors.Is(err, net.ErrClosed):
 			return nil
 		default:
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 	}
@@ -794,6 +808,102 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			round++
 		}
 	}
+}
+
+func (s *Server) localLoad() policy.NodeLoad {
+	if s == nil || s.loadMgr == nil {
+		return policy.NodeLoad{}
+	}
+	load := s.loadMgr.Snapshot()
+	if s.weightMgr != nil {
+		w := s.weightMgr.Collect()
+		load.AvgLatencyMs = w.AvgLatencyMs
+	}
+	return load
+}
+
+func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
+	for {
+		conn, err := s.interRelayListener.Accept()
+		switch {
+		case err == nil:
+			go func(conn net.Conn) {
+				if s.ols == nil || s.relaySet == nil || s.overlay == nil {
+					_ = conn.Close()
+					return
+				}
+				snapshot := s.relaySet.Snapshot()
+				peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+				s.ols.ServeInterRelayConn(ctx, conn, peers, func(serverName string, c net.Conn) {
+					s.serveLocalConn(ctx, serverName, c)
+				})
+			}(conn)
+		case errors.Is(err, net.ErrClosed):
+			return nil
+		default:
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+func (s *Server) serveLocalConn(ctx context.Context, serverName string, conn net.Conn) {
+	if serverName == s.identity.Name {
+		if s.apiListener == nil {
+			_ = conn.Close()
+			return
+		}
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
+		if err != nil {
+			_ = conn.Close()
+			return
+		}
+		s.BridgeConns(conn, upstream)
+		return
+	}
+
+	record, ok := s.registry.Lookup(serverName)
+	if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
+		_ = conn.Close()
+		return
+	}
+
+	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+	defer cancel()
+
+	session, err := record.stream.Claim(claimCtx)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+
+	s.BridgeConns(conn, session)
+}
+
+type snapshotPeerDialer struct {
+	snapshot map[string]types.RelayState
+	overlay  *wireguard.Overlay
+}
+
+func (d *snapshotPeerDialer) PeerAddr(nodeID string) (string, bool) {
+	state, ok := d.snapshot[nodeID]
+	if !ok || state.Expired {
+		return "", false
+	}
+	if !state.Descriptor.SupportsOverlayPeer || strings.TrimSpace(state.Descriptor.OverlayIPv4) == "" {
+		return "", false
+	}
+	return net.JoinHostPort(state.Descriptor.OverlayIPv4, "7778"), true
+}
+
+func (d *snapshotPeerDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if d == nil || d.overlay == nil {
+		return nil, errors.New("overlay is not initialized")
+	}
+	return d.overlay.DialContext(ctx, network, address)
 }
 
 func (s *Server) BridgeConns(left, right net.Conn) {
