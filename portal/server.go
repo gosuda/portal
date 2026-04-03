@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
@@ -79,36 +78,15 @@ type Server struct {
 	wgConfig           wireguard.Config
 	cfg                ServerConfig
 	trustedProxyCIDRs  []*net.IPNet
-	relaySet           *discovery.RelaySet
-	ols                *ols.Engine
-	activeConns        int64
-	bytesIn            int64
-	bytesOut           int64
-	connCount          int64
-	lastConnRateCheck  time.Time
-	connRateMu         sync.Mutex
-	connRate           float64
-	shutdownOnce       sync.Once
+	relaySet     *discovery.RelaySet
+	ols          *ols.Engine
+	loadMgr      *policy.LoadManager
+	shutdownOnce sync.Once
 }
 
 // localLoad returns the current server load snapshot for OLS accounting.
 func (s *Server) localLoad() policy.NodeLoad {
-	s.connRateMu.Lock()
-	now := time.Now()
-	diff := now.Sub(s.lastConnRateCheck).Seconds()
-	if diff >= 5.0 {
-		count := atomic.SwapInt64(&s.connCount, 0)
-		s.connRate = float64(count) / diff
-		s.lastConnRateCheck = now
-	}
-	connRate := s.connRate
-	s.connRateMu.Unlock()
-	return policy.NodeLoad{
-		ActiveConns: atomic.LoadInt64(&s.activeConns),
-		BytesIn:     atomic.LoadInt64(&s.bytesIn),
-		BytesOut:    atomic.LoadInt64(&s.bytesOut),
-		ConnRate:    connRate,
-	}
+	return s.loadMgr.Snapshot()
 }
 
 func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
@@ -221,7 +199,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		identity:          identity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
-		lastConnRateCheck: time.Now(),
+		loadMgr:           policy.NewLoadManager(),
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -828,9 +806,8 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 }
 
 func (s *Server) BridgeConns(left, right net.Conn) {
-	atomic.AddInt64(&s.activeConns, 1)
-	atomic.AddInt64(&s.connCount, 1)
-	defer atomic.AddInt64(&s.activeConns, -1)
+	s.loadMgr.RecordConnStart()
+	defer s.loadMgr.RecordConnEnd()
 
 	defer left.Close()
 	defer right.Close()
@@ -838,13 +815,13 @@ func (s *Server) BridgeConns(left, right net.Conn) {
 	var group errgroup.Group
 	group.Go(func() error {
 		n, err := io.Copy(right, left)
-		atomic.AddInt64(&s.bytesIn, n)
+		s.loadMgr.RecordBytesIn(n)
 		closeWrite(right)
 		return err
 	})
 	group.Go(func() error {
 		n, err := io.Copy(left, right)
-		atomic.AddInt64(&s.bytesOut, n)
+		s.loadMgr.RecordBytesOut(n)
 		closeWrite(left)
 		return err
 	})

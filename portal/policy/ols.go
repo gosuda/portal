@@ -186,12 +186,17 @@ func generateMOLS(n int) ([][]int, [][]int) {
 	return composeMOLS(a1, b1), composeMOLS(a2, b2)
 }
 
+// generateBaseMOLS fills an n×n grid where each cell (i,j) gets value
+// (step*i + j) % n. Intermediate products are kept bounded by reducing
+// modulo n at each multiplication step.
 func generateBaseMOLS(n, step int) [][]int {
 	ls := make([][]int, n)
 	for i := 0; i < n; i++ {
 		ls[i] = make([]int, n)
+		// Compute step*i mod n once per row, then add j mod n per column.
+		base := (step % n) * (i % n) % n
 		for j := 0; j < n; j++ {
-			ls[i][j] = (step*i + j) % n
+			ls[i][j] = (base + j) % n
 		}
 	}
 	return ls
@@ -248,8 +253,8 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 		}
 	}
 
-	i := hashString(clientID) % m.n
-	j := hashString(leaseID) % m.n
+	i := hashStringMod(clientID, m.n)
+	j := hashStringMod(leaseID, m.n)
 
 	row := m.l1[i][j]
 	col := m.l2[i][j]
@@ -447,13 +452,15 @@ func (m *OLSManager) checkAndRotate() {
 	m.rotation = math.Mod(m.rotation+sign*step+360.0, 360.0)
 }
 
-func hashString(s string) int {
+// hashStringMod computes a polynomial hash of s modulo mod using Horner's method.
+// Reducing modulo mod at each step keeps intermediate values bounded as n grows.
+func hashStringMod(s string, mod int) int {
+	if mod <= 0 {
+		return 0
+	}
 	h := 0
 	for i := 0; i < len(s); i++ {
-		h = 31*h + int(s[i])
-	}
-	if h < 0 {
-		h = -h
+		h = (31*h + int(s[i])) % mod
 	}
 	return h
 }
