@@ -2,7 +2,7 @@ package utils
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net"
@@ -143,7 +143,7 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 	if resp.StatusCode != http.StatusOK {
 		return explicit, nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&registry); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &registry); err != nil {
 		return explicit, nil
 	}
 

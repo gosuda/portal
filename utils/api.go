@@ -3,7 +3,8 @@ package utils
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,7 @@ func (resp APIErrorResponse) Write(w http.ResponseWriter) {
 func WriteAPIData(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{OK: true, Data: data})
+	_ = json.MarshalWrite(w, types.APIEnvelope[any]{OK: true, Data: data})
 }
 
 func WriteAPIEmpty(w http.ResponseWriter, status int) {
@@ -36,7 +37,7 @@ func WriteAPIEmpty(w http.ResponseWriter, status int) {
 func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{
+	_ = json.MarshalWrite(w, types.APIEnvelope[any]{
 		OK:    false,
 		Error: &types.APIError{Code: code, Message: message},
 	})
@@ -114,7 +115,7 @@ func HTTPDoJSON(ctx context.Context, client *http.Client, method, rawURL string,
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return json.UnmarshalRead(resp.Body, out)
 }
 
 func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, method, path string, payload any, headers http.Header, out any) error {
@@ -133,8 +134,8 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 		return DecodeAPIRequestError(resp)
 	}
 
-	var envelope types.APIEnvelope[json.RawMessage]
-	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+	var envelope types.APIEnvelope[jsontext.Value]
+	if err := json.UnmarshalRead(resp.Body, &envelope); err != nil {
 		return fmt.Errorf("decode response: %w", err)
 	}
 	if !envelope.OK {
@@ -162,7 +163,7 @@ func DecodeAPIRequestError(resp *http.Response) error {
 	}
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	var envelope types.APIEnvelope[json.RawMessage]
+	var envelope types.APIEnvelope[jsontext.Value]
 	if err := json.Unmarshal(body, &envelope); err == nil && !envelope.OK {
 		if envelope.Error == nil {
 			return &types.APIRequestError{
@@ -187,7 +188,7 @@ func DecodeJSONRequest[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 	var dst T
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	if err := json.UnmarshalRead(r.Body, &dst); err != nil {
 		WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidJSON, err.Error())
 		return dst, false
 	}
@@ -198,7 +199,7 @@ func DecodeJSONRequestAs[T any](w http.ResponseWriter, r *http.Request, maxBytes
 	var dst T
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(&dst); err != nil {
+	if err := json.UnmarshalRead(r.Body, &dst); err != nil {
 		invalid.Write(w)
 		return dst, false
 	}

@@ -9,6 +9,7 @@ GOLANGCI_LINT_VERSION := v2.11.1
 GOVULNCHECK_VERSION := v1.1.4
 
 export GOTOOLCHAIN := $(GO_TOOLCHAIN_VERSION)
+export GOEXPERIMENT := jsonv2
 
 help:
 	@echo "Available targets:"

@@ -2,7 +2,7 @@ package sdk
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,7 +54,7 @@ func TestExposeLoadsPrivateKeyFromIdentityPath(t *testing.T) {
 			})
 		case types.PathSDKRegisterChallenge:
 			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
 			select {
@@ -71,7 +71,7 @@ func TestExposeLoadsPrivateKeyFromIdentityPath(t *testing.T) {
 			})
 		case types.PathSDKRegister:
 			var registerReq types.RegisterRequest
-			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterResponse]{
@@ -154,7 +154,7 @@ func TestExposeLoadsIdentityFromJSON(t *testing.T) {
 			})
 		case types.PathSDKRegisterChallenge:
 			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
 			select {
@@ -238,7 +238,7 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 			})
 		case types.PathSDKRegisterChallenge:
 			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
 			mu.Lock()
@@ -258,7 +258,7 @@ func TestExposeGeneratesAddressWithoutPrivateKey(t *testing.T) {
 			})
 		case types.PathSDKRegister:
 			var registerReq types.RegisterRequest
-			if err := json.NewDecoder(r.Body).Decode(&registerReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&registerReq); err != nil {
 				t.Fatalf("decode register request: %v", err)
 			}
 			mu.RLock()
@@ -336,7 +336,7 @@ func TestAPIClientRegisterLeaseRequiresSNIPortForUDP(t *testing.T) {
 			})
 		case types.PathSDKRegisterChallenge:
 			var challengeReq types.RegisterChallengeRequest
-			if err := json.NewDecoder(r.Body).Decode(&challengeReq); err != nil {
+			if err := json.UnmarshalRead(r.Body,&challengeReq); err != nil {
 				t.Fatalf("decode register challenge request: %v", err)
 			}
 			writeSDKTestEnvelope(w, http.StatusCreated, types.APIEnvelope[types.RegisterChallengeResponse]{
@@ -400,7 +400,7 @@ func mustSDKTestSIWEMessage(t *testing.T, r *http.Request, address, challengeID 
 func writeSDKTestEnvelope[T any](w http.ResponseWriter, status int, envelope types.APIEnvelope[T]) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(envelope)
+	_ = json.MarshalWrite(w, envelope)
 }
 
 func waitForSDKTest(t *testing.T, fn func() bool) {

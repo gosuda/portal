@@ -3,7 +3,7 @@ package portal
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -470,13 +470,13 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 
 	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var msg types.QUICControlMessage
-	if err := json.NewDecoder(io.LimitReader(stream, defaultControlBodyLimit)).Decode(&msg); err != nil {
+	if err := json.UnmarshalRead(io.LimitReader(stream, defaultControlBodyLimit), &msg); err != nil {
 		_ = conn.CloseWithError(1, "control read failed")
 		return
 	}
 	_ = stream.SetReadDeadline(time.Time{})
 	if strings.TrimSpace(msg.AccessToken) == "" {
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: "invalid_control_message"})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
@@ -485,34 +485,34 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 	switch {
 	case err == nil:
 	case errors.Is(err, errLeaseNotFound):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
 		_ = conn.CloseWithError(1, "lease not found")
 		return
 	case errors.Is(err, errLeaseRejected):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
 		_ = conn.CloseWithError(1, "lease rejected")
 		return
 	case errors.Is(err, errUnauthorized):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
 		_ = conn.CloseWithError(1, "unauthorized")
 		return
 	case errors.Is(err, errTransportMismatch):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
 		_ = conn.CloseWithError(1, "transport mismatch")
 		return
 	default:
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
 		_ = conn.CloseWithError(1, "invalid control message")
 		return
 	}
 
 	if err := lease.datagram.Register(conn); err != nil {
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: "broker_closed"})
+		_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: false, Error: "broker_closed"})
 		_ = conn.CloseWithError(1, "broker closed")
 		return
 	}
 
-	_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: true})
+	_ = json.MarshalWrite(stream, types.QUICControlResponse{OK: true})
 	s.registry.Touch(lease.Copy(), conn.RemoteAddr().String(), time.Now())
 	log.Info().
 		Str("component", "quic-tunnel-listener").
