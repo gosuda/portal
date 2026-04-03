@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -59,105 +60,30 @@ type ServerConfig struct {
 	TrustProxyHeaders   bool
 	DiscoveryEnabled    bool
 	UDPPortCount        int
+	I2PProxyURL         string
+	I2PDiscoveryOnly    bool
 }
 
 type Server struct {
-	sniListener        net.Listener
-	apiListener        net.Listener
-	apiServer          *http.Server
-	apiTLSClose        io.Closer
-	acmeManager        *acme.Manager
-	quicTunnel         *quic.Listener
-	overlay            *wireguard.Overlay
-	interRelayListener net.Listener
-	cancel             context.CancelFunc
-	group              *errgroup.Group
-	registry           *leaseRegistry
-	ports              *transport.PortAllocator
-	identity           types.Identity
-	wgConfig           wireguard.Config
-	cfg                ServerConfig
-	trustedProxyCIDRs  []*net.IPNet
-	relaySet           *discovery.RelaySet
-	ols                *ols.Engine
-	loadMgr            *policy.LoadManager
-	weightMgr          *policy.WeightManager
-	shutdownOnce       sync.Once
-}
-
-// snapshotPeerDialer implements ols.PeerDialer.  It concentrates all
-// WireGuard-specific knowledge in one place so that the OLS engine remains
-// protocol-agnostic.
-type snapshotPeerDialer struct {
-	snapshot map[string]types.RelayState
-	overlay  *wireguard.Overlay
-}
-
-// PeerAddr returns the inter-relay TCP address (host:port) for nodeID by
-// reading WireGuard overlay fields from the cached relay snapshot.
-func (d *snapshotPeerDialer) PeerAddr(nodeID string) (string, bool) {
-	if d == nil || d.overlay == nil {
-		return "", false
-	}
-	state, ok := d.snapshot[nodeID]
-	if !ok || state.Expired || !state.Descriptor.SupportsOverlayPeer || state.Descriptor.OverlayIPv4 == "" {
-		return "", false
-	}
-	return net.JoinHostPort(state.Descriptor.OverlayIPv4, fmt.Sprintf("%d", 7778)), true
-}
-
-// DialContext dials through the WireGuard overlay network.
-func (d *snapshotPeerDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	return d.overlay.DialContext(ctx, network, address)
-}
-
-// localLoad returns the current server load snapshot for OLS accounting.
-// It merges raw connection metrics from LoadManager with the protocol-specific
-// latency signals collected by WeightManager.
-func (s *Server) localLoad() policy.NodeLoad {
-	load := s.loadMgr.Snapshot()
-	if s.weightMgr != nil {
-		wl := s.weightMgr.Collect()
-		load.AvgLatencyMs = wl.AvgLatencyMs
-	}
-	return load
-}
-
-func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
-	for {
-		conn, err := s.interRelayListener.Accept()
-		if err != nil {
-			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil || strings.Contains(err.Error(), "endpoint is in invalid state") {
-				//nolint:nilerr
-				return nil
-			}
-			return err
-		}
-		go func(conn net.Conn) {
-			snapshot := s.relaySet.Snapshot()
-			peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
-			s.ols.ServeInterRelayConn(ctx, conn, peers, s.serveLocalConn(ctx))
-		}(conn)
-	}
-}
-
-// serveLocalConn returns a handler that claims a local lease stream and bridges it.
-func (s *Server) serveLocalConn(ctx context.Context) func(serverName string, conn net.Conn) {
-	return func(serverName string, conn net.Conn) {
-		record, ok := s.registry.Lookup(serverName)
-		if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
-			_ = conn.Close()
-			return
-		}
-		claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-		defer cancel()
-		session, err := record.stream.Claim(claimCtx)
-		if err != nil {
-			_ = conn.Close()
-			return
-		}
-		s.BridgeConns(conn, session)
-	}
+	sniListener       net.Listener
+	apiListener       net.Listener
+	apiServer         *http.Server
+	apiTLSClose       io.Closer
+	acmeManager       *acme.Manager
+	quicTunnel        *quic.Listener
+	overlay           *wireguard.Overlay
+	cancel            context.CancelFunc
+	group             *errgroup.Group
+	registry          *leaseRegistry
+	ports             *transport.PortAllocator
+	identity          types.Identity
+	wgConfig          wireguard.Config
+	cfg               ServerConfig
+	trustedProxyCIDRs []*net.IPNet
+	relaySet          *discovery.RelaySet
+	shutdownOnce      sync.Once
+	olsManager        *discovery.OLSManager
+	discoveryClient   *http.Client
 }
 
 func NewServer(cfg ServerConfig) (*Server, error) {
@@ -235,8 +161,22 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		identity:          identity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
-		loadMgr:           policy.NewLoadManager(),
-		weightMgr:         policy.NewWeightManager(),
+		olsManager:        discovery.NewOLSManager(),
+	}
+	if cfg.I2PDiscoveryOnly {
+		proxyURL := strings.TrimSpace(cfg.I2PProxyURL)
+		if proxyURL != "" {
+			parsedProxy, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, fmt.Errorf("parse i2p proxy url: %w", err)
+			}
+			s.discoveryClient = &http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyURL(parsedProxy),
+				},
+				Timeout: 15 * time.Second,
+			}
+		}
 	}
 
 	if cfg.DiscoveryEnabled {
@@ -711,12 +651,16 @@ func (s *Server) startOverlay() error {
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(types.DiscoveryPollInterval)
 	defer ticker.Stop()
+	var round uint64
 
 	for {
 		bootstraps := s.relaySet.BootstrapDescriptors()
+		if s.olsManager != nil && len(bootstraps) > 1 {
+			bootstraps = s.olsManager.OrderDescriptors(bootstraps, nil, round)
+		}
 
 		for _, bootstrap := range bootstraps {
-			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, nil)
+			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, s.discoveryClient)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -764,6 +708,14 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		if s.overlay != nil {
 			overlayClient := s.overlay.Client()
 			syncableRelays := s.relaySet.SyncableDescriptors()
+			if s.olsManager != nil && len(syncableRelays) > 1 {
+				loadByURL := map[string]float64{}
+				snapshot := s.relaySet.Snapshot()
+				for _, relay := range syncableRelays {
+					loadByURL[relay.APIHTTPSAddr] = float64(snapshot[relay.Key()].ConsecutiveFailures)
+				}
+				syncableRelays = s.olsManager.OrderDescriptors(syncableRelays, loadByURL, round)
+			}
 
 			for _, relay := range syncableRelays {
 				var failureErr error
@@ -839,6 +791,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			round++
 		}
 	}
 }
