@@ -154,6 +154,20 @@ func (o *Overlay) Client() *http.Client {
 	}
 }
 
+func (o *Overlay) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if o == nil || o.stack == nil {
+		return nil, errors.New("overlay is not initialized")
+	}
+	return o.stack.DialContext(ctx, network, address)
+}
+
+func (o *Overlay) ListenTCP(port int) (net.Listener, error) {
+	if o == nil || o.stack == nil {
+		return nil, errors.New("overlay is not initialized")
+	}
+	return o.stack.ListenTCP(port)
+}
+
 func (o *Overlay) Sync(selfIdentityKey string, snapshot map[string]types.RelayState) error {
 	if o == nil || o.stack == nil {
 		return nil

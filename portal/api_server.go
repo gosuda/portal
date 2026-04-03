@@ -165,6 +165,7 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		WireGuardEndpoint:   s.wgConfig.Endpoint,
 		OverlayIPv4:         s.wgConfig.OverlayIPv4,
 		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
+		Load:                float64(s.loadMgr.ActiveConns()),
 	})
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
