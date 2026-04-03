@@ -46,14 +46,12 @@ func (s *ClientStream) RunLoop(
 	ctx context.Context,
 	open func(context.Context) (net.Conn, error),
 	currentTLSConfig func() *tls.Config,
-	onReady func(),
-	onInactive func(),
 	retry func(context.Context, string, error, int) bool,
 ) {
 	var retries int
 
 	for {
-		claimed, err := s.runSession(ctx, open, currentTLSConfig, onReady)
+		claimed, err := s.runSession(ctx, open, currentTLSConfig)
 		switch {
 		case err == nil:
 			retries = 0
@@ -63,9 +61,6 @@ func (s *ClientStream) RunLoop(
 			retries = 0
 		default:
 			retries++
-			if s.ActiveSessions() == 0 && onInactive != nil {
-				onInactive()
-			}
 			if retry == nil || !retry(ctx, "reverse session connect", err, retries) {
 				return
 			}
@@ -103,7 +98,6 @@ func (s *ClientStream) runSession(
 	ctx context.Context,
 	open func(context.Context) (net.Conn, error),
 	currentTLSConfig func() *tls.Config,
-	onReady func(),
 ) (bool, error) {
 	conn, err := open(ctx)
 	if err != nil {
@@ -129,17 +123,11 @@ func (s *ClientStream) runSession(
 				_ = conn.Close()
 				return true, err
 			}
-			if onReady != nil {
-				onReady()
-			}
 			return true, nil
 		case types.MarkerRawStart:
 			if err := s.activateRaw(ctx, conn); err != nil {
 				_ = conn.Close()
 				return true, err
-			}
-			if onReady != nil {
-				onReady()
 			}
 			return true, nil
 		default:

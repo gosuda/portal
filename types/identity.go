@@ -87,33 +87,11 @@ type RelayDescriptor struct {
 	APIHTTPSAddr   string `json:"api_https_addr"`
 	IngressTLSAddr string `json:"ingress_tls_addr,omitempty"`
 
-	WireGuardPublicKey string   `json:"wireguard_public_key,omitempty"`
-	WireGuardEndpoint  string   `json:"wireguard_endpoint,omitempty"`
-	OverlayIPv4        string   `json:"overlay_ipv4,omitempty"`
-	OverlayCIDRs       []string `json:"overlay_cidrs,omitempty"`
-
-	SupportsUDP         bool `json:"supports_udp,omitempty"`
-	SupportsTCP         bool `json:"supports_tcp,omitempty"`
-	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
+	SupportsUDP bool `json:"supports_udp,omitempty"`
+	SupportsTCP bool `json:"supports_tcp,omitempty"`
 }
 
 const DiscoveryPollInterval = 1 * time.Minute
-
-type RelayState struct {
-	Descriptor          RelayDescriptor `json:"descriptor"`
-	Bootstrap           bool            `json:"bootstrap,omitempty"`
-	Advertised          bool            `json:"advertised,omitempty"`
-	Expired             bool            `json:"expired,omitempty"`
-	FirstSeenAt         time.Time       `json:"first_seen_at"`
-	LastSeenAt          time.Time       `json:"last_seen_at"`
-	ConsecutiveFailures int             `json:"consecutive_failures,omitempty"`
-}
-
-type DesiredPeer struct {
-	WireGuardPublicKey string   `json:"wireguard_public_key"`
-	WireGuardEndpoint  string   `json:"wireguard_endpoint"`
-	AllowedIPs         []string `json:"allowed_ips,omitempty"`
-}
 
 type DNSSECStatus struct {
 	State    string `json:"state,omitempty"`

@@ -137,8 +137,6 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 						defer l.mu.Unlock()
 						return l.tlsConfig
 					},
-					func() { l.markReachable() },
-					func() { l.markUnreachable() },
 					l.retryOrClose,
 				)
 			}
@@ -509,10 +507,6 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 		Str("address", l.Address()).
 		Logger()
 
-	if operation == "lease registration" {
-		l.markUnreachable()
-	}
-
 	if l.retryCount > 0 && retries > l.retryCount {
 		if operation != "lease renewal" {
 			logger.Error().
@@ -558,23 +552,9 @@ func (l *Listener) ban() {
 		return
 	}
 	if l.relaySet != nil && l.api != nil && l.api.baseURL != nil {
-		l.relaySet.BanRelayURL(l.api.baseURL.String(), "mitm")
+		l.relaySet.BanRelayURL(l.api.baseURL.String())
 	}
 	_ = l.Close()
-}
-
-func (l *Listener) markReachable() {
-	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
-		return
-	}
-	l.relaySet.MarkRelayReachable(l.api.baseURL.String(), time.Now().UTC())
-}
-
-func (l *Listener) markUnreachable() {
-	if l == nil || l.relaySet == nil || l.api == nil || l.api.baseURL == nil {
-		return
-	}
-	l.relaySet.MarkRelayUnreachable(l.api.baseURL.String())
 }
 
 func (l *Listener) BanMITM() bool {

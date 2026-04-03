@@ -221,9 +221,8 @@ func TestMITMProbeDetectionBansListener(t *testing.T) {
 		registered: make(chan struct{}),
 		banMITM:    true,
 	}
-	listener.relaySet.ReplaceKnownRelayURLs([]string{relayURL.String()})
+	listener.relaySet.SetBootstrapRelayURLs([]string{relayURL.String()})
 	listener.mitmManager = newMITMManager(context.Background(), listener)
-	listener.markReachable()
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
@@ -255,9 +254,8 @@ func TestMITMProbeDetectionWarnsWithoutBanningListener(t *testing.T) {
 		registered: make(chan struct{}),
 		banMITM:    false,
 	}
-	listener.relaySet.ReplaceKnownRelayURLs([]string{relayURL.String()})
+	listener.relaySet.SetBootstrapRelayURLs([]string{relayURL.String()})
 	listener.mitmManager = newMITMManager(context.Background(), listener)
-	listener.markReachable()
 
 	listener.mitmManager.logResult(MITMProbeReport{
 		RelayURL: relayURL.String(),
