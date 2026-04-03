@@ -21,7 +21,7 @@ const (
 	defaultFlowCleanupInterval = 30 * time.Second
 )
 
-var ErrPortExhausted = errors.New("no udp ports available")
+var ErrPortExhausted = errors.New("no ports available")
 
 type flowReplyFunc func([]byte) error
 
@@ -36,7 +36,7 @@ type portReservation struct {
 	expiresAt time.Time
 }
 
-// PortAllocator manages a pool of UDP ports for dynamic per-lease allocation.
+// PortAllocator manages a pool of ports for dynamic per-lease allocation.
 type PortAllocator struct {
 	available []int
 	inUse     map[int]string

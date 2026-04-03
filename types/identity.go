@@ -57,6 +57,8 @@ type Lease struct {
 	LastSeenAt  time.Time
 	Hostname    string
 	UDPEnabled  bool
+	TCPEnabled  bool
+	TCPAddr     string
 	Metadata    LeaseMetadata
 	Ready       int
 }
@@ -90,8 +92,8 @@ type RelayDescriptor struct {
 	OverlayIPv4        string   `json:"overlay_ipv4,omitempty"`
 	OverlayCIDRs       []string `json:"overlay_cidrs,omitempty"`
 
-	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsUDP         bool `json:"supports_udp,omitempty"`
+	SupportsTCP         bool `json:"supports_tcp,omitempty"`
 	SupportsOverlayPeer bool `json:"supports_overlay_peer,omitempty"`
 }
 

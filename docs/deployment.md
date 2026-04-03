@@ -14,8 +14,10 @@ You need:
   - `443/tcp`
   - `4017/tcp`
   - optional for UDP transport:
-    - `4017/udp`
-    - `50000+/udp` (see section 5)
+    - `SNI_PORT/udp`
+    - `MIN_PORT-MAX_PORT/udp` (see section 5)
+  - optional for raw TCP port transport:
+    - `MIN_PORT-MAX_PORT/tcp` (see section 5)
 
 ## 2. Certificate and DNS Mode
 
@@ -120,7 +122,6 @@ Equivalent relay flags:
 When `ENS_GASLESS_ENABLED=true` and `ACME_DNS_PROVIDER=route53` and the hosted zone does not already have an active Route53 key-signing key (KSK), also provide:
 
 - `AWS_DNSSEC_KMS_KEY_ARN`
-- optional `DNSSEC_KSK_NAME`
 
 ### 3.4 Google Cloud DNS setup
 
@@ -266,8 +267,6 @@ AWS_REGION=us-east-1
 AWS_HOSTED_ZONE_ID=Z1234567890ABC
 # Required only for ENS gasless automation when no ACTIVE KSK already exists.
 AWS_DNSSEC_KMS_KEY_ARN=arn:aws:kms:...
-# Optional override
-DNSSEC_KSK_NAME=portal_ksk
 ENS_GASLESS_ENABLED=false
 ```
 
@@ -334,57 +333,71 @@ Then start the stack:
 docker compose up -d
 ```
 
-## 5. Optional UDP Setup
+## 5. Optional UDP and Raw TCP Port Setup
 
-UDP transport is disabled by default.
+UDP transport and raw TCP port transport are disabled by default.
 
-### 5.1 Open UDP ports on your VM or host
+### 5.1 Open transport ports on your VM or host
 
-Open these UDP ports in your cloud security group or firewall:
+Open these ports in your cloud security group or firewall:
 
-- `4017/udp`
-- the lease port range starting at `50000`, for example `50000-50009/udp`
+- `SNI_PORT/udp`
+- `MIN_PORT-MAX_PORT/udp` when UDP transport is enabled
+- `MIN_PORT-MAX_PORT/tcp` when raw TCP port transport is enabled
 
-UFW example for 10 UDP ports:
+Example with `MIN_PORT=40000` and `MAX_PORT=40009`:
 
 ```bash
-sudo ufw allow 4017/udp
-sudo ufw allow 50000:50009/udp
+sudo ufw allow 443/udp
+sudo ufw allow 40000:40009/udp
+sudo ufw allow 40000:40009/tcp
 ```
 
-### 5.2 Expose UDP ports in Docker
+### 5.2 Expose transport ports in Docker
 
-If you use `network_mode: host`, the container uses host UDP ports directly.
+If you use `network_mode: host`, the container uses host transport ports directly.
 
 If you use bridge networking, map the ports explicitly in `docker-compose.yaml`:
 
 ```yaml
 ports:
-  - "4017:4017/udp"
-  - "50000-50009:50000-50009/udp"
+  - "443:443/udp"
+  - "40000-40009:40000-40009/udp"
+  - "40000-40009:40000-40009"
 ```
 
-### 5.3 Configure `UDP_PORT_COUNT`
+Map `SNI_PORT/udp` on the host to the relay's UDP QUIC listener port in the container.
+UDP and raw TCP use the same numeric lease range independently, so when both transports are enabled you publish the same `MIN_PORT-MAX_PORT` range once for UDP and once for TCP.
 
-Set `UDP_PORT_COUNT` in `.env` to the number of UDP leases you want to support.
+### 5.3 Configure Relay Transport Ports
+
+Set the shared lease range in `.env`, then enable the transports you want.
 
 Example:
 
 ```bash
-UDP_PORT_COUNT=10
+MIN_PORT=40000
+MAX_PORT=40009
+UDP_ENABLED=true
+TCP_ENABLED=true
 ```
 
-That allocates lease UDP ports `50000-50009`.
+That allocates lease ports `40000-40009` for both UDP and raw TCP. The protocols are independent, so the same numeric port may be used on both transports at the same time.
+The SDK datagram backhaul always uses the relay `SNI_PORT`, even if `PORTAL_URL` uses `:4017` for the API.
 
 | Variable | Default | Description |
 |---|---|---|
-| `UDP_PORT_COUNT` | `0` | Number of UDP ports to allocate, starting at port 50000 |
+| `MIN_PORT` | `0` | Inclusive minimum lease port shared by UDP and raw TCP (`0` disables the range) |
+| `MAX_PORT` | `0` | Inclusive maximum lease port shared by UDP and raw TCP (`0` disables the range) |
+| `UDP_ENABLED` | `false` | Enable UDP relay transport |
+| `TCP_ENABLED` | `false` | Enable raw TCP port transport |
+| `SNI_PORT` | `443` | Public TCP SNI port and QUIC UDP port for relay ingress |
 
-### 5.4 Enable UDP in the admin panel
+### 5.4 Enable transports in the admin panel
 
-After the relay starts, open `/admin`, enable UDP transport, and optionally set a max concurrent UDP lease limit.
+After the relay starts, open `/admin`, enable UDP transport and/or TCP port transport, and set any lease limits you want to enforce.
 
-### 4.5 Optional Linux UDP buffer tuning
+### 5.5 Optional Linux UDP buffer tuning
 
 For better QUIC performance on Linux:
 
@@ -395,11 +408,11 @@ sudo sysctl -w net.core.wmem_max=7500000
 
 To persist this across reboots, add the values to `/etc/sysctl.conf` or a file in `/etc/sysctl.d/`.
 
-## 5. Auto-Update
+## 6. Auto-Update
 
 Automatically redeploy when a new `ghcr.io/gosuda/portal:latest` image is pushed.
 
-### 5.1 Deploy script
+### 6.1 Deploy script
 
 Create `deploy_portal.sh` in your project directory:
 
@@ -413,7 +426,7 @@ docker compose pull
 docker compose up -d
 ```
 
-### 5.2 Watcher script
+### 6.2 Watcher script
 
 The repository includes `watch_and_deploy.sh`, which polls the remote image digest and runs the deploy script on change.
 
@@ -425,7 +438,7 @@ Environment variables:
 | `DEPLOY_SCRIPT` | `deploy_portal.sh` | Path to deploy script |
 | `DIGEST_FILE` | `.portal_image_digest` | File storing the last known digest |
 
-### 5.3 Register as systemd service
+### 6.3 Register as systemd service
 
 Set `WorkingDirectory` and `ExecStart` to the directory where `watch_and_deploy.sh` and `deploy_portal.sh` are located:
 
@@ -461,7 +474,7 @@ Adjust `User` to match your environment. Ensure the user belongs to the `docker`
 sudo usermod -aG docker opc
 ```
 
-### 5.4 Verify and monitor
+### 6.4 Verify and monitor
 
 ```bash
 sudo systemctl status portal-watcher
@@ -469,33 +482,36 @@ sudo journalctl -u portal-watcher -f
 sudo journalctl -u portal-watcher --since today
 ```
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
-### 6.1 Ports blocked
+### 7.1 Ports blocked
 
 Required inbound ports:
 
 - `443/tcp`
 - `4017/tcp`
 - optional for UDP:
-  - `4017/udp`
-  - `50000+/udp` matching `UDP_PORT_COUNT`
+  - `SNI_PORT/udp`
+  - `MIN_PORT-MAX_PORT/udp`
+- optional for raw TCP:
+  - `MIN_PORT-MAX_PORT/tcp`
 
-UFW example with 10 UDP ports:
+UFW example with `MIN_PORT=40000` and `MAX_PORT=40009`:
 
 ```bash
 sudo ufw allow 443/tcp
 sudo ufw allow 4017/tcp
-sudo ufw allow 4017/udp
-sudo ufw allow 50000:50009/udp
+sudo ufw allow 443/udp
+sudo ufw allow 40000:40009/udp
+sudo ufw allow 40000:40009/tcp
 sudo ufw status
 ```
 
-### 6.2 QUIC UDP buffer warnings
+### 7.2 QUIC UDP buffer warnings
 
-If relay logs show `failed to sufficiently increase receive buffer size`, apply the sysctl settings from section 4.5.
+If relay logs show `failed to sufficiently increase receive buffer size`, apply the sysctl settings from section 5.5.
 
-### 6.3 Docker DNS resolution fails
+### 7.3 Docker DNS resolution fails
 
 If logs show `discover bootstraps failed`, `sync dns records`, or `lookup <host> on 127.0.0.11:53: write: operation not permitted`, Docker is usually using the wrong host resolver config.
 

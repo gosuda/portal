@@ -6,7 +6,7 @@ import { ServerCard } from "@/components/ServerCard";
 import { TagCombobox } from "@/components/TagCombobox";
 import { TunnelCommandModal } from "@/components/TunnelCommandModal";
 import type { ClientServer } from "@/hooks/useServerList";
-import type { AdminServer, ApprovalMode, UDPSettings } from "@/hooks/useAdmin";
+import type { AdminServer, ApprovalMode, UDPSettings, TCPPortSettings } from "@/hooks/useAdmin";
 import type { SortOption, StatusFilter } from "@/types/filters";
 import { StatusSelect } from "@/components/select/StatusSelect";
 import { BanStatusButtons } from "@/components/button/BanStatusButtons";
@@ -159,6 +159,8 @@ interface ServerListViewProps {
   onLandingPageEnabledChange?: (enabled: boolean) => void | Promise<void>;
   udpSettings?: UDPSettings;
   onUDPSettingsChange?: (settings: UDPSettings) => void | Promise<void>;
+  tcpPortSettings?: TCPPortSettings;
+  onTCPPortSettingsChange?: (settings: TCPPortSettings) => void | Promise<void>;
   onApproveStatusChange?: (
     identityKey: string,
     approve: boolean
@@ -207,6 +209,8 @@ export function ServerListView({
   onLandingPageEnabledChange,
   udpSettings,
   onUDPSettingsChange,
+  tcpPortSettings,
+  onTCPPortSettingsChange,
   onApproveStatusChange,
   onDenyStatusChange,
   onIPBanStatusChange,
@@ -406,14 +410,27 @@ export function ServerListView({
   const [maxLeasesInput, setMaxLeasesInput] = useState(
     String(udpSettings?.maxLeases ?? 0)
   );
+  const [tcpPortMaxLeasesInput, setTCPPortMaxLeasesInput] = useState(
+    String(tcpPortSettings?.maxLeases ?? 0)
+  );
 
   useEffect(() => {
     setMaxLeasesInput(String(udpSettings?.maxLeases ?? 0));
   }, [udpSettings?.maxLeases]);
 
+  useEffect(() => {
+    setTCPPortMaxLeasesInput(String(tcpPortSettings?.maxLeases ?? 0));
+  }, [tcpPortSettings?.maxLeases]);
+
   const handleUDPToggle = (enabled: boolean) => {
     if (onUDPSettingsChange && udpSettings) {
       void onUDPSettingsChange({ ...udpSettings, enabled });
+    }
+  };
+
+  const handleTCPPortToggle = (enabled: boolean) => {
+    if (onTCPPortSettingsChange && tcpPortSettings) {
+      void onTCPPortSettingsChange({ ...tcpPortSettings, enabled });
     }
   };
 
@@ -428,6 +445,14 @@ export function ServerListView({
       const value = Math.max(0, parseInt(maxLeasesInput, 10) || 0);
       setMaxLeasesInput(String(value));
       void onUDPSettingsChange({ ...udpSettings, maxLeases: value });
+    }
+  };
+
+  const handleTCPPortMaxLeasesSave = () => {
+    if (onTCPPortSettingsChange && tcpPortSettings) {
+      const value = Math.max(0, parseInt(tcpPortMaxLeasesInput, 10) || 0);
+      setTCPPortMaxLeasesInput(String(value));
+      void onTCPPortSettingsChange({ ...tcpPortSettings, maxLeases: value });
     }
   };
 
@@ -523,6 +548,57 @@ export function ServerListView({
               />
               <button
                 onClick={handleMaxLeasesSave}
+                className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      {onTCPPortSettingsChange && tcpPortSettings && (
+        <>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-text-muted">TCP</span>
+            <div className="flex rounded-lg overflow-hidden border border-foreground/20">
+              <button
+                onClick={() => handleTCPPortToggle(false)}
+                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors ${
+                  !tcpPortSettings.enabled
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                }`}
+              >
+                Disabled
+              </button>
+              <button
+                onClick={() => handleTCPPortToggle(true)}
+                className={`cursor-pointer px-4 h-10 text-sm font-medium transition-colors border-l border-foreground/20 ${
+                  tcpPortSettings.enabled
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                }`}
+              >
+                Enabled
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-text-muted">Max TCP</span>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                value={tcpPortMaxLeasesInput}
+                onChange={(e) => setTCPPortMaxLeasesInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleTCPPortMaxLeasesSave();
+                }}
+                className="w-20 h-10 px-3 text-sm border border-foreground/20 rounded-lg bg-secondary text-foreground"
+                placeholder="0"
+              />
+              <button
+                onClick={handleTCPPortMaxLeasesSave}
                 className="cursor-pointer h-10 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 Save

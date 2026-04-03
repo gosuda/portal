@@ -11,6 +11,8 @@ type Runtime struct {
 	bannedIdentityKeys map[string]struct{}
 	udpEnabled         bool
 	udpMaxLeases       int
+	tcpPortEnabled     bool
+	tcpPortMaxLeases   int
 	mu                 sync.RWMutex
 }
 
@@ -156,6 +158,34 @@ func (r *Runtime) UDPMaxLeases() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.udpMaxLeases
+}
+
+func (r *Runtime) SetTCPPortPolicy(enabled bool, maxLeases int) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.tcpPortEnabled = enabled
+	r.tcpPortMaxLeases = maxLeases
+	r.mu.Unlock()
+}
+
+func (r *Runtime) IsTCPPortEnabled() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.tcpPortEnabled
+}
+
+func (r *Runtime) TCPPortMaxLeases() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.tcpPortMaxLeases
 }
 
 func (r *Runtime) ForgetIdentity(key string) {

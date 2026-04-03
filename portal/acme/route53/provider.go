@@ -32,7 +32,6 @@ type Config struct {
 	Region          string
 	HostedZoneID    string
 	KMSKeyARN       string
-	DNSSECKSKName   string
 }
 
 type Provider struct {
@@ -48,7 +47,6 @@ func New(cfg Config) *Provider {
 			Region:          strings.TrimSpace(cfg.Region),
 			HostedZoneID:    normalizeZoneID(cfg.HostedZoneID),
 			KMSKeyARN:       strings.TrimSpace(cfg.KMSKeyARN),
-			DNSSECKSKName:   strings.TrimSpace(cfg.DNSSECKSKName),
 		},
 	}
 }
@@ -552,10 +550,7 @@ func ensureActiveKeySigningKey(ctx context.Context, client *awsroute53.Client, h
 	if client == nil {
 		return errors.New("route53 client is nil")
 	}
-	kskName := strings.TrimSpace(cfg.DNSSECKSKName)
-	if kskName == "" {
-		kskName = defaultDNSSECKSKName
-	}
+	kskName := defaultDNSSECKSKName
 
 	if existing, ok := keySigningKeyByName(keys, kskName); ok {
 		if strings.EqualFold(strings.TrimSpace(aws.ToString(existing.Status)), "ACTIVE") {

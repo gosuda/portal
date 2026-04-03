@@ -47,6 +47,7 @@ type exposeFlags struct {
 	httpRoutes   []string
 	udp          bool
 	udpAddr      string
+	tcp          bool
 }
 
 func runExposeCommand(args []string) error {
@@ -67,6 +68,7 @@ func runExposeCommand(args []string) error {
 	utils.RepeatedStringFlag(fs, &flags.httpRoutes, "http-route", "HTTP route mapping in PATH=UPSTREAM form; repeat to aggregate multiple local HTTP services behind one public URL")
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
+	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
 
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -132,6 +134,7 @@ func runExposeCommand(args []string) error {
 		TargetAddr:   flags.targetAddr,
 		UDPAddr:      flags.udpAddr,
 		UDPEnabled:   flags.udp,
+		TCPEnabled:   flags.tcp,
 		BanMITM:      flags.banMITM,
 		Discovery:    flags.discovery,
 		Metadata: types.LeaseMetadata{

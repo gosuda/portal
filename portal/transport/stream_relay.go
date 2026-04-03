@@ -66,6 +66,14 @@ func (b *RelayStream) OfferConn(conn net.Conn) error {
 }
 
 func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
+	return b.claimWithMarker(ctx, types.MarkerTLSStart)
+}
+
+func (b *RelayStream) ClaimRaw(ctx context.Context) (net.Conn, error) {
+	return b.claimWithMarker(ctx, types.MarkerRawStart)
+}
+
+func (b *RelayStream) claimWithMarker(ctx context.Context, marker byte) (net.Conn, error) {
 	for {
 		b.mu.Lock()
 		if b.closedErr != nil {
@@ -82,7 +90,7 @@ func (b *RelayStream) Claim(ctx context.Context) (net.Conn, error) {
 			if session.IsClosed() {
 				continue
 			}
-			if err := session.Activate(); err != nil {
+			if err := session.activateWithMarker(marker); err != nil {
 				_ = session.Close()
 				continue
 			}
@@ -246,6 +254,10 @@ func (s *relaySession) StartIdle() {
 }
 
 func (s *relaySession) Activate() error {
+	return s.activateWithMarker(types.MarkerTLSStart)
+}
+
+func (s *relaySession) activateWithMarker(marker byte) error {
 	s.mu.Lock()
 	if s.state != sessionIdle {
 		state := s.state
@@ -272,7 +284,7 @@ func (s *relaySession) Activate() error {
 		return net.ErrClosed
 	}
 	_ = s.conn.SetWriteDeadline(time.Now().Add(defaultSessionWriteLimit))
-	_, err := s.conn.Write([]byte{types.MarkerTLSStart})
+	_, err := s.conn.Write([]byte{marker})
 	_ = s.conn.SetWriteDeadline(time.Time{})
 	if err != nil {
 		_ = s.Close()

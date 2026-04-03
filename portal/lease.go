@@ -3,6 +3,7 @@ package portal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -168,6 +169,14 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 			return types.RegisterChallengeResponse{}, errUDPCapacityExceeded
 		}
 	}
+	if req.TCPEnabled {
+		if !r.policy.IsTCPPortEnabled() {
+			return types.RegisterChallengeResponse{}, errTCPPortDisabled
+		}
+		if max := r.policy.TCPPortMaxLeases(); max > 0 && r.CountTCPPortLeases() >= max {
+			return types.RegisterChallengeResponse{}, errTCPPortCapacityExceeded
+		}
+	}
 
 	now := time.Now().UTC()
 	challenge, err := auth.NewRegisterChallenge(req, domain, uri, now, defaultRegisterChallengeTTL)
@@ -262,6 +271,19 @@ func (r *leaseRegistry) CountDatagramLeases() int {
 	return count
 }
 
+func (r *leaseRegistry) CountTCPPortLeases() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	now := time.Now()
+	count := 0
+	for _, record := range r.leasesByKey {
+		if record.tcpPort != nil && now.Before(record.ExpiresAt) {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 	if record == nil {
 		return types.Lease{}
@@ -274,7 +296,11 @@ func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
 		LastSeenAt:  record.LastSeenAt,
 		Hostname:    record.Hostname,
 		UDPEnabled:  record.UDPEnabled,
+		TCPEnabled:  record.TCPEnabled,
 		Metadata:    record.Metadata.Copy(),
+	}
+	if record.tcpPort != nil {
+		snapshot.TCPAddr = fmt.Sprintf("%s:%d", record.Hostname, record.tcpPort.TCPPort())
 	}
 	if record.stream != nil {
 		snapshot.Ready = record.stream.ReadyCount()
@@ -291,9 +317,12 @@ type leaseRecord struct {
 	ReportedIP  string
 	Hostname    string
 	UDPEnabled  bool
+	TCPEnabled  bool
 	Metadata    types.LeaseMetadata
 	datagram    *transport.RelayDatagram
 	ports       *transport.PortAllocator
+	tcpPort     *transport.RelayTCPPort
+	tcpPorts    *transport.PortAllocator
 	stream      *transport.RelayStream
 	startErr    error
 	startOnce   sync.Once
@@ -321,12 +350,20 @@ func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
 }
 
 func (r *leaseRecord) Start() error {
-	if r == nil || r.datagram == nil {
+	if r == nil {
 		return nil
 	}
 
 	r.startOnce.Do(func() {
-		r.startErr = r.datagram.Start(context.Background())
+		if r.datagram != nil {
+			r.startErr = r.datagram.Start(context.Background())
+			if r.startErr != nil {
+				return
+			}
+		}
+		if r.tcpPort != nil {
+			r.startErr = r.tcpPort.Start(context.Background())
+		}
 	})
 	return r.startErr
 }
@@ -343,6 +380,13 @@ func (r *leaseRecord) Close() {
 		r.datagram.Close()
 		if port > 0 && r.ports != nil {
 			r.ports.Release(port)
+		}
+	}
+	if r.tcpPort != nil {
+		port := r.tcpPort.TCPPort()
+		r.tcpPort.Close()
+		if port > 0 && r.tcpPorts != nil {
+			r.tcpPorts.Release(port)
 		}
 	}
 }
