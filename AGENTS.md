@@ -3,31 +3,30 @@
 Keep this file short and behavioral.
 Architecture, product behavior, and design rationale belong in `docs/architecture.md` and `docs/adr/README.md`.
 
-## Development Principles
+## Principles
 
-- Minimizing concepts, duplication, and ceremony.
-- Prefer a single stable contract with one real owner.
-- Prefer local simplicity over premature or speculative abstraction.
-- Add indirection only when it removes real coupling or protects a real boundary.
-- Tests should protect stable contracts and invariants, not drive the spec.
+- Minimize concepts, duplication, and ceremony.
+- One real owner per contract. No mirroring, no wrappers unless they remove real coupling.
+- Local simplicity over speculative abstraction. Add indirection only when it removes real coupling or protects a real boundary.
+- When caller and callee are both local with no real boundary, change both directly.
+- Remove dead code, fields, config, and stale state while touching nearby code.
 
-## Project Principles
+## Go Mandates
 
-- When caller and callee are both local and no real boundary exists, change both directly; do not preserve local call shapes.
-- If a field, method, wrapper, or abstraction has no clear, current use and does not protect a real boundary, remove it immediately.
-- No wrapper functions or helpers unless they remove real coupling or protect a real boundary.
-- Prefer direct code over layers, facades, and indirection.
-- Prefer flattening and merging nearby responsibilities over splitting by default.
-- Remove dead fields, methods, config, and stale state while touching nearby code.
-- Do not duplicate normalization, validation, or defaulting logic; keep it in a single real owner.
-- Keep shared stateless transforms in `utils/`; keep stateful and domain-shaped logic with the real owner.
-- Keep stable shared contracts, constants, and public paths in `types/`, not in runtime or helpers.
-- Resolve complexity in the lowest coherent owner and expose only the minimum surface upward.
-- Shared runtime logic must live in one real owner and be reused, not mirrored.
+- Validate on construction. `NewX` functions reject invalid state; callers never receive a half-built value.
+- Fail fast with clear errors. Wrap with context; surface the root cause.
+- Zero external dependencies unless the alternative is re-implementing a non-trivial, correctness-critical algorithm. Justify in the commit message.
+- Interfaces express behavior, not taxonomy. One or two methods. If an interface has no consumer, delete it.
+
+## Testing
+
+- A test exists to catch real bugs. If deleting the test would not let a bug reach production, delete the test.
+- Test contracts and boundaries: protocol compliance, error semantics, security invariants, integration across real I/O.
+- Do not test configuration shapes, constructor output fields, or struct assembly — the type system and constructors already guarantee those.
+- Do not test that a function returns exactly what you passed in.
 
 ## Verification
 
 - CI commands: `make vet`, `make lint`, `make test`, `make vuln`.
 - `make tidy` is local maintenance, not a CI requirement.
-- Run tests only when explicitly requested.
-- If verification seems necessary, ask before running it.
+- Run targeted tests after contract-touching or risky edits. Ask before running the full suite.
