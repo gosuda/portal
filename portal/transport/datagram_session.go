@@ -86,6 +86,9 @@ func (s *datagramSession) hasConnection() bool {
 }
 
 func (s *datagramSession) Send(flowID uint32, payload []byte) error {
+	// Send may be called concurrently by multiple goroutines (per-flow workers).
+	// nextMessageID is advanced under the session mutex so segmented message IDs
+	// remain unique per active session.
 	s.mu.Lock()
 	conn := s.conn
 	closed := s.closed

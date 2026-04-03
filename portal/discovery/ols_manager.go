@@ -55,6 +55,7 @@ func (m *OLSManager) OrderDescriptors(relays []types.RelayDescriptor, loadByURL 
 	weights := make([]weighted, 0, len(ordered))
 	for _, relay := range ordered {
 		load := clampNonNegative(loadByURL[relay.APIHTTPSAddr])
+		// x^2 increases penalty faster for high-load relays than low-load relays.
 		distorted := load * load // f(x)=x^2
 		// sqrt(y+1) is used as a stable inverse-like compensation that stays finite
 		// at zero load and preserves ordering for scheduling.
@@ -110,6 +111,7 @@ func gcd(a, b int) int {
 
 func pickCoprimeStep(n int, round int) int {
 	if n <= 1 {
+		// Guard keeps the modulo below safe; (n-1) is never zero afterwards.
 		return 1
 	}
 	candidate := (round % (n - 1)) + 1

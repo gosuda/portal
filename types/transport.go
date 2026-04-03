@@ -33,7 +33,7 @@ const (
 )
 
 // EncodeDatagram serialises a non-segmented flow-framed datagram for transmission.
-// Wire layout: [flowID varint][flags byte][payload bytes]
+// Wire layout: [flowID varint][flags=DatagramFlagNone][payload bytes]
 func EncodeDatagram(flowID uint32, payload []byte) []byte {
 	var buf [binary.MaxVarintLen32]byte
 	n := binary.PutUvarint(buf[:], uint64(flowID))
