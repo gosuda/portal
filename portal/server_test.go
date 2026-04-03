@@ -56,7 +56,6 @@ func mustRelayDescriptor(t *testing.T, relayURL string) types.RelayDescriptor {
 		WireGuardPublicKey:  wireGuardPublicKey,
 		WireGuardEndpoint:   net.JoinHostPort(utils.PortalRootHost(relayURL), "51820"),
 		OverlayIPv4:         overlayIPv4,
-		SupportsTCP:         true,
 		SupportsOverlayPeer: true,
 	})
 	if err != nil {
@@ -146,7 +145,9 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		ACME:          acme.Config{KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
-		UDPPortCount:  1,
+		MinPort:       40000,
+		MaxPort:       40000,
+		UDPEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -198,6 +199,107 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 
 	if signResp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /v1/sign status = %d, want %d", signResp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:     "https://localhost:4017",
+		IdentityPath:  tempIdentityPath(t),
+		ACME:          acme.Config{KeyDir: t.TempDir()},
+		SNIPort:       4443,
+		APIListenAddr: "127.0.0.1:0",
+		SNIListenAddr: "127.0.0.1:0",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := server.Start(ctx, nil); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+
+	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
+	if err != nil {
+		t.Fatalf("GET /sdk/domain error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sdk/domain status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /sdk/domain response: %v", err)
+	}
+
+	var envelope types.APIEnvelope[types.DomainResponse]
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("decode /sdk/domain response: %v", err)
+	}
+	if !envelope.OK {
+		t.Fatalf("GET /sdk/domain response = %+v, want ok=true", envelope)
+	}
+	if envelope.Data.ProtocolVersion != types.ProtocolVersion {
+		t.Fatalf("DomainResponse.ProtocolVersion = %q, want %q", envelope.Data.ProtocolVersion, types.ProtocolVersion)
+	}
+	if envelope.Data.ReleaseVersion != types.ReleaseVersion {
+		t.Fatalf("DomainResponse.ReleaseVersion = %q, want %q", envelope.Data.ReleaseVersion, types.ReleaseVersion)
+	}
+}
+
+func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
+	t.Parallel()
+
+	server, err := NewServer(ServerConfig{
+		PortalURL:    "https://portal.example.com:4017",
+		IdentityPath: tempIdentityPath(t),
+		SNIPort:      4443,
+		MinPort:      40000,
+		MaxPort:      40009,
+		TCPEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	resp, err := server.registerLease(types.RegisterChallengeRequest{
+		Identity: types.Identity{
+			Name:    "demo-tcp",
+			Address: server.identity.Address,
+		},
+		TCPEnabled: true,
+	}, "203.0.113.10", "")
+	if err != nil {
+		t.Fatalf("registerLease() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if record, err := server.registry.Find(resp.Identity); err == nil {
+			record.Close()
+		}
+	})
+
+	if resp.SNIPort != 0 {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want 0 without udp", resp.SNIPort)
 	}
 }
 
@@ -320,7 +422,9 @@ func TestServerStartRejectsMismatchedACMEBaseDomain(t *testing.T) {
 		ACME:          acme.Config{BaseDomain: "other.example.com", KeyDir: t.TempDir()},
 		APIListenAddr: "127.0.0.1:0",
 		SNIListenAddr: "127.0.0.1:0",
-		UDPPortCount:  1,
+		MinPort:       40000,
+		MaxPort:       40000,
+		UDPEnabled:    true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -398,7 +502,9 @@ func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	server, err := NewServer(ServerConfig{
 		PortalURL:    "https://portal.example.com",
 		IdentityPath: tempIdentityPath(t),
-		UDPPortCount: 1,
+		MinPort:      40000,
+		MaxPort:      40000,
+		UDPEnabled:   true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -438,7 +544,9 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	server, err := NewServer(ServerConfig{
 		PortalURL:    "https://portal.example.com",
 		IdentityPath: tempIdentityPath(t),
-		UDPPortCount: 10,
+		MinPort:      40000,
+		MaxPort:      40009,
+		UDPEnabled:   true,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -471,8 +579,11 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	if record.datagram == nil {
 		t.Fatal("datagram = nil, want datagram runtime")
 	}
-	if got := record.datagram.UDPPort(); got == 0 {
-		t.Fatal("UDPPort() = 0, want allocated port")
+	if got := record.datagram.UDPPort(); got < 40000 || got > 40009 {
+		t.Fatalf("UDPPort() = %d, want port within %d-%d", got, 40000, 40009)
+	}
+	if resp.SNIPort != server.cfg.SNIPort {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.cfg.SNIPort)
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")

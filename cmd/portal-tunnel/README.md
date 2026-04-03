@@ -47,6 +47,12 @@ portal expose localhost:8080 \
   --owner "Portal Operator"
 ```
 
+TCP port routing example (e.g., Minecraft server):
+
+```text
+portal expose localhost:25565 --name minecraft --tcp
+```
+
 Multi-port HTTP aggregation example:
 
 ```text
@@ -68,6 +74,7 @@ portal expose --name myapp \
 - `--relays` adds explicit relay API URLs for that run.
 - `--discovery=false` disables the public registry seed list and the runtime relay discovery expansion loop for that run. With `--discovery=false`, only the explicit `--relays` values are used.
 - `--ban-mitm` enables strict rejection when the TLS self-probe detects termination in the path.
+- `--tcp` requests a dedicated TCP port on the relay for raw TCP services that do not use TLS (e.g., Minecraft, game servers).
 
 Flags:
 
@@ -82,6 +89,7 @@ Flags:
 --thumbnail       Service thumbnail URL metadata
 --owner           Service owner metadata
 --hide            Hide service from relay listing screens
+--tcp        Request a dedicated TCP port on the relay for raw TCP services (no TLS)
 --http-route      HTTP route mapping in PATH=UPSTREAM form; repeat for multiple routes
 ```
 
@@ -119,4 +127,5 @@ Legacy execution compatibility has been removed:
 - Tenant TLS is provisioned automatically through the relay keyless signer. The SDK fetches the relay certificate chain and uses `/v1/sign` for remote signing.
 - `portal expose` enables MITM strict enforcement by default. Use `--ban-mitm=false` to keep warning-only behavior when the TLS self-probe suspects relay termination.
 - When the local service is unreachable, the tunnel returns an HTTP 503 page.
+- `--tcp` allocates a dedicated TCP port within the relay's configured `MIN_PORT-MAX_PORT` range. The relay bridges raw TCP connections to the local target without TLS. Requires `TCP_ENABLED=true`, a valid `MIN_PORT/MAX_PORT` range, and TCP port enabled in the admin panel.
 - `--http-route` mode is HTTP-only and cannot be combined with `--udp`.

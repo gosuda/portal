@@ -28,6 +28,7 @@ type Exposure struct {
 	TargetAddr       string
 	UDPAddr          string
 	udpEnabled       bool
+	tcpEnabled       bool
 	banMITM          bool
 	metadata         types.LeaseMetadata
 	rootCAPEM        []byte
@@ -52,6 +53,7 @@ type ExposeConfig struct {
 	TargetAddr   string
 	UDPAddr      string
 	UDPEnabled   bool
+	TCPEnabled   bool
 	BanMITM      bool
 	Discovery    bool
 	Metadata     types.LeaseMetadata
@@ -100,6 +102,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		TargetAddr:       targetAddr,
 		UDPAddr:          udpAddr,
 		udpEnabled:       cfg.UDPEnabled,
+		tcpEnabled:       cfg.TCPEnabled,
 		banMITM:          cfg.BanMITM,
 		metadata:         cfg.Metadata.Copy(),
 		rootCAPEM:        append([]byte(nil), cfg.RootCAPEM...),
@@ -326,6 +329,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 		listener, err := NewListener(context.Background(), relayURL, ListenerConfig{
 			Identity:   e.identity.Copy(),
 			UDPEnabled: e.udpEnabled,
+			TCPEnabled: e.tcpEnabled,
 			BanMITM:    e.banMITM,
 			Metadata:   e.metadata.Copy(),
 			RootCAPEM:  append([]byte(nil), e.rootCAPEM...),

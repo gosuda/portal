@@ -133,6 +133,7 @@ func NewRegisterChallenge(req types.RegisterChallengeRequest, domain, uri string
 		Metadata:   req.Metadata.Copy(),
 		TTL:        req.TTL,
 		UDPEnabled: req.UDPEnabled,
+		TCPEnabled: req.TCPEnabled,
 	}
 
 	return &RegisterChallenge{

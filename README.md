@@ -17,6 +17,7 @@
 - **Optional I2P-routed discovery control plane**: Discovery requests can be routed through an I2P HTTP proxy
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
 - **Raw TCP and UDP transport**: Native TCP reverse sessions with optional UDP (no SSH or WebSocket)
+- **TCP port routing**: Dedicated TCP ports for non-TLS services (e.g., Minecraft, game servers) without SNI-based routing
 
 ## Comparison
 
@@ -29,6 +30,7 @@
 | Multi-relay failover | **Yes** | Managed | Built-in multi-DC | No |
 | Custom domain | **Yes** | Paid plans | Yes | Yes |
 | Transport | Raw TCP / UDP | HTTP/S, TCP, TLS | HTTP/S, TCP, UDP | HTTP/S, TCP, UDP |
+| Non-TLS TCP port routing | **Yes** | Paid plans | No | Yes |
 | Open source | **MIT** | No | Client only (Apache 2.0) | Apache 2.0 |
 | Account required | **No** (SIWE) | Yes | Yes | No |
 

@@ -18,6 +18,7 @@ const (
 	PathAdminApproval     = "/admin/settings/approval-mode"
 	PathAdminLandingPage  = "/admin/settings/landing-page"
 	PathAdminUDP          = "/admin/settings/udp"
+	PathAdminTCPPort      = "/admin/settings/tcp-port"
 	PathAdminIPsPrefix    = "/admin/ips/"
 	PathInstallShell      = "/install.sh"
 	PathInstallPowerShell = "/install.ps1"
