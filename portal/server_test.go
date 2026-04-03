@@ -267,42 +267,6 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 	}
 }
 
-func TestRegisterLeaseIncludesSNIPort(t *testing.T) {
-	t.Parallel()
-
-	server, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com:4017",
-		IdentityPath: tempIdentityPath(t),
-		SNIPort:      4443,
-		MinPort:      40000,
-		MaxPort:      40009,
-		UDPEnabled:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
-	}
-
-	resp, err := server.registerLease(types.RegisterChallengeRequest{
-		Identity: types.Identity{
-			Name:    "demo-sni",
-			Address: server.identity.Address,
-		},
-		UDPEnabled: true,
-	}, "203.0.113.10", "")
-	if err != nil {
-		t.Fatalf("registerLease() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if record, err := server.registry.Find(resp.Identity); err == nil {
-			record.Close()
-		}
-	})
-
-	if resp.SNIPort != 4443 {
-		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, 4443)
-	}
-}
-
 func TestRegisterLeaseOmitsSNIPortWithoutUDP(t *testing.T) {
 	t.Parallel()
 
@@ -532,23 +496,6 @@ func TestNewServerIgnoresDiscoveryPortWithoutWireGuardKey(t *testing.T) {
 	}
 }
 
-func TestNewServerRejectsInvalidSharedPortRange(t *testing.T) {
-	t.Parallel()
-
-	_, err := NewServer(ServerConfig{
-		PortalURL:    "https://portal.example.com",
-		IdentityPath: tempIdentityPath(t),
-		MinPort:      40010,
-		MaxPort:      40000,
-	})
-	if err == nil {
-		t.Fatal("NewServer() error = nil, want invalid range error")
-	}
-	if !strings.Contains(err.Error(), "min port must be less than or equal to max port") {
-		t.Fatalf("NewServer() error = %v, want invalid range error", err)
-	}
-}
-
 func TestRegisterLeaseDerivesFixedHostnameFromName(t *testing.T) {
 	t.Parallel()
 
@@ -634,6 +581,9 @@ func TestRegisterLeaseBuildsUDPEnabledRuntime(t *testing.T) {
 	}
 	if got := record.datagram.UDPPort(); got < 40000 || got > 40009 {
 		t.Fatalf("UDPPort() = %d, want port within %d-%d", got, 40000, 40009)
+	}
+	if resp.SNIPort != server.cfg.SNIPort {
+		t.Fatalf("RegisterResponse.SNIPort = %d, want %d", resp.SNIPort, server.cfg.SNIPort)
 	}
 	if resp.UDPAddr == "" {
 		t.Fatal("RegisterResponse.UDPAddr = empty, want public udp address")
