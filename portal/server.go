@@ -128,6 +128,7 @@ func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
 		conn, err := s.interRelayListener.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil || strings.Contains(err.Error(), "endpoint is in invalid state") {
+				//nolint:nilerr
 				return nil
 			}
 			return err
