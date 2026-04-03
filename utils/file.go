@@ -1,7 +1,8 @@
 package utils
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,7 @@ func ReadJSONFileIfExists(path string, out any) (bool, error) {
 }
 
 func WriteJSONFile(path string, payload any, mode os.FileMode) error {
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := json.Marshal(payload, jsontext.WithIndent("  "))
 	if err != nil {
 		return err
 	}

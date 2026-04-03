@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -353,14 +353,14 @@ func (a *apiClient) openQUICSession(ctx context.Context, accessToken string) (*q
 	controlMsg := types.QUICControlMessage{
 		AccessToken: accessToken,
 	}
-	if err := json.NewEncoder(stream).Encode(controlMsg); err != nil {
+	if err := json.MarshalWrite(stream, controlMsg); err != nil {
 		_ = conn.CloseWithError(1, "control write failed")
 		return nil, fmt.Errorf("write control: %w", err)
 	}
 
 	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
 	var resp types.QUICControlResponse
-	if err := json.NewDecoder(io.LimitReader(stream, 4096)).Decode(&resp); err != nil {
+	if err := json.UnmarshalRead(io.LimitReader(stream, 4096), &resp); err != nil {
 		_ = conn.CloseWithError(1, "control read failed")
 		return nil, fmt.Errorf("read control response: %w", err)
 	}

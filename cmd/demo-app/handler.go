@@ -2,7 +2,7 @@ package main
 
 import (
 	"embed"
-	"encoding/json"
+	"encoding/json/v2"
 	"io/fs"
 	"net/http"
 	"time"
@@ -28,7 +28,7 @@ func newHandler() http.Handler {
 
 func handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	_ = json.MarshalWrite(w, map[string]any{
 		"message": "pong",
 		"time":    time.Now().UTC().Format(time.RFC3339),
 	})
@@ -59,7 +59,7 @@ func handleCookies(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, cookie)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	_ = json.MarshalWrite(w, map[string]any{
 		"message": "4 cookies set: session_id, auth_token, csrf_token, user_pref",
 	})
 }
@@ -69,7 +69,7 @@ func newUDPInfoHandler(exposure *sdk.Exposure) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		udpAddrs, _ := exposure.WaitDatagramReady(r.Context())
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		_ = json.MarshalWrite(w, map[string]any{
 			"message":   "demo-udp is running",
 			"udp_addrs": udpAddrs,
 		})

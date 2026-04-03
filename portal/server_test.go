@@ -8,7 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	"encoding/json/v2"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -184,7 +184,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 	}
 
 	var healthEnvelope types.APIEnvelope[map[string]string]
-	if err := json.NewDecoder(healthResp.Body).Decode(&healthEnvelope); err != nil {
+	if err := json.UnmarshalRead(healthResp.Body, &healthEnvelope); err != nil {
 		t.Fatalf("decode /healthz response: %v", err)
 	}
 	if !healthEnvelope.OK || healthEnvelope.Data["status"] != "ok" {

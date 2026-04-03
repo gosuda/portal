@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -23,7 +23,7 @@ func TestWriteAPIDataAndDecodeEnvelope(t *testing.T) {
 	}
 
 	var envelope types.APIEnvelope[map[string]string]
-	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+	if err := json.UnmarshalRead(rec.Body, &envelope); err != nil {
 		t.Fatalf("json.Decode() error = %v", err)
 	}
 	if !envelope.OK || envelope.Data["status"] != "ok" {

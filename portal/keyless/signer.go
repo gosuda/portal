@@ -2,7 +2,7 @@ package keyless
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -74,7 +74,7 @@ func (s *Signer) Handler() http.Handler {
 		defer r.Body.Close()
 
 		var req signrpc.SignRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.UnmarshalRead(r.Body, &req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -93,7 +93,7 @@ func (s *Signer) Handler() http.Handler {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		_ = json.MarshalWrite(w, resp)
 	})
 	return mux
 }
@@ -101,5 +101,5 @@ func (s *Signer) Handler() http.Handler {
 func writeJSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(signrpc.ErrorResponse{Error: message})
+	_ = json.MarshalWrite(w, signrpc.ErrorResponse{Error: message})
 }
