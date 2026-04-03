@@ -2,13 +2,14 @@ package transport
 
 import (
 	"context"
-	"fmt"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/quic-go/quic-go"
+	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/types"
 )
@@ -160,7 +161,7 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 	}
 	type reassemblyEntry struct {
 		count      uint16
-		parts       map[uint16][]byte
+		segments    map[uint16][]byte
 		totalBytes  int
 		lastUpdated time.Time
 	}
@@ -198,23 +199,29 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 			if entry == nil {
 				entry = &reassemblyEntry{
 					count:      frame.SegmentCount,
-					parts:      make(map[uint16][]byte, int(frame.SegmentCount)),
+					segments:   make(map[uint16][]byte, int(frame.SegmentCount)),
 					lastUpdated: time.Now(),
 				}
 				reassembly[key] = entry
 			}
 			if entry.count != frame.SegmentCount {
+				log.Warn().
+					Uint32("flow_id", frame.FlowID).
+					Uint64("message_id", frame.MessageID).
+					Uint16("expected_segment_count", entry.count).
+					Uint16("received_segment_count", frame.SegmentCount).
+					Msg("datagram segmentation protocol mismatch; dropping reassembly entry")
 				delete(reassembly, key)
 				continue
 			}
-			if _, exists := entry.parts[frame.SegmentIndex]; !exists {
+			if _, exists := entry.segments[frame.SegmentIndex]; !exists {
 				part := make([]byte, len(frame.Payload))
 				copy(part, frame.Payload)
-				entry.parts[frame.SegmentIndex] = part
+				entry.segments[frame.SegmentIndex] = part
 				entry.totalBytes += len(part)
 			}
 			entry.lastUpdated = time.Now()
-			if len(entry.parts) != int(entry.count) {
+			if len(entry.segments) != int(entry.count) {
 				now := time.Now()
 				if now.Sub(lastCleanup) >= reassemblyCleanupPeriod {
 					for k, candidate := range reassembly {
@@ -230,7 +237,7 @@ func (s *datagramSession) receiveLoop(conn *quic.Conn, recvDone chan struct{}) {
 			merged := make([]byte, 0, entry.totalBytes)
 			complete := true
 			for i := uint16(0); i < entry.count; i++ {
-				part, ok := entry.parts[i]
+				part, ok := entry.segments[i]
 				if !ok {
 					complete = false
 					break

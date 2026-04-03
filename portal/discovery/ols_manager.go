@@ -25,7 +25,9 @@ func NewOLSManager() *OLSManager {
 //
 // Procedure:
 // 1) Build a non-linear load score f(x)=x^2 for each relay URL.
-// 2) Apply inverse pre-distortion g(y)=sqrt(y) to recover compensated weight.
+// 2) Apply inverse pre-distortion by mapping y=f(x) back to approximately x.
+//    In practice we keep zero-safe behavior with sqrt(y+1), then rank by this
+//    compensated value (monotonic with respect to load).
 // 3) Convert compensated weights into a stable inverse permutation (least-loaded
 //    first, ties by URL).
 // 4) Feed the inverse permutation into a latin-square style affine map
@@ -53,8 +55,10 @@ func (m *OLSManager) OrderDescriptors(relays []types.RelayDescriptor, loadByURL 
 	weights := make([]weighted, 0, len(ordered))
 	for _, relay := range ordered {
 		load := clampNonNegative(loadByURL[relay.APIHTTPSAddr])
-		distorted := load * load                  // f(x)=x^2
-		compensated := math.Sqrt(distorted + 1.0) // g(y)=sqrt(y+1), finite at zero load
+		distorted := load * load // f(x)=x^2
+		// sqrt(y+1) is used as a stable inverse-like compensation that stays finite
+		// at zero load and preserves ordering for scheduling.
+		compensated := math.Sqrt(distorted + 1.0)
 		weights = append(weights, weighted{
 			desc:        relay,
 			compensated: compensated,

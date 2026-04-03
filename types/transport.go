@@ -8,6 +8,7 @@ import (
 // ErrDatagramTooSmall is returned when a datagram payload is too short to
 // contain a valid flow ID varint.
 var ErrDatagramTooSmall = errors.New("datagram too small to decode")
+var ErrDatagramUnsupportedFlag = errors.New("datagram has unsupported flags")
 
 // DatagramFrame carries one relayed datagram.
 type DatagramFrame struct {
@@ -85,14 +86,9 @@ func DecodeDatagram(data []byte) (DatagramFrame, error) {
 		}, nil
 	}
 
-	// Backward compatibility:
-	// old frames were [flowID varint][payload bytes] without flags.
 	flags := data[n]
 	if flags != DatagramFlagNone && flags != DatagramFlagSegmented {
-		return DatagramFrame{
-			FlowID:  uint32(flowID),
-			Payload: data[n:],
-		}, nil
+		return DatagramFrame{}, ErrDatagramUnsupportedFlag
 	}
 	if flags == DatagramFlagNone {
 		return DatagramFrame{
