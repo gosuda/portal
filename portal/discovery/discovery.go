@@ -17,7 +17,8 @@ import (
 const defaultRequestTimeout = 15 * time.Second
 
 func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, error) {
-	desc.RelayID = strings.TrimSpace(desc.RelayID)
+	desc.Name = utils.NormalizeHostname(desc.Name)
+	desc.Address = strings.TrimSpace(desc.Address)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
 	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
 	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
@@ -35,9 +36,13 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 			return types.RelayDescriptor{}, fmt.Errorf("normalize api https addr: %w", err)
 		}
 		desc.APIHTTPSAddr = normalized
-		if desc.RelayID == "" {
-			desc.RelayID = normalized
+	}
+	if desc.Address != "" {
+		normalized, err := utils.NormalizeEVMAddress(desc.Address)
+		if err != nil {
+			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
 		}
+		desc.Address = normalized
 	}
 	if len(desc.OverlayCIDRs) > 0 {
 		normalized, err := utils.NormalizeOverlayCIDRs(desc.OverlayCIDRs)
@@ -66,8 +71,8 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	now = now.UTC()
 
 	switch {
-	case normalized.RelayID == "":
-		return types.RelayDescriptor{}, errors.New("relay_id is required")
+	case normalized.Name == "":
+		return types.RelayDescriptor{}, errors.New("identity.name is required")
 	case normalized.APIHTTPSAddr == "":
 		return types.RelayDescriptor{}, errors.New("api_https_addr is required")
 	case normalized.Sequence == 0:
@@ -98,8 +103,9 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 }
 
 func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time) (types.RelayDescriptor, []types.RelayDescriptor, error) {
-	if strings.TrimSpace(resp.ProtocolVersion) != types.ProtocolVersion {
-		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", strings.TrimSpace(resp.ProtocolVersion), types.ProtocolVersion)
+	protocolVersion := strings.TrimSpace(resp.ProtocolVersion)
+	if protocolVersion != types.ProtocolVersion {
+		return types.RelayDescriptor{}, nil, fmt.Errorf("relay protocol version mismatch: relay=%q client=%q", protocolVersion, types.ProtocolVersion)
 	}
 
 	self, err := ValidateDescriptor(resp.Self, now)
@@ -107,7 +113,7 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 		return types.RelayDescriptor{}, nil, err
 	}
 
-	seen := map[string]struct{}{self.RelayID: {}}
+	seen := map[string]struct{}{self.Key(): {}}
 	relays := make([]types.RelayDescriptor, 0, len(resp.Relays))
 	var validateErr error
 	for _, descriptor := range resp.Relays {
@@ -118,25 +124,39 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 			}
 			continue
 		}
-		if _, ok := seen[verified.RelayID]; ok {
+		identityKey := verified.Key()
+		if _, ok := seen[identityKey]; ok {
 			continue
 		}
-		seen[verified.RelayID] = struct{}{}
+		seen[identityKey] = struct{}{}
 		relays = append(relays, verified)
 	}
 	return self, relays, validateErr
 }
 
 // ValidateDescriptorTarget checks if a descriptor matches expected target identity.
-func ValidateDescriptorTarget(desc types.RelayDescriptor, targetRelayID, targetURL string) error {
+func ValidateDescriptorTarget(desc types.RelayDescriptor, targetIdentity types.Identity, targetURL string) error {
 	normalized, err := NormalizeDescriptor(desc)
 	if err != nil {
 		return err
 	}
 
-	relayID := strings.TrimSpace(normalized.RelayID)
-	if targetRelayID != "" && relayID != targetRelayID {
-		return errors.New("descriptor relay_id does not match target relay")
+	targetName := strings.TrimSpace(targetIdentity.Name)
+	if targetName != "" {
+		normalizedTargetName := utils.NormalizeHostname(targetName)
+		if normalized.Name != normalizedTargetName {
+			return errors.New("descriptor name does not match target relay")
+		}
+	}
+	targetAddress := strings.TrimSpace(targetIdentity.Address)
+	if targetAddress != "" {
+		normalizedTargetAddress, err := utils.NormalizeEVMAddress(targetAddress)
+		if err != nil {
+			return err
+		}
+		if normalized.Address != normalizedTargetAddress {
+			return errors.New("descriptor address does not match target relay")
+		}
 	}
 
 	if targetURL != "" {
@@ -157,8 +177,6 @@ func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byt
 		return types.DiscoveryResponse{}, fmt.Errorf("parse discovery base url: %w", err)
 	}
 
-	requestURL := parsedBaseURL.ResolveReference(&url.URL{Path: types.PathDiscovery})
-
 	client := httpClient
 	if client == nil {
 		_, client, err = keyless.NewRelayHTTPClient(ctx, parsedBaseURL, rootCAPEM, defaultRequestTimeout)
@@ -173,7 +191,7 @@ func DiscoverRelayDiscovery(ctx context.Context, baseURL string, rootCAPEM []byt
 	}
 
 	var resp types.DiscoveryResponse
-	if err := utils.HTTPDoAPI(ctx, client, http.MethodGet, requestURL.String(), nil, nil, &resp); err != nil {
+	if err := utils.HTTPDoAPIPath(ctx, client, parsedBaseURL, http.MethodGet, types.PathDiscovery, nil, nil, &resp); err != nil {
 		return types.DiscoveryResponse{}, err
 	}
 	return resp, nil
@@ -197,7 +215,9 @@ func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
 		return types.RelayDescriptor{}, err
 	}
 	return types.RelayDescriptor{
-		RelayID:      normalized,
+		Identity: types.Identity{
+			Name: utils.PortalRootHost(normalized),
+		},
 		APIHTTPSAddr: normalized,
 		Version:      1,
 	}, nil
@@ -207,13 +227,13 @@ func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
 	if !desc.SupportsOverlayPeer {
 		return errors.New("descriptor does not support overlay peer")
 	}
-	if strings.TrimSpace(desc.WireGuardPublicKey) == "" {
+	if desc.WireGuardPublicKey == "" {
 		return errors.New("descriptor wireguard public key is required")
 	}
-	if strings.TrimSpace(desc.WireGuardEndpoint) == "" {
+	if desc.WireGuardEndpoint == "" {
 		return errors.New("descriptor wireguard endpoint is required")
 	}
-	if strings.TrimSpace(desc.OverlayIPv4) == "" {
+	if desc.OverlayIPv4 == "" {
 		return errors.New("descriptor overlay ipv4 is required")
 	}
 	return nil

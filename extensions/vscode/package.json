@@ -1,7 +1,7 @@
 {
   "name": "portal-tunnel",
   "publisher": "gosuda",
-  "displayName": "Portal",
+  "displayName": "Portal Tunnel",
   "description": "Expose local services to the internet via Portal relay tunnels",
   "version": "0.0.3",
   "engines": {

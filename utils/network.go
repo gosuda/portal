@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -71,14 +72,14 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 		}
 
 		requestCtx, cancelRequest := context.WithTimeout(ctx, requestTimeout)
-		resp, err := HTTPDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
+		resp, err := httpDo(requestCtx, client, http.MethodGet, endpoint, nil, headers)
 		cancelRequest()
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		body, readErr := HTTPReadString(resp, 256)
+		limitedBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			lastErr = errors.New(resp.Status)
@@ -89,7 +90,7 @@ func resolvePublicIP(ctx context.Context, totalTimeout, attemptTimeout time.Dura
 			continue
 		}
 
-		candidate := SanitizeReportedIP(body)
+		candidate := SanitizeReportedIP(string(limitedBody))
 		if candidate == "" {
 			lastErr = errors.New("invalid public ip response")
 			continue
@@ -134,7 +135,7 @@ func ResolvePortalRelayURLs(ctx context.Context, explicit []string, includeDefau
 	var registry struct {
 		Relays []string `json:"relays"`
 	}
-	resp, err := HTTPDo(ctx, client, http.MethodGet, types.PortalRelayRegistryURL, nil, nil)
+	resp, err := httpDo(ctx, client, http.MethodGet, types.PortalRelayRegistryURL, nil, nil)
 	if err != nil {
 		return explicit, nil
 	}

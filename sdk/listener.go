@@ -22,8 +22,7 @@ import (
 )
 
 type ListenerConfig struct {
-	Name             string
-	OwnerPrivateKey  string
+	Identity         types.Identity
 	UDPEnabled       bool
 	BanMITM          bool
 	Metadata         types.LeaseMetadata
@@ -58,9 +57,9 @@ type Listener struct {
 	registerOnce sync.Once
 
 	banMITM   bool
+	identity  types.Identity
 	relaySet  *discovery.RelaySet
 	mu        sync.Mutex
-	leaseID   string
 	hostname  string
 	udpAddr   string
 	metadata  types.LeaseMetadata
@@ -93,6 +92,7 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 		retryWait:   retryWait,
 		leaseTTL:    leaseTTL,
 		renewBefore: renewBefore,
+		identity:    api.identity.Copy(),
 		metadata:    cfg.Metadata.Copy(),
 		banMITM:     cfg.BanMITM,
 		relaySet:    cfg.relaySet,
@@ -104,11 +104,11 @@ func NewListener(ctx context.Context, relayURL string, cfg ListenerConfig) (*Lis
 			log.Info().
 				Err(err).
 				Str("component", "sdk-datagram-plane").
-				Str("lease_id", l.LeaseID()).
+				Str("address", l.Address()).
 				Msg("quic datagram plane disconnected; waiting to reconnect")
 		})
 		go l.datagram.RunLoop(listenerCtx, l.currentDatagramState, func(ctx context.Context, state transport.ClientDatagramState) (*quic.Conn, error) {
-			return l.api.openQUICSession(ctx, state.LeaseID, state.AccessToken)
+			return l.api.openQUICSession(ctx, state.AccessToken)
 		})
 	}
 
@@ -127,10 +127,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 				go l.stream.RunLoop(
 					ctx,
 					func(ctx context.Context) (net.Conn, error) {
-						l.mu.Lock()
-						leaseID := l.leaseID
-						l.mu.Unlock()
-						return l.api.openReverseSession(ctx, leaseID)
+						return l.api.openReverseSession(ctx)
 					},
 					func() *tls.Config {
 						l.mu.Lock()
@@ -144,7 +141,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 			}
 			go l.runRenewLoop(ctx)
 			publicURL := l.PublicURL()
-			event := log.Info().Str("lease_id", l.LeaseID())
+			event := log.Info().Str("address", l.Address())
 			if publicURL != "" {
 				event.
 					Msg("service ready at " + publicURL)
@@ -163,7 +160,7 @@ func (l *Listener) runStartup(ctx context.Context, readyTarget int) {
 				log.Error().
 					Err(err).
 					Str("relay_url", l.api.baseURL.String()).
-					Str("lease_id", l.LeaseID()).
+					Str("address", l.Address()).
 					Msg("lease registration failed; closing listener")
 				_ = l.Close()
 				return
@@ -184,12 +181,12 @@ func (l *Listener) Close() error {
 		}
 
 		l.mu.Lock()
-		leaseID := l.leaseID
+		identity := l.identity.Copy()
+		registered := l.hostname != ""
 		tlsCloser := l.tlsCloser
 		stream := l.stream
 		datagram := l.datagram
 		api := l.api
-		l.leaseID = ""
 		l.hostname = ""
 		l.udpAddr = ""
 		l.tlsConfig = nil
@@ -207,9 +204,9 @@ func (l *Listener) Close() error {
 			datagram.Close()
 		}
 
-		if api != nil && leaseID != "" {
+		if api != nil && registered && identity.Key() != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			closeErr = errors.Join(closeErr, api.unregisterLease(ctx, leaseID))
+			closeErr = errors.Join(closeErr, api.unregisterLease(ctx))
 			cancel()
 		}
 		if tlsCloser != nil {
@@ -237,7 +234,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 			log.Debug().
 				Err(handleErr).
 				Str("relay_url", l.api.baseURL.String()).
-				Str("lease_id", l.LeaseID()).
+				Str("address", l.Address()).
 				Msg("mitm self-probe handling failed")
 		}
 		if handled {
@@ -259,7 +256,7 @@ func (l *Listener) AcceptDatagram() (types.DatagramFrame, error) {
 
 	frame.Payload = append([]byte(nil), frame.Payload...)
 	l.mu.Lock()
-	frame.LeaseID = l.leaseID
+	frame.Address = l.identity.Address
 	frame.UDPAddr = l.udpAddr
 	if l.api != nil && l.api.baseURL != nil {
 		frame.RelayURL = l.api.baseURL.String()
@@ -274,15 +271,15 @@ func (l *Listener) SendDatagram(frame types.DatagramFrame) error {
 	}
 
 	l.mu.Lock()
-	leaseID := l.leaseID
 	datagram := l.datagram
+	address := l.identity.Address
 	l.mu.Unlock()
 
-	if leaseID == "" || datagram == nil {
+	if address == "" || datagram == nil {
 		return net.ErrClosed
 	}
-	if frameLeaseID := strings.TrimSpace(frame.LeaseID); frameLeaseID != "" && frameLeaseID != leaseID {
-		return errors.New("datagram frame targets stale lease")
+	if frameAddress := strings.TrimSpace(frame.Address); frameAddress != "" && frameAddress != address {
+		return errors.New("datagram frame targets stale address")
 	}
 	return datagram.Send(frame.FlowID, frame.Payload)
 }
@@ -309,16 +306,16 @@ func (l *Listener) DatagramReady() (string, bool, bool) {
 func (l *Listener) Addr() net.Addr {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.leaseID == "" {
+	if l.identity.Address == "" {
 		return listenerAddr("portal:closed")
 	}
-	return listenerAddr("portal:" + l.leaseID)
+	return listenerAddr("portal:" + l.identity.Address)
 }
 
-func (l *Listener) LeaseID() string {
+func (l *Listener) Address() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.leaseID
+	return l.identity.Address
 }
 
 func (l *Listener) Hostname() string {
@@ -331,6 +328,13 @@ func (l *Listener) Metadata() types.LeaseMetadata {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.metadata.Copy()
+}
+
+func (l *Listener) Identity() types.Identity {
+	if l == nil {
+		return types.Identity{}
+	}
+	return l.identity.Copy()
 }
 
 func (l *Listener) PublicURL() string {
@@ -346,12 +350,12 @@ func (l *Listener) PublicURL() string {
 		return ""
 	}
 
-	if strings.TrimSpace(l.api.baseURL.Scheme) == "" {
+	if l.api.baseURL.Scheme == "" {
 		return "https://" + hostname
 	}
 
 	host := hostname
-	if port := strings.TrimSpace(l.api.baseURL.Port()); port != "" {
+	if port := l.api.baseURL.Port(); port != "" {
 		host = net.JoinHostPort(hostname, port)
 	}
 
@@ -369,7 +373,7 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.api == nil || l.leaseID == "" || l.udpAddr == "" {
+	if l.api == nil || l.identity.Key() == "" || l.udpAddr == "" {
 		return transport.ClientDatagramState{}, false
 	}
 	l.api.mu.RLock()
@@ -377,7 +381,7 @@ func (l *Listener) currentDatagramState() (transport.ClientDatagramState, bool) 
 	l.api.mu.RUnlock()
 
 	return transport.ClientDatagramState{
-		LeaseID:     l.leaseID,
+		Identity:    l.identity.Copy(),
 		AccessToken: accessToken,
 	}, true
 }
@@ -418,12 +422,8 @@ func (l *Listener) runRenewLoop(ctx context.Context) {
 }
 
 func (l *Listener) renewLease(ctx context.Context) error {
-	l.mu.Lock()
-	leaseID := l.leaseID
-	l.mu.Unlock()
-
 	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	err := l.api.renewLease(requestCtx, leaseID, l.leaseTTL)
+	err := l.api.renewLease(requestCtx, l.leaseTTL)
 	cancel()
 	if err == nil {
 		return nil
@@ -446,7 +446,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 		return err
 	}
 	if l.datagram != nil && !resp.UDPEnabled {
-		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		_ = l.api.unregisterLease(context.Background())
 		return &types.APIRequestError{
 			Code:    types.APIErrorCodeFeatureUnavailable,
 			Message: "relay did not enable required udp support",
@@ -454,12 +454,12 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	}
 	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
 	if err != nil {
-		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		_ = l.api.unregisterLease(context.Background())
 		return err
 	}
 
 	if ctx.Err() != nil {
-		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		_ = l.api.unregisterLease(context.Background())
 		if tlsCloser != nil {
 			_ = tlsCloser.Close()
 		}
@@ -469,7 +469,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	l.mu.Lock()
 	if ctx.Err() != nil {
 		l.mu.Unlock()
-		_ = l.api.unregisterLease(context.Background(), resp.LeaseID)
+		_ = l.api.unregisterLease(context.Background())
 		if tlsCloser != nil {
 			_ = tlsCloser.Close()
 		}
@@ -477,10 +477,10 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 	}
 	oldCloser := l.tlsCloser
 	datagram := l.datagram
-	l.leaseID = resp.LeaseID
+	l.identity.Name = resp.Identity.Name
+	l.identity.Address = resp.Identity.Address
 	l.hostname = resp.Hostname
 	l.udpAddr = resp.UDPAddr
-	l.metadata = resp.Metadata.Copy()
 	l.tlsConfig = tlsConf
 	l.tlsCloser = tlsCloser
 	l.mu.Unlock()
@@ -503,7 +503,7 @@ func (l *Listener) retryOrClose(ctx context.Context, operation string, err error
 	logger := log.With().
 		Str("relay_url", l.api.baseURL.String()).
 		Str("operation", operation).
-		Str("lease_id", l.LeaseID()).
+		Str("address", l.Address()).
 		Logger()
 
 	if operation == "lease registration" {

@@ -3,7 +3,6 @@ package keyless
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -86,39 +85,11 @@ func ResolveMaterials(ctx context.Context, endpoint, serverName string) ([]byte,
 }
 
 func VerifyCertificateHostname(certPEM []byte, hostname string) error {
-	_, leaf, err := ParseCertificateChainPEM(certPEM)
+	leaf, err := utils.ParseCertificatePEM(certPEM)
 	if err != nil {
 		return err
 	}
 	return leaf.VerifyHostname(hostname)
-}
-
-func ParseCertificateChainPEM(certPEM []byte) ([][]byte, *x509.Certificate, error) {
-	if len(certPEM) == 0 {
-		return nil, nil, errors.New("certificate PEM is empty")
-	}
-
-	var chain [][]byte
-	rest := certPEM
-	for {
-		block, next := pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if block.Type == "CERTIFICATE" {
-			chain = append(chain, block.Bytes)
-		}
-		rest = next
-	}
-	if len(chain) == 0 {
-		return nil, nil, errors.New("no certificate blocks found")
-	}
-
-	leaf, err := x509.ParseCertificate(chain[0])
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse leaf certificate: %w", err)
-	}
-	return chain, leaf, nil
 }
 
 func FetchEndpointCertificateChain(ctx context.Context, endpoint, serverName string) ([]byte, error) {

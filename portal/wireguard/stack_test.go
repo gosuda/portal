@@ -135,7 +135,6 @@ func TestApplyPeersKeepsCurrentEndpointOnResolveFailure(t *testing.T) {
 	}
 
 	peer := types.DesiredPeer{
-		RelayID:            "https://peer.example.com",
 		WireGuardPublicKey: peerPublicKey,
 		WireGuardEndpoint:  "127.0.0.1:51820",
 		AllowedIPs:         []string{"10.77.0.2/32"},

@@ -16,9 +16,13 @@ import (
 )
 
 type httpRoute struct {
-	prefix   string
-	upstream *url.URL
-	proxy    *httputil.ReverseProxy
+	prefix            string
+	prefixSlash       string
+	upstream          *url.URL
+	upstreamPath      string
+	upstreamPathSlash string
+	upstreamDomain    string
+	proxy             *httputil.ReverseProxy
 }
 
 func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
@@ -55,7 +59,7 @@ func newHTTPRouteHandler(rawRoutes []string) (http.Handler, error) {
 			p = "/"
 		}
 		for _, route := range routes {
-			if route.prefix == "/" || p == route.prefix || strings.HasPrefix(p, route.prefix+"/") {
+			if route.prefix == "/" || p == route.prefix || strings.HasPrefix(p, route.prefixSlash) {
 				route.proxy.ServeHTTP(w, r)
 				return
 			}
@@ -109,22 +113,25 @@ func parseHTTPRoute(raw string) (*httpRoute, error) {
 	upstream.Fragment = ""
 	upstream.Path = utils.NormalizeURLPath(upstream.Path)
 
-	return &httpRoute{prefix: prefix, upstream: upstream}, nil
+	route := &httpRoute{
+		prefix:         prefix,
+		upstream:       upstream,
+		upstreamPath:   upstream.Path,
+		upstreamDomain: utils.NormalizeHostname(upstream.Hostname()),
+	}
+	if prefix != "/" {
+		route.prefixSlash = prefix + "/"
+	}
+	if upstream.Path != "/" {
+		route.upstreamPathSlash = upstream.Path + "/"
+	}
+	return route, nil
 }
 
 func (r *httpRoute) newReverseProxy() *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
-		Rewrite: r.rewriteRequest,
-		ModifyResponse: func(resp *http.Response) error {
-			if resp == nil || resp.Request == nil {
-				return nil
-			}
-			publicHost := resp.Request.Header.Get("X-Forwarded-Host")
-			publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
-			r.rewriteLocation(resp.Header, publicHost, publicScheme)
-			r.rewriteSetCookies(resp.Header, publicHost)
-			return nil
-		},
+		Rewrite:        r.rewriteRequest,
+		ModifyResponse: r.rewriteResponse,
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
 			log.Error().Err(err).
 				Str("route_prefix", r.prefix).
@@ -136,28 +143,7 @@ func (r *httpRoute) newReverseProxy() *httputil.ReverseProxy {
 }
 
 func (r *httpRoute) rewriteRequest(pr *httputil.ProxyRequest) {
-	// strip route prefix from the path before forwarding
-	reqPath := utils.NormalizeURLPath(pr.In.URL.Path)
-	rawPath := pr.In.URL.RawPath
-	if r.prefix != "/" {
-		if reqPath == r.prefix {
-			reqPath = "/"
-			rawPath = ""
-		} else {
-			reqPath = strings.TrimPrefix(reqPath, r.prefix)
-			if reqPath == "" {
-				reqPath = "/"
-			}
-			if rawPath == r.prefix {
-				rawPath = "/"
-			} else if strings.HasPrefix(rawPath, r.prefix+"/") {
-				rawPath = strings.TrimPrefix(rawPath, r.prefix)
-			}
-		}
-	}
-
-	pr.Out.URL.Path = reqPath
-	pr.Out.URL.RawPath = rawPath
+	pr.Out.URL.Path, pr.Out.URL.RawPath = r.publicRequestPathToUpstream(pr.In.URL.Path, pr.In.URL.RawPath)
 	pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 	pr.SetURL(r.upstream)
 	pr.SetXForwarded()
@@ -176,50 +162,54 @@ func (r *httpRoute) rewriteRequest(pr *httputil.ProxyRequest) {
 	}
 }
 
-func (r *httpRoute) rewriteLocation(header http.Header, publicHost, publicScheme string) {
+func (r *httpRoute) rewriteResponse(resp *http.Response) error {
+	if resp == nil || resp.Request == nil {
+		return nil
+	}
+
+	header := resp.Header
+	publicHost := resp.Request.Header.Get("X-Forwarded-Host")
+	publicScheme := resp.Request.Header.Get("X-Forwarded-Proto")
+
 	location := header.Get("Location")
-	if location == "" {
-		return
-	}
-	parsed, err := url.Parse(location)
-	if err != nil {
-		return
-	}
+	if location != "" {
+		parsed, err := url.Parse(location)
+		if err == nil {
+			switch {
+			case parsed.IsAbs():
+				if strings.EqualFold(parsed.Scheme, r.upstream.Scheme) && strings.EqualFold(parsed.Host, r.upstream.Host) {
+					parsed.Scheme = publicScheme
+					parsed.Host = publicHost
+				} else {
+					parsed = nil
+				}
+			case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || (location[1] != '\\' && location[1] != '/')):
+				// server-relative redirect
+			default:
+				parsed = nil
+			}
 
-	switch {
-	case parsed.IsAbs():
-		if !strings.EqualFold(parsed.Scheme, r.upstream.Scheme) || !strings.EqualFold(parsed.Host, r.upstream.Host) {
-			return
+			if parsed != nil {
+				mapped := r.upstreamPathToPublic(parsed.Path)
+				if strings.HasPrefix(mapped, "/") && (len(mapped) == 1 || (mapped[1] != '/' && mapped[1] != '\\')) {
+					parsed.Path = mapped
+					parsed.RawPath = ""
+					header.Set("Location", parsed.String())
+				}
+			}
 		}
-		parsed.Scheme = publicScheme
-		parsed.Host = publicHost
-	case strings.HasPrefix(location, "/") && parsed.Host == "" && (len(location) == 1 || (location[1] != '\\' && location[1] != '/')):
-		// server-relative redirect
-	default:
-		return
 	}
 
-	mapped := r.mapUpstreamPathToPublic(parsed.Path)
-	if !strings.HasPrefix(mapped, "/") || (len(mapped) > 1 && (mapped[1] == '/' || mapped[1] == '\\')) {
-		return
-	}
-	parsed.Path = mapped
-	parsed.RawPath = ""
-	header.Set("Location", parsed.String())
-}
-
-func (r *httpRoute) rewriteSetCookies(header http.Header, publicHost string) {
 	values := header.Values("Set-Cookie")
 	if len(values) == 0 {
-		return
+		return nil
 	}
 
 	publicDomain := publicHost
 	if host, port, err := net.SplitHostPort(publicDomain); err == nil && port != "" {
 		publicDomain = host
 	}
-	publicDomain = strings.ToLower(strings.Trim(publicDomain, "[]"))
-	upstreamDomain := strings.ToLower(r.upstream.Hostname())
+	publicDomain = utils.NormalizeHostname(strings.Trim(publicDomain, "[]"))
 
 	header.Del("Set-Cookie")
 	for _, value := range values {
@@ -231,40 +221,65 @@ func (r *httpRoute) rewriteSetCookies(header http.Header, publicHost string) {
 
 		changed := false
 		if cookie.Path != "" {
-			if rewritten := r.mapUpstreamPathToPublic(cookie.Path); rewritten != cookie.Path {
+			if rewritten := r.upstreamPathToPublic(cookie.Path); rewritten != cookie.Path {
 				cookie.Path = rewritten
 				changed = true
 			}
 		}
 
-		domain := strings.ToLower(strings.TrimPrefix(cookie.Domain, "."))
+		domain := utils.NormalizeHostname(strings.TrimPrefix(cookie.Domain, "."))
 		if domain != "" && domain != publicDomain &&
-			(domain == upstreamDomain || utils.IsLocalRelayHost(domain)) {
+			(domain == r.upstreamDomain || utils.IsLocalRelayHost(domain)) {
 			cookie.Domain = ""
 			changed = true
 		}
 
 		if changed {
 			header.Add("Set-Cookie", cookie.String())
-		} else {
-			header.Add("Set-Cookie", value)
+			continue
 		}
+		header.Add("Set-Cookie", value)
 	}
+
+	return nil
 }
 
-func (r *httpRoute) mapUpstreamPathToPublic(raw string) string {
+func (r *httpRoute) publicRequestPathToUpstream(path, rawPath string) (string, string) {
+	path = utils.NormalizeURLPath(path)
+	if r.prefix == "/" {
+		return path, rawPath
+	}
+	if path == r.prefix {
+		return "/", ""
+	}
+	path = strings.TrimPrefix(path, r.prefix)
+	if path == "" {
+		path = "/"
+	}
+
+	if rawPath != "" {
+		switch {
+		case rawPath == r.prefix:
+			rawPath = "/"
+		case strings.HasPrefix(rawPath, r.prefixSlash):
+			rawPath = strings.TrimPrefix(rawPath, r.prefix)
+		}
+	}
+	return path, rawPath
+}
+
+func (r *httpRoute) upstreamPathToPublic(raw string) string {
 	raw = utils.NormalizeURLPath(raw)
-	if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefix+"/")) {
+	if r.prefix != "/" && (raw == r.prefix || strings.HasPrefix(raw, r.prefixSlash)) {
 		return raw
 	}
 
-	base := utils.NormalizeURLPath(r.upstream.Path)
 	rest := raw
-	if base != "/" {
-		if raw == base {
+	if r.upstreamPath != "/" {
+		if raw == r.upstreamPath {
 			rest = "/"
-		} else if strings.HasPrefix(raw, base+"/") {
-			rest = strings.TrimPrefix(raw, base)
+		} else if strings.HasPrefix(raw, r.upstreamPathSlash) {
+			rest = strings.TrimPrefix(raw, r.upstreamPath)
 		}
 	}
 

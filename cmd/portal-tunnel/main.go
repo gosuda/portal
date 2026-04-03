@@ -32,20 +32,21 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV   string
-	discovery  bool
-	banMITM    bool
-	privateKey string
-	name       string
-	desc       string
-	tags       string
-	owner      string
-	thumbnail  string
-	hide       bool
-	targetAddr string
-	httpRoutes []string
-	udp        bool
-	udpAddr    string
+	relayCSV     string
+	discovery    bool
+	banMITM      bool
+	identityPath string
+	identityJSON string
+	name         string
+	desc         string
+	tags         string
+	owner        string
+	thumbnail    string
+	hide         bool
+	targetAddr   string
+	httpRoutes   []string
+	udp          bool
+	udpAddr      string
 }
 
 func runExposeCommand(args []string) error {
@@ -55,7 +56,8 @@ func runExposeCommand(args []string) error {
 	utils.StringFlag(fs, &flags.relayCSV, "relays", "", "Additional Portal relay server API URLs (comma-separated; scheme omitted defaults to https)")
 	utils.BoolFlag(fs, &flags.discovery, "discovery", true, "Include public registry relays and discover additional relay bootstraps")
 	utils.BoolFlagEnv(fs, &flags.banMITM, "ban-mitm", true, "Ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlag(fs, &flags.privateKey, "private-key", "", "Owner private key used to derive a discovery address")
+	utils.StringFlagEnv(fs, &flags.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
+	utils.StringFlagEnv(fs, &flags.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
 	utils.StringFlag(fs, &flags.name, "name", "", "Public hostname prefix (single DNS label); auto-generated when omitted")
 	utils.StringFlag(fs, &flags.desc, "description", "", "Service description metadata")
 	utils.StringFlag(fs, &flags.tags, "tags", "", "Service tags metadata (comma-separated)")
@@ -90,6 +92,21 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
 	}
+	if flags.name == "" && strings.TrimSpace(flags.identityJSON) != "" {
+		identity, err := utils.ParseIdentityJSON(flags.identityJSON)
+		if err != nil {
+			return fmt.Errorf("parse --identity-json: %w", err)
+		}
+		if strings.TrimSpace(identity.Name) != "" {
+			flags.name = identity.Name
+		}
+	}
+	if flags.name == "" {
+		storedIdentity, err := utils.LoadIdentity(flags.identityPath)
+		if err == nil && strings.TrimSpace(storedIdentity.Name) != "" {
+			flags.name = storedIdentity.Name
+		}
+	}
 	if flags.name == "" {
 		defaultTarget := flags.targetAddr
 		if defaultTarget == "" && len(flags.httpRoutes) > 0 {
@@ -100,18 +117,23 @@ func runExposeCommand(args []string) error {
 			return fmt.Errorf("derive service name: %w", err)
 		}
 	}
-
+	flags.name, err = utils.NormalizeDNSLabel(flags.name)
+	if err != nil {
+		return fmt.Errorf("invalid service name: %w", err)
+	}
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
 	exposure, err := sdk.Expose(ctx, sdk.ExposeConfig{
-		RelayURLs:  utils.SplitCSV(flags.relayCSV),
-		Name:       flags.name,
-		TargetAddr: flags.targetAddr,
-		UDPAddr:    flags.udpAddr,
-		UDPEnabled: flags.udp,
-		BanMITM:    flags.banMITM,
-		Discovery:  flags.discovery,
+		RelayURLs:    utils.SplitCSV(flags.relayCSV),
+		IdentityPath: flags.identityPath,
+		IdentityJSON: flags.identityJSON,
+		Name:         flags.name,
+		TargetAddr:   flags.targetAddr,
+		UDPAddr:      flags.udpAddr,
+		UDPEnabled:   flags.udp,
+		BanMITM:      flags.banMITM,
+		Discovery:    flags.discovery,
 		Metadata: types.LeaseMetadata{
 			Description: flags.desc,
 			Tags:        utils.SplitCSV(flags.tags),
@@ -119,7 +141,6 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
-		OwnerPrivateKey: flags.privateKey,
 	})
 	if err != nil {
 		return fmt.Errorf("service %s: failed to start relays: %w", flags.name, err)
@@ -133,7 +154,7 @@ func runExposeCommand(args []string) error {
 		defer exposure.Close()
 		return exposure.RunHTTP(ctx, handler, "")
 	}
-	return proxyExposure(ctx, exposure, flags.name)
+	return proxyExposure(ctx, exposure)
 }
 
 type listFlags struct {

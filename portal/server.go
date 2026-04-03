@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gosuda/keyless_tls/relay/l4"
@@ -21,6 +20,7 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
+	"github.com/gosuda/portal/v2/portal/ols"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/portal/wireguard"
@@ -41,7 +41,7 @@ const (
 
 type ServerConfig struct {
 	PortalURL           string
-	OwnerPrivateKey     string
+	IdentityPath        string
 	Bootstraps          []string
 	WireGuardPrivateKey string
 	DiscoveryPort       int
@@ -62,141 +62,100 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	sniListener       net.Listener
-	apiListener       net.Listener
-	apiServer         *http.Server
-	apiTLSClose       io.Closer
-	acmeManager       *acme.Manager
-	quicTunnel        *quic.Listener
-	overlay           *wireguard.Overlay
+	sniListener        net.Listener
+	apiListener        net.Listener
+	apiServer          *http.Server
+	apiTLSClose        io.Closer
+	acmeManager        *acme.Manager
+	quicTunnel         *quic.Listener
+	overlay            *wireguard.Overlay
 	interRelayListener net.Listener
-	cancel            context.CancelFunc
-	group             *errgroup.Group
-	registry          *leaseRegistry
-	ports             *transport.PortAllocator
-	ownerIdentity     utils.Secp256k1Identity
-	wgConfig          wireguard.Config
-	cfg               ServerConfig
-	rootHost          string
-	trustedProxyCIDRs []*net.IPNet
-	relaySet          *discovery.RelaySet
-	olsManager        *policy.OLSManager
-	activeConns       int64
-	bytesIn           int64
-	bytesOut          int64
-	connCount         int64
-	lastConnRateCheck time.Time
-	connRate          float64
-	shutdownOnce      sync.Once
+	cancel             context.CancelFunc
+	group              *errgroup.Group
+	registry           *leaseRegistry
+	ports              *transport.PortAllocator
+	identity           types.Identity
+	wgConfig           wireguard.Config
+	cfg                ServerConfig
+	trustedProxyCIDRs  []*net.IPNet
+	relaySet           *discovery.RelaySet
+	ols                *ols.Engine
+	loadMgr            *policy.LoadManager
+	weightMgr          *policy.WeightManager
+	shutdownOnce       sync.Once
 }
 
-func (s *Server) writeRouteContext(conn net.Conn, ctx *policy.RouteContext) error {
-	data, err := utils.MarshalJSON(ctx)
-	if err != nil {
-		return err
-	}
-	// [Magic 4 bytes: 'PORT'][Length 4 bytes][JSON]
-	header := make([]byte, 8)
-	copy(header[0:4], "PORT")
-	utils.PutUint32(header[4:8], uint32(len(data)))
-	if _, err := conn.Write(header); err != nil {
-		return err
-	}
-	_, err = conn.Write(data)
-	return err
+// snapshotPeerDialer implements ols.PeerDialer.  It concentrates all
+// WireGuard-specific knowledge in one place so that the OLS engine remains
+// protocol-agnostic.
+type snapshotPeerDialer struct {
+	snapshot map[string]types.RelayState
+	overlay  *wireguard.Overlay
 }
 
-func (s *Server) readRouteContext(conn net.Conn) (*policy.RouteContext, error) {
-	header := make([]byte, 8)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return nil, err
+// PeerAddr returns the inter-relay TCP address (host:port) for nodeID by
+// reading WireGuard overlay fields from the cached relay snapshot.
+func (d *snapshotPeerDialer) PeerAddr(nodeID string) (string, bool) {
+	if d == nil || d.overlay == nil {
+		return "", false
 	}
-	if string(header[0:4]) != "PORT" {
-		return nil, fmt.Errorf("invalid inter-relay magic")
+	state, ok := d.snapshot[nodeID]
+	if !ok || state.Expired || !state.Descriptor.SupportsOverlayPeer || state.Descriptor.OverlayIPv4 == "" {
+		return "", false
 	}
-	length := utils.Uint32(header[4:8])
-	if length > 65536 {
-		return nil, fmt.Errorf("inter-relay context too large")
+	return net.JoinHostPort(state.Descriptor.OverlayIPv4, fmt.Sprintf("%d", 7778)), true
+}
+
+// DialContext dials through the WireGuard overlay network.
+func (d *snapshotPeerDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return d.overlay.DialContext(ctx, network, address)
+}
+
+// localLoad returns the current server load snapshot for OLS accounting.
+// It merges raw connection metrics from LoadManager with the protocol-specific
+// latency signals collected by WeightManager.
+func (s *Server) localLoad() policy.NodeLoad {
+	load := s.loadMgr.Snapshot()
+	if s.weightMgr != nil {
+		wl := s.weightMgr.Collect()
+		load.AvgLatencyMs = wl.AvgLatencyMs
 	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(conn, data); err != nil {
-		return nil, err
-	}
-	var ctx policy.RouteContext
-	if err := utils.UnmarshalJSON(data, &ctx); err != nil {
-		return nil, err
-	}
-	return &ctx, nil
+	return load
 }
 
 func (s *Server) runInterRelayProxyListener(ctx context.Context) error {
 	for {
 		conn, err := s.interRelayListener.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil || strings.Contains(err.Error(), "endpoint is in invalid state") {
 				return nil
 			}
 			return err
 		}
 		go func(conn net.Conn) {
-			defer conn.Close()
-			routeCtx, err := s.readRouteContext(conn)
-			if err != nil {
-				log.Warn().Err(err).Msg("failed to read inter-relay route context")
-				return
-			}
-
-			// Append self to visited and increment hop count
-			routeCtx.Visited = append(routeCtx.Visited, s.cfg.PortalURL)
-			routeCtx.HopCount++
-
-			clientHello, wrappedConn, err := l4.InspectClientHello(conn, defaultClientHelloWait)
-			if err != nil {
-				return
-			}
-			serverName := utils.NormalizeHostname(clientHello.ServerName)
-			if serverName == "" {
-				_ = wrappedConn.Close()
-				return
-			}
-
-			// Re-route or handle locally
-			targetID, err := s.olsManager.GetTargetNodeID(conn.RemoteAddr().String(), serverName, routeCtx)
-			if err == nil && targetID != s.cfg.PortalURL {
-				// Proxy further (multi-hop)
-				snapshot := s.relaySet.Snapshot()
-				if targetState, ok := snapshot[targetID]; ok && targetState.Descriptor.SupportsOverlayPeer && targetState.Descriptor.OverlayIPv4 != "" {
-					proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, "7778")
-					targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
-					if err == nil {
-						err = s.writeRouteContext(targetConn, routeCtx)
-						if err == nil {
-							s.BridgeConns(wrappedConn, targetConn)
-							s.olsManager.MarkSuccess(targetID)
-							return
-						}
-						_ = targetConn.Close()
-					}
-					s.olsManager.MarkFailure(targetID)
-				}
-			}
-
-			// Handle locally
-			record, ok := s.registry.Lookup(serverName)
-			if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsLeaseRoutable(record.ID) || record.stream == nil {
-				_ = wrappedConn.Close()
-				return
-			}
-
-			claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-			defer cancel()
-			session, err := record.stream.Claim(claimCtx)
-			if err != nil {
-				_ = wrappedConn.Close()
-				return
-			}
-			s.BridgeConns(wrappedConn, session)
+			snapshot := s.relaySet.Snapshot()
+			peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+			s.ols.ServeInterRelayConn(ctx, conn, peers, s.serveLocalConn(ctx))
 		}(conn)
+	}
+}
+
+// serveLocalConn returns a handler that claims a local lease stream and bridges it.
+func (s *Server) serveLocalConn(ctx context.Context) func(serverName string, conn net.Conn) {
+	return func(serverName string, conn net.Conn) {
+		record, ok := s.registry.Lookup(serverName)
+		if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
+			_ = conn.Close()
+			return
+		}
+		claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+		defer cancel()
+		session, err := record.stream.Claim(claimCtx)
+		if err != nil {
+			_ = conn.Close()
+			return
+		}
+		s.BridgeConns(conn, session)
 	}
 }
 
@@ -252,19 +211,15 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		portMax = defaultUDPPortBase + cfg.UDPPortCount - 1
 	}
 
-	ownerPrivateKey := strings.TrimSpace(cfg.OwnerPrivateKey)
-	ownerIdentity, err := utils.ResolveSecp256k1Identity(ownerPrivateKey)
+	identity, generatedIdentity, err := utils.LoadOrCreateIdentity(cfg.IdentityPath, types.Identity{Name: rootHost})
 	if err != nil {
-		if ownerPrivateKey == "" {
-			return nil, fmt.Errorf("generate relay owner private key: %w", err)
-		}
-		return nil, fmt.Errorf("resolve owner identity: %w", err)
+		return nil, fmt.Errorf("load relay identity: %w", err)
 	}
-	if ownerPrivateKey == "" {
+	if generatedIdentity {
 		log.Warn().
-			Str("owner_address", ownerIdentity.Address).
-			Str("owner_private_key", ownerIdentity.PrivateKey).
-			Msg("generated relay owner private key; set OWNER_PRIVATE_KEY unique identity")
+			Str("identity_path", cfg.IdentityPath).
+			Str("address", identity.Address).
+			Msg("generated relay identity and saved it to disk")
 	}
 
 	policyRuntime := policy.NewRuntime()
@@ -274,29 +229,26 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 
 	s := &Server{
 		cfg:               cfg,
-		rootHost:          rootHost,
 		registry:          registry,
 		ports:             ports,
-		ownerIdentity:     ownerIdentity,
+		identity:          identity,
 		wgConfig:          wgConfig,
 		trustedProxyCIDRs: trustedProxyCIDRs,
-		olsManager:        policy.NewOLSManager(),
-		lastConnRateCheck: time.Now(),
+		loadMgr:           policy.NewLoadManager(),
+		weightMgr:         policy.NewWeightManager(),
 	}
 
 	if cfg.DiscoveryEnabled {
 		s.relaySet = discovery.NewRelaySet()
-		_, err = s.relaySet.RegisterBootstrapRelayURLs(cfg.Bootstraps, time.Now().UTC())
+		_, err = s.relaySet.RegisterBootstrapRelayURLs(cfg.Bootstraps)
 		if err != nil {
 			return nil, err
 		}
-		// Initial OLS update with self
-		s.olsManager.UpdateNodes([]string{s.cfg.PortalURL})
+		s.ols = ols.New(identity.Key())
 	}
 
 	return s, nil
 }
-
 func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	if s.group != nil {
 		return errors.New("server already started")
@@ -360,7 +312,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		group.Go(func() error { return s.runInterRelayProxyListener(groupCtx) })
 	}
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
-	group.Go(func() error { return s.registry.RunJanitor(groupCtx, 5*time.Second) })
+	group.Go(func() error { return s.runLeaseJanitor(groupCtx, 5*time.Second) })
 	if s.cfg.DiscoveryEnabled {
 		group.Go(func() error { return s.runRelayDiscoveryLoop(groupCtx) })
 	}
@@ -381,12 +333,11 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	logEvent := log.Info().
 		Str("api_addr", utils.HostPortOrLoopback(s.apiListener.Addr().String())).
 		Str("sni_addr", s.sniListener.Addr().String()).
-		Str("root_host", s.rootHost).
+		Str("root_host", s.identity.Name).
 		Str("acme_dns_provider", s.cfg.ACME.DNSProvider).
 		Bool("discovery_enabled", s.cfg.DiscoveryEnabled).
-		Bool("wireguard_enabled", strings.TrimSpace(s.wgConfig.PrivateKey) != "").
-		Bool("udp_enabled", s.cfg.UDPPortCount > 0).
-		Bool("acme_enabled", !strings.HasSuffix(s.rootHost, "localhost") && s.rootHost != "127.0.0.1" && s.rootHost != "::1")
+		Bool("wireguard_enabled", s.wgConfig.PrivateKey != "").
+		Bool("udp_enabled", s.cfg.UDPPortCount > 0)
 	if s.quicTunnel != nil {
 		logEvent = logEvent.Str("internal_quic_tunnel_addr", s.quicTunnel.Addr().String())
 	}
@@ -402,6 +353,13 @@ func (s *Server) Wait() error {
 	return s.group.Wait()
 }
 
+func (s *Server) Identity() types.Identity {
+	if s == nil {
+		return types.Identity{}
+	}
+	return s.identity.Copy()
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {
@@ -411,6 +369,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 		for _, lease := range s.registry.CloseAll() {
 			if lease != nil {
+				if s.acmeManager != nil {
+					deleteCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
+					if err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, lease.Hostname); err != nil {
+						log.Warn().
+							Err(err).
+							Str("hostname", lease.Hostname).
+							Str("address", lease.Address).
+							Msg("delete lease ens gasless txt during shutdown")
+					}
+					cancel()
+				}
 				lease.Close()
 			}
 		}
@@ -461,13 +430,47 @@ func (s *Server) LeaseSnapshots() []types.Lease {
 	s.registry.mu.RLock()
 	defer s.registry.mu.RUnlock()
 
-	records := make([]*leaseRecord, 0, len(s.registry.leaseByID))
-	for _, record := range s.registry.leaseByID {
+	now := time.Now()
+	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
+	for _, record := range s.registry.leasesByKey {
 		records = append(records, record)
 	}
 	snapshots := make([]types.Lease, 0, len(records))
 	for _, record := range records {
-		snapshots = append(snapshots, s.registry.Snapshot(record))
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		adminSnapshot := s.registry.AdminSnapshot(record)
+		since := time.Duration(0)
+		if !adminSnapshot.LastSeenAt.IsZero() {
+			since = max(now.Sub(adminSnapshot.LastSeenAt), 0)
+		}
+		if adminSnapshot.IsBanned || adminSnapshot.IsDenied || !adminSnapshot.IsApproved || adminSnapshot.Metadata.Hide {
+			continue
+		}
+		if adminSnapshot.Ready == 0 && since >= 3*time.Minute {
+			continue
+		}
+		snapshots = append(snapshots, adminSnapshot.Lease)
+	}
+	return snapshots
+}
+
+func (s *Server) AdminLeaseSnapshots() []types.AdminLease {
+	s.registry.mu.RLock()
+	defer s.registry.mu.RUnlock()
+
+	now := time.Now()
+	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
+	for _, record := range s.registry.leasesByKey {
+		records = append(records, record)
+	}
+	snapshots := make([]types.AdminLease, 0, len(records))
+	for _, record := range records {
+		if now.After(record.ExpiresAt) {
+			continue
+		}
+		snapshots = append(snapshots, s.registry.AdminSnapshot(record))
 	}
 	return snapshots
 }
@@ -486,10 +489,13 @@ func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
 
 func (s *Server) prepareAPITLS(ctx context.Context) (keyless.TLSMaterialConfig, *acme.Manager, error) {
 	acmeCfg := s.cfg.ACME
-	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.rootHost {
-		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.rootHost)
+	if baseDomain := utils.NormalizeHostname(acmeCfg.BaseDomain); baseDomain != "" && baseDomain != s.identity.Name {
+		return keyless.TLSMaterialConfig{}, nil, fmt.Errorf("acme base domain %q does not match portal root host %q", acmeCfg.BaseDomain, s.identity.Name)
 	}
-	acmeCfg.BaseDomain = s.rootHost
+	acmeCfg.BaseDomain = s.identity.Name
+	if strings.TrimSpace(acmeCfg.ENSGaslessAddress) == "" {
+		acmeCfg.ENSGaslessAddress = s.identity.Address
+	}
 
 	manager, err := acme.NewManager(acmeCfg)
 	if err != nil {
@@ -540,48 +546,16 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 					return
 				}
 
-				// OLS Load Balancing
-				if s.olsManager != nil {
-					// Use client remote address as clientID for hashing
-					clientID := conn.RemoteAddr().String()
-					routeCtx := &policy.RouteContext{
-						OriginNodeID: s.cfg.PortalURL,
-						Visited:      []string{s.cfg.PortalURL},
-						HopCount:     0,
-					}
-					targetID, err := s.olsManager.GetTargetNodeID(clientID, serverName, routeCtx)
-					if err == nil && targetID != s.cfg.PortalURL && s.overlay != nil {
-						// Target is another node. Proxy to it.
-						log.Debug().
-							Str("client_addr", clientID).
-							Str("server_name", serverName).
-							Str("target_id", targetID).
-							Msg("proxying to OLS target node")
-
-						// Check if we can reach target via overlay
-						snapshot := s.relaySet.Snapshot()
-						if targetState, ok := snapshot[targetID]; ok && targetState.Descriptor.SupportsOverlayPeer && targetState.Descriptor.OverlayIPv4 != "" {
-							// Proxy to inter-relay port 7778
-							proxyAddr := net.JoinHostPort(targetState.Descriptor.OverlayIPv4, "7778")
-
-							targetConn, err := s.overlay.DialContext(ctx, "tcp", proxyAddr)
-							if err == nil {
-								// Send RouteContext before raw TLS
-								err = s.writeRouteContext(targetConn, routeCtx)
-								if err == nil {
-									s.BridgeConns(wrappedConn, targetConn)
-									s.olsManager.MarkSuccess(targetID)
-									return
-								}
-								_ = targetConn.Close()
-							}
-							s.olsManager.MarkFailure(targetID)
-							log.Warn().Err(err).Str("target", proxyAddr).Msg("failed to proxy to OLS target via overlay")
-						}
-					}
+			// OLS load balancing: route to best target node if applicable.
+			if s.ols != nil {
+				snapshot := s.relaySet.Snapshot()
+				peers := &snapshotPeerDialer{snapshot: snapshot, overlay: s.overlay}
+				if s.ols.RouteConn(ctx, wrappedConn, serverName, peers) {
+					return
 				}
+			}
 
-				if serverName == s.rootHost {
+				if serverName == s.identity.Name {
 					if s.apiListener == nil {
 						_ = wrappedConn.Close()
 						return
@@ -597,7 +571,7 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				}
 
 				record, ok := s.registry.Lookup(serverName)
-				if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsLeaseRoutable(record.ID) || record.stream == nil {
+				if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
 					_ = wrappedConn.Close()
 					return
 				}
@@ -617,6 +591,36 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 			return nil
 		default:
 			return err
+		}
+	}
+}
+
+func (s *Server) runLeaseJanitor(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return errors.New("janitor interval must be positive")
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for _, lease := range s.registry.cleanupExpired(time.Now()) {
+				deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
+				err := s.acmeManager.DeleteENSGaslessHostname(deleteCtx, lease.Hostname)
+				cancel()
+				if err != nil {
+					log.Warn().
+						Err(err).
+						Str("hostname", lease.Hostname).
+						Str("address", lease.Address).
+						Msg("delete expired lease ens gasless txt")
+				}
+				lease.Close()
+			}
 		}
 	}
 }
@@ -692,7 +696,7 @@ func (s *Server) startOverlay() error {
 		return fmt.Errorf("listen inter-relay proxy: %w", err)
 	}
 
-	if err := overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); err != nil {
+	if err := overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); err != nil {
 		_ = interRelayListener.Close()
 		_ = overlay.Shutdown(context.Background())
 		return fmt.Errorf("sync wireguard peers: %w", err)
@@ -702,6 +706,7 @@ func (s *Server) startOverlay() error {
 	s.interRelayListener = interRelayListener
 	return nil
 }
+
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 	ticker := time.NewTicker(types.DiscoveryPollInterval)
 	defer ticker.Stop()
@@ -722,11 +727,13 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 			now := time.Now().UTC()
 			var relaySetChanged bool
 			var warnErr error
-			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.RelayID, bootstrap.APIHTTPSAddr, resp, now)
+			_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.Identity, bootstrap.APIHTTPSAddr, resp, now)
 			if relaySetChanged {
-				s.updateOLSFromRelaySet()
+				if s.ols != nil {
+					s.ols.OnRelaySetChanged(s.localLoad(), s.relaySet.Snapshot())
+				}
 				if s.overlay != nil {
-					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil {
+					if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil {
 						if warnErr == nil {
 							warnErr = syncErr
 						}
@@ -775,11 +782,13 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 						var relaySetChanged bool
 						var warnErr error
 						var snapshot map[string]types.RelayState
-						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.RelayID, relay.APIHTTPSAddr, resp, now)
+						_, relaySetChanged, _, warnErr, err = s.relaySet.ApplyOverlayRelayDiscoveryResponse(relay.Identity, relay.APIHTTPSAddr, resp, now)
 						if relaySetChanged {
-							s.updateOLSFromRelaySet()
+							if s.ols != nil {
+								s.ols.OnRelaySetChanged(s.localLoad(), s.relaySet.Snapshot())
+							}
 							snapshot = s.relaySet.Snapshot()
-							if syncErr := s.overlay.Sync(s.cfg.PortalURL, snapshot); syncErr != nil {
+							if syncErr := s.overlay.Sync(s.identity.Key(), snapshot); syncErr != nil {
 								if warnErr == nil {
 									warnErr = syncErr
 								}
@@ -800,9 +809,9 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 						}
 					}
 				}
-				expired, expireReason, consecutiveFailures := s.relaySet.RecordDiscoveryFailure(relay.RelayID, relay.APIHTTPSAddr, failureErr, defaultWGRecoveryFailures, time.Now().UTC())
+				expired, expireReason, consecutiveFailures := s.relaySet.RecordDiscoveryFailure(relay.Identity, relay.APIHTTPSAddr, failureErr, defaultWGRecoveryFailures, time.Now().UTC())
 				if expired {
-					if syncErr := s.overlay.Sync(s.cfg.PortalURL, s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
+					if syncErr := s.overlay.Sync(s.identity.Key(), s.relaySet.Snapshot()); syncErr != nil && failureErr == nil {
 						failureErr = syncErr
 					}
 				}
@@ -834,9 +843,8 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 }
 
 func (s *Server) BridgeConns(left, right net.Conn) {
-	atomic.AddInt64(&s.activeConns, 1)
-	atomic.AddInt64(&s.connCount, 1)
-	defer atomic.AddInt64(&s.activeConns, -1)
+	s.loadMgr.RecordConnStart()
+	defer s.loadMgr.RecordConnEnd()
 
 	defer left.Close()
 	defer right.Close()
@@ -844,56 +852,17 @@ func (s *Server) BridgeConns(left, right net.Conn) {
 	var group errgroup.Group
 	group.Go(func() error {
 		n, err := io.Copy(right, left)
-		atomic.AddInt64(&s.bytesIn, n)
+		s.loadMgr.RecordBytesIn(n)
 		closeWrite(right)
 		return err
 	})
 	group.Go(func() error {
 		n, err := io.Copy(left, right)
-		atomic.AddInt64(&s.bytesOut, n)
+		s.loadMgr.RecordBytesOut(n)
 		closeWrite(left)
 		return err
 	})
 	_ = group.Wait()
-}
-
-func (s *Server) updateOLSFromRelaySet() {
-	if s.olsManager == nil || s.relaySet == nil {
-		return
-	}
-	snapshot := s.relaySet.Snapshot()
-	nodes := []string{s.cfg.PortalURL}
-	// Add other reachable relays
-	for id, state := range snapshot {
-		if !state.Expired {
-			nodes = append(nodes, id)
-		}
-	}
-	s.olsManager.UpdateNodes(nodes)
-
-	// Update local load
-	now := time.Now()
-	diff := now.Sub(s.lastConnRateCheck).Seconds()
-	if diff >= 5.0 {
-		count := atomic.SwapInt64(&s.connCount, 0)
-		s.connRate = float64(count) / diff
-		s.lastConnRateCheck = now
-	}
-
-	localLoad := policy.NodeLoad{
-		ActiveConns: atomic.LoadInt64(&s.activeConns),
-		BytesIn:     atomic.LoadInt64(&s.bytesIn),
-		BytesOut:    atomic.LoadInt64(&s.bytesOut),
-		ConnRate:    s.connRate,
-	}
-	s.olsManager.UpdateLoad(s.cfg.PortalURL, localLoad, 0, now.Unix())
-
-	// Update peer loads from relay set
-	for id, state := range snapshot {
-		if !state.Expired {
-			s.olsManager.UpdateLoad(id, policy.NodeLoad{}, state.Descriptor.LoadScore, state.Descriptor.LastUpdated)
-		}
-	}
 }
 
 func closeWrite(conn net.Conn) {

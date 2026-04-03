@@ -15,6 +15,11 @@ const (
 	w4 = 0.1 // AvgLatencyMs
 
 	alpha = 0.2 // EWMA alpha
+
+	rotationTriggerRatio   = 1.05
+	rotationAggressiveRatio = 1.5
+	rotationMinStepDeg     = 15.0
+	rotationMaxStepDeg     = 90.0
 )
 
 // NodeLoad represents a node's load vector.
@@ -65,7 +70,7 @@ type OLSManager struct {
 	l1 [][]int
 	l2 [][]int
 
-	rotation int
+	rotation float64
 
 	table NodeTable
 }
@@ -181,12 +186,17 @@ func generateMOLS(n int) ([][]int, [][]int) {
 	return composeMOLS(a1, b1), composeMOLS(a2, b2)
 }
 
+// generateBaseMOLS fills an n×n grid where each cell (i,j) gets value
+// (step*i + j) % n. Intermediate products are kept bounded by reducing
+// modulo n at each multiplication step.
 func generateBaseMOLS(n, step int) [][]int {
 	ls := make([][]int, n)
 	for i := 0; i < n; i++ {
 		ls[i] = make([]int, n)
+		// Compute step*i mod n once per row, then add j mod n per column.
+		base := (step % n) * (i % n) % n
 		for j := 0; j < n; j++ {
-			ls[i][j] = (step*i + j) % n
+			ls[i][j] = (base + j) % n
 		}
 	}
 	return ls
@@ -243,8 +253,8 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 		}
 	}
 
-	i := hashString(clientID) % m.n
-	j := hashString(leaseID) % m.n
+	i := hashStringMod(clientID, m.n)
+	j := hashStringMod(leaseID, m.n)
 
 	row := m.l1[i][j]
 	col := m.l2[i][j]
@@ -280,17 +290,34 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 }
 
 func (m *OLSManager) applyRotation(row, col int) (int, int) {
-	n := m.n
-	switch m.rotation {
-	case 90:
-		return col, n - 1 - row
-	case 180:
-		return n - 1 - row, n - 1 - col
-	case 270:
-		return n - 1 - col, row
-	default:
+	if m.n <= 1 || m.rotation == 0 {
 		return row, col
 	}
+
+	center := float64(m.n-1) / 2.0
+	x := float64(col) - center
+	y := float64(row) - center
+	rad := m.rotation * math.Pi / 180.0
+	cosV := math.Cos(rad)
+	sinV := math.Sin(rad)
+
+	rotX := x*cosV - y*sinV
+	rotY := x*sinV + y*cosV
+
+	newCol := int(math.Round(rotX + center))
+	newRow := int(math.Round(rotY + center))
+
+	if newRow < 0 {
+		newRow = 0
+	} else if newRow >= m.n {
+		newRow = m.n - 1
+	}
+	if newCol < 0 {
+		newCol = 0
+	} else if newCol >= m.n {
+		newCol = m.n - 1
+	}
+	return newRow, newCol
 }
 
 func (m *OLSManager) UpdateLoad(nodeID string, newLoad NodeLoad, score float64, timestamp int64) {
@@ -395,19 +422,45 @@ func (m *OLSManager) checkAndRotate() {
 	rowVar := variance(rowLoad)
 	colVar := variance(colLoad)
 
-	// If row imbalance exceeds col imbalance significantly, rotate
-	if rowVar > colVar*1.5 {
-		m.rotation = (m.rotation + 90) % 360
+	rowDominant := rowVar > colVar*rotationTriggerRatio
+	colDominant := colVar > rowVar*rotationTriggerRatio
+	if !rowDominant && !colDominant {
+		return
 	}
+
+	dominantVar := rowVar
+	otherVar := colVar
+	sign := 1.0
+	if colDominant {
+		dominantVar = colVar
+		otherVar = rowVar
+		sign = -1.0
+	}
+
+	ratio := dominantVar / math.Max(otherVar, 1e-9)
+	step := rotationMaxStepDeg
+	if ratio < rotationAggressiveRatio {
+		scale := (ratio - rotationTriggerRatio) / (rotationAggressiveRatio - rotationTriggerRatio)
+		if scale < 0 {
+			scale = 0
+		} else if scale > 1 {
+			scale = 1
+		}
+		step = rotationMinStepDeg + (rotationMaxStepDeg-rotationMinStepDeg)*scale
+	}
+
+	m.rotation = math.Mod(m.rotation+sign*step+360.0, 360.0)
 }
 
-func hashString(s string) int {
+// hashStringMod computes a polynomial hash of s modulo mod using Horner's method.
+// Reducing modulo mod at each step keeps intermediate values bounded as n grows.
+func hashStringMod(s string, mod int) int {
+	if mod <= 0 {
+		return 0
+	}
 	h := 0
 	for i := 0; i < len(s); i++ {
-		h = 31*h + int(s[i])
-	}
-	if h < 0 {
-		h = -h
+		h = (31*h + int(s[i])) % mod
 	}
 	return h
 }

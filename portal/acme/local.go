@@ -11,7 +11,6 @@ import (
 	"math/big"
 	"net"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gosuda/portal/v2/utils"
@@ -24,17 +23,17 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	keyFile := filepath.Join(keyDir, keyFileName)
 	certFile := filepath.Join(keyDir, fullChainFileName)
 
-	if fileExists(keyFile) && fileExists(certFile) {
+	if utils.FileExists(keyFile) && utils.FileExists(certFile) {
 		covered, err := certCoversDomains(certFile, domains)
 		if err == nil && covered {
 			return nil
 		}
 	}
 
-	if err := ensureParentDir(keyFile); err != nil {
+	if err := utils.EnsureParentDir(keyFile); err != nil {
 		return err
 	}
-	if err := ensureParentDir(certFile); err != nil {
+	if err := utils.EnsureParentDir(certFile); err != nil {
 		return err
 	}
 
@@ -84,17 +83,17 @@ func ensureLocalDevelopmentCertificate(keyDir, baseHost string) error {
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := writeFileAtomic(certFile, certPEM, 0o644); err != nil {
+	if err := utils.WriteFileAtomic(certFile, certPEM, 0o644); err != nil {
 		return fmt.Errorf("write local dev certificate: %w", err)
 	}
-	if err := writeFileAtomic(keyFile, keyPEM, 0o600); err != nil {
+	if err := utils.WriteFileAtomic(keyFile, keyPEM, 0o600); err != nil {
 		return fmt.Errorf("write local dev private key: %w", err)
 	}
 	return nil
 }
 
 func localDevelopmentDomains(baseHost string) []string {
-	baseHost = strings.TrimPrefix(utils.NormalizeHostname(baseHost), "*.")
+	baseHost = utils.NormalizeBaseDomain(baseHost)
 	domains := []string{"localhost", "*.localhost", "127.0.0.1", "::1"}
 	if baseHost != "" && baseHost != "localhost" {
 		domains = append(domains, baseHost)

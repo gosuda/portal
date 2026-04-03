@@ -1,7 +1,7 @@
 package utils
 
 import (
-	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -22,12 +22,12 @@ func TestWriteAPIDataAndDecodeEnvelope(t *testing.T) {
 		t.Fatalf("WriteAPIData() status = %d, want %d", rec.Code, http.StatusCreated)
 	}
 
-	envelope, err := DecodeAPIEnvelope[map[string]string](bytes.NewReader(rec.Body.Bytes()))
-	if err != nil {
-		t.Fatalf("DecodeAPIEnvelope() error = %v", err)
+	var envelope types.APIEnvelope[map[string]string]
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatalf("json.Decode() error = %v", err)
 	}
 	if !envelope.OK || envelope.Data["status"] != "ok" {
-		t.Fatalf("DecodeAPIEnvelope() = %+v, want ok envelope", envelope)
+		t.Fatalf("decoded envelope = %+v, want ok envelope", envelope)
 	}
 }
 

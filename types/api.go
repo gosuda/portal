@@ -27,11 +27,13 @@ func (e *APIRequestError) Error() string {
 	if e == nil {
 		return ""
 	}
-	if strings.TrimSpace(e.Code) != "" {
-		return e.Code + ": " + strings.TrimSpace(e.Message)
+	code := strings.TrimSpace(e.Code)
+	message := strings.TrimSpace(e.Message)
+	if code != "" {
+		return code + ": " + message
 	}
-	if strings.TrimSpace(e.Message) != "" {
-		return strings.TrimSpace(e.Message)
+	if message != "" {
+		return message
 	}
 	if e.StatusCode > 0 {
 		return fmt.Sprintf("api request failed with status %d", e.StatusCode)
@@ -61,11 +63,10 @@ type RegisterRequest struct {
 }
 
 type RegisterChallengeRequest struct {
-	Name         string        `json:"name"`
-	Metadata     LeaseMetadata `json:"metadata"`
-	OwnerAddress string        `json:"owner_address"`
-	TTL          int           `json:"ttl,omitempty"`
-	UDPEnabled   bool          `json:"udp_enabled,omitempty"`
+	Identity   Identity      `json:"identity"`
+	Metadata   LeaseMetadata `json:"metadata"`
+	TTL        int           `json:"ttl,omitempty"`
+	UDPEnabled bool          `json:"udp_enabled,omitempty"`
 }
 
 type RegisterChallengeResponse struct {
@@ -75,13 +76,12 @@ type RegisterChallengeResponse struct {
 }
 
 type RegisterResponse struct {
-	ExpiresAt   time.Time     `json:"expires_at"`
-	LeaseID     string        `json:"lease_id"`
-	Hostname    string        `json:"hostname"`
-	Metadata    LeaseMetadata `json:"metadata"`
-	AccessToken string        `json:"access_token"`
-	UDPAddr     string        `json:"udp_addr,omitempty"`
-	UDPEnabled  bool          `json:"udp_enabled,omitempty"`
+	Identity    Identity  `json:"identity"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Hostname    string    `json:"hostname"`
+	AccessToken string    `json:"access_token"`
+	UDPAddr     string    `json:"udp_addr,omitempty"`
+	UDPEnabled  bool      `json:"udp_enabled,omitempty"`
 }
 
 type DiscoveryResponse struct {
@@ -92,7 +92,6 @@ type DiscoveryResponse struct {
 }
 
 type QUICControlMessage struct {
-	LeaseID     string `json:"lease_id"`
 	AccessToken string `json:"access_token"`
 }
 
@@ -102,7 +101,6 @@ type QUICControlResponse struct {
 }
 
 type RenewRequest struct {
-	LeaseID     string `json:"lease_id"`
 	AccessToken string `json:"access_token"`
 	TTL         int    `json:"ttl,omitempty"`
 	ReportedIP  string `json:"reported_ip,omitempty"`
@@ -110,12 +108,10 @@ type RenewRequest struct {
 
 type RenewResponse struct {
 	ExpiresAt   time.Time `json:"expires_at"`
-	LeaseID     string    `json:"lease_id"`
 	AccessToken string    `json:"access_token"`
 }
 
 type UnregisterRequest struct {
-	LeaseID     string `json:"lease_id"`
 	AccessToken string `json:"access_token"`
 }
 
@@ -146,7 +142,7 @@ type AdminAuthStatusResponse struct {
 type AdminSnapshotResponse struct {
 	ApprovalMode       string                   `json:"approval_mode"`
 	LandingPageEnabled bool                     `json:"landing_page_enabled"`
-	Leases             []Lease                  `json:"leases,omitempty"`
+	Leases             []AdminLease             `json:"leases,omitempty"`
 	UDP                AdminUDPSettingsResponse `json:"udp"`
 }
 

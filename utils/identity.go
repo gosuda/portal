@@ -1,0 +1,310 @@
+package utils
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/gosuda/portal/v2/types"
+)
+
+func NormalizeIdentity(identity types.Identity) (types.Identity, error) {
+	normalized := identity.Copy()
+
+	name, err := NormalizeDNSLabel(identity.Name)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	address, err := NormalizeEVMAddress(identity.Address)
+	if err != nil {
+		return types.Identity{}, err
+	}
+
+	normalized.Name = name
+	normalized.Address = address
+	return normalized, nil
+}
+
+func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
+	normalized := identity.Copy()
+	normalized.Name = strings.TrimSpace(normalized.Name)
+	normalized.Address = strings.TrimSpace(normalized.Address)
+	normalized.PublicKey = strings.TrimSpace(normalized.PublicKey)
+	normalized.PrivateKey = strings.TrimSpace(normalized.PrivateKey)
+
+	if normalized.PrivateKey != "" {
+		resolved, err := ResolveSecp256k1Identity(normalized.PrivateKey)
+		if err != nil {
+			return types.Identity{}, err
+		}
+		if normalized.PublicKey != "" && !strings.EqualFold(TrimHexPrefix(normalized.PublicKey), resolved.PublicKey) {
+			return types.Identity{}, errors.New("identity public key does not match private key")
+		}
+		if normalized.Address != "" {
+			address, err := NormalizeEVMAddress(normalized.Address)
+			if err != nil {
+				return types.Identity{}, err
+			}
+			if address != resolved.Address {
+				return types.Identity{}, errors.New("identity address does not match private key")
+			}
+		}
+		normalized.Address = resolved.Address
+		normalized.PublicKey = resolved.PublicKey
+		normalized.PrivateKey = resolved.PrivateKey
+		return normalized, nil
+	}
+
+	if normalized.PublicKey != "" {
+		address, err := AddressFromCompressedPublicKeyHex(normalized.PublicKey)
+		if err != nil {
+			return types.Identity{}, err
+		}
+		normalized.PublicKey = strings.ToLower(TrimHexPrefix(normalized.PublicKey))
+		if normalized.Address == "" {
+			normalized.Address = address
+			return normalized, nil
+		}
+		normalized.Address, err = NormalizeEVMAddress(normalized.Address)
+		if err != nil {
+			return types.Identity{}, err
+		}
+		if normalized.Address != address {
+			return types.Identity{}, errors.New("identity address does not match public key")
+		}
+		return normalized, nil
+	}
+
+	if normalized.Address != "" {
+		address, err := NormalizeEVMAddress(normalized.Address)
+		if err != nil {
+			return types.Identity{}, err
+		}
+		normalized.Address = address
+	}
+	return normalized, nil
+}
+
+type storedIdentity struct {
+	Name       string `json:"name,omitempty"`
+	Address    string `json:"address,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+}
+
+func SaveIdentity(path string, identity types.Identity) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("identity path is required")
+	}
+	normalized, err := NormalizeStoredIdentity(identity)
+	if err != nil {
+		return err
+	}
+	if err := WriteJSONFile(path, storedIdentity{
+		Name:       normalized.Name,
+		Address:    normalized.Address,
+		PublicKey:  normalized.PublicKey,
+		PrivateKey: normalized.PrivateKey,
+	}, 0o600); err != nil {
+		return fmt.Errorf("write identity file: %w", err)
+	}
+	return nil
+}
+
+func LoadIdentity(path string) (types.Identity, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return types.Identity{}, errors.New("identity path is required")
+	}
+	var payload storedIdentity
+	if err := ReadJSONFile(path, &payload); err != nil {
+		return types.Identity{}, fmt.Errorf("read identity file: %w", err)
+	}
+	return NormalizeStoredIdentity(types.Identity{
+		Name:       payload.Name,
+		Address:    payload.Address,
+		PublicKey:  payload.PublicKey,
+		PrivateKey: payload.PrivateKey,
+	})
+}
+
+func ParseIdentityJSON(raw string) (types.Identity, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return types.Identity{}, errors.New("identity json is required")
+	}
+
+	var payload storedIdentity
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return types.Identity{}, fmt.Errorf("decode identity json: %w", err)
+	}
+	return NormalizeStoredIdentity(types.Identity{
+		Name:       payload.Name,
+		Address:    payload.Address,
+		PublicKey:  payload.PublicKey,
+		PrivateKey: payload.PrivateKey,
+	})
+}
+
+func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity, bool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return types.Identity{}, false, errors.New("identity path is required")
+	}
+
+	stored, err := LoadIdentity(path)
+	switch {
+	case err == nil:
+		if name := strings.TrimSpace(identity.Name); name != "" {
+			stored.Name = name
+		}
+		if address := strings.TrimSpace(identity.Address); address != "" {
+			stored.Address = address
+		}
+		if publicKey := strings.TrimSpace(identity.PublicKey); publicKey != "" {
+			stored.PublicKey = publicKey
+		}
+		if privateKey := strings.TrimSpace(identity.PrivateKey); privateKey != "" {
+			stored.PrivateKey = privateKey
+		}
+		if strings.TrimSpace(stored.PrivateKey) == "" {
+			return types.Identity{}, false, errors.New("stored identity private key is required")
+		}
+		if err := SaveIdentity(path, stored); err != nil {
+			return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+		}
+		loaded, err := LoadIdentity(path)
+		if err != nil {
+			return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+		}
+		return loaded, false, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+	}
+
+	created := identity.Copy()
+	generated, err := ResolveSecp256k1Identity(created.PrivateKey)
+	if err != nil {
+		return types.Identity{}, false, fmt.Errorf("generate identity: %w", err)
+	}
+	if strings.TrimSpace(created.Address) == "" {
+		created.Address = generated.Address
+	}
+	if strings.TrimSpace(created.PublicKey) == "" {
+		created.PublicKey = generated.PublicKey
+	}
+	created.PrivateKey = generated.PrivateKey
+	if err := SaveIdentity(path, created); err != nil {
+		return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+	}
+	loaded, err := LoadIdentity(path)
+	if err != nil {
+		return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+	}
+	return loaded, true, nil
+}
+
+func ResolveListenerIdentity(identity types.Identity, identityPath, identityJSON string) (types.Identity, bool, error) {
+	identityPath = strings.TrimSpace(identityPath)
+	identityJSON = strings.TrimSpace(identityJSON)
+	if identityJSON != "" {
+		provided, err := ParseIdentityJSON(identityJSON)
+		if err != nil {
+			return types.Identity{}, false, err
+		}
+		if identityPath != "" {
+			if err := SaveIdentity(identityPath, provided); err != nil {
+				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
+			}
+			provided, err = LoadIdentity(identityPath)
+			if err != nil {
+				return types.Identity{}, false, fmt.Errorf("load identity: %w", err)
+			}
+		}
+		resolved, err := ResolveLeaseIdentity(provided)
+		return resolved, false, err
+	}
+	if identityPath == "" {
+		resolved, err := ResolveLeaseIdentity(identity)
+		return resolved, false, err
+	}
+
+	loaded, created, err := LoadOrCreateIdentity(identityPath, identity)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	resolved, err := ResolveLeaseIdentity(loaded)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	return resolved, created, nil
+}
+
+func NormalizeIdentityKey(raw string) string {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	if key == "" {
+		return ""
+	}
+	name, address, ok := strings.Cut(key, types.IdentityKeySeparator)
+	if !ok || name == "" || address == "" {
+		return ""
+	}
+	return name + types.IdentityKeySeparator + address
+}
+
+func NormalizeIdentityKeys(inputs []string) []string {
+	return normalizeUniqueStrings(inputs, NormalizeIdentityKey)
+}
+
+func NormalizeIdentityKeyBPS(inputs map[string]int64) map[string]int64 {
+	if len(inputs) == 0 {
+		return nil
+	}
+
+	out := make(map[string]int64, len(inputs))
+	for input, bps := range inputs {
+		key := NormalizeIdentityKey(input)
+		if key == "" || bps <= 0 {
+			continue
+		}
+		out[key] = bps
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func ResolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
+	resolved := identity.Copy()
+
+	name, err := NormalizeDNSLabel(resolved.Name)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	resolved.Name = name
+
+	signingIdentity, err := ResolveSecp256k1Identity(resolved.PrivateKey)
+	if err != nil {
+		return types.Identity{}, err
+	}
+	if resolved.Address == "" {
+		resolved.Address = signingIdentity.Address
+	} else {
+		address, err := NormalizeEVMAddress(resolved.Address)
+		if err != nil {
+			return types.Identity{}, err
+		}
+		if address != signingIdentity.Address {
+			return types.Identity{}, errors.New("identity address does not match private key")
+		}
+		resolved.Address = address
+	}
+
+	resolved.PublicKey = signingIdentity.PublicKey
+	resolved.PrivateKey = signingIdentity.PrivateKey
+	return resolved, nil
+}

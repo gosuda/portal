@@ -18,12 +18,13 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	runtime := policy.NewRuntime()
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		Lease: types.Lease{
-			ID:        "lease_1",
-			Hostname:  "demo.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "demo",
+			Address: "addr-1",
 		},
-		stream: transport.NewRelayStream("lease_1", time.Minute, 1),
+		Hostname:  "demo.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-1", time.Minute, 1),
 	}
 
 	if err := registry.Register(record); err != nil {
@@ -35,18 +36,18 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 		t.Fatalf("Lookup() = %v, %v, want registered lease", lookedUp, ok)
 	}
 
-	renewed, err := registry.Renew(record.ID, time.Minute, "203.0.113.10", "")
+	renewed, err := registry.Renew(record.Copy(), time.Minute, "203.0.113.10", "")
 	if err != nil {
 		t.Fatalf("Renew() error = %v", err)
 	}
 	if renewed.ClientIP != "203.0.113.10" {
 		t.Fatalf("Renew() client ip = %q, want %q", renewed.ClientIP, "203.0.113.10")
 	}
-	if got := runtime.IPFilter().LeaseIP(record.ID); got != "203.0.113.10" {
+	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.10" {
 		t.Fatalf("Renew() did not register client IP for lease")
 	}
 
-	removed, err := registry.Unregister(record.ID)
+	removed, err := registry.Unregister(record.Copy())
 	if err != nil {
 		t.Fatalf("Unregister() error = %v", err)
 	}
@@ -57,7 +58,7 @@ func TestLeaseRegistryLifecycle(t *testing.T) {
 	if _, ok := registry.Lookup("demo.example.com"); ok {
 		t.Fatal("Lookup() after Unregister() = true, want false")
 	}
-	if got := runtime.IPFilter().LeaseIP(record.ID); got != "" {
+	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "" {
 		t.Fatalf("Unregister() lease IP = %q, want empty", got)
 	}
 }
@@ -67,12 +68,13 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 
 	registry := newLeaseRegistry(policy.NewRuntime())
 	wildcardLease := &leaseRecord{
-		Lease: types.Lease{
-			ID:        "lease_wildcard",
-			Hostname:  "*.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "wildcard",
+			Address: "addr-wildcard",
 		},
-		stream: transport.NewRelayStream("lease_wildcard", time.Minute, 1),
+		Hostname:  "*.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-wildcard", time.Minute, 1),
 	}
 	if err := registry.Register(wildcardLease); err != nil {
 		t.Fatalf("Register(wildcard) error = %v", err)
@@ -86,12 +88,13 @@ func TestLeaseRegistryWildcardAndConflict(t *testing.T) {
 	}
 
 	conflict := &leaseRecord{
-		Lease: types.Lease{
-			ID:        "lease_conflict",
-			Hostname:  "*.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
+		Identity: types.Identity{
+			Name:    "conflict",
+			Address: "addr-conflict",
 		},
-		stream: transport.NewRelayStream("lease_conflict", time.Minute, 1),
+		Hostname:  "*.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		stream:    transport.NewRelayStream("addr-conflict", time.Minute, 1),
 	}
 	err := registry.Register(conflict)
 	if !errors.Is(err, errHostnameConflict) {
@@ -109,39 +112,39 @@ func TestLeaseRegistrySnapshotAndRoutableUsePolicy(t *testing.T) {
 
 	registry := newLeaseRegistry(runtime)
 	record := &leaseRecord{
-		Lease: types.Lease{
-			ID:        "lease_policy",
-			Name:      "demo",
-			Hostname:  "demo.example.com",
-			ExpiresAt: time.Now().Add(30 * time.Second),
-			ClientIP:  "203.0.113.20",
+		Identity: types.Identity{
+			Name:    "demo",
+			Address: "addr-policy",
 		},
-		stream: transport.NewRelayStream("lease_policy", time.Minute, 1),
+		Hostname:  "demo.example.com",
+		ExpiresAt: time.Now().Add(30 * time.Second),
+		ClientIP:  "203.0.113.20",
+		stream:    transport.NewRelayStream("addr-policy", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	if registry.policy.IsLeaseRoutable(record.ID) {
-		t.Fatal("policy.IsLeaseRoutable() = true, want false before approval")
+	if registry.policy.IsIdentityRoutable(record.Key()) {
+		t.Fatal("policy.IsIdentityRoutable() = true, want false before approval")
 	}
 
-	snapshot := registry.Snapshot(record)
+	snapshot := registry.AdminSnapshot(record)
 	if snapshot.IsApproved {
-		t.Fatal("Snapshot().IsApproved = true, want false before approval")
+		t.Fatal("AdminSnapshot().IsApproved = true, want false before approval")
 	}
-	if got := runtime.IPFilter().LeaseIP(record.ID); got != "203.0.113.20" {
+	if got := runtime.IPFilter().IdentityIP(record.Key()); got != "203.0.113.20" {
 		t.Fatalf("Register() lease IP = %q, want %q", got, "203.0.113.20")
 	}
 
-	runtime.Approver().Approve(record.ID)
-	if !registry.policy.IsLeaseRoutable(record.ID) {
-		t.Fatal("policy.IsLeaseRoutable() = false, want true after approval")
+	runtime.Approver().Approve(record.Key())
+	if !registry.policy.IsIdentityRoutable(record.Key()) {
+		t.Fatal("policy.IsIdentityRoutable() = false, want true after approval")
 	}
 
-	snapshot = registry.Snapshot(record)
+	snapshot = registry.AdminSnapshot(record)
 	if !snapshot.IsApproved {
-		t.Fatal("Snapshot().IsApproved = false, want true after approval")
+		t.Fatal("AdminSnapshot().IsApproved = false, want true after approval")
 	}
 }
 
@@ -150,35 +153,36 @@ func TestLeaseRegistryCleanupExpiredClosesBroker(t *testing.T) {
 
 	registry := newLeaseRegistry(policy.NewRuntime())
 	record := &leaseRecord{
-		Lease: types.Lease{
-			ID:        "lease_expired",
-			Hostname:  "expired.example.com",
-			ExpiresAt: time.Now().Add(-time.Second),
+		Identity: types.Identity{
+			Name:    "expired",
+			Address: "addr-expired",
 		},
-		stream: transport.NewRelayStream("lease_expired", time.Minute, 1),
+		Hostname:  "expired.example.com",
+		ExpiresAt: time.Now().Add(-time.Second),
+		stream:    transport.NewRelayStream("addr-expired", time.Minute, 1),
 	}
 	if err := registry.Register(record); err != nil {
 		t.Fatalf("Register() error = %v", err)
 	}
 
-	for _, lease := range registry.removeExpired(time.Now()) {
+	for _, lease := range registry.cleanupExpired(time.Now()) {
 		lease.Close()
 	}
 
 	if _, ok := registry.Lookup("expired.example.com"); ok {
-		t.Fatal("Lookup() after removeExpired() = true, want false")
+		t.Fatal("Lookup() after cleanupExpired() = true, want false")
 	}
 	if _, err := record.stream.Claim(context.Background()); !errors.Is(err, net.ErrClosed) {
-		t.Fatalf("Claim() after removeExpired() error = %v, want %v", err, net.ErrClosed)
+		t.Fatalf("Claim() after cleanupExpired() error = %v, want %v", err, net.ErrClosed)
 	}
 }
 
-func TestLeaseRegistryRunJanitorRejectsNonPositiveInterval(t *testing.T) {
+func TestServerRunLeaseJanitorRejectsNonPositiveInterval(t *testing.T) {
 	t.Parallel()
 
-	registry := newLeaseRegistry(policy.NewRuntime())
-	err := registry.RunJanitor(context.Background(), 0)
+	server := &Server{registry: newLeaseRegistry(policy.NewRuntime())}
+	err := server.runLeaseJanitor(context.Background(), 0)
 	if err == nil {
-		t.Fatal("RunJanitor() error = nil, want validation error")
+		t.Fatal("runLeaseJanitor() error = nil, want validation error")
 	}
 }

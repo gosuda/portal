@@ -5,18 +5,6 @@ import (
 	"testing"
 )
 
-func TestDomainCandidates(t *testing.T) {
-	t.Parallel()
-
-	got := domainCandidates("portal.example.com")
-	if len(got) != 2 {
-		t.Fatalf("len(domainCandidates) = %d, want 2", len(got))
-	}
-	if got[0] != "portal.example.com" || got[1] != "example.com" {
-		t.Fatalf("domainCandidates() = %v, want [portal.example.com example.com]", got)
-	}
-}
-
 func TestFindHostedZoneIDExplicitOverride(t *testing.T) {
 	t.Parallel()
 

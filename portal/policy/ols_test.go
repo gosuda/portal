@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"math"
 	"testing"
 )
 
@@ -37,5 +38,68 @@ func TestOLSManager(t *testing.T) {
 	// After load imbalance, it should eventually rotate if threshold met
 	if m.rotation == 0 {
 		t.Error("expected rotation, got 0")
+	}
+}
+
+func TestOLSManagerConservativeRotationWhenVarianceIsSimilar(t *testing.T) {
+	m := NewOLSManager()
+	m.UpdateNodes([]string{
+		"node1", "node2", "node3",
+		"node4", "node5", "node6",
+		"node7", "node8", "node9",
+	})
+	if m.n != 3 {
+		t.Fatalf("expected n=3, got %d", m.n)
+	}
+
+	loads := [][]float64{
+		{2.0, 2.0, 1.0},
+		{1.5, 1.5, 1.0},
+		{1.4, 0.5, 1.1},
+	}
+	for i := 0; i < m.n; i++ {
+		for j := 0; j < m.n; j++ {
+			m.grid[i][j].LoadScore = loads[i][j]
+		}
+	}
+
+	m.rotation = 0
+	m.checkAndRotate()
+
+	if m.rotation <= 0 {
+		t.Fatalf("expected positive conservative rotation, got %v", m.rotation)
+	}
+	if m.rotation >= 90 {
+		t.Fatalf("expected conservative angle < 90, got %v", m.rotation)
+	}
+}
+
+func TestOLSManagerKeepsNinetyDegreeRotationForSevereBurst(t *testing.T) {
+	m := NewOLSManager()
+	m.UpdateNodes([]string{
+		"node1", "node2", "node3",
+		"node4", "node5", "node6",
+		"node7", "node8", "node9",
+	})
+	if m.n != 3 {
+		t.Fatalf("expected n=3, got %d", m.n)
+	}
+
+	loads := [][]float64{
+		{2.0, 2.0, 2.0},
+		{2.0, 2.0, 2.0},
+		{0.0, 0.0, 0.0},
+	}
+	for i := 0; i < m.n; i++ {
+		for j := 0; j < m.n; j++ {
+			m.grid[i][j].LoadScore = loads[i][j]
+		}
+	}
+
+	m.rotation = 0
+	m.checkAndRotate()
+
+	if math.Abs(m.rotation-90.0) > 0.0001 {
+		t.Fatalf("expected 90 degree rotation for severe burst, got %v", m.rotation)
 	}
 }

@@ -33,29 +33,40 @@ const heroDifferentiatorCards = [
 
 const heroFeatures = [
   {
-    title: "No setup. No port forwarding.",
+    eyebrow: "HTTPS",
+    title: "Public HTTPS for localhost",
     description:
-      "Works instantly, even behind NAT and firewalls.",
+      "Publish local apps through TCP passthrough without opening inbound ports.",
   },
   {
-    title: "End-to-end TLS",
+    eyebrow: "TLS",
+    title: "End-to-end TLS on your side",
     description:
-      "End-to-end TLS via SNI routing, keyless TLS, and built-in MITM detection.",
+      "Tenant TLS terminates locally with MITM detection, so relays cannot access plaintext.",
   },
   {
-    title: "Permissionless hosting",
+    eyebrow: "Setup",
+    title: "One-command setup",
     description:
-      "Attach to arbitrary relays - no accounts, no approval, no trust required.",
+      "Start relays and tunnels with minimal setup and a short copy-paste path.",
   },
   {
-    title: "UDP support",
+    eyebrow: "Relay",
+    title: "Self-hosted relays and pools",
     description:
-      "Expose web apps and arbitrary protocols through the same tunnel.",
+      "Connect to public relays, use discovered relays as a pool with failover, or run your own.",
   },
   {
-    title: "One command. Done.",
+    eyebrow: "Transport",
+    title: "Raw TCP with optional UDP",
     description:
-      "Install and expose your app in a single copy-paste.",
+      "Carry web traffic and arbitrary protocols without SSH or WebSocket overlays.",
+  },
+  {
+    eyebrow: "Identity",
+    title: "SIWE ownership with ENS support",
+    description:
+      "Authenticate ownership with SIWE and keep identity portable with ENS-based naming support.",
   },
 ] as const;
 
@@ -392,34 +403,36 @@ export function LandingHero() {
       </div>
 
       <div className="relative -mx-4 w-auto sm:-mx-6 md:-mx-8">
+        <div className="mx-auto max-w-6xl px-4 pb-5 text-left sm:px-6">
+          <div className="space-y-2">
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
+              Core features
+            </p>
+            <h2 className="text-3xl font-semibold tracking-tight text-foreground">
+              Built for real localhost publishing
+            </h2>
+          </div>
+        </div>
         <div className="overflow-hidden border-t border-border/80 bg-border/70">
           <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-3">
-            <div className="flex min-h-46 bg-background/88 p-6 text-left sm:min-h-49 sm:p-7">
-              <div className="space-y-2">
-                <p className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">
-                  Core features
-                </p>
-                <h2 className="whitespace-nowrap text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-none">
-                  Make localhost public
-                </h2>
-                <p className="max-w-[28ch] text-[0.95rem] leading-6 text-text-muted">
-                  Turn any local app into a shareable HTTPS URL in seconds.
-                </p>
-              </div>
-            </div>
-
-            {heroFeatures.map(({ title, description }) => (
+            {heroFeatures.map(({ eyebrow, title, description }) => (
               <article
                 key={title}
-                className="flex min-h-46 bg-background/88 p-6 text-left transition-colors duration-200 hover:bg-background/92 sm:min-h-49 sm:p-7"
+                className="flex min-h-52 bg-background/88 p-6 text-left transition-colors duration-200 hover:bg-background/92 sm:min-h-56 sm:p-7"
               >
-                <div className="space-y-2">
-                  <h3 className="whitespace-nowrap text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-none">
+                <div className="flex h-full flex-col space-y-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-primary/80">
+                    {eyebrow}
+                  </p>
+                  <h3 className="text-[1.2rem] font-semibold tracking-tight text-foreground sm:text-[1.32rem] sm:leading-tight">
                     {title}
                   </h3>
                   <p className="max-w-[28ch] text-[0.95rem] leading-6 text-text-muted">
                     {description}
                   </p>
+                  <div className="mt-auto pt-4">
+                    <div className="h-px w-12 bg-linear-to-r from-primary/55 to-transparent" />
+                  </div>
                 </div>
               </article>
             ))}

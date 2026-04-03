@@ -26,7 +26,8 @@ interface ServerCardProps {
   isFavorite?: boolean;
   onToggleFavorite?: (serverId: number) => void;
   showAdminControls?: boolean;
-  leaseId?: string;
+  identityKey?: string;
+  address?: string;
   isBanned?: boolean;
   isApproved?: boolean;
   isDenied?: boolean;
@@ -35,19 +36,18 @@ interface ServerCardProps {
   displayIP?: string;
   isIPBanned?: boolean;
   onBanStatusChange?: (
-    leaseId: string,
+    identityKey: string,
     isBan: boolean
   ) => void | Promise<void>;
-  onBPSChange?: (leaseId: string, bps: number) => void | Promise<void>;
+  onBPSChange?: (identityKey: string, bps: number) => void | Promise<void>;
   onApproveStatusChange?: (
-    leaseId: string,
+    identityKey: string,
     approve: boolean
   ) => void | Promise<void>;
-  onDenyStatusChange?: (leaseId: string, deny: boolean) => void | Promise<void>;
+  onDenyStatusChange?: (identityKey: string, deny: boolean) => void | Promise<void>;
   onIPBanStatusChange?: (ip: string, isBan: boolean) => void | Promise<void>;
-  transport?: string;
   isSelected?: boolean;
-  onToggleSelect?: (leaseId: string) => void;
+  onToggleSelect?: (identityKey: string) => void;
 }
 
 export function ServerCard({
@@ -65,7 +65,8 @@ export function ServerCard({
   isFavorite = false,
   onToggleFavorite,
   showAdminControls = false,
-  leaseId,
+  identityKey,
+  address,
   isBanned = false,
   isApproved = false,
   isDenied = false,
@@ -78,7 +79,6 @@ export function ServerCard({
   onApproveStatusChange,
   onDenyStatusChange,
   onIPBanStatusChange,
-  transport = "tcp",
   isSelected = false,
   onToggleSelect,
 }: ServerCardProps) {
@@ -131,32 +131,32 @@ export function ServerCard({
   const handleSelectClick = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (leaseId && onToggleSelect) {
-      onToggleSelect(leaseId);
+    if (identityKey && onToggleSelect) {
+      onToggleSelect(identityKey);
     }
   };
 
   const handleBanClick = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (leaseId) {
-      runAsyncAdminAction(() => onBanStatusChange?.(leaseId, !isBanned));
+    if (identityKey) {
+      runAsyncAdminAction(() => onBanStatusChange?.(identityKey, !isBanned));
     }
   };
 
   const handleApproveClick = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (leaseId) {
-      runAsyncAdminAction(() => onApproveStatusChange?.(leaseId, !isApproved));
+    if (identityKey) {
+      runAsyncAdminAction(() => onApproveStatusChange?.(identityKey, !isApproved));
     }
   };
 
   const handleDenyClick = (event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (leaseId) {
-      runAsyncAdminAction(() => onDenyStatusChange?.(leaseId, !isDenied));
+    if (identityKey) {
+      runAsyncAdminAction(() => onDenyStatusChange?.(identityKey, !isDenied));
     }
   };
 
@@ -177,9 +177,9 @@ export function ServerCard({
   };
 
   const handleBPSSave = () => {
-    if (leaseId) {
+    if (identityKey) {
       const newBps = parseInt(bpsInput, 10) || 0;
-      runAsyncAdminAction(() => onBPSChange?.(leaseId, newBps));
+      runAsyncAdminAction(() => onBPSChange?.(identityKey, newBps));
     }
     setShowBPSModal(false);
   };
@@ -262,12 +262,6 @@ export function ServerCard({
               {formattedDuration && online && ` · ${formattedDuration}`}
             </span>
           </div>
-          {showAdminControls && transport !== "tcp" && (
-            <span className="rounded-full bg-black/40 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-primary backdrop-blur-sm border border-primary/30">
-              {transport}
-            </span>
-          )}
-
           {showAdminControls ? (
             <button
               onClick={handleSelectClick}
@@ -360,8 +354,12 @@ export function ServerCard({
           </div>
         </div>
 
-        {showAdminControls && leaseId && (
+        {showAdminControls && address && (
           <div className="flex flex-col gap-3 rounded-3xl border border-border bg-secondary/70 p-4">
+            <div className="text-[11px] text-text-muted">
+              Address: <span className="font-mono text-foreground">{address}</span>
+            </div>
+
             {onBPSChange && (
               <div className="flex items-center justify-between gap-4">
                 <span className="text-xs text-text-muted">
