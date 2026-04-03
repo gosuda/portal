@@ -13,6 +13,8 @@
 - **One-command setup**: Start relays and tunnels with minimal setup
 - **Self-hosted relays**: Connect to public relays or run your own
 - **Relay discovery and pools**: Use discovered relays as a pool, with multi-relay access and failover
+- **Load-aware discovery ordering**: Discovery polling uses a non-linear OLS-based order (inverse-load pre-distortion), not simple rotation
+- **Optional I2P-routed discovery control plane**: Discovery requests can be routed through an I2P HTTP proxy
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
 - **Raw TCP and UDP transport**: Native TCP reverse sessions with optional UDP (no SSH or WebSocket)
 
