@@ -45,6 +45,8 @@ type relayServerConfig struct {
 	AdminSecretKey      string
 	TrustProxyHeaders   bool
 	TrustedProxyCIDRs   string
+	I2PProxyURL         string
+	I2PDiscoveryOnly    bool
 	AdminSettingsPath   string
 	KeylessDir          string
 	ACMEDNSProvider     string
@@ -79,6 +81,8 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.AdminSecretKey, "admin-secret-key", "", "admin auth secret", "ADMIN_SECRET_KEY")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
+	utils.StringFlagEnv(fs, &cfg.I2PProxyURL, "i2p-proxy-url", "", "I2P HTTP proxy URL for discovery control-plane traffic (e.g., http://127.0.0.1:4444)", "I2P_PROXY_URL")
+	utils.BoolFlagEnv(fs, &cfg.I2PDiscoveryOnly, "i2p-discovery-only", false, "route relay discovery control-plane requests via I2P proxy when i2p-proxy-url is set", "I2P_DISCOVERY_ONLY")
 
 	utils.StringFlagEnv(fs, &cfg.KeylessDir, "keyless-dir", "./.portal-certs", "directory path for relay keyless materials", "KEYLESS_DIR")
 	utils.StringFlagEnv(fs, &cfg.AdminSettingsPath, "admin-settings-path", "admin_settings.json", "admin settings file path", "ADMIN_SETTINGS_PATH")
@@ -117,6 +121,7 @@ func runServeCommand(args []string) error {
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPPortCount > 0).
+		Bool("i2p_discovery_only", cfg.I2PDiscoveryOnly).
 		Msg("configured relay server")
 
 	ctx, stop := utils.SignalContext()
@@ -159,6 +164,8 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 		DiscoveryEnabled:  cfg.DiscoveryEnabled,
 		UDPPortCount:      cfg.UDPPortCount,
+		I2PProxyURL:       cfg.I2PProxyURL,
+		I2PDiscoveryOnly:  cfg.I2PDiscoveryOnly,
 	})
 	if err != nil {
 		return fmt.Errorf("create relay server: %w", err)
