@@ -48,6 +48,17 @@ var (
 	errTCPPortExhausted        = &apiError{types.APIErrorCodeTCPPortExhausted, "no tcp ports available", http.StatusServiceUnavailable}
 )
 
+var quicRejectTable = []struct {
+	sentinel error
+	code     string
+	reason   string
+}{
+	{errLeaseNotFound, types.APIErrorCodeLeaseNotFound, "lease not found"},
+	{errLeaseRejected, types.APIErrorCodeLeaseRejected, "lease rejected"},
+	{errUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized"},
+	{errTransportMismatch, types.APIErrorCodeTransportMismatch, "transport mismatch"},
+}
+
 func writeAPIErrorResponse(w http.ResponseWriter, err error) {
 	var ae *apiError
 	if errors.As(err, &ae) {
@@ -441,28 +452,21 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 
+	rejectConn := func(code, reason string) {
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: code})
+		_ = conn.CloseWithError(1, reason)
+	}
+
 	lease, err := s.admitLeaseByToken(msg.AccessToken, true)
-	switch {
-	case err == nil:
-	case errors.Is(err, errLeaseNotFound):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
-		_ = conn.CloseWithError(1, "lease not found")
-		return
-	case errors.Is(err, errLeaseRejected):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
-		_ = conn.CloseWithError(1, "lease rejected")
-		return
-	case errors.Is(err, errUnauthorized):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
-		_ = conn.CloseWithError(1, "unauthorized")
-		return
-	case errors.Is(err, errTransportMismatch):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
-		_ = conn.CloseWithError(1, "transport mismatch")
-		return
-	default:
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
-		_ = conn.CloseWithError(1, "invalid control message")
+	if err != nil {
+		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
+		for _, entry := range quicRejectTable {
+			if errors.Is(err, entry.sentinel) {
+				code, reason = entry.code, entry.reason
+				break
+			}
+		}
+		rejectConn(code, reason)
 		return
 	}
 

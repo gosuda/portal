@@ -263,70 +263,60 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			identityKey := identity.Key()
+			approver := runtime.Approver()
 
-			switch parts[2] {
-			case "ban":
-				switch r.Method {
-				case http.MethodPost:
-					runtime.BanIdentity(identityKey)
-				case http.MethodDelete:
-					runtime.UnbanIdentity(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-			case "bps":
-				switch r.Method {
-				case http.MethodPost:
-					req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, 1<<16, invalidRequestBody)
-					if !ok {
-						return
-					}
-					if req.BPS <= 0 {
-						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
-						return
-					}
-					runtime.BPSManager().SetIdentityBPS(identityKey, req.BPS)
-				case http.MethodDelete:
-					runtime.BPSManager().DeleteIdentityBPS(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-			case "approve":
-				approver := runtime.Approver()
-				switch r.Method {
-				case http.MethodPost:
-					approver.Approve(identityKey)
-					approver.Undeny(identityKey)
-				case http.MethodDelete:
-					approver.Revoke(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-			case "deny":
-				approver := runtime.Approver()
-				switch r.Method {
-				case http.MethodPost:
-					approver.Deny(identityKey)
-				case http.MethodDelete:
-					approver.Undeny(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
-			default:
-				http.NotFound(w, r)
+			type identityAction struct {
+				post   func() bool // returns true if response was already written (error path)
+				delete func()
 			}
+			actions := map[string]identityAction{
+				"ban": {
+					post:   func() bool { runtime.BanIdentity(identityKey); return false },
+					delete: func() { runtime.UnbanIdentity(identityKey) },
+				},
+				"bps": {
+					post: func() bool {
+						req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, 1<<16, invalidRequestBody)
+						if !ok {
+							return true
+						}
+						if req.BPS <= 0 {
+							utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
+							return true
+						}
+						runtime.BPSManager().SetIdentityBPS(identityKey, req.BPS)
+						return false
+					},
+					delete: func() { runtime.BPSManager().DeleteIdentityBPS(identityKey) },
+				},
+				"approve": {
+					post:   func() bool { approver.Approve(identityKey); approver.Undeny(identityKey); return false },
+					delete: func() { approver.Revoke(identityKey) },
+				},
+				"deny": {
+					post:   func() bool { approver.Deny(identityKey); return false },
+					delete: func() { approver.Undeny(identityKey) },
+				},
+			}
+
+			action, ok := actions[parts[2]]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodPost:
+				if action.post() {
+					return
+				}
+			case http.MethodDelete:
+				action.delete()
+			default:
+				methodNotAllowed.Write(w)
+				return
+			}
+			saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
+			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		case strings.HasPrefix(path, types.PathAdminIPsPrefix):
 			if !strings.HasSuffix(path, "/ban") {
 				http.NotFound(w, r)

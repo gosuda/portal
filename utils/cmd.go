@@ -351,6 +351,41 @@ func NormalizeLoopbackTarget(raw string) (string, error) {
 	return NormalizeTargetAddr(raw)
 }
 
+// HelpTopic maps a subcommand name to its usage printer.
+type HelpTopic struct {
+	Name  string
+	Usage func(io.Writer)
+}
+
+// MakeHelpCommand returns a CommandFunc that dispatches help topics.
+// Topics are matched in order; the slice provides deterministic output.
+func MakeHelpCommand(rootUsage func(io.Writer), topics []HelpTopic) CommandFunc {
+	return func(args []string) error {
+		if len(args) == 0 {
+			rootUsage(os.Stdout)
+			return nil
+		}
+		if len(args) > 1 {
+			rootUsage(os.Stderr)
+			return errors.New("only one help topic is supported")
+		}
+		topic := strings.TrimSpace(args[0])
+		switch topic {
+		case "", "help", "-h", "--help":
+			rootUsage(os.Stdout)
+			return nil
+		}
+		for _, t := range topics {
+			if t.Name == topic {
+				t.Usage(os.Stdout)
+				return nil
+			}
+		}
+		rootUsage(os.Stderr)
+		return fmt.Errorf("unknown help topic %q", topic)
+	}
+}
+
 func WriteCommandUsage(w io.Writer, usage []string, examples []string) {
 	if w == nil {
 		return

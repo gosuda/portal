@@ -258,30 +258,39 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	return expired
 }
 
-func (r *leaseRegistry) CountDatagramLeases() int {
+func (r *leaseRegistry) countActiveLeasesWhere(pred func(*leaseRecord) bool) int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	now := time.Now()
 	count := 0
 	for _, record := range r.leasesByKey {
-		if record.datagram != nil && now.Before(record.ExpiresAt) {
+		if now.Before(record.ExpiresAt) && pred(record) {
 			count++
 		}
 	}
 	return count
 }
 
+func (r *leaseRegistry) CountDatagramLeases() int {
+	return r.countActiveLeasesWhere(func(rec *leaseRecord) bool { return rec.datagram != nil })
+}
+
 func (r *leaseRegistry) CountTCPPortLeases() int {
+	return r.countActiveLeasesWhere(func(rec *leaseRecord) bool { return rec.tcpPort != nil })
+}
+
+func (r *leaseRegistry) activeAdminSnapshots() []types.AdminLease {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	now := time.Now()
-	count := 0
+	out := make([]types.AdminLease, 0, len(r.leasesByKey))
 	for _, record := range r.leasesByKey {
-		if record.tcpPort != nil && now.Before(record.ExpiresAt) {
-			count++
+		if !now.After(record.ExpiresAt) {
+			out = append(out, r.AdminSnapshot(record))
 		}
 	}
-	return count
+	return out
 }
 
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {

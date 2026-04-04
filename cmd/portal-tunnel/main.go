@@ -25,7 +25,10 @@ func main() {
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
 		"list":   runListCommand,
-		"help":   runHelpCommand,
+		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
+			{Name: "expose", Usage: printExposeUsage},
+			{Name: "list", Usage: printListUsage},
+		}),
 	}); err != nil {
 		log.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
@@ -201,32 +204,6 @@ func runListCommand(args []string) error {
 		fmt.Println(relayURL)
 	}
 	return nil
-}
-
-func runHelpCommand(args []string) error {
-	if len(args) == 0 {
-		printRootUsage(os.Stdout)
-		return nil
-	}
-	if len(args) > 1 {
-		printRootUsage(os.Stderr)
-		return errors.New("only one help topic is supported")
-	}
-
-	switch strings.TrimSpace(args[0]) {
-	case "", "help", "-h", "--help":
-		printRootUsage(os.Stdout)
-		return nil
-	case "expose":
-		printExposeUsage(os.Stdout)
-		return nil
-	case "list":
-		printListUsage(os.Stdout)
-		return nil
-	default:
-		printRootUsage(os.Stderr)
-		return fmt.Errorf("unknown help topic %q", strings.TrimSpace(args[0]))
-	}
 }
 
 var exposeNameOpeners = []string{
