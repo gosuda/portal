@@ -62,9 +62,16 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key, ok := routeLookup(r.routes, host)
+	key, ok := r.routes[host]
 	if !ok {
-		return nil, false
+		parts := strings.Split(host, ".")
+		if len(parts) < 3 {
+			return nil, false
+		}
+		key, ok = r.routes["*."+strings.Join(parts[1:], ".")]
+		if !ok {
+			return nil, false
+		}
 	}
 	record, ok := r.leasesByKey[key]
 	return record, ok && record != nil
@@ -100,21 +107,13 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	record.Hostname = hostname
 	r.leasesByKey[key] = record
 	r.routes[hostname] = key
-	r.setClientIPLocked(key, record.ClientIP)
+	r.policy.IPFilter().RegisterIdentityIP(key, record.ClientIP)
 	r.mu.Unlock()
 
 	if replaced != nil && replaced != record {
 		replaced.Close()
 	}
 	return nil
-}
-
-// setClientIPLocked updates the record's client IP and registers it with the
-// IP filter. Caller must hold r.mu.
-func (r *leaseRegistry) setClientIPLocked(identityKey, clientIP string) {
-	if strings.TrimSpace(clientIP) != "" {
-		r.policy.IPFilter().RegisterIdentityIP(identityKey, clientIP)
-	}
 }
 
 func (r *leaseRegistry) Renew(identity types.Identity, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
@@ -135,7 +134,7 @@ func (r *leaseRegistry) Renew(identity types.Identity, ttl time.Duration, client
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
 	}
-	r.setClientIPLocked(record.Key(), clientIP)
+	r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	return record, nil
 }
 
@@ -171,7 +170,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		if !r.policy.IsUDPEnabled() {
 			return types.RegisterChallengeResponse{}, errUDPDisabled
 		}
-		if max := r.policy.UDPMaxLeases(); max > 0 && r.CountDatagramLeases() >= max {
+		if max := r.policy.UDPMaxLeases(); max > 0 && r.countDatagramLeases() >= max {
 			return types.RegisterChallengeResponse{}, errUDPCapacityExceeded
 		}
 	}
@@ -179,7 +178,7 @@ func (r *leaseRegistry) issueRegisterChallenge(req types.RegisterChallengeReques
 		if !r.policy.IsTCPPortEnabled() {
 			return types.RegisterChallengeResponse{}, errTCPPortDisabled
 		}
-		if max := r.policy.TCPPortMaxLeases(); max > 0 && r.CountTCPPortLeases() >= max {
+		if max := r.policy.TCPPortMaxLeases(); max > 0 && r.countTCPPortLeases() >= max {
 			return types.RegisterChallengeResponse{}, errTCPPortCapacityExceeded
 		}
 	}
@@ -239,7 +238,7 @@ func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
 	}
-	r.setClientIPLocked(record.Key(), clientIP)
+	r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	return record
 }
 
@@ -264,25 +263,32 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 	return expired
 }
 
-func (r *leaseRegistry) countActiveLeasesWhere(pred func(*leaseRecord) bool) int {
+func (r *leaseRegistry) countDatagramLeases() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	now := time.Now()
 	count := 0
 	for _, record := range r.leasesByKey {
-		if now.Before(record.ExpiresAt) && pred(record) {
+		if now.Before(record.ExpiresAt) && record.datagram != nil {
 			count++
 		}
 	}
 	return count
 }
 
-func (r *leaseRegistry) CountDatagramLeases() int {
-	return r.countActiveLeasesWhere(func(rec *leaseRecord) bool { return rec.datagram != nil })
-}
+func (r *leaseRegistry) countTCPPortLeases() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-func (r *leaseRegistry) CountTCPPortLeases() int {
-	return r.countActiveLeasesWhere(func(rec *leaseRecord) bool { return rec.tcpPort != nil })
+	now := time.Now()
+	count := 0
+	for _, record := range r.leasesByKey {
+		if now.Before(record.ExpiresAt) && record.tcpPort != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *leaseRegistry) activeAdminSnapshots() []types.AdminLease {
@@ -392,20 +398,4 @@ func (r *leaseRecord) Close() {
 			r.tcpPorts.Release(port)
 		}
 	}
-}
-
-func routeLookup(routes map[string]string, host string) (string, bool) {
-	if host == "" {
-		return "", false
-	}
-	if identityKey, ok := routes[host]; ok {
-		return identityKey, true
-	}
-	parts := strings.Split(host, ".")
-	if len(parts) < 3 {
-		return "", false
-	}
-	wildcard := "*." + strings.Join(parts[1:], ".")
-	identityKey, ok := routes[wildcard]
-	return identityKey, ok
 }

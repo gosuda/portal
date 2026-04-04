@@ -529,7 +529,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		if !s.registry.policy.IsUDPEnabled() {
 			return types.RegisterResponse{}, errUDPDisabled
 		}
-		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.CountDatagramLeases() >= max {
+		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.countDatagramLeases() >= max {
 			return types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
@@ -540,7 +540,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		if !s.registry.policy.IsTCPPortEnabled() {
 			return types.RegisterResponse{}, errTCPPortDisabled
 		}
-		if max := s.registry.policy.TCPPortMaxLeases(); max > 0 && s.registry.CountTCPPortLeases() >= max {
+		if max := s.registry.policy.TCPPortMaxLeases(); max > 0 && s.registry.countTCPPortLeases() >= max {
 			return types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}

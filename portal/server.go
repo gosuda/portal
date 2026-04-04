@@ -257,10 +257,6 @@ func (s *Server) Wait() error {
 	return s.group.Wait()
 }
 
-func (s *Server) Identity() types.Identity {
-	return s.identity.Copy()
-}
-
 func (s *Server) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {
@@ -529,25 +525,23 @@ func BridgeConns(left, right net.Conn) {
 	defer left.Close()
 	defer right.Close()
 
+	type closeWriter interface {
+		CloseWrite() error
+	}
 	var group errgroup.Group
 	group.Go(func() error {
 		_, err := io.Copy(right, left)
-		closeWrite(right)
+		if cw, ok := right.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		}
 		return err
 	})
 	group.Go(func() error {
 		_, err := io.Copy(left, right)
-		closeWrite(left)
+		if cw, ok := left.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		}
 		return err
 	})
 	_ = group.Wait()
-}
-
-func closeWrite(conn net.Conn) {
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if cw, ok := conn.(closeWriter); ok {
-		_ = cw.CloseWrite()
-	}
 }

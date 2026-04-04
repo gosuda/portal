@@ -20,5 +20,6 @@ These are mandates, not suggestions.
 ## Testing
 
 - A test exists to catch real bugs. If deleting the test would not let a bug reach production, delete the test.
+- Do not add tests whose only purpose is generic regression prevention without a concrete bug, contract, or boundary at risk.
 - Test contracts and boundaries: protocol compliance, error semantics, security invariants, integration across real I/O.
-- Do not test configuration shapes, constructor output fields, or struct assembly — the type system and constructors already guarantee those.
+- Do not test configuration shapes, constructor output fields, or struct assembly; the type system and constructors already guarantee those.
