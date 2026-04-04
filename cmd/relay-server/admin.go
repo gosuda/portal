@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -150,7 +151,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   -1,
 		})
-		utils.WriteAPIEmpty(w, http.StatusOK)
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
 	case types.PathAdminAuthStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
@@ -170,7 +171,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 	runtime := f.server.PolicyRuntime()
 	methodNotAllowed := utils.MethodNotAllowedError()
-	invalidRequestBody := utils.InvalidRequestMessage("invalid request body")
+	invalidRequestBody := utils.InvalidRequestError(errors.New("invalid request body"))
 
 	switch path {
 	case types.PathAdminSnapshot:
@@ -204,41 +205,19 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			Enabled: f.isLandingPageEnabled(),
 		})
 	case types.PathAdminUDP:
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminUDPSettingsRequest](w, r, 1<<16, invalidRequestBody)
-		if !ok {
-			return
-		}
-		if req.MaxLeases < 0 {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
-			return
-		}
-		runtime.SetUDPPolicy(req.Enabled, req.MaxLeases)
-		saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-		utils.WriteAPIData(w, http.StatusOK, types.AdminUDPSettingsResponse{
-			Enabled:   runtime.IsUDPEnabled(),
-			MaxLeases: runtime.UDPMaxLeases(),
-		})
+		f.handlePortSettings(w, r, invalidRequestBody, runtime,
+			runtime.SetUDPPolicy,
+			func() any {
+				return types.AdminUDPSettingsResponse{Enabled: runtime.IsUDPEnabled(), MaxLeases: runtime.UDPMaxLeases()}
+			},
+		)
 	case types.PathAdminTCPPort:
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminTCPPortSettingsRequest](w, r, 1<<16, invalidRequestBody)
-		if !ok {
-			return
-		}
-		if req.MaxLeases < 0 {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
-			return
-		}
-		runtime.SetTCPPortPolicy(req.Enabled, req.MaxLeases)
-		saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-		utils.WriteAPIData(w, http.StatusOK, types.AdminTCPPortSettingsResponse{
-			Enabled:   runtime.IsTCPPortEnabled(),
-			MaxLeases: runtime.TCPPortMaxLeases(),
-		})
+		f.handlePortSettings(w, r, invalidRequestBody, runtime,
+			runtime.SetTCPPortPolicy,
+			func() any {
+				return types.AdminTCPPortSettingsResponse{Enabled: runtime.IsTCPPortEnabled(), MaxLeases: runtime.TCPPortMaxLeases()}
+			},
+		)
 	case types.PathAdminApproval:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
@@ -297,7 +276,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
+				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 			case "bps":
 				switch r.Method {
 				case http.MethodPost:
@@ -317,7 +296,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
+				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 			case "approve":
 				approver := runtime.Approver()
 				switch r.Method {
@@ -331,7 +310,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
+				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 			case "deny":
 				approver := runtime.Approver()
 				switch r.Method {
@@ -344,7 +323,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
+				utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 			default:
 				http.NotFound(w, r)
 			}
@@ -372,11 +351,40 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-			utils.WriteAPIEmpty(w, http.StatusOK)
+			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		default:
 			http.NotFound(w, r)
 		}
 	}
+}
+
+type portSettingsRequest struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+func (f *Frontend) handlePortSettings(
+	w http.ResponseWriter,
+	r *http.Request,
+	invalidBody utils.APIErrorResponse,
+	runtime *policy.Runtime,
+	setPolicy func(bool, int),
+	buildResponse func() any,
+) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	req, ok := utils.DecodeJSONRequestAs[portSettingsRequest](w, r, 1<<16, invalidBody)
+	if !ok {
+		return
+	}
+	if req.MaxLeases < 0 {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
+		return
+	}
+	setPolicy(req.Enabled, req.MaxLeases)
+	saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
+	utils.WriteAPIData(w, http.StatusOK, buildResponse())
 }
 
 func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +396,7 @@ func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, 1<<16, utils.InvalidRequestMessage("invalid request body"))
+	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, 1<<16, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}

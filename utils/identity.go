@@ -42,14 +42,8 @@ func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 		if normalized.PublicKey != "" && !strings.EqualFold(TrimHexPrefix(normalized.PublicKey), resolved.PublicKey) {
 			return types.Identity{}, errors.New("identity public key does not match private key")
 		}
-		if normalized.Address != "" {
-			address, err := NormalizeEVMAddress(normalized.Address)
-			if err != nil {
-				return types.Identity{}, err
-			}
-			if address != resolved.Address {
-				return types.Identity{}, errors.New("identity address does not match private key")
-			}
+		if normalized.Address != "" && !strings.EqualFold(normalized.Address, resolved.Address) {
+			return types.Identity{}, errors.New("identity address does not match private key")
 		}
 		normalized.Address = resolved.Address
 		normalized.PublicKey = resolved.PublicKey
@@ -67,13 +61,10 @@ func NormalizeStoredIdentity(identity types.Identity) (types.Identity, error) {
 			normalized.Address = address
 			return normalized, nil
 		}
-		normalized.Address, err = NormalizeEVMAddress(normalized.Address)
-		if err != nil {
-			return types.Identity{}, err
-		}
-		if normalized.Address != address {
+		if !strings.EqualFold(normalized.Address, address) {
 			return types.Identity{}, errors.New("identity address does not match public key")
 		}
+		normalized.Address = address
 		return normalized, nil
 	}
 

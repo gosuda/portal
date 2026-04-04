@@ -29,10 +29,6 @@ func WriteAPIData(w http.ResponseWriter, status int, data any) {
 	_ = json.NewEncoder(w).Encode(types.APIEnvelope[any]{OK: true, Data: data})
 }
 
-func WriteAPIEmpty(w http.ResponseWriter, status int) {
-	WriteAPIData(w, status, map[string]any{})
-}
-
 func WriteAPIError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -55,14 +51,6 @@ func InvalidRequestError(err error) APIErrorResponse {
 		Status:  http.StatusBadRequest,
 		Code:    types.APIErrorCodeInvalidRequest,
 		Message: err.Error(),
-	}
-}
-
-func InvalidRequestMessage(message string) APIErrorResponse {
-	return APIErrorResponse{
-		Status:  http.StatusBadRequest,
-		Code:    types.APIErrorCodeInvalidRequest,
-		Message: message,
 	}
 }
 

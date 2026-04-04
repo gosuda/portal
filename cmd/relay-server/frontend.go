@@ -214,7 +214,7 @@ func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
 
 	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
 	if hostname == "" {
-		utils.InvalidRequestMessage("hostname is required").Write(w)
+		utils.InvalidRequestError(errors.New("hostname is required")).Write(w)
 		return
 	}
 

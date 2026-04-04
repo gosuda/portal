@@ -171,30 +171,35 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		return err
 	}
 
+	var cleanups []func()
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
+
+	cleanups = append(cleanups, acmeManager.Stop)
+
 	serverCtx, cancel := context.WithCancel(ctx)
+	cleanups = append(cleanups, cancel)
+
 	var listenConfig net.ListenConfig
 
 	apiListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.APIListenAddr)
 	if err != nil {
-		acmeManager.Stop()
-		cancel()
 		return fmt.Errorf("listen api: %w", err)
 	}
+	cleanups = append(cleanups, func() { _ = apiListener.Close() })
+
 	sniListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.SNIListenAddr)
 	if err != nil {
-		acmeManager.Stop()
-		_ = apiListener.Close()
-		cancel()
 		return fmt.Errorf("listen sni: %w", err)
 	}
+	cleanups = append(cleanups, func() { _ = sniListener.Close() })
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
 	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
 	if err != nil {
-		acmeManager.Stop()
-		_ = apiListener.Close()
-		_ = sniListener.Close()
-		cancel()
 		return err
 	}
 
@@ -205,6 +210,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
+	cleanups = nil
 
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })

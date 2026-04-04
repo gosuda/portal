@@ -5,9 +5,9 @@ import (
 	"errors"
 )
 
-// ErrDatagramTooSmall is returned when a datagram payload is too short to
+// errDatagramTooSmall is returned when a datagram payload is too short to
 // contain a valid flow ID varint.
-var ErrDatagramTooSmall = errors.New("datagram too small to decode")
+var errDatagramTooSmall = errors.New("datagram too small to decode")
 
 // DatagramFrame carries one relayed datagram.
 // Wire encoding uses only FlowID and Payload with layout:
@@ -34,7 +34,7 @@ func EncodeDatagram(flowID uint32, payload []byte) []byte {
 func DecodeDatagram(data []byte) (DatagramFrame, error) {
 	flowID, n := binary.Uvarint(data)
 	if n <= 0 {
-		return DatagramFrame{}, ErrDatagramTooSmall
+		return DatagramFrame{}, errDatagramTooSmall
 	}
 	return DatagramFrame{
 		FlowID:  uint32(flowID),

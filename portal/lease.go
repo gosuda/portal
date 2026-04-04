@@ -18,7 +18,7 @@ import (
 const defaultRegisterChallengeTTL = 2 * time.Minute
 
 type leaseRegistry struct {
-	routes             *routeTable
+	routes             map[string]string
 	leasesByKey        map[string]*leaseRecord
 	registerChallenges map[string]*auth.RegisterChallenge
 	policy             *policy.Runtime
@@ -31,7 +31,7 @@ func newLeaseRegistry(runtime *policy.Runtime) *leaseRegistry {
 	}
 
 	return &leaseRegistry{
-		routes:             newRouteTable(),
+		routes:             make(map[string]string),
 		leasesByKey:        make(map[string]*leaseRecord),
 		registerChallenges: make(map[string]*auth.RegisterChallenge),
 		policy:             runtime,
@@ -47,7 +47,7 @@ func (r *leaseRegistry) CloseAll() []*leaseRecord {
 		out = append(out, record)
 		r.policy.ForgetIdentity(record.Key())
 	}
-	r.routes = newRouteTable()
+	r.routes = make(map[string]string)
 	r.leasesByKey = make(map[string]*leaseRecord)
 	r.registerChallenges = make(map[string]*auth.RegisterChallenge)
 	return out
@@ -62,7 +62,7 @@ func (r *leaseRegistry) Lookup(host string) (*leaseRecord, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	key, ok := r.routes.Lookup(host)
+	key, ok := routeLookup(r.routes, host)
 	if !ok {
 		return nil, false
 	}
@@ -86,7 +86,7 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 
 	r.mu.Lock()
 
-	if existingKey, ok := r.routes.LookupExact(hostname); ok && existingKey != key {
+	if existingKey, ok := r.routes[hostname]; ok && existingKey != key {
 		r.mu.Unlock()
 		return errHostnameConflict
 	}
@@ -94,12 +94,12 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	var replaced *leaseRecord
 	if existing, ok := r.leasesByKey[key]; ok && existing != nil {
 		replaced = existing
-		r.routes.Delete(existing.Hostname)
+		delete(r.routes, utils.NormalizeHostname(existing.Hostname))
 		r.policy.ForgetIdentity(existing.Key())
 	}
 	record.Hostname = hostname
 	r.leasesByKey[key] = record
-	r.routes.Set(hostname, key)
+	r.routes[hostname] = key
 	if strings.TrimSpace(record.ClientIP) != "" {
 		r.policy.IPFilter().RegisterIdentityIP(key, record.ClientIP)
 	}
@@ -144,7 +144,7 @@ func (r *leaseRegistry) Unregister(identity types.Identity) (*leaseRecord, error
 	}
 
 	delete(r.leasesByKey, key)
-	r.routes.Delete(record.Hostname)
+	delete(r.routes, utils.NormalizeHostname(record.Hostname))
 	r.policy.ForgetIdentity(key)
 	return record, nil
 }
@@ -246,7 +246,7 @@ func (r *leaseRegistry) cleanupExpired(now time.Time) []*leaseRecord {
 		if now.After(record.ExpiresAt) {
 			expired = append(expired, record)
 			delete(r.leasesByKey, key)
-			r.routes.Delete(record.Hostname)
+			delete(r.routes, utils.NormalizeHostname(record.Hostname))
 			r.policy.ForgetIdentity(key)
 		}
 	}
@@ -379,50 +379,18 @@ func (r *leaseRecord) Close() {
 	}
 }
 
-type routeTable struct {
-	exact map[string]string
-}
-
-func newRouteTable() *routeTable {
-	return &routeTable{exact: make(map[string]string)}
-}
-
-func (t *routeTable) Set(host, identityKey string) {
-	host = utils.NormalizeHostname(host)
-	if host == "" {
-		return
-	}
-	t.exact[host] = identityKey
-}
-
-func (t *routeTable) Delete(host string) {
-	delete(t.exact, utils.NormalizeHostname(host))
-}
-
-func (t *routeTable) LookupExact(host string) (string, bool) {
-	host = utils.NormalizeHostname(host)
+func routeLookup(routes map[string]string, host string) (string, bool) {
 	if host == "" {
 		return "", false
 	}
-	identityKey, ok := t.exact[host]
-	return identityKey, ok
-}
-
-func (t *routeTable) Lookup(host string) (string, bool) {
-	host = utils.NormalizeHostname(host)
-	if host == "" {
-		return "", false
-	}
-
-	if identityKey, ok := t.exact[host]; ok {
+	if identityKey, ok := routes[host]; ok {
 		return identityKey, true
 	}
-
 	parts := strings.Split(host, ".")
 	if len(parts) < 3 {
 		return "", false
 	}
 	wildcard := "*." + strings.Join(parts[1:], ".")
-	identityKey, ok := t.exact[wildcard]
+	identityKey, ok := routes[wildcard]
 	return identityKey, ok
 }

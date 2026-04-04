@@ -320,20 +320,6 @@ func RemoveRelayURL(inputs []string, target string) []string {
 	return filtered
 }
 
-func AppendUniqueRelayURL(inputs []string, target string) []string {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return append([]string(nil), inputs...)
-	}
-
-	for _, input := range inputs {
-		if strings.TrimSpace(input) == target {
-			return append([]string(nil), inputs...)
-		}
-	}
-	return append(append([]string(nil), inputs...), target)
-}
-
 func MergeRelayURLs(current, excluded, inputs []string) ([]string, error) {
 	merged, err := NormalizeRelayURLs(append(append([]string(nil), current...), inputs...)...)
 	if err != nil {
@@ -387,42 +373,6 @@ func LeaseHostname(name, rootHost string) (string, error) {
 		return "", errors.New("root host is required")
 	}
 	return label + "." + rootHost, nil
-}
-
-func FormatDuration(d time.Duration) string {
-	if d <= 0 {
-		return ""
-	}
-	if d > time.Hour {
-		return fmt.Sprintf("%.0fh", d.Hours())
-	}
-	if d > time.Minute {
-		return fmt.Sprintf("%.0fm", d.Minutes())
-	}
-	return fmt.Sprintf("%.0fs", d.Seconds())
-}
-
-func FormatLastSeen(d time.Duration) string {
-	if d <= 0 {
-		return ""
-	}
-	if d >= time.Hour {
-		hours := int(d / time.Hour)
-		minutes := int((d % time.Hour) / time.Minute)
-		if minutes > 0 {
-			return fmt.Sprintf("%dh %dm", hours, minutes)
-		}
-		return fmt.Sprintf("%dh", hours)
-	}
-	if d >= time.Minute {
-		minutes := int(d / time.Minute)
-		seconds := int((d % time.Minute) / time.Second)
-		if seconds > 0 {
-			return fmt.Sprintf("%dm %ds", minutes, seconds)
-		}
-		return fmt.Sprintf("%dm", minutes)
-	}
-	return fmt.Sprintf("%ds", int(d/time.Second))
 }
 
 func DecodeBase64URLString(encoded string) (string, error) {

@@ -1,9 +1,9 @@
-export type APIErrorPayload = {
+type APIErrorPayload = {
   code?: string;
   message?: string;
 };
 
-export type APIEnvelope<T> = {
+type APIEnvelope<T> = {
   ok?: boolean;
   data?: T;
   error?: APIErrorPayload;

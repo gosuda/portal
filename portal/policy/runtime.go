@@ -4,15 +4,26 @@ import (
 	"sync"
 )
 
+type PortPolicy struct {
+	enabled   bool
+	maxLeases int
+}
+
+func (p PortPolicy) IsEnabled() bool { return p.enabled }
+func (p PortPolicy) MaxLeases() int  { return p.maxLeases }
+
+func (p *PortPolicy) Set(enabled bool, maxLeases int) {
+	p.enabled = enabled
+	p.maxLeases = maxLeases
+}
+
 type Runtime struct {
 	approver           *Approver
 	bpsManager         *BPSManager
 	ipFilter           *IPFilter
 	bannedIdentityKeys map[string]struct{}
-	udpEnabled         bool
-	udpMaxLeases       int
-	tcpPortEnabled     bool
-	tcpPortMaxLeases   int
+	udp                PortPolicy
+	tcpPort            PortPolicy
 	mu                 sync.RWMutex
 }
 
@@ -115,40 +126,38 @@ func (r *Runtime) IsIdentityRoutable(key string) bool {
 
 func (r *Runtime) SetUDPPolicy(enabled bool, maxLeases int) {
 	r.mu.Lock()
-	r.udpEnabled = enabled
-	r.udpMaxLeases = maxLeases
+	r.udp.Set(enabled, maxLeases)
 	r.mu.Unlock()
 }
 
 func (r *Runtime) IsUDPEnabled() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.udpEnabled
+	return r.udp.IsEnabled()
 }
 
 func (r *Runtime) UDPMaxLeases() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.udpMaxLeases
+	return r.udp.MaxLeases()
 }
 
 func (r *Runtime) SetTCPPortPolicy(enabled bool, maxLeases int) {
 	r.mu.Lock()
-	r.tcpPortEnabled = enabled
-	r.tcpPortMaxLeases = maxLeases
+	r.tcpPort.Set(enabled, maxLeases)
 	r.mu.Unlock()
 }
 
 func (r *Runtime) IsTCPPortEnabled() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.tcpPortEnabled
+	return r.tcpPort.IsEnabled()
 }
 
 func (r *Runtime) TCPPortMaxLeases() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.tcpPortMaxLeases
+	return r.tcpPort.MaxLeases()
 }
 
 func (r *Runtime) ForgetIdentity(key string) {

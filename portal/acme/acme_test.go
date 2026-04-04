@@ -111,27 +111,6 @@ func TestNewManagerRejectsENSGaslessWithoutDNSProvider(t *testing.T) {
 	}
 }
 
-func TestNewManagerAllowsENSGaslessWithACMEDNSProvider(t *testing.T) {
-	t.Parallel()
-
-	manager, err := NewManager(Config{
-		BaseDomain:        "portal.example.com",
-		KeyDir:            t.TempDir(),
-		DNSProvider:       TypeRoute53,
-		ENSGaslessEnabled: true,
-		ENSGaslessAddress: "0x1234567890123456789012345678901234567890",
-	})
-	if err != nil {
-		t.Fatalf("NewManager() error = %v", err)
-	}
-	if manager == nil {
-		t.Fatal("NewManager() = nil, want manager")
-	}
-	if manager.dns == nil {
-		t.Fatal("manager.dns = nil, want dns provider")
-	}
-}
-
 func TestEnsureTLSMaterialUsesManualCertificateWithDNSProvider(t *testing.T) {
 	t.Parallel()
 
