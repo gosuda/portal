@@ -24,7 +24,6 @@ import (
 	"golang.org/x/net/idna"
 )
 
-// Input parsing and normalization.
 func SplitCSV(raw string) []string {
 	if strings.TrimSpace(raw) == "" {
 		return nil
@@ -229,7 +228,6 @@ func NormalizeChildHostnames(inputs []string, baseDomain string) []string {
 	})
 }
 
-// NormalizeURLPath canonicalizes URL paths to a rooted, slash-trimmed form.
 func NormalizeURLPath(raw string) string {
 	clean := path.Clean(strings.TrimSpace(raw))
 	if clean == "." || clean == "" {
@@ -440,7 +438,6 @@ func DecodeBase64URLString(encoded string) (string, error) {
 	return string(decoded), nil
 }
 
-// Network and transport helpers.
 func NormalizeTargetAddr(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -535,7 +532,6 @@ func RandomHex(size int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-// Security and TLS helpers.
 func CertPoolFromPEM(rootCAPEM []byte) (*x509.CertPool, error) {
 	if len(rootCAPEM) == 0 {
 		return nil, nil
@@ -588,7 +584,6 @@ func SleepOrDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Random value helpers.
 func RandomID(prefix string) string {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {

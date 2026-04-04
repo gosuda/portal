@@ -285,10 +285,6 @@ func (r *leaseRegistry) CountTCPPortLeases() int {
 }
 
 func (r *leaseRegistry) Snapshot(record *leaseRecord) types.Lease {
-	if record == nil {
-		return types.Lease{}
-	}
-
 	snapshot := types.Lease{
 		Name:        record.Name,
 		ExpiresAt:   record.ExpiresAt,
@@ -329,10 +325,6 @@ type leaseRecord struct {
 }
 
 func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
-	if record == nil {
-		return types.AdminLease{}
-	}
-
 	clientIP := record.ClientIP
 	identityKey := record.Key()
 	return types.AdminLease{
@@ -350,10 +342,6 @@ func (r *leaseRegistry) AdminSnapshot(record *leaseRecord) types.AdminLease {
 }
 
 func (r *leaseRecord) Start() error {
-	if r == nil {
-		return nil
-	}
-
 	r.startOnce.Do(func() {
 		if r.datagram != nil {
 			r.startErr = r.datagram.Start(context.Background())

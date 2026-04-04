@@ -157,10 +157,6 @@ func HTTPDoAPIPath(ctx context.Context, client *http.Client, baseURL *url.URL, m
 }
 
 func DecodeAPIRequestError(resp *http.Response) error {
-	if resp == nil {
-		return &types.APIRequestError{Message: "empty api response"}
-	}
-
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
 	var envelope types.APIEnvelope[json.RawMessage]
 	if err := json.Unmarshal(body, &envelope); err == nil && !envelope.OK {

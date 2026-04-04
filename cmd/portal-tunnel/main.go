@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -258,6 +259,56 @@ var exposeNameClosers = []string{
 	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
 }
 
+var digitsOnly = regexp.MustCompile(`^\d+$`)
+
+func normalizeExposeTarget(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	candidate := trimmed
+	if candidate == "" {
+		candidate = "3000"
+	}
+
+	if digitsOnly.MatchString(candidate) {
+		return "127.0.0.1:" + candidate
+	}
+
+	if strings.Contains(candidate, "://") {
+		parsed, err := url.Parse(candidate)
+		if err == nil &&
+			(parsed.Scheme == "http" || parsed.Scheme == "https") &&
+			parsed.Host != "" &&
+			(parsed.Path == "" || parsed.Path == "/") &&
+			parsed.RawQuery == "" &&
+			parsed.Fragment == "" {
+			return parsed.Host
+		}
+		return candidate
+	}
+
+	parsed, err := url.Parse("tcp://" + candidate)
+	if err != nil || parsed.Hostname() == "" {
+		return candidate
+	}
+	port := parsed.Port()
+	if port == "" {
+		port = "80"
+	}
+	host := parsed.Hostname()
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:" + port
+	}
+	return host + ":" + port
+}
+
+func fnv1a32(data []byte, seed uint32) uint32 {
+	h := seed
+	for _, b := range data {
+		h ^= uint32(b)
+		h *= 0x01000193
+	}
+	return h
+}
+
 func defaultExposeName(target, rawSeed string) (string, error) {
 	seed := strings.TrimSpace(rawSeed)
 	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
@@ -267,11 +318,15 @@ func defaultExposeName(target, rawSeed string) (string, error) {
 		seed = "portal"
 	}
 
-	sum := sha256.Sum256([]byte(seed + "|" + strings.TrimSpace(target)))
+	input := []byte(seed + "|" + normalizeExposeTarget(target))
+	first := fnv1a32(input, 0x811c9dc5)
+	second := fnv1a32(input, 0x9e3779b9)
+	third := fnv1a32(input, 0x85ebca6b)
+
 	label := strings.Join([]string{
-		exposeNameOpeners[int(sum[0])%len(exposeNameOpeners)],
-		exposeNameCenters[int(sum[1])%len(exposeNameCenters)],
-		exposeNameClosers[int(sum[2])%len(exposeNameClosers)],
+		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
+		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
+		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
 	}, "-")
 
 	return utils.NormalizeDNSLabel(label)

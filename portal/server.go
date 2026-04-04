@@ -252,9 +252,6 @@ func (s *Server) Wait() error {
 }
 
 func (s *Server) Identity() types.Identity {
-	if s == nil {
-		return types.Identity{}
-	}
 	return s.identity.Copy()
 }
 
@@ -306,16 +303,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) PolicyRuntime() *policy.Runtime {
-	if s == nil || s.registry == nil {
-		return nil
-	}
 	return s.registry.policy
 }
 
 func (s *Server) PortalURL() string {
-	if s == nil {
-		return ""
-	}
 	return s.cfg.PortalURL
 }
 
@@ -369,10 +360,6 @@ func (s *Server) AdminLeaseSnapshots() []types.AdminLease {
 }
 
 func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
-	if s == nil || s.registry == nil {
-		return types.Lease{}, false
-	}
-
 	record, ok := s.registry.Lookup(hostname)
 	if !ok || record == nil || time.Now().After(record.ExpiresAt) {
 		return types.Lease{}, false
