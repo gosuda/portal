@@ -512,11 +512,9 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				s.BridgeConns(wrappedConn, session)
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
-			err = nil
 			return err
 		default:
 			if ctx.Err() != nil {
-				err = nil
 				return err
 			}
 			return err
