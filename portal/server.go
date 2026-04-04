@@ -512,10 +512,12 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				s.BridgeConns(wrappedConn, session)
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
-			return nil
+			err = nil
+			return err
 		default:
 			if ctx.Err() != nil {
-				return nil
+				err = nil
+				return err
 			}
 			return err
 		}
@@ -659,40 +661,6 @@ func (s *Server) localLoad() policy.NodeLoad {
 		load.AvgLatencyMs = w.AvgLatencyMs
 	}
 	return load
-}
-
-func (s *Server) serveLocalConn(ctx context.Context, serverName string, conn net.Conn) {
-	if serverName == s.identity.Name {
-		if s.apiListener == nil {
-			_ = conn.Close()
-			return
-		}
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		upstream, err := dialer.DialContext(ctx, "tcp", utils.HostPortOrLoopback(s.apiListener.Addr().String()))
-		if err != nil {
-			_ = conn.Close()
-			return
-		}
-		s.BridgeConns(conn, upstream)
-		return
-	}
-
-	record, ok := s.registry.Lookup(serverName)
-	if !ok || record == nil || time.Now().After(record.ExpiresAt) || !s.registry.policy.IsIdentityRoutable(record.Key()) || record.stream == nil {
-		_ = conn.Close()
-		return
-	}
-
-	claimCtx, cancel := context.WithTimeout(ctx, defaultClaimTimeout)
-	defer cancel()
-
-	session, err := record.stream.Claim(claimCtx)
-	if err != nil {
-		_ = conn.Close()
-		return
-	}
-
-	s.BridgeConns(conn, session)
 }
 
 func (s *Server) BridgeConns(left, right net.Conn) {

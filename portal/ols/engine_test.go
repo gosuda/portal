@@ -11,10 +11,10 @@ import (
 
 // mockPeerDialer implements PeerDialer for tests.
 type mockPeerDialer struct {
-	peers   map[string]string
-	dialed  []string
-	conn    net.Conn
-	dialCh  chan struct{}
+	peers  map[string]string
+	dialed []string
+	conn   net.Conn
+	dialCh chan struct{}
 }
 
 func newMockPeerDialer(conn net.Conn, peers map[string]string) *mockPeerDialer {
