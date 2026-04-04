@@ -20,10 +20,13 @@ import (
 func main() {
 	log.Logger = log.Output(zerolog.NewConsoleWriter())
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
-		"":     runTCPCommand,
-		"tcp":  runTCPCommand,
-		"udp":  runUDPCommand,
-		"help": runHelpCommand,
+		"":    runTCPCommand,
+		"tcp": runTCPCommand,
+		"udp": runUDPCommand,
+		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
+			{Name: "tcp", Usage: printTCPUsage},
+			{Name: "udp", Usage: printUDPUsage},
+		}),
 	}); err != nil {
 		log.Error().Err(err).Msg("demo command failed")
 		os.Exit(1)
@@ -45,20 +48,26 @@ type demoConfig struct {
 	thumbnail    string
 }
 
-func runTCPCommand(args []string) error {
-	cfg := demoConfig{}
-
-	fs := utils.NewFlagSet("demo-app", printTCPUsage)
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://gosunuts.xyz", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
+// registerConnectivityFlags registers the relay, discovery, identity, and
+// owner flags that are shared across TCP and UDP demo commands.
+func registerConnectivityFlags(fs *flag.FlagSet, cfg *demoConfig, defaultRelays string) {
+	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", defaultRelays, "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
 	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
 	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
 	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
 	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
+}
+
+func runTCPCommand(args []string) error {
+	cfg := demoConfig{}
+
+	fs := utils.NewFlagSet("demo-app", printTCPUsage)
+	registerConnectivityFlags(fs, &cfg, "https://gosunuts.xyz")
 	utils.StringFlag(fs, &cfg.addr, "addr", "127.0.0.1:8092", "local demo HTTP listen address (host:port or URL; disable if empty)")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-app", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo connectivity app", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,connectivity,activity,cloud,sun,morning", "comma-separated lease tags")
-	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
 	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "https://picsum.photos/640/360", "lease thumbnail")
 	utils.BoolFlag(fs, &cfg.hide, "hide", false, "hide this lease from listings")
 
@@ -88,15 +97,10 @@ func runUDPCommand(args []string) error {
 	cfg := demoConfig{}
 	fs := utils.NewFlagSet("demo-app-udp", printUDPUsage)
 
-	utils.StringFlagEnv(fs, &cfg.relayURLs, "relays", "https://localhost:4017", "additional relay API URLs (comma-separated; scheme omitted defaults to https; merged with public registry relays when discovery is enabled)", "RELAYS")
-	utils.BoolFlagEnv(fs, &cfg.discovery, "discovery", true, "include public registry relays and enable discovery", "DISCOVERY")
-	utils.BoolFlagEnv(fs, &cfg.banMITM, "ban-mitm", false, "ban relay when the MITM self-probe detects TLS termination", "BAN_MITM")
-	utils.StringFlagEnv(fs, &cfg.identityPath, "identity-path", "identity.json", "identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.identityJSON, "identity-json", "", "identity json payload; overrides --identity-path contents and is persisted there when both are set", "IDENTITY_JSON")
+	registerConnectivityFlags(fs, &cfg, "https://localhost:4017")
 	utils.StringFlag(fs, &cfg.name, "name", "demo-udp", "public hostname prefix (single DNS label)")
 	utils.StringFlag(fs, &cfg.desc, "description", "Portal demo UDP echo service", "lease description")
 	utils.StringFlag(fs, &cfg.tags, "tags", "demo,udp,echo", "comma-separated lease tags")
-	utils.StringFlag(fs, &cfg.owner, "owner", "PortalApp Developer", "lease owner")
 	utils.StringFlag(fs, &cfg.thumbnail, "thumbnail", "", "lease thumbnail")
 	utils.BoolFlag(fs, &cfg.hide, "hide", true, "hide this lease from listings")
 
@@ -120,32 +124,6 @@ func runUDPCommand(args []string) error {
 	defer stop()
 
 	return runUDPDemo(ctx, cfg)
-}
-
-func runHelpCommand(args []string) error {
-	if len(args) == 0 {
-		printRootUsage(os.Stdout)
-		return nil
-	}
-	if len(args) > 1 {
-		printRootUsage(os.Stderr)
-		return errors.New("only one help topic is supported")
-	}
-
-	switch args[0] {
-	case "", "help", "-h", "--help":
-		printRootUsage(os.Stdout)
-		return nil
-	case "tcp":
-		printTCPUsage(os.Stdout)
-		return nil
-	case "udp":
-		printUDPUsage(os.Stdout)
-		return nil
-	default:
-		printRootUsage(os.Stderr)
-		return fmt.Errorf("unknown help topic %q", args[0])
-	}
 }
 
 func runTCPDemo(ctx context.Context, cfg demoConfig) error {

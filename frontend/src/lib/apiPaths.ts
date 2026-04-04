@@ -6,7 +6,7 @@ export const API_PATHS = {
     logout: "/admin/logout",
     authStatus: "/admin/auth/status",
     leases: "/admin/leases",
-    stats: "/admin/stats",
+
     approvalMode: "/admin/settings/approval-mode",
     landingPage: "/admin/settings/landing-page",
     udpSettings: "/admin/settings/udp",

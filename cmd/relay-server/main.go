@@ -80,9 +80,6 @@ func runServeCommand(args []string) error {
 	utils.StringFlagEnv(fs, &cfg.Bootstraps, "bootstraps", "", "additional bootstrap relay API URLs used for discovery expansion", "BOOTSTRAPS")
 	utils.BoolFlagEnv(fs, &cfg.DiscoveryEnabled, "discovery", false, "serve relay discovery endpoints and poll discovery peers", "DISCOVERY")
 	utils.StringFlagEnv(fs, &cfg.IdentityPath, "identity-path", "identity.json", "relay identity json file path", "IDENTITY_PATH")
-	utils.StringFlagEnv(fs, &cfg.WireGuardPrivateKey, "wireguard-private-key", "", "wireguard private key for relay peer overlay", "WIREGUARD_PRIVATE_KEY")
-	utils.IntFlagEnv(fs, &cfg.DiscoveryPort, "discovery-port", 0, utils.ParsePortNumber, "public UDP listen port advertised for relay-peer discovery overlay (defaults to 51820 when wireguard is enabled)", "DISCOVERY_PORT")
-	utils.StringFlagEnv(fs, &cfg.WireGuardEndpoint, "wireguard-endpoint", "", "explicit public WireGuard endpoint advertised for relay peer overlay (host:port or ip:port); defaults to PORTAL_URL host + DISCOVERY_PORT when empty", "WIREGUARD_ENDPOINT")
 	utils.StringFlagEnv(fs, &cfg.AdminSecretKey, "admin-secret-key", "", "admin auth secret", "ADMIN_SECRET_KEY")
 	utils.BoolFlagEnv(fs, &cfg.TrustProxyHeaders, "trust-proxy-headers", false, "trust X-Forwarded-* and X-Real-IP headers from trusted proxies", "TRUST_PROXY_HEADERS")
 	utils.StringFlagEnv(fs, &cfg.TrustedProxyCIDRs, "trusted-proxy-cidrs", "", "trusted proxy CIDR allowlist for forwarded headers, comma-separated; defaults to private/loopback proxy ranges when trust-proxy-headers is enabled", "TRUSTED_PROXY_CIDRS")
@@ -126,8 +123,8 @@ func runServeCommand(args []string) error {
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
 		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
+		Bool("udp_enabled", cfg.UDPEnabled).
 		Bool("tcp_enabled", cfg.TCPEnabled).
-		Bool("udp_enabled", cfg.UDPPortCount > 0).
 		Bool("i2p_discovery_only", cfg.I2PDiscoveryOnly).
 		Msg("configured relay server")
 
@@ -144,12 +141,9 @@ func runServer(ctx context.Context, cfg relayServerConfig) error {
 	}
 
 	server, err := portal.NewServer(portal.ServerConfig{
-		PortalURL:           cfg.PortalURL,
-		IdentityPath:        cfg.IdentityPath,
-		Bootstraps:          bootstraps,
-		WireGuardPrivateKey: cfg.WireGuardPrivateKey,
-		DiscoveryPort:       cfg.DiscoveryPort,
-		WireGuardEndpoint:   cfg.WireGuardEndpoint,
+		PortalURL:    cfg.PortalURL,
+		IdentityPath: cfg.IdentityPath,
+		Bootstraps:   bootstraps,
 		ACME: acme.Config{
 			KeyDir:             cfg.KeylessDir,
 			DNSProvider:        cfg.ACMEDNSProvider,

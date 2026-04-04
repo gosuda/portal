@@ -204,7 +204,6 @@ PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
 IDENTITY_PATH=/portal-certs/identity.json
-WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/portal-certs
@@ -226,7 +225,6 @@ PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
 IDENTITY_PATH=/portal-certs/identity.json
-WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/portal-certs
@@ -244,7 +242,6 @@ PORTAL_URL=https://example.com
 BOOTSTRAPS=
 DISCOVERY=true
 IDENTITY_PATH=/portal-certs/identity.json
-WIREGUARD_ENDPOINT=
 SNI_PORT=443
 ADMIN_SECRET_KEY=your-admin-secret
 KEYLESS_DIR=/portal-certs
@@ -289,8 +286,6 @@ Notes:
 
 - For non-apex deployments, set `PORTAL_URL` to the non-apex host value, for example `https://portal.example.com:8443`
 - Portal uses the `PORTAL_URL` host for public lease hostnames
-- `WIREGUARD_ENDPOINT` is optional. When empty, Portal advertises `PORTAL_URL` host with `DISCOVERY_PORT`
-- Set `WIREGUARD_ENDPOINT` explicitly only when relay-peer discovery UDP is exposed on a different address than `PORTAL_URL`
 - `IDENTITY_PATH` stores the relay identity JSON inside the container
 - `KEYLESS_DIR` stores relay certificate material inside the container
 - The Docker Compose stack stores relay identity JSON and certificate state under `./.portal-certs` on the host

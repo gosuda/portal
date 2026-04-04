@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -75,24 +74,6 @@ func TestRemoveRelayURL(t *testing.T) {
 	want := []string{"https://relay-b.example"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("RemoveRelayURL() = %v, want %v", got, want)
-	}
-}
-
-func TestAppendUniqueRelayURL(t *testing.T) {
-	t.Parallel()
-
-	got := AppendUniqueRelayURL(
-		[]string{"https://relay-a.example"},
-		"https://relay-b.example",
-	)
-	want := []string{"https://relay-a.example", "https://relay-b.example"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("AppendUniqueRelayURL() = %v, want %v", got, want)
-	}
-
-	got = AppendUniqueRelayURL(got, "https://relay-b.example")
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("AppendUniqueRelayURL() dedupe = %v, want %v", got, want)
 	}
 }
 
@@ -192,22 +173,6 @@ func TestLeaseHostname(t *testing.T) {
 	}
 }
 
-func TestFormatDuration(t *testing.T) {
-	t.Parallel()
-
-	if got := FormatDuration(90 * time.Second); got != "2m" {
-		t.Fatalf("FormatDuration() = %q, want %q", got, "2m")
-	}
-}
-
-func TestFormatLastSeen(t *testing.T) {
-	t.Parallel()
-
-	if got := FormatLastSeen(65 * time.Second); got != "1m 5s" {
-		t.Fatalf("FormatLastSeen() = %q, want %q", got, "1m 5s")
-	}
-}
-
 func TestDecodeBase64URLString(t *testing.T) {
 	t.Parallel()
 
@@ -237,30 +202,6 @@ func TestDecodeBase64URLStringRejectsInvalidValue(t *testing.T) {
 
 	if _, err := DecodeBase64URLString("%%%"); err == nil {
 		t.Fatal("DecodeBase64URLString() error = nil, want invalid base64 error")
-	}
-}
-
-func TestRandomID(t *testing.T) {
-	t.Parallel()
-
-	got := RandomID("tok_")
-	if !strings.HasPrefix(got, "tok_") {
-		t.Fatalf("RandomID() = %q, want tok_ prefix", got)
-	}
-	if len(got) != len("tok_")+16 {
-		t.Fatalf("RandomID() length = %d, want %d", len(got), len("tok_")+16)
-	}
-}
-
-func TestRandomHex(t *testing.T) {
-	t.Parallel()
-
-	got, err := RandomHex(16)
-	if err != nil {
-		t.Fatalf("RandomHex() error = %v", err)
-	}
-	if len(got) != 32 {
-		t.Fatalf("RandomHex() length = %d, want %d", len(got), 32)
 	}
 }
 

@@ -122,6 +122,9 @@ func TestExposeLoadsPrivateKeyFromIdentityPath(t *testing.T) {
 	if challengeReq.Identity.Address != identity.Address {
 		t.Fatalf("register challenge Identity.Address = %q, want %q", challengeReq.Identity.Address, identity.Address)
 	}
+	if challengeReq.Identity.Name != identity.Name {
+		t.Fatalf("register challenge Identity.Name = %q, want %q", challengeReq.Identity.Name, identity.Name)
+	}
 }
 
 func TestExposeLoadsIdentityFromJSON(t *testing.T) {

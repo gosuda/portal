@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/gosuda/portal/v2/portal/keyless"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
@@ -20,9 +22,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 	desc.Name = utils.NormalizeHostname(desc.Name)
 	desc.Address = strings.TrimSpace(desc.Address)
 	desc.APIHTTPSAddr = strings.TrimSpace(desc.APIHTTPSAddr)
-	desc.WireGuardPublicKey = strings.TrimSpace(desc.WireGuardPublicKey)
-	desc.WireGuardEndpoint = strings.TrimSpace(desc.WireGuardEndpoint)
-	desc.OverlayIPv4 = strings.TrimSpace(desc.OverlayIPv4)
 	if !desc.IssuedAt.IsZero() {
 		desc.IssuedAt = desc.IssuedAt.UTC()
 	}
@@ -43,19 +42,6 @@ func NormalizeDescriptor(desc types.RelayDescriptor) (types.RelayDescriptor, err
 			return types.RelayDescriptor{}, fmt.Errorf("normalize address: %w", err)
 		}
 		desc.Address = normalized
-	}
-	if len(desc.OverlayCIDRs) > 0 {
-		normalized, err := utils.NormalizeOverlayCIDRs(desc.OverlayCIDRs)
-		if err != nil {
-			return types.RelayDescriptor{}, err
-		}
-		desc.OverlayCIDRs = normalized
-	}
-	if !desc.SupportsOverlayPeer {
-		desc.WireGuardPublicKey = ""
-		desc.WireGuardEndpoint = ""
-		desc.OverlayIPv4 = ""
-		desc.OverlayCIDRs = nil
 	}
 	return desc, nil
 }
@@ -88,17 +74,6 @@ func ValidateDescriptor(desc types.RelayDescriptor, now time.Time) (types.RelayD
 	case normalized.IssuedAt.After(normalized.ExpiresAt):
 		return types.RelayDescriptor{}, errors.New("issued_at must be before expires_at")
 	}
-	if normalized.SupportsOverlayPeer {
-		if err := utils.ValidateWireGuardPublicKey(normalized.WireGuardPublicKey); err != nil {
-			return types.RelayDescriptor{}, err
-		}
-		if err := utils.ValidateWireGuardEndpoint(normalized.WireGuardEndpoint); err != nil {
-			return types.RelayDescriptor{}, err
-		}
-		if err := utils.ValidateOverlayIPv4(normalized.OverlayIPv4); err != nil {
-			return types.RelayDescriptor{}, err
-		}
-	}
 	return normalized, nil
 }
 
@@ -115,23 +90,28 @@ func ValidateRelayDiscoveryResponse(resp types.DiscoveryResponse, now time.Time)
 
 	seen := map[string]struct{}{self.Key(): {}}
 	relays := make([]types.RelayDescriptor, 0, len(resp.Relays))
-	var validateErr error
 	for _, descriptor := range resp.Relays {
 		verified, err := ValidateDescriptor(descriptor, now)
 		if err != nil {
-			if validateErr == nil {
-				validateErr = err
-			}
+			log.Warn().
+				Err(err).
+				Str("relay", strings.TrimSpace(descriptor.APIHTTPSAddr)).
+				Str("name", strings.TrimSpace(descriptor.Name)).
+				Msg("skipping invalid discovery relay hint")
 			continue
 		}
 		identityKey := verified.Key()
 		if _, ok := seen[identityKey]; ok {
+			log.Debug().
+				Str("relay", verified.APIHTTPSAddr).
+				Str("identity_key", identityKey).
+				Msg("skipping duplicate discovery relay hint")
 			continue
 		}
 		seen[identityKey] = struct{}{}
 		relays = append(relays, verified)
 	}
-	return self, relays, validateErr
+	return self, relays, nil
 }
 
 // ValidateDescriptorTarget checks if a descriptor matches expected target identity.
@@ -207,34 +187,4 @@ func DiscoveryUnavailableStatus(err error) (statusCode int, code string, unavail
 		return apiErr.StatusCode, code, true
 	}
 	return 0, "", false
-}
-
-func SeedDescriptor(apiURL string) (types.RelayDescriptor, error) {
-	normalized, err := utils.NormalizeRelayURL(apiURL)
-	if err != nil {
-		return types.RelayDescriptor{}, err
-	}
-	return types.RelayDescriptor{
-		Identity: types.Identity{
-			Name: utils.PortalRootHost(normalized),
-		},
-		APIHTTPSAddr: normalized,
-		Version:      1,
-	}, nil
-}
-
-func RequireOverlayRelayDescriptor(desc types.RelayDescriptor) error {
-	if !desc.SupportsOverlayPeer {
-		return errors.New("descriptor does not support overlay peer")
-	}
-	if desc.WireGuardPublicKey == "" {
-		return errors.New("descriptor wireguard public key is required")
-	}
-	if desc.WireGuardEndpoint == "" {
-		return errors.New("descriptor wireguard endpoint is required")
-	}
-	if desc.OverlayIPv4 == "" {
-		return errors.New("descriptor overlay ipv4 is required")
-	}
-	return nil
 }

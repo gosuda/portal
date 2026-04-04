@@ -48,13 +48,13 @@ func TestExposureBanRelayURLMovesRelay(t *testing.T) {
 		relaySet:       discovery.NewRelaySet(),
 		relayListeners: make(map[string]*Listener, 2),
 	}
-	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	exposure.relaySet.SetBootstrapRelayURLs([]string{relayA, relayB})
 	exposure.relayListeners = map[string]*Listener{
 		relayA: listener,
 		relayB: {},
 	}
 
-	exposure.relaySet.BanRelayURL(relayA, "mitm")
+	exposure.relaySet.BanRelayURL(relayA)
 	exposure.listenerMu.Lock()
 	delete(exposure.relayListeners, relayA)
 	exposure.listenerMu.Unlock()
@@ -85,12 +85,12 @@ func TestExposureSetRelayURLsSkipsBannedRelay(t *testing.T) {
 		relaySet:       discovery.NewRelaySet(),
 		relayListeners: make(map[string]*Listener, 1),
 	}
-	exposure.relaySet.BanRelayURL(relayB, "test")
+	exposure.relaySet.BanRelayURL(relayB)
 	exposure.relayListeners = map[string]*Listener{
 		relayA: {},
 	}
 
-	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	exposure.relaySet.SetBootstrapRelayURLs([]string{relayA, relayB})
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
@@ -123,7 +123,7 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 		relaySet:       discovery.NewRelaySet(),
 		relayListeners: make(map[string]*Listener, 2),
 	}
-	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayA, relayB})
+	exposure.relaySet.SetBootstrapRelayURLs([]string{relayA, relayB})
 	exposure.relayListeners = map[string]*Listener{
 		relayA: {
 			api:    &apiClient{baseURL: relayAURL},
@@ -135,7 +135,7 @@ func TestExposureSetRelayURLsRemovesStaleListener(t *testing.T) {
 		},
 	}
 
-	exposure.relaySet.ReplaceKnownRelayURLs([]string{relayB})
+	exposure.relaySet.SetBootstrapRelayURLs([]string{relayB})
 	if err := exposure.reconcileRelayListeners(false); err != nil {
 		t.Fatalf("reconcileRelayListeners() error = %v", err)
 	}
@@ -166,12 +166,12 @@ func TestExposurePinDiscoveredDescriptorAllowsURLChangeForSameIdentity(t *testin
 	exposure := &Exposure{relaySet: discovery.NewRelaySet()}
 	desc := mustRelayDescriptor(t, "relay-a", "https://relay-a.example")
 
-	if _, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
+	if err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, desc.APIHTTPSAddr, types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: desc}, time.Now().UTC()); err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v", err)
 	}
 
 	changedURL := mustRelayDescriptor(t, desc.Name, "https://relay-b.example")
-	_, _, _, _, err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
+	err := exposure.relaySet.ApplyRelayDiscoveryResponse(desc.Identity, "", types.DiscoveryResponse{ProtocolVersion: types.ProtocolVersion, Self: changedURL}, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("ApplyRelayDiscoveryResponse() error = %v, want nil for same relay identity", err)
 	}

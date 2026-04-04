@@ -142,21 +142,6 @@ function normalizeApprovalMode(value: string | undefined): ApprovalMode {
   return value === "manual" ? "manual" : "auto";
 }
 
-function dedupeStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-
-  values.forEach((value) => {
-    if (seen.has(value)) {
-      return;
-    }
-    seen.add(value);
-    output.push(value);
-  });
-
-  return output;
-}
-
 interface AdminSnapshot {
   serverData: AdminLeaseData[];
   approvalMode: ApprovalMode;
@@ -349,31 +334,22 @@ export function useAdmin() {
     });
   };
 
-  const handleUDPSettingsChange = async (settings: UDPSettings) => {
-    await runAdminAction(async () => {
-      const response = await apiClient.post<{ enabled: boolean; max_leases: number }>(
-        API_PATHS.admin.udpSettings,
-        { enabled: settings.enabled, max_leases: settings.maxLeases }
-      );
-      setUDPSettings({
-        enabled: response?.enabled ?? settings.enabled,
-        maxLeases: response?.max_leases ?? settings.maxLeases,
+  const handleSettingsChange = (path: string, setter: (s: { enabled: boolean; maxLeases: number }) => void) =>
+    async (settings: { enabled: boolean; maxLeases: number }) => {
+      await runAdminAction(async () => {
+        const response = await apiClient.post<{ enabled: boolean; max_leases: number }>(path, {
+          enabled: settings.enabled,
+          max_leases: settings.maxLeases,
+        });
+        setter({
+          enabled: response?.enabled ?? settings.enabled,
+          maxLeases: response?.max_leases ?? settings.maxLeases,
+        });
       });
-    });
-  };
+    };
 
-  const handleTCPPortSettingsChange = async (settings: TCPPortSettings) => {
-    await runAdminAction(async () => {
-      const response = await apiClient.post<{ enabled: boolean; max_leases: number }>(
-        API_PATHS.admin.tcpPortSettings,
-        { enabled: settings.enabled, max_leases: settings.maxLeases }
-      );
-      setTCPPortSettings({
-        enabled: response?.enabled ?? settings.enabled,
-        maxLeases: response?.max_leases ?? settings.maxLeases,
-      });
-    });
-  };
+  const handleUDPSettingsChange = handleSettingsChange(API_PATHS.admin.udpSettings, setUDPSettings);
+  const handleTCPPortSettingsChange = handleSettingsChange(API_PATHS.admin.tcpPortSettings, setTCPPortSettings);
 
   const handleLandingPageEnabledChange = async (enabled: boolean) => {
     await runAdminAction(async () => {
@@ -405,9 +381,9 @@ export function useAdmin() {
     });
 
   const runBulkLeaseAction = async (identityKeys: string[], action: LeaseAction) => {
-    const normalizedIdentityKeys = dedupeStrings(
+    const normalizedIdentityKeys = [...new Set(
       identityKeys.filter((identityKey) => identityKey.length > 0)
-    );
+    )];
     if (normalizedIdentityKeys.length === 0) {
       throw new Error("No valid leases selected");
     }

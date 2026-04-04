@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -15,7 +16,10 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-const cookieName = "portal_admin"
+const (
+	cookieName     = "portal_admin"
+	adminBodyLimit = 1 << 16
+)
 
 type adminAuth struct {
 	sessions  map[string]time.Time
@@ -150,7 +154,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   -1,
 		})
-		utils.WriteAPIEmpty(w, http.StatusOK)
+		utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		return
 	case types.PathAdminAuthStatus:
 		if !utils.RequireMethod(w, r, http.MethodGet) {
@@ -170,7 +174,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 
 	runtime := f.server.PolicyRuntime()
 	methodNotAllowed := utils.MethodNotAllowedError()
-	invalidRequestBody := utils.InvalidRequestMessage("invalid request body")
+	invalidRequestBody := utils.InvalidRequestError(errors.New("invalid request body"))
 
 	switch path {
 	case types.PathAdminSnapshot:
@@ -194,7 +198,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminLandingPageSettingsRequest](w, r, 1<<16, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.AdminLandingPageSettingsRequest](w, r, adminBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -204,46 +208,24 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 			Enabled: f.isLandingPageEnabled(),
 		})
 	case types.PathAdminUDP:
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminUDPSettingsRequest](w, r, 1<<16, invalidRequestBody)
-		if !ok {
-			return
-		}
-		if req.MaxLeases < 0 {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
-			return
-		}
-		runtime.SetUDPPolicy(req.Enabled, req.MaxLeases)
-		saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-		utils.WriteAPIData(w, http.StatusOK, types.AdminUDPSettingsResponse{
-			Enabled:   runtime.IsUDPEnabled(),
-			MaxLeases: runtime.UDPMaxLeases(),
-		})
+		f.handlePortSettings(w, r, invalidRequestBody, runtime,
+			runtime.SetUDPPolicy,
+			func() any {
+				return types.AdminUDPSettingsResponse{Enabled: runtime.IsUDPEnabled(), MaxLeases: runtime.UDPMaxLeases()}
+			},
+		)
 	case types.PathAdminTCPPort:
-		if !utils.RequireMethod(w, r, http.MethodPost) {
-			return
-		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminTCPPortSettingsRequest](w, r, 1<<16, invalidRequestBody)
-		if !ok {
-			return
-		}
-		if req.MaxLeases < 0 {
-			utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
-			return
-		}
-		runtime.SetTCPPortPolicy(req.Enabled, req.MaxLeases)
-		saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-		utils.WriteAPIData(w, http.StatusOK, types.AdminTCPPortSettingsResponse{
-			Enabled:   runtime.IsTCPPortEnabled(),
-			MaxLeases: runtime.TCPPortMaxLeases(),
-		})
+		f.handlePortSettings(w, r, invalidRequestBody, runtime,
+			runtime.SetTCPPortPolicy,
+			func() any {
+				return types.AdminTCPPortSettingsResponse{Enabled: runtime.IsTCPPortEnabled(), MaxLeases: runtime.TCPPortMaxLeases()}
+			},
+		)
 	case types.PathAdminApproval:
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminApprovalModeRequest](w, r, 1<<16, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.AdminApprovalModeRequest](w, r, adminBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -284,70 +266,60 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			identityKey := identity.Key()
+			approver := runtime.Approver()
 
-			switch parts[2] {
-			case "ban":
-				switch r.Method {
-				case http.MethodPost:
-					runtime.BanIdentity(identityKey)
-				case http.MethodDelete:
-					runtime.UnbanIdentity(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
-			case "bps":
-				switch r.Method {
-				case http.MethodPost:
-					req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, 1<<16, invalidRequestBody)
-					if !ok {
-						return
-					}
-					if req.BPS <= 0 {
-						utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
-						return
-					}
-					runtime.BPSManager().SetIdentityBPS(identityKey, req.BPS)
-				case http.MethodDelete:
-					runtime.BPSManager().DeleteIdentityBPS(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
-			case "approve":
-				approver := runtime.Approver()
-				switch r.Method {
-				case http.MethodPost:
-					approver.Approve(identityKey)
-					approver.Undeny(identityKey)
-				case http.MethodDelete:
-					approver.Revoke(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
-			case "deny":
-				approver := runtime.Approver()
-				switch r.Method {
-				case http.MethodPost:
-					approver.Deny(identityKey)
-				case http.MethodDelete:
-					approver.Undeny(identityKey)
-				default:
-					methodNotAllowed.Write(w)
-					return
-				}
-				saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-				utils.WriteAPIEmpty(w, http.StatusOK)
-			default:
-				http.NotFound(w, r)
+			type identityAction struct {
+				post   func() bool // returns true if response was already written (error path)
+				delete func()
 			}
+			actions := map[string]identityAction{
+				"ban": {
+					post:   func() bool { runtime.BanIdentity(identityKey); return false },
+					delete: func() { runtime.UnbanIdentity(identityKey) },
+				},
+				"bps": {
+					post: func() bool {
+						req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, adminBodyLimit, invalidRequestBody)
+						if !ok {
+							return true
+						}
+						if req.BPS <= 0 {
+							utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "bps must be greater than zero")
+							return true
+						}
+						runtime.BPSManager().SetIdentityBPS(identityKey, req.BPS)
+						return false
+					},
+					delete: func() { runtime.BPSManager().DeleteIdentityBPS(identityKey) },
+				},
+				"approve": {
+					post:   func() bool { approver.Approve(identityKey); approver.Undeny(identityKey); return false },
+					delete: func() { approver.Revoke(identityKey) },
+				},
+				"deny": {
+					post:   func() bool { approver.Deny(identityKey); return false },
+					delete: func() { approver.Undeny(identityKey) },
+				},
+			}
+
+			action, ok := actions[parts[2]]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			switch r.Method {
+			case http.MethodPost:
+				if action.post() {
+					return
+				}
+			case http.MethodDelete:
+				action.delete()
+			default:
+				methodNotAllowed.Write(w)
+				return
+			}
+			saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
+			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		case strings.HasPrefix(path, types.PathAdminIPsPrefix):
 			if !strings.HasSuffix(path, "/ban") {
 				http.NotFound(w, r)
@@ -372,11 +344,40 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
-			utils.WriteAPIEmpty(w, http.StatusOK)
+			utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 		default:
 			http.NotFound(w, r)
 		}
 	}
+}
+
+type portSettingsRequest struct {
+	Enabled   bool `json:"enabled"`
+	MaxLeases int  `json:"max_leases"`
+}
+
+func (f *Frontend) handlePortSettings(
+	w http.ResponseWriter,
+	r *http.Request,
+	invalidBody utils.APIErrorResponse,
+	runtime *policy.Runtime,
+	setPolicy func(bool, int),
+	buildResponse func() any,
+) {
+	if !utils.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	req, ok := utils.DecodeJSONRequestAs[portSettingsRequest](w, r, 1<<16, invalidBody)
+	if !ok {
+		return
+	}
+	if req.MaxLeases < 0 {
+		utils.WriteAPIError(w, http.StatusBadRequest, types.APIErrorCodeInvalidRequest, "max_leases must be non-negative")
+		return
+	}
+	setPolicy(req.Enabled, req.MaxLeases)
+	saveAdminState(f.adminSettingsPath, runtime, f.isLandingPageEnabled())
+	utils.WriteAPIData(w, http.StatusOK, buildResponse())
 }
 
 func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -388,7 +389,7 @@ func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, 1<<16, utils.InvalidRequestMessage("invalid request body"))
+	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, adminBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}
@@ -466,6 +467,21 @@ type persistedAdminState struct {
 	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
+func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, getMax func() int, set func(bool, int)) {
+	if enabled == nil && maxLeases == nil {
+		return
+	}
+	e := getEnabled()
+	m := getMax()
+	if enabled != nil {
+		e = *enabled
+	}
+	if maxLeases != nil {
+		m = *maxLeases
+	}
+	set(e, m)
+}
+
 func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	if runtime == nil {
 		return nil
@@ -482,21 +498,7 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.SetBannedIdentityKeys(utils.NormalizeIdentityKeys(s.BannedIdentityKeys))
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetIdentityBPSLimits(utils.NormalizeIdentityKeyBPS(s.IdentityBPS))
-	switch {
-	case s.UDPEnabled != nil && s.UDPMaxLeases != nil:
-		runtime.SetUDPPolicy(*s.UDPEnabled, *s.UDPMaxLeases)
-	case s.UDPEnabled != nil:
-		runtime.SetUDPPolicy(*s.UDPEnabled, runtime.UDPMaxLeases())
-	case s.UDPMaxLeases != nil:
-		runtime.SetUDPPolicy(runtime.IsUDPEnabled(), *s.UDPMaxLeases)
-	}
-	switch {
-	case s.TCPPortEnabled != nil && s.TCPPortMaxLeases != nil:
-		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, *s.TCPPortMaxLeases)
-	case s.TCPPortEnabled != nil:
-		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, runtime.TCPPortMaxLeases())
-	case s.TCPPortMaxLeases != nil:
-		runtime.SetTCPPortPolicy(runtime.IsTCPPortEnabled(), *s.TCPPortMaxLeases)
-	}
+	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, runtime.SetUDPPolicy)
+	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, runtime.SetTCPPortPolicy)
 	return nil
 }

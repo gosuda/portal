@@ -7,8 +7,10 @@ import (
 
 // ErrDatagramTooSmall is returned when a datagram payload is too short to
 // contain a valid flow ID varint.
-var ErrDatagramTooSmall = errors.New("datagram too small to decode")
-var ErrDatagramUnsupportedFlag = errors.New("datagram has unsupported flags")
+var (
+	ErrDatagramTooSmall        = errors.New("datagram too small to decode")
+	ErrDatagramUnsupportedFlag = errors.New("datagram has unsupported flags")
+)
 
 // DatagramFrame carries one relayed datagram.
 type DatagramFrame struct {
