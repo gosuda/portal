@@ -6,10 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -98,35 +95,6 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
 	}
-	if flags.name == "" && strings.TrimSpace(flags.identityJSON) != "" {
-		identity, err := utils.ParseIdentityJSON(flags.identityJSON)
-		if err != nil {
-			return fmt.Errorf("parse --identity-json: %w", err)
-		}
-		if strings.TrimSpace(identity.Name) != "" {
-			flags.name = identity.Name
-		}
-	}
-	if flags.name == "" {
-		storedIdentity, err := utils.LoadIdentity(flags.identityPath)
-		if err == nil && strings.TrimSpace(storedIdentity.Name) != "" {
-			flags.name = storedIdentity.Name
-		}
-	}
-	if flags.name == "" {
-		defaultTarget := flags.targetAddr
-		if defaultTarget == "" && len(flags.httpRoutes) > 0 {
-			defaultTarget = strings.Join(flags.httpRoutes, ",")
-		}
-		flags.name, err = defaultExposeName(defaultTarget, utils.RandomID("cli_"))
-		if err != nil {
-			return fmt.Errorf("derive service name: %w", err)
-		}
-	}
-	flags.name, err = utils.NormalizeDNSLabel(flags.name)
-	if err != nil {
-		return fmt.Errorf("invalid service name: %w", err)
-	}
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
@@ -150,7 +118,7 @@ func runExposeCommand(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("service %s: failed to start relays: %w", flags.name, err)
+		return fmt.Errorf("failed to start relays: %w", err)
 	}
 	if len(flags.httpRoutes) > 0 {
 		handler, err := newHTTPRouteHandler(flags.httpRoutes)
@@ -204,109 +172,6 @@ func runListCommand(args []string) error {
 		fmt.Println(relayURL)
 	}
 	return nil
-}
-
-var exposeNameOpeners = []string{
-	"arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
-	"fancy", "fizzy", "flashy", "fuzzy", "gentle", "glitter", "golden", "happy",
-	"hyper", "jazzy", "jolly", "lively", "lucky", "magic", "mellow", "minty",
-	"misty", "moonlit", "mystic", "neon", "nova", "peppy", "pixel", "playful",
-	"poppy", "rapid", "rocket", "rowdy", "snappy", "snazzy", "sparkly", "spicy",
-	"sprightly", "starry", "sunny", "swift", "tangy", "tidy", "toasty", "turbo",
-	"velvet", "vivid", "wavy", "whimsy", "wild", "wonky", "zany", "zesty",
-}
-
-var exposeNameCenters = []string{
-	"alpaca", "badger", "banjo", "beacon", "biscuit", "capybara", "comet", "cricket",
-	"dragon", "falcon", "feather", "fjord", "fox", "gadget", "gecko", "gizmo",
-	"harbor", "heron", "iguana", "jelly", "koala", "lemur", "mango", "narwhal",
-	"nebula", "noodle", "octopus", "otter", "panda", "pepper", "phoenix", "pickle",
-	"puffin", "quokka", "radar", "ranger", "rocket", "scooter", "seahorse", "skylark",
-	"sprocket", "starling", "sunbeam", "taco", "thimble", "tiger", "toucan", "triton",
-	"walrus", "widget", "willow", "wombat", "yeti", "zeppelin", "zigzag", "zinnia",
-}
-
-var exposeNameClosers = []string{
-	"arcade", "beacon", "boogie", "bounce", "burst", "cascade", "chorus", "dash",
-	"disco", "drift", "echo", "fiesta", "flare", "flash", "flight", "flip",
-	"glow", "groove", "jam", "jive", "launch", "loop", "march", "orbit",
-	"parade", "party", "pulse", "quest", "rally", "riot", "ripple", "rodeo",
-	"roll", "rush", "serenade", "shuffle", "signal", "sketch", "spark", "sprint",
-	"starlight", "stride", "sway", "swoop", "twirl", "uplift", "vibe", "voyage",
-	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
-}
-
-var digitsOnly = regexp.MustCompile(`^\d+$`)
-
-func normalizeExposeTarget(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	candidate := trimmed
-	if candidate == "" {
-		candidate = "3000"
-	}
-
-	if digitsOnly.MatchString(candidate) {
-		return "127.0.0.1:" + candidate
-	}
-
-	if strings.Contains(candidate, "://") {
-		parsed, err := url.Parse(candidate)
-		if err == nil &&
-			(parsed.Scheme == "http" || parsed.Scheme == "https") &&
-			parsed.Host != "" &&
-			(parsed.Path == "" || parsed.Path == "/") &&
-			parsed.RawQuery == "" &&
-			parsed.Fragment == "" {
-			return parsed.Host
-		}
-		return candidate
-	}
-
-	parsed, err := url.Parse("tcp://" + candidate)
-	if err != nil || parsed.Hostname() == "" {
-		return candidate
-	}
-	port := parsed.Port()
-	if port == "" {
-		port = "80"
-	}
-	host := parsed.Hostname()
-	if strings.Contains(host, ":") {
-		return "[" + host + "]:" + port
-	}
-	return host + ":" + port
-}
-
-func fnv1a32(data []byte, seed uint32) uint32 {
-	h := seed
-	for _, b := range data {
-		h ^= uint32(b)
-		h *= 0x01000193
-	}
-	return h
-}
-
-func defaultExposeName(target, rawSeed string) (string, error) {
-	seed := strings.TrimSpace(rawSeed)
-	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
-		seed = cut
-	}
-	if seed == "" {
-		seed = "portal"
-	}
-
-	input := []byte(seed + "|" + normalizeExposeTarget(target))
-	first := fnv1a32(input, 0x811c9dc5)
-	second := fnv1a32(input, 0x9e3779b9)
-	third := fnv1a32(input, 0x85ebca6b)
-
-	label := strings.Join([]string{
-		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
-		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
-		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
-	}, "-")
-
-	return utils.NormalizeDNSLabel(label)
 }
 
 func printRootUsage(w io.Writer) {

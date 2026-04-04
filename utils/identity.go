@@ -201,11 +201,17 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 func ResolveListenerIdentity(identity types.Identity, identityPath, identityJSON string) (types.Identity, bool, error) {
 	identityPath = strings.TrimSpace(identityPath)
 	identityJSON = strings.TrimSpace(identityJSON)
+	resolvedName, err := resolveExposeName(identity.Name, identityPath, identityJSON)
+	if err != nil {
+		return types.Identity{}, false, err
+	}
+	identity.Name = resolvedName
 	if identityJSON != "" {
 		provided, err := ParseIdentityJSON(identityJSON)
 		if err != nil {
 			return types.Identity{}, false, err
 		}
+		provided.Name = identity.Name
 		if identityPath != "" {
 			if err := SaveIdentity(identityPath, provided); err != nil {
 				return types.Identity{}, false, fmt.Errorf("persist identity: %w", err)
@@ -298,4 +304,94 @@ func ResolveLeaseIdentity(identity types.Identity) (types.Identity, error) {
 	resolved.PublicKey = signingIdentity.PublicKey
 	resolved.PrivateKey = signingIdentity.PrivateKey
 	return resolved, nil
+}
+
+var exposeNameOpeners = []string{
+	"arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
+	"fancy", "fizzy", "flashy", "fuzzy", "gentle", "glitter", "golden", "happy",
+	"hyper", "jazzy", "jolly", "lively", "lucky", "magic", "mellow", "minty",
+	"misty", "moonlit", "mystic", "neon", "nova", "peppy", "pixel", "playful",
+	"poppy", "rapid", "rocket", "rowdy", "snappy", "snazzy", "sparkly", "spicy",
+	"sprightly", "starry", "sunny", "swift", "tangy", "tidy", "toasty", "turbo",
+	"velvet", "vivid", "wavy", "whimsy", "wild", "wonky", "zany", "zesty",
+}
+
+var exposeNameCenters = []string{
+	"alpaca", "badger", "banjo", "beacon", "biscuit", "capybara", "comet", "cricket",
+	"dragon", "falcon", "feather", "fjord", "fox", "gadget", "gecko", "gizmo",
+	"harbor", "heron", "iguana", "jelly", "koala", "lemur", "mango", "narwhal",
+	"nebula", "noodle", "octopus", "otter", "panda", "pepper", "phoenix", "pickle",
+	"puffin", "quokka", "radar", "ranger", "rocket", "scooter", "seahorse", "skylark",
+	"sprocket", "starling", "sunbeam", "taco", "thimble", "tiger", "toucan", "triton",
+	"walrus", "widget", "willow", "wombat", "yeti", "zeppelin", "zigzag", "zinnia",
+}
+
+var exposeNameClosers = []string{
+	"arcade", "beacon", "boogie", "bounce", "burst", "cascade", "chorus", "dash",
+	"disco", "drift", "echo", "fiesta", "flare", "flash", "flight", "flip",
+	"glow", "groove", "jam", "jive", "launch", "loop", "march", "orbit",
+	"parade", "party", "pulse", "quest", "rally", "riot", "ripple", "rodeo",
+	"roll", "rush", "serenade", "shuffle", "signal", "sketch", "spark", "sprint",
+	"starlight", "stride", "sway", "swoop", "twirl", "uplift", "vibe", "voyage",
+	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
+}
+
+func DefaultExposeName(rawSeed string) (string, error) {
+	seed := strings.TrimSpace(rawSeed)
+	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
+		seed = cut
+	}
+	if seed == "" {
+		seed = "portal"
+	}
+
+	input := []byte(seed)
+	first := fnv1a32(input, 0x811c9dc5)
+	second := fnv1a32(input, 0x9e3779b9)
+	third := fnv1a32(input, 0x85ebca6b)
+
+	label := strings.Join([]string{
+		exposeNameOpeners[int(first&0xff)%len(exposeNameOpeners)],
+		exposeNameCenters[int(second&0xff)%len(exposeNameCenters)],
+		exposeNameClosers[int(third&0xff)%len(exposeNameClosers)],
+	}, "-")
+
+	return NormalizeDNSLabel(label)
+}
+
+func resolveExposeName(name, identityPath, identityJSON string) (string, error) {
+	if name = strings.TrimSpace(name); name != "" {
+		return name, nil
+	}
+	if identityJSON = strings.TrimSpace(identityJSON); identityJSON != "" {
+		identity, err := ParseIdentityJSON(identityJSON)
+		if err != nil {
+			return "", err
+		}
+		if name := strings.TrimSpace(identity.Name); name != "" {
+			return name, nil
+		}
+	}
+	if identityPath = strings.TrimSpace(identityPath); identityPath != "" {
+		identity, err := LoadIdentity(identityPath)
+		switch {
+		case err == nil:
+			if name := strings.TrimSpace(identity.Name); name != "" {
+				return name, nil
+			}
+		case !errors.Is(err, os.ErrNotExist):
+			return "", err
+		}
+	}
+
+	return DefaultExposeName(RandomID("cli_"))
+}
+
+func fnv1a32(data []byte, seed uint32) uint32 {
+	h := seed
+	for _, b := range data {
+		h ^= uint32(b)
+		h *= 0x01000193
+	}
+	return h
 }

@@ -133,7 +133,6 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 
 	return exposure, nil
 }
-
 func (e *Exposure) ActiveRelayURLs() []string {
 	return e.relaySet.ActiveRelayURLs()
 }
