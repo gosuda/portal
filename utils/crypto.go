@@ -9,8 +9,9 @@ import (
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
-	"github.com/gosuda/portal/v2/types"
 	"golang.org/x/crypto/sha3"
+
+	"github.com/gosuda/portal/v2/types"
 )
 
 func NormalizeEVMAddress(raw string) (string, error) {

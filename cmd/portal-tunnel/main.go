@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,7 +22,10 @@ func main() {
 	if err := utils.RunCommands(os.Args[1:], os.Stdout, os.Stderr, printRootUsage, map[string]utils.CommandFunc{
 		"expose": runExposeCommand,
 		"list":   runListCommand,
-		"help":   runHelpCommand,
+		"help": utils.MakeHelpCommand(printRootUsage, []utils.HelpTopic{
+			{Name: "expose", Usage: printExposeUsage},
+			{Name: "list", Usage: printListUsage},
+		}),
 	}); err != nil {
 		log.Error().Err(err).Msg("portal tunnel exited with error")
 		os.Exit(1)
@@ -94,35 +95,6 @@ func runExposeCommand(args []string) error {
 		printExposeUsage(os.Stderr)
 		return errors.New("--udp cannot be combined with --http-route")
 	}
-	if flags.name == "" && strings.TrimSpace(flags.identityJSON) != "" {
-		identity, err := utils.ParseIdentityJSON(flags.identityJSON)
-		if err != nil {
-			return fmt.Errorf("parse --identity-json: %w", err)
-		}
-		if strings.TrimSpace(identity.Name) != "" {
-			flags.name = identity.Name
-		}
-	}
-	if flags.name == "" {
-		storedIdentity, err := utils.LoadIdentity(flags.identityPath)
-		if err == nil && strings.TrimSpace(storedIdentity.Name) != "" {
-			flags.name = storedIdentity.Name
-		}
-	}
-	if flags.name == "" {
-		defaultTarget := flags.targetAddr
-		if defaultTarget == "" && len(flags.httpRoutes) > 0 {
-			defaultTarget = strings.Join(flags.httpRoutes, ",")
-		}
-		flags.name, err = defaultExposeName(defaultTarget, utils.RandomID("cli_"))
-		if err != nil {
-			return fmt.Errorf("derive service name: %w", err)
-		}
-	}
-	flags.name, err = utils.NormalizeDNSLabel(flags.name)
-	if err != nil {
-		return fmt.Errorf("invalid service name: %w", err)
-	}
 	ctx, stop := utils.SignalContext()
 	defer stop()
 
@@ -146,7 +118,7 @@ func runExposeCommand(args []string) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("service %s: failed to start relays: %w", flags.name, err)
+		return fmt.Errorf("failed to start relays: %w", err)
 	}
 	if len(flags.httpRoutes) > 0 {
 		handler, err := newHTTPRouteHandler(flags.httpRoutes)
@@ -200,81 +172,6 @@ func runListCommand(args []string) error {
 		fmt.Println(relayURL)
 	}
 	return nil
-}
-
-func runHelpCommand(args []string) error {
-	if len(args) == 0 {
-		printRootUsage(os.Stdout)
-		return nil
-	}
-	if len(args) > 1 {
-		printRootUsage(os.Stderr)
-		return errors.New("only one help topic is supported")
-	}
-
-	switch strings.TrimSpace(args[0]) {
-	case "", "help", "-h", "--help":
-		printRootUsage(os.Stdout)
-		return nil
-	case "expose":
-		printExposeUsage(os.Stdout)
-		return nil
-	case "list":
-		printListUsage(os.Stdout)
-		return nil
-	default:
-		printRootUsage(os.Stderr)
-		return fmt.Errorf("unknown help topic %q", strings.TrimSpace(args[0]))
-	}
-}
-
-var exposeNameOpeners = []string{
-	"arcade", "bouncy", "bravo", "bubble", "candy", "cosmic", "dapper", "electric",
-	"fancy", "fizzy", "flashy", "fuzzy", "gentle", "glitter", "golden", "happy",
-	"hyper", "jazzy", "jolly", "lively", "lucky", "magic", "mellow", "minty",
-	"misty", "moonlit", "mystic", "neon", "nova", "peppy", "pixel", "playful",
-	"poppy", "rapid", "rocket", "rowdy", "snappy", "snazzy", "sparkly", "spicy",
-	"sprightly", "starry", "sunny", "swift", "tangy", "tidy", "toasty", "turbo",
-	"velvet", "vivid", "wavy", "whimsy", "wild", "wonky", "zany", "zesty",
-}
-
-var exposeNameCenters = []string{
-	"alpaca", "badger", "banjo", "beacon", "biscuit", "capybara", "comet", "cricket",
-	"dragon", "falcon", "feather", "fjord", "fox", "gadget", "gecko", "gizmo",
-	"harbor", "heron", "iguana", "jelly", "koala", "lemur", "mango", "narwhal",
-	"nebula", "noodle", "octopus", "otter", "panda", "pepper", "phoenix", "pickle",
-	"puffin", "quokka", "radar", "ranger", "rocket", "scooter", "seahorse", "skylark",
-	"sprocket", "starling", "sunbeam", "taco", "thimble", "tiger", "toucan", "triton",
-	"walrus", "widget", "willow", "wombat", "yeti", "zeppelin", "zigzag", "zinnia",
-}
-
-var exposeNameClosers = []string{
-	"arcade", "beacon", "boogie", "bounce", "burst", "cascade", "chorus", "dash",
-	"disco", "drift", "echo", "fiesta", "flare", "flash", "flight", "flip",
-	"glow", "groove", "jam", "jive", "launch", "loop", "march", "orbit",
-	"parade", "party", "pulse", "quest", "rally", "riot", "ripple", "rodeo",
-	"roll", "rush", "serenade", "shuffle", "signal", "sketch", "spark", "sprint",
-	"starlight", "stride", "sway", "swoop", "twirl", "uplift", "vibe", "voyage",
-	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
-}
-
-func defaultExposeName(target, rawSeed string) (string, error) {
-	seed := strings.TrimSpace(rawSeed)
-	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
-		seed = cut
-	}
-	if seed == "" {
-		seed = "portal"
-	}
-
-	sum := sha256.Sum256([]byte(seed + "|" + strings.TrimSpace(target)))
-	label := strings.Join([]string{
-		exposeNameOpeners[int(sum[0])%len(exposeNameOpeners)],
-		exposeNameCenters[int(sum[1])%len(exposeNameCenters)],
-		exposeNameClosers[int(sum[2])%len(exposeNameClosers)],
-	}, "-")
-
-	return utils.NormalizeDNSLabel(label)
 }
 
 func printRootUsage(w io.Writer) {

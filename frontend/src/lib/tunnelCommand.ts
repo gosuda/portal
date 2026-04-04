@@ -1,9 +1,5 @@
 import { API_PATHS } from "@/lib/apiPaths";
-import {
-  buildDefaultExposeName,
-  normalizeExposeName,
-  resolveExposeName,
-} from "@/lib/exposeName";
+import { resolveExposeName } from "@/lib/exposeName";
 
 export type TunnelCommandOS = "unix" | "windows";
 
@@ -20,16 +16,6 @@ export interface TunnelCommandOptions {
   os: TunnelCommandOS;
 }
 
-export function buildDefaultTunnelName(
-  target: string,
-  nameSeed: string
-): string {
-  return buildDefaultExposeName(target, nameSeed);
-}
-
-export function normalizeTunnelCommandName(value: string): string {
-  return normalizeExposeName(value);
-}
 
 export function buildTunnelCommand({
   currentOrigin,
@@ -163,7 +149,7 @@ export function buildTunnelPreviewURL(
   target: string,
   nameSeed: string
 ): string {
-  const baseHost = getTunnelBaseHost(origin);
+  const baseHost = getRelayOriginHost(origin);
   const subdomain = resolveExposeName(name, target, nameSeed);
   return `https://${subdomain}.${baseHost}`;
 }
@@ -197,11 +183,6 @@ export function normalizeAbsoluteHTTPURL(raw: string): string {
   } catch {
     return "";
   }
-}
-
-function getTunnelBaseHost(origin: string): string {
-  const relayHost = getRelayOriginHost(origin);
-  return relayHost;
 }
 
 function getRelayOriginHost(origin: string): string {

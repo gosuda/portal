@@ -536,9 +536,6 @@ func (a listenerAddr) Network() string { return "portal" }
 func (a listenerAddr) String() string  { return string(a) }
 
 func (l *Listener) closed() bool {
-	if l == nil || l.doneCh == nil {
-		return true
-	}
 	select {
 	case <-l.doneCh:
 		return true
@@ -548,9 +545,6 @@ func (l *Listener) closed() bool {
 }
 
 func (l *Listener) ban() {
-	if l == nil {
-		return
-	}
 	if l.relaySet != nil && l.api != nil && l.api.baseURL != nil {
 		l.relaySet.BanRelayURL(l.api.baseURL.String())
 	}

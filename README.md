@@ -14,8 +14,7 @@
 - **Self-hosted relays**: Connect to public relays or run your own
 - **Relay discovery and pools**: Use discovered relays as a pool, with multi-relay access and failover
 - **No login, no API keys**: Authenticate ownership using SIWE, with ENS-based identity support
-- **Raw TCP and UDP transport**: Native TCP reverse sessions with optional UDP (no SSH or WebSocket)
-- **TCP port routing**: Dedicated TCP ports for non-TLS services (e.g., Minecraft, game servers) without SNI-based routing
+- **Raw TCP/UDP + TCP port routing**: Native TCP reverse sessions, optional UDP, and dedicated TCP ports for non-TLS services
 
 ## Comparison
 

@@ -32,7 +32,7 @@ type RelaySet struct {
 	bootstrapRelayURLs []string
 	relayKeysByURL     map[string]string
 	relays             map[string]types.RelayDescriptor
-	localByURL         map[string]RelayLocalState
+	localByURL         map[string]*RelayLocalState
 	activeRelayURLs    []string
 	activeRelays       []types.RelayDescriptor
 	selfRelayKey       string
@@ -43,11 +43,20 @@ func NewRelaySet() *RelaySet {
 	return &RelaySet{
 		relayKeysByURL: make(map[string]string),
 		relays:         make(map[string]types.RelayDescriptor),
-		localByURL:     make(map[string]RelayLocalState),
+		localByURL:     make(map[string]*RelayLocalState),
 	}
 }
 
-func relayExpiredAt(desc types.RelayDescriptor, state RelayLocalState, now time.Time) bool {
+func (s *RelaySet) getOrCreateLocalState(relayURL string) *RelayLocalState {
+	state := s.localByURL[relayURL]
+	if state == nil {
+		state = &RelayLocalState{}
+		s.localByURL[relayURL] = state
+	}
+	return state
+}
+
+func relayExpiredAt(desc types.RelayDescriptor, state *RelayLocalState, now time.Time) bool {
 	if state.Expired {
 		return true
 	}
@@ -160,7 +169,7 @@ func (s *RelaySet) syncActiveLocked(now time.Time) {
 		if s.isSelfRelayURLLocked(relayURL) {
 			continue
 		}
-		state := s.localByURL[relayURL]
+		state := s.getOrCreateLocalState(relayURL)
 		if state.Banned {
 			continue
 		}
@@ -185,7 +194,7 @@ func (s *RelaySet) syncActiveLocked(now time.Time) {
 		if _, ok := seen[relayURL]; ok {
 			continue
 		}
-		state := s.localByURL[relayURL]
+		state := s.getOrCreateLocalState(relayURL)
 		if state.Banned || !state.Advertised || relayExpiredAt(desc, state, now) {
 			continue
 		}
@@ -231,7 +240,7 @@ func (s *RelaySet) bootstrapDescriptors() []types.RelayDescriptor {
 		if s.isSelfRelayURLLocked(relayURL) {
 			continue
 		}
-		if s.localByURL[relayURL].Banned {
+		if s.getOrCreateLocalState(relayURL).Banned {
 			continue
 		}
 		if desc, ok := s.descriptorByURLLocked(relayURL); ok && desc.APIHTTPSAddr != "" {
@@ -288,7 +297,7 @@ func (s *RelaySet) confirmableDescriptors() []types.RelayDescriptor {
 		if _, ok := bootstrapRelayURLs[relayURL]; ok {
 			continue
 		}
-		state := s.localByURL[relayURL]
+		state := s.getOrCreateLocalState(relayURL)
 		if state.Banned || relayExpiredAt(desc, state, now) {
 			continue
 		}
@@ -314,12 +323,11 @@ func (s *RelaySet) BanRelayURL(relayURL string) {
 	if relayURL == "" {
 		return
 	}
-	state := s.localByURL[relayURL]
+	state := s.getOrCreateLocalState(relayURL)
 	if state.Banned {
 		return
 	}
 	state.Banned = true
-	s.localByURL[relayURL] = state
 	s.syncActiveLocked(time.Now().UTC())
 }
 
@@ -345,9 +353,7 @@ func (s *RelaySet) SetBootstrapRelayURLs(relayURLs []string) {
 		}
 		seen[relayURL] = struct{}{}
 		filtered = append(filtered, relayURL)
-		if _, ok := s.localByURL[relayURL]; !ok {
-			s.localByURL[relayURL] = RelayLocalState{}
-		}
+		s.getOrCreateLocalState(relayURL)
 	}
 
 	for _, relayURL := range s.bootstrapRelayURLs {
@@ -396,9 +402,7 @@ func (s *RelaySet) registerDescriptorLocked(desc types.RelayDescriptor) error {
 
 	s.relays[relayKey] = normalized
 	s.relayKeysByURL[normalized.APIHTTPSAddr] = relayKey
-	if _, ok := s.localByURL[normalized.APIHTTPSAddr]; !ok {
-		s.localByURL[normalized.APIHTTPSAddr] = RelayLocalState{}
-	}
+	s.getOrCreateLocalState(normalized.APIHTTPSAddr)
 	return nil
 }
 
@@ -424,11 +428,10 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetIdentity types.Identity, ta
 	if err := s.registerDescriptorLocked(selfDescriptor); err != nil {
 		return err
 	}
-	selfState := s.localByURL[selfDescriptor.APIHTTPSAddr]
+	selfState := s.getOrCreateLocalState(selfDescriptor.APIHTTPSAddr)
 	selfState.Advertised = true
 	selfState.Expired = false
 	selfState.ConsecutiveFailures = 0
-	s.localByURL[selfDescriptor.APIHTTPSAddr] = selfState
 
 	for _, relayDescriptor := range relayDescriptors {
 		if s.isSelfRelayDescriptorLocked(relayDescriptor) {
@@ -441,7 +444,7 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetIdentity types.Identity, ta
 				Msg("skipping conflicting discovery relay hint")
 			continue
 		}
-		state := s.localByURL[relayDescriptor.APIHTTPSAddr]
+		state := s.getOrCreateLocalState(relayDescriptor.APIHTTPSAddr)
 		switch {
 		case state.Expired:
 			// Fresh hint re-enables direct confirmation but must not restore
@@ -453,7 +456,6 @@ func (s *RelaySet) ApplyRelayDiscoveryResponse(targetIdentity types.Identity, ta
 			state.Expired = false
 			state.ConsecutiveFailures = 0
 		}
-		s.localByURL[relayDescriptor.APIHTTPSAddr] = state
 	}
 	s.syncActiveLocked(now)
 	return nil
@@ -483,13 +485,11 @@ func (s *RelaySet) RecordDiscoveryFailure(identity types.Identity, relayURL stri
 		return false, "", 0
 	}
 
-	state := s.localByURL[relayURL]
+	state := s.getOrCreateLocalState(relayURL)
 	state.ConsecutiveFailures++
-	s.localByURL[relayURL] = state
 	if !state.Expired && state.ConsecutiveFailures >= discoveryRecoveryFailures {
 		state.Expired = true
 		state.Advertised = false
-		s.localByURL[relayURL] = state
 		s.syncActiveLocked(time.Now().UTC())
 		return true, "recovery", state.ConsecutiveFailures
 	}
@@ -501,7 +501,6 @@ func (s *RelaySet) RecordDiscoveryFailure(identity types.Identity, relayURL stri
 			apiErr.StatusCode == http.StatusGone) {
 		state.Expired = true
 		state.Advertised = false
-		s.localByURL[relayURL] = state
 		s.syncActiveLocked(time.Now().UTC())
 		return true, "status", state.ConsecutiveFailures
 	}

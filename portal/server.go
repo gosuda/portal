@@ -171,30 +171,35 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 		return err
 	}
 
+	var cleanups []func()
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
+
+	cleanups = append(cleanups, acmeManager.Stop)
+
 	serverCtx, cancel := context.WithCancel(ctx)
+	cleanups = append(cleanups, cancel)
+
 	var listenConfig net.ListenConfig
 
 	apiListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.APIListenAddr)
 	if err != nil {
-		acmeManager.Stop()
-		cancel()
 		return fmt.Errorf("listen api: %w", err)
 	}
+	cleanups = append(cleanups, func() { _ = apiListener.Close() })
+
 	sniListener, err := listenConfig.Listen(serverCtx, "tcp", s.cfg.SNIListenAddr)
 	if err != nil {
-		acmeManager.Stop()
-		_ = apiListener.Close()
-		cancel()
 		return fmt.Errorf("listen sni: %w", err)
 	}
+	cleanups = append(cleanups, func() { _ = sniListener.Close() })
 
 	group, groupCtx := errgroup.WithContext(serverCtx)
 	wrappedAPIListener, apiServer, apiCloser, err := s.newAPIServer(apiListener, apiMux, apiTLS)
 	if err != nil {
-		acmeManager.Stop()
-		_ = apiListener.Close()
-		_ = sniListener.Close()
-		cancel()
 		return err
 	}
 
@@ -205,6 +210,7 @@ func (s *Server) Start(ctx context.Context, apiMux *http.ServeMux) error {
 	s.acmeManager = acmeManager
 	s.cancel = cancel
 	s.group = group
+	cleanups = nil
 
 	group.Go(s.runAPIServer)
 	group.Go(func() error { return s.runSNIListener(groupCtx) })
@@ -249,13 +255,6 @@ func (s *Server) Wait() error {
 		return nil
 	}
 	return s.group.Wait()
-}
-
-func (s *Server) Identity() types.Identity {
-	if s == nil {
-		return types.Identity{}
-	}
-	return s.identity.Copy()
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
@@ -306,73 +305,38 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) PolicyRuntime() *policy.Runtime {
-	if s == nil || s.registry == nil {
-		return nil
-	}
 	return s.registry.policy
 }
 
 func (s *Server) PortalURL() string {
-	if s == nil {
-		return ""
-	}
 	return s.cfg.PortalURL
 }
 
 func (s *Server) LeaseSnapshots() []types.Lease {
-	s.registry.mu.RLock()
-	defer s.registry.mu.RUnlock()
-
 	now := time.Now()
-	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
-	for _, record := range s.registry.leasesByKey {
-		records = append(records, record)
-	}
-	snapshots := make([]types.Lease, 0, len(records))
-	for _, record := range records {
-		if now.After(record.ExpiresAt) {
-			continue
-		}
-		adminSnapshot := s.registry.AdminSnapshot(record)
+	all := s.registry.activeAdminSnapshots()
+	out := make([]types.Lease, 0, len(all))
+	for _, snap := range all {
 		since := time.Duration(0)
-		if !adminSnapshot.LastSeenAt.IsZero() {
-			since = max(now.Sub(adminSnapshot.LastSeenAt), 0)
+		if !snap.LastSeenAt.IsZero() {
+			since = max(now.Sub(snap.LastSeenAt), 0)
 		}
-		if adminSnapshot.IsBanned || adminSnapshot.IsDenied || !adminSnapshot.IsApproved || adminSnapshot.Metadata.Hide {
+		if snap.IsBanned || snap.IsDenied || !snap.IsApproved || snap.Metadata.Hide {
 			continue
 		}
-		if adminSnapshot.Ready == 0 && since >= 3*time.Minute {
+		if snap.Ready == 0 && since >= 3*time.Minute {
 			continue
 		}
-		snapshots = append(snapshots, adminSnapshot.Lease)
+		out = append(out, snap.Lease)
 	}
-	return snapshots
+	return out
 }
 
 func (s *Server) AdminLeaseSnapshots() []types.AdminLease {
-	s.registry.mu.RLock()
-	defer s.registry.mu.RUnlock()
-
-	now := time.Now()
-	records := make([]*leaseRecord, 0, len(s.registry.leasesByKey))
-	for _, record := range s.registry.leasesByKey {
-		records = append(records, record)
-	}
-	snapshots := make([]types.AdminLease, 0, len(records))
-	for _, record := range records {
-		if now.After(record.ExpiresAt) {
-			continue
-		}
-		snapshots = append(snapshots, s.registry.AdminSnapshot(record))
-	}
-	return snapshots
+	return s.registry.activeAdminSnapshots()
 }
 
 func (s *Server) LeaseSnapshotByHostname(hostname string) (types.Lease, bool) {
-	if s == nil || s.registry == nil {
-		return types.Lease{}, false
-	}
-
 	record, ok := s.registry.Lookup(hostname)
 	if !ok || record == nil || time.Now().After(record.ExpiresAt) {
 		return types.Lease{}, false
@@ -561,25 +525,23 @@ func BridgeConns(left, right net.Conn) {
 	defer left.Close()
 	defer right.Close()
 
+	type closeWriter interface {
+		CloseWrite() error
+	}
 	var group errgroup.Group
 	group.Go(func() error {
 		_, err := io.Copy(right, left)
-		closeWrite(right)
+		if cw, ok := right.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		}
 		return err
 	})
 	group.Go(func() error {
 		_, err := io.Copy(left, right)
-		closeWrite(left)
+		if cw, ok := left.(closeWriter); ok {
+			_ = cw.CloseWrite()
+		}
 		return err
 	})
 	_ = group.Wait()
-}
-
-func closeWrite(conn net.Conn) {
-	type closeWriter interface {
-		CloseWrite() error
-	}
-	if cw, ok := conn.(closeWriter); ok {
-		_ = cw.CloseWrite()
-	}
 }

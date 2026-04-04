@@ -53,6 +53,23 @@ func tempIdentityPath(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "relay_identity.json")
 }
 
+func newTestClient(t *testing.T, cancel context.CancelFunc, server *Server) *http.Client {
+	t.Helper()
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	t.Cleanup(func() {
+		client.CloseIdleConnections()
+		cancel()
+		if err := server.Wait(); err != nil {
+			t.Fatalf("Wait() error = %v", err)
+		}
+	})
+	return client
+}
+
 func writeManualRelayCertificate(t *testing.T, keyDir, baseDomain string) {
 	t.Helper()
 
@@ -135,18 +152,7 @@ func TestServerStartInitializesLocalACMEAndSigner(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
+	client := newTestClient(t, cancel, server)
 
 	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {
@@ -199,18 +205,7 @@ func TestServerStartDomainReportsCompatibilityInfo(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
+	client := newTestClient(t, cancel, server)
 
 	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathSDKDomain)
 	if err != nil {
@@ -302,18 +297,7 @@ func TestServerStartUsesManualCertificateWithoutACMEProvider(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
+	client := newTestClient(t, cancel, server)
 
 	healthResp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathHealthz)
 	if err != nil {
@@ -348,18 +332,7 @@ func TestServerStartDiscoveryIncludesIdentityAndOmitsSignerFields(t *testing.T) 
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
+	client := newTestClient(t, cancel, server)
 
 	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
 	if err != nil {
@@ -937,18 +910,7 @@ func TestServerStartHidesDiscoveryRoutesWhenDisabled(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-	t.Cleanup(func() {
-		client.CloseIdleConnections()
-		cancel()
-		if err := server.Wait(); err != nil {
-			t.Fatalf("Wait() error = %v", err)
-		}
-	})
+	client := newTestClient(t, cancel, server)
 
 	resp, err := client.Get("https://" + utils.HostPortOrLoopback(server.apiListener.Addr().String()) + types.PathDiscovery)
 	if err != nil {

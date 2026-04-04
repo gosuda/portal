@@ -25,20 +25,48 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
+type apiError struct {
+	code   string
+	msg    string
+	status int
+}
+
+func (e *apiError) Error() string { return e.msg }
+
 var (
-	errFeatureUnavailable      = errors.New(types.APIErrorCodeFeatureUnavailable)
-	errHostnameConflict        = errors.New(types.APIErrorCodeHostnameConflict)
-	errIPBanned                = errors.New(types.APIErrorCodeIPBanned)
-	errLeaseNotFound           = errors.New(types.APIErrorCodeLeaseNotFound)
-	errLeaseRejected           = errors.New(types.APIErrorCodeLeaseRejected)
-	errTransportMismatch       = errors.New(types.APIErrorCodeTransportMismatch)
-	errUnauthorized            = errors.New(types.APIErrorCodeUnauthorized)
-	errUDPDisabled             = errors.New(types.APIErrorCodeUDPDisabled)
-	errUDPCapacityExceeded     = errors.New(types.APIErrorCodeUDPCapacityExceeded)
-	errTCPPortDisabled         = errors.New(types.APIErrorCodeTCPPortDisabled)
-	errTCPPortCapacityExceeded = errors.New(types.APIErrorCodeTCPPortCapacityExceeded)
-	errTCPPortExhausted        = errors.New("no tcp ports available")
+	errFeatureUnavailable      = &apiError{types.APIErrorCodeFeatureUnavailable, "feature unavailable", http.StatusServiceUnavailable}
+	errHostnameConflict        = &apiError{types.APIErrorCodeHostnameConflict, "hostname conflict", http.StatusConflict}
+	errIPBanned                = &apiError{types.APIErrorCodeIPBanned, "request denied because source IP is banned", http.StatusForbidden}
+	errLeaseNotFound           = &apiError{types.APIErrorCodeLeaseNotFound, "lease not found", http.StatusNotFound}
+	errLeaseRejected           = &apiError{types.APIErrorCodeLeaseRejected, "lease is not approved for routing", http.StatusForbidden}
+	errTransportMismatch       = &apiError{types.APIErrorCodeTransportMismatch, "transport mismatch", http.StatusConflict}
+	errUnauthorized            = &apiError{types.APIErrorCodeUnauthorized, "unauthorized", http.StatusForbidden}
+	errUDPDisabled             = &apiError{types.APIErrorCodeUDPDisabled, "udp disabled", http.StatusForbidden}
+	errUDPCapacityExceeded     = &apiError{types.APIErrorCodeUDPCapacityExceeded, "udp capacity exceeded", http.StatusServiceUnavailable}
+	errTCPPortDisabled         = &apiError{types.APIErrorCodeTCPPortDisabled, "tcp port disabled", http.StatusForbidden}
+	errTCPPortCapacityExceeded = &apiError{types.APIErrorCodeTCPPortCapacityExceeded, "tcp port capacity exceeded", http.StatusServiceUnavailable}
+	errTCPPortExhausted        = &apiError{types.APIErrorCodeTCPPortExhausted, "no tcp ports available", http.StatusServiceUnavailable}
 )
+
+var quicRejectTable = []struct {
+	sentinel error
+	code     string
+	reason   string
+}{
+	{errLeaseNotFound, types.APIErrorCodeLeaseNotFound, "lease not found"},
+	{errLeaseRejected, types.APIErrorCodeLeaseRejected, "lease rejected"},
+	{errUnauthorized, types.APIErrorCodeUnauthorized, "unauthorized"},
+	{errTransportMismatch, types.APIErrorCodeTransportMismatch, "transport mismatch"},
+}
+
+func writeAPIErrorResponse(w http.ResponseWriter, err error) {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		utils.WriteAPIError(w, ae.status, ae.code, ae.msg)
+		return
+	}
+	utils.InvalidRequestError(err).Write(w)
+}
 
 func (s *Server) newAPIServer(listener net.Listener, apiMux *http.ServeMux, apiTLS keyless.TLSMaterialConfig) (net.Listener, *http.Server, io.Closer, error) {
 	var keylessSignerHandler http.Handler
@@ -124,17 +152,6 @@ func (s *Server) extractAllowedClientIP(w http.ResponseWriter, r *http.Request) 
 	return "", false
 }
 
-func leaseLookupError(err error) utils.APIErrorResponse {
-	if errors.Is(err, errLeaseNotFound) {
-		return utils.APIErrorResponse{
-			Status:  http.StatusNotFound,
-			Code:    types.APIErrorCodeLeaseNotFound,
-			Message: err.Error(),
-		}
-	}
-	return utils.InvalidRequestError(err)
-}
-
 func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	if !utils.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -215,27 +232,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.registerLease(challenge.Request, clientIP, req.ReportedIP)
 	if err != nil {
-		switch {
-		case errors.Is(err, errFeatureUnavailable):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
-		case errors.Is(err, errHostnameConflict):
-			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeHostnameConflict, err.Error())
-		case errors.Is(err, errIPBanned):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeIPBanned, err.Error())
-		case errors.Is(err, errTCPPortExhausted):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTCPPortExhausted, err.Error())
-		case errors.Is(err, transport.ErrPortExhausted):
+		if errors.Is(err, transport.ErrPortExhausted) {
 			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPPortExhausted, err.Error())
-		case errors.Is(err, errUDPDisabled):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
-		case errors.Is(err, errUDPCapacityExceeded):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
-		case errors.Is(err, errTCPPortDisabled):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeTCPPortDisabled, err.Error())
-		case errors.Is(err, errTCPPortCapacityExceeded):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeTCPPortCapacityExceeded, err.Error())
-		default:
-			utils.InvalidRequestError(err).Write(w)
+		} else {
+			writeAPIErrorResponse(w, err)
 		}
 		return
 	}
@@ -282,16 +282,7 @@ func (s *Server) handleRegisterChallenge(w http.ResponseWriter, r *http.Request)
 
 	resp, err := s.registry.issueRegisterChallenge(req, domain, registerURI)
 	if err != nil {
-		switch {
-		case errors.Is(err, errFeatureUnavailable):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeFeatureUnavailable, err.Error())
-		case errors.Is(err, errUDPDisabled):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUDPDisabled, err.Error())
-		case errors.Is(err, errUDPCapacityExceeded):
-			utils.WriteAPIError(w, http.StatusServiceUnavailable, types.APIErrorCodeUDPCapacityExceeded, err.Error())
-		default:
-			utils.InvalidRequestError(err).Write(w)
-		}
+		writeAPIErrorResponse(w, err)
 		return
 	}
 
@@ -325,7 +316,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	}
 	record, err := s.registry.Renew(claims.Identity, ttl, clientIP, utils.SanitizeReportedIP(req.ReportedIP))
 	if err != nil {
-		leaseLookupError(err).Write(w)
+		writeAPIErrorResponse(w, err)
 		return
 	}
 	nextAccessToken, _, err := auth.IssueLeaseAccessToken(s.identity.PrivateKey, s.identity.Address, s.cfg.PortalURL, record.Copy(), ttl)
@@ -357,7 +348,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 
 	record, err := s.registry.Unregister(claims.Identity)
 	if err != nil {
-		leaseLookupError(err).Write(w)
+		writeAPIErrorResponse(w, err)
 		return
 	}
 	deleteCtx, cancel := context.WithTimeout(context.Background(), defaultClaimTimeout)
@@ -373,7 +364,7 @@ func (s *Server) handleUnregister(w http.ResponseWriter, r *http.Request) {
 		record.Close()
 	}
 
-	utils.WriteAPIEmpty(w, http.StatusOK)
+	utils.WriteAPIData(w, http.StatusOK, map[string]any{})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -393,18 +384,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	lease, err := s.admitLeaseByToken(token, false)
 	if err != nil {
-		switch {
-		case errors.Is(err, errLeaseNotFound):
-			utils.WriteAPIError(w, http.StatusNotFound, types.APIErrorCodeLeaseNotFound, err.Error())
-		case errors.Is(err, errLeaseRejected):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeLeaseRejected, "lease is not approved for routing")
-		case errors.Is(err, errUnauthorized):
-			utils.WriteAPIError(w, http.StatusForbidden, types.APIErrorCodeUnauthorized, err.Error())
-		case errors.Is(err, errTransportMismatch):
-			utils.WriteAPIError(w, http.StatusConflict, types.APIErrorCodeTransportMismatch, "lease does not support stream transport")
-		default:
-			utils.InvalidRequestError(err).Write(w)
-		}
+		writeAPIErrorResponse(w, err)
 		return
 	}
 
@@ -472,28 +452,21 @@ func (s *Server) handleQUICTunnelConn(conn *quic.Conn) {
 		return
 	}
 
+	rejectConn := func(code, reason string) {
+		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: code})
+		_ = conn.CloseWithError(1, reason)
+	}
+
 	lease, err := s.admitLeaseByToken(msg.AccessToken, true)
-	switch {
-	case err == nil:
-	case errors.Is(err, errLeaseNotFound):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseNotFound})
-		_ = conn.CloseWithError(1, "lease not found")
-		return
-	case errors.Is(err, errLeaseRejected):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeLeaseRejected})
-		_ = conn.CloseWithError(1, "lease rejected")
-		return
-	case errors.Is(err, errUnauthorized):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeUnauthorized})
-		_ = conn.CloseWithError(1, "unauthorized")
-		return
-	case errors.Is(err, errTransportMismatch):
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeTransportMismatch})
-		_ = conn.CloseWithError(1, "transport mismatch")
-		return
-	default:
-		_ = json.NewEncoder(stream).Encode(types.QUICControlResponse{OK: false, Error: types.APIErrorCodeInvalidRequest})
-		_ = conn.CloseWithError(1, "invalid control message")
+	if err != nil {
+		code, reason := types.APIErrorCodeInvalidRequest, "invalid control message"
+		for _, entry := range quicRejectTable {
+			if errors.Is(err, entry.sentinel) {
+				code, reason = entry.code, entry.reason
+				break
+			}
+		}
+		rejectConn(code, reason)
 		return
 	}
 
@@ -556,7 +529,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		if !s.registry.policy.IsUDPEnabled() {
 			return types.RegisterResponse{}, errUDPDisabled
 		}
-		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.CountDatagramLeases() >= max {
+		if max := s.registry.policy.UDPMaxLeases(); max > 0 && s.registry.countDatagramLeases() >= max {
 			return types.RegisterResponse{}, errUDPCapacityExceeded
 		}
 	}
@@ -567,7 +540,7 @@ func (s *Server) registerLease(req types.RegisterChallengeRequest, clientIP, rep
 		if !s.registry.policy.IsTCPPortEnabled() {
 			return types.RegisterResponse{}, errTCPPortDisabled
 		}
-		if max := s.registry.policy.TCPPortMaxLeases(); max > 0 && s.registry.CountTCPPortLeases() >= max {
+		if max := s.registry.policy.TCPPortMaxLeases(); max > 0 && s.registry.countTCPPortLeases() >= max {
 			return types.RegisterResponse{}, errTCPPortCapacityExceeded
 		}
 	}

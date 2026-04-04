@@ -19,14 +19,14 @@ type CommandFunc func([]string) error
 type IntEnvParser func(string, int) int
 type boolFlagValue interface{ IsBoolFlag() bool }
 
-func TrimmedEnv(name string) string {
+func trimmedEnv(name string) string {
 	return strings.TrimSpace(os.Getenv(name))
 }
 
-func ResolveStringEnv(fallback string, envNames ...string) string {
+func resolveStringEnv(fallback string, envNames ...string) string {
 	value := fallback
 	for _, envName := range envNames {
-		if envValue := TrimmedEnv(envName); envValue != "" {
+		if envValue := trimmedEnv(envName); envValue != "" {
 			value = envValue
 			break
 		}
@@ -34,9 +34,9 @@ func ResolveStringEnv(fallback string, envNames ...string) string {
 	return value
 }
 
-func ResolveBoolEnv(fallback bool, envNames ...string) bool {
+func resolveBoolEnv(fallback bool, envNames ...string) bool {
 	for _, envName := range envNames {
-		raw := TrimmedEnv(envName)
+		raw := trimmedEnv(envName)
 		if raw == "" {
 			continue
 		}
@@ -49,7 +49,7 @@ func ResolveBoolEnv(fallback bool, envNames ...string) bool {
 	return fallback
 }
 
-func ResolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
+func resolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
 	if parse == nil {
 		parse = func(raw string, fallback int) int {
 			v, err := strconv.Atoi(strings.TrimSpace(raw))
@@ -60,7 +60,7 @@ func ResolveIntEnv(fallback int, parse IntEnvParser, envNames ...string) int {
 		}
 	}
 	for _, envName := range envNames {
-		raw := TrimmedEnv(envName)
+		raw := trimmedEnv(envName)
 		if raw == "" {
 			continue
 		}
@@ -92,18 +92,6 @@ func ParseOptionalPortNumber(raw string, fallback int) int {
 	return ParsePortNumber(raw, fallback)
 }
 
-func ParseNonNegativeInt(raw string, fallback int) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fallback
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 0 {
-		return fallback
-	}
-	return v
-}
-
 func DurationOrDefault(v, fallback time.Duration) time.Duration {
 	if v > 0 {
 		return v
@@ -130,7 +118,7 @@ func StringFlag(fs *flag.FlagSet, target *string, name, fallback, usage string) 
 }
 
 func StringFlagEnv(fs *flag.FlagSet, target *string, name, fallback, usage string, envNames ...string) {
-	ensureFlagSet(fs).StringVar(target, name, ResolveStringEnv(fallback, envNames...), flagUsage(usage, envNames...))
+	ensureFlagSet(fs).StringVar(target, name, resolveStringEnv(fallback, envNames...), flagUsage(usage, envNames...))
 }
 
 func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string) {
@@ -138,15 +126,11 @@ func BoolFlag(fs *flag.FlagSet, target *bool, name string, fallback bool, usage 
 }
 
 func BoolFlagEnv(fs *flag.FlagSet, target *bool, name string, fallback bool, usage string, envNames ...string) {
-	ensureFlagSet(fs).BoolVar(target, name, ResolveBoolEnv(fallback, envNames...), flagUsage(usage, envNames...))
-}
-
-func IntFlag(fs *flag.FlagSet, target *int, name string, fallback int, usage string) {
-	ensureFlagSet(fs).IntVar(target, name, fallback, usage)
+	ensureFlagSet(fs).BoolVar(target, name, resolveBoolEnv(fallback, envNames...), flagUsage(usage, envNames...))
 }
 
 func IntFlagEnv(fs *flag.FlagSet, target *int, name string, fallback int, parse IntEnvParser, usage string, envNames ...string) {
-	ensureFlagSet(fs).IntVar(target, name, ResolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
+	ensureFlagSet(fs).IntVar(target, name, resolveIntEnv(fallback, parse, envNames...), flagUsage(usage, envNames...))
 }
 
 func RepeatedStringFlag(fs *flag.FlagSet, target *[]string, name, usage string) {
@@ -365,6 +349,41 @@ func NormalizeLoopbackTarget(raw string) (string, error) {
 		return net.JoinHostPort("127.0.0.1", raw), nil
 	}
 	return NormalizeTargetAddr(raw)
+}
+
+// HelpTopic maps a subcommand name to its usage printer.
+type HelpTopic struct {
+	Name  string
+	Usage func(io.Writer)
+}
+
+// MakeHelpCommand returns a CommandFunc that dispatches help topics.
+// Topics are matched in order; the slice provides deterministic output.
+func MakeHelpCommand(rootUsage func(io.Writer), topics []HelpTopic) CommandFunc {
+	return func(args []string) error {
+		if len(args) == 0 {
+			rootUsage(os.Stdout)
+			return nil
+		}
+		if len(args) > 1 {
+			rootUsage(os.Stderr)
+			return errors.New("only one help topic is supported")
+		}
+		topic := strings.TrimSpace(args[0])
+		switch topic {
+		case "", "help", "-h", "--help":
+			rootUsage(os.Stdout)
+			return nil
+		}
+		for _, t := range topics {
+			if t.Name == topic {
+				t.Usage(os.Stdout)
+				return nil
+			}
+		}
+		rootUsage(os.Stderr)
+		return fmt.Errorf("unknown help topic %q", topic)
+	}
 }
 
 func WriteCommandUsage(w io.Writer, usage []string, examples []string) {

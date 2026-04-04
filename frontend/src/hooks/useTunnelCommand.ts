@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import {
-  buildDefaultTunnelName,
+  buildDefaultExposeName,
+  normalizeExposeName,
+} from "@/lib/exposeName";
+import {
   buildTunnelCommand,
   buildTunnelDisplayCommand,
-  normalizeTunnelCommandName,
   type TunnelCommandOS,
 } from "@/lib/tunnelCommand";
 
@@ -73,8 +75,8 @@ interface TunnelCommandExtras {
 }
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
-  const [currentOrigin] = useState(readCurrentOrigin);
-  const [nameSeed] = useState(readTunnelNameSeed);
+  const currentOrigin = useMemo(() => readCurrentOrigin(), []);
+  const nameSeed = useMemo(() => readTunnelNameSeed(), []);
 
   const [target, setTarget] = useState(DEFAULT_HOST);
   const [name, setName] = useState("");
@@ -82,18 +84,9 @@ export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const [copied, setCopied] = useState(false);
   const [os, setOs] = useState<TunnelCommandOS>("unix");
 
-  const resolvedNameSeed = useMemo(
-    () => `${nameSeed}:${nameShuffleKey}`,
-    [nameSeed, nameShuffleKey]
-  );
-  const generatedName = useMemo(
-    () => buildDefaultTunnelName(target, resolvedNameSeed),
-    [resolvedNameSeed, target]
-  );
-  const normalizedName = useMemo(
-    () => normalizeTunnelCommandName(name),
-    [name]
-  );
+  const resolvedNameSeed = `${nameSeed}:${nameShuffleKey}`;
+  const generatedName = buildDefaultExposeName(target, resolvedNameSeed);
+  const normalizedName = normalizeExposeName(name);
   const effectiveName = normalizedName === "" ? generatedName : normalizedName;
   const commandOptions = useMemo(
     () => ({

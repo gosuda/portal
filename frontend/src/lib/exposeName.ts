@@ -76,7 +76,7 @@ export function normalizeExposeName(value: string): string {
   return ascii;
 }
 
-export function normalizeExposeTarget(raw: string): string {
+function normalizeExposeTarget(raw: string): string {
   const trimmed = raw.trim();
   const candidate = trimmed === "" ? DEFAULT_TARGET_PORT : trimmed;
 

@@ -214,7 +214,7 @@ func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
 
 	hostname := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("hostname")))
 	if hostname == "" {
-		utils.InvalidRequestMessage("hostname is required").Write(w)
+		utils.InvalidRequestError(errors.New("hostname is required")).Write(w)
 		return
 	}
 
@@ -261,32 +261,13 @@ func (f *Frontend) setLandingPageEnabled(enabled bool) {
 }
 
 func getContentType(ext string) string {
-	ext = strings.TrimSpace(ext)
-	if ext == "" {
-		return ""
+	if ct := mime.TypeByExtension(ext); ct != "" {
+		return ct
 	}
-	if contentType := mime.TypeByExtension(ext); contentType != "" {
-		return contentType
-	}
-
-	switch strings.ToLower(ext) {
-	case ".js", ".mjs":
-		return "text/javascript; charset=utf-8"
-	case ".css":
-		return "text/css; charset=utf-8"
-	case ".svg":
-		return "image/svg+xml"
-	case ".ico":
-		return "image/x-icon"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".json", ".webmanifest":
+	if ext == ".webmanifest" {
 		return "application/json; charset=utf-8"
-	default:
-		return ""
 	}
+	return ""
 }
 
 func frontendRootAssetPaths() []string {
