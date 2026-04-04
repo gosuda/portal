@@ -41,45 +41,20 @@ function headersToObject(headers?: HeadersInit): Record<string, string> {
 }
 
 function ensureJsonEnvelope<T>(raw: unknown, path: string, status: number): APIEnvelope<T> {
-  if (!isRecord(raw)) {
-    throw new APIClientError(
-      `Unexpected API response for ${path}: envelope is not an object`,
-      status,
-      "invalid_envelope",
-      raw
-    );
+  if (!isRecord(raw) || typeof raw.ok !== "boolean") {
+    throw new APIClientError(`Invalid API response for ${path}`, status, "invalid_envelope", raw);
   }
-
-  const okValue = raw.ok;
-  if (typeof okValue !== "boolean") {
-    throw new APIClientError(
-      `Unexpected API response for ${path}: missing ok flag`,
-      status,
-      "invalid_envelope",
-      raw
-    );
+  if (raw.error !== undefined && !isRecord(raw.error)) {
+    throw new APIClientError(`Invalid error payload for ${path}`, status, "invalid_envelope", raw.error);
   }
-
   const errorValue = raw.error;
-  if (errorValue !== undefined && !isRecord(errorValue)) {
-    throw new APIClientError(
-      `Unexpected API response for ${path}: invalid error payload`,
-      status,
-      "invalid_envelope",
-      errorValue
-    );
-  }
-
   return {
-    ok: okValue,
+    ok: raw.ok,
     data: (raw as { data?: T }).data,
     error: errorValue
       ? {
           code: typeof errorValue.code === "string" ? errorValue.code : "request_failed",
-          message:
-            typeof errorValue.message === "string"
-              ? errorValue.message
-              : "Request failed",
+          message: typeof errorValue.message === "string" ? errorValue.message : "Request failed",
         }
       : undefined,
   };

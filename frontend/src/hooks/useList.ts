@@ -36,19 +36,6 @@ export interface UseListReturn<T extends BaseServer> {
   handleToggleFavorite: (serverId: number) => void;
 }
 
-function dedupeNumbers(values: number[]): number[] {
-  const seen = new Set<number>();
-  const next: number[] = [];
-  values.forEach((value) => {
-    if (seen.has(value)) {
-      return;
-    }
-    seen.add(value);
-    next.push(value);
-  });
-  return next;
-}
-
 function readStoredFavorites(storageKey: string): number[] {
   let raw: string | null = null;
   try {
@@ -66,11 +53,11 @@ function readStoredFavorites(storageKey: string): number[] {
     if (!Array.isArray(parsed)) {
       return [];
     }
-    return dedupeNumbers(
+    return [...new Set(
       parsed.filter(
         (value): value is number => Number.isInteger(value) && value > 0
       )
-    );
+    )];
   } catch {
     return [];
   }
@@ -140,30 +127,12 @@ export function useList<T extends BaseServer>({
 
   useEffect(() => {
     const validIDs = new Set(servers.map((server) => server.id));
-    setFavorites((prev) => {
-      const next = dedupeNumbers(prev.filter((id) => validIDs.has(id)));
-      if (
-        next.length === prev.length &&
-        next.every((value, index) => value === prev[index])
-      ) {
-        return prev;
-      }
-      return next;
-    });
+    setFavorites((prev) => prev.filter((id) => validIDs.has(id)));
   }, [servers]);
 
   useEffect(() => {
     const availableTagSet = new Set(availableTags);
-    setSelectedTags((prev) => {
-      const next = prev.filter((tag) => availableTagSet.has(tag));
-      if (
-        next.length === prev.length &&
-        next.every((value, index) => value === prev[index])
-      ) {
-        return prev;
-      }
-      return next;
-    });
+    setSelectedTags((prev) => prev.filter((tag) => availableTagSet.has(tag)));
   }, [availableTags]);
 
   const filteredServers = useMemo(() => {

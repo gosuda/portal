@@ -102,7 +102,7 @@ export function ServerCard({
 
     try {
       const result = action();
-      if (result && typeof (result as Promise<void>).then === "function") {
+      if (result instanceof Promise) {
         void result.catch((error) => {
           console.error("Failed admin action", error);
         });
