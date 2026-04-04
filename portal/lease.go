@@ -100,15 +100,21 @@ func (r *leaseRegistry) Register(record *leaseRecord) error {
 	record.Hostname = hostname
 	r.leasesByKey[key] = record
 	r.routes[hostname] = key
-	if strings.TrimSpace(record.ClientIP) != "" {
-		r.policy.IPFilter().RegisterIdentityIP(key, record.ClientIP)
-	}
+	r.setClientIPLocked(key, record.ClientIP)
 	r.mu.Unlock()
 
 	if replaced != nil && replaced != record {
 		replaced.Close()
 	}
 	return nil
+}
+
+// setClientIPLocked updates the record's client IP and registers it with the
+// IP filter. Caller must hold r.mu.
+func (r *leaseRegistry) setClientIPLocked(identityKey, clientIP string) {
+	if strings.TrimSpace(clientIP) != "" {
+		r.policy.IPFilter().RegisterIdentityIP(identityKey, clientIP)
+	}
 }
 
 func (r *leaseRegistry) Renew(identity types.Identity, ttl time.Duration, clientIP, reportedIP string) (*leaseRecord, error) {
@@ -125,11 +131,11 @@ func (r *leaseRegistry) Renew(identity types.Identity, ttl time.Duration, client
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
-		r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	}
 	if strings.TrimSpace(reportedIP) != "" {
 		record.ReportedIP = reportedIP
 	}
+	r.setClientIPLocked(record.Key(), clientIP)
 	return record, nil
 }
 
@@ -232,8 +238,8 @@ func (r *leaseRegistry) Touch(identity types.Identity, clientIP string, now time
 	record.LastSeenAt = now
 	if strings.TrimSpace(clientIP) != "" {
 		record.ClientIP = clientIP
-		r.policy.IPFilter().RegisterIdentityIP(record.Key(), clientIP)
 	}
+	r.setClientIPLocked(record.Key(), clientIP)
 	return record
 }
 

@@ -16,7 +16,10 @@ import (
 	"github.com/gosuda/portal/v2/utils"
 )
 
-const cookieName = "portal_admin"
+const (
+	cookieName     = "portal_admin"
+	adminBodyLimit = 1 << 16
+)
 
 type adminAuth struct {
 	sessions  map[string]time.Time
@@ -195,7 +198,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminLandingPageSettingsRequest](w, r, 1<<16, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.AdminLandingPageSettingsRequest](w, r, adminBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -222,7 +225,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		if !utils.RequireMethod(w, r, http.MethodPost) {
 			return
 		}
-		req, ok := utils.DecodeJSONRequestAs[types.AdminApprovalModeRequest](w, r, 1<<16, invalidRequestBody)
+		req, ok := utils.DecodeJSONRequestAs[types.AdminApprovalModeRequest](w, r, adminBodyLimit, invalidRequestBody)
 		if !ok {
 			return
 		}
@@ -276,7 +279,7 @@ func (f *Frontend) serveAdmin(w http.ResponseWriter, r *http.Request) {
 				},
 				"bps": {
 					post: func() bool {
-						req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, 1<<16, invalidRequestBody)
+						req, ok := utils.DecodeJSONRequestAs[types.AdminBPSRequest](w, r, adminBodyLimit, invalidRequestBody)
 						if !ok {
 							return true
 						}
@@ -386,7 +389,7 @@ func (f *Frontend) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, 1<<16, utils.InvalidRequestError(errors.New("invalid request body")))
+	req, ok := utils.DecodeJSONRequestAs[types.AdminLoginRequest](w, r, adminBodyLimit, utils.InvalidRequestError(errors.New("invalid request body")))
 	if !ok {
 		return
 	}
@@ -464,6 +467,21 @@ type persistedAdminState struct {
 	LandingPageEnabled   *bool            `json:"landing_page_enabled,omitempty"`
 }
 
+func applyOptionalPolicy(enabled *bool, maxLeases *int, getEnabled func() bool, getMax func() int, set func(bool, int)) {
+	if enabled == nil && maxLeases == nil {
+		return
+	}
+	e := getEnabled()
+	m := getMax()
+	if enabled != nil {
+		e = *enabled
+	}
+	if maxLeases != nil {
+		m = *maxLeases
+	}
+	set(e, m)
+}
+
 func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	if runtime == nil {
 		return nil
@@ -480,21 +498,7 @@ func (s persistedAdminState) apply(runtime *policy.Runtime) error {
 	runtime.SetBannedIdentityKeys(utils.NormalizeIdentityKeys(s.BannedIdentityKeys))
 	runtime.IPFilter().SetBannedIPs(s.BannedIPs)
 	runtime.BPSManager().SetIdentityBPSLimits(utils.NormalizeIdentityKeyBPS(s.IdentityBPS))
-	switch {
-	case s.UDPEnabled != nil && s.UDPMaxLeases != nil:
-		runtime.SetUDPPolicy(*s.UDPEnabled, *s.UDPMaxLeases)
-	case s.UDPEnabled != nil:
-		runtime.SetUDPPolicy(*s.UDPEnabled, runtime.UDPMaxLeases())
-	case s.UDPMaxLeases != nil:
-		runtime.SetUDPPolicy(runtime.IsUDPEnabled(), *s.UDPMaxLeases)
-	}
-	switch {
-	case s.TCPPortEnabled != nil && s.TCPPortMaxLeases != nil:
-		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, *s.TCPPortMaxLeases)
-	case s.TCPPortEnabled != nil:
-		runtime.SetTCPPortPolicy(*s.TCPPortEnabled, runtime.TCPPortMaxLeases())
-	case s.TCPPortMaxLeases != nil:
-		runtime.SetTCPPortPolicy(runtime.IsTCPPortEnabled(), *s.TCPPortMaxLeases)
-	}
+	applyOptionalPolicy(s.UDPEnabled, s.UDPMaxLeases, runtime.IsUDPEnabled, runtime.UDPMaxLeases, runtime.SetUDPPolicy)
+	applyOptionalPolicy(s.TCPPortEnabled, s.TCPPortMaxLeases, runtime.IsTCPPortEnabled, runtime.TCPPortMaxLeases, runtime.SetTCPPortPolicy)
 	return nil
 }
