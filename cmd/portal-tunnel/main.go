@@ -154,6 +154,17 @@ func runExposeCommand(args []string) error {
 			_ = exposure.Close()
 			return err
 		}
+		handler = newOGInjectHandler(handler)
+		defer exposure.Close()
+		return exposure.RunHTTP(ctx, handler, "")
+	}
+	if flags.targetAddr != "" && !flags.udp && !flags.tcp {
+		handler, err := newHTTPRouteHandler([]string{"/=" + flags.targetAddr})
+		if err != nil {
+			_ = exposure.Close()
+			return err
+		}
+		handler = newOGInjectHandler(handler)
 		defer exposure.Close()
 		return exposure.RunHTTP(ctx, handler, "")
 	}

@@ -101,6 +101,8 @@ func (f *Frontend) Handler() *http.ServeMux {
 	})
 	mux.HandleFunc(types.PathInstallBinPrefix, serveInstallBinary)
 
+	mux.HandleFunc("/og-banner.png", f.serveOGBanner)
+
 	return mux
 }
 
@@ -135,7 +137,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 		return
 	}
 	if appPath == "" {
-		f.servePortalHTMLWithSSR(w)
+		f.servePortalHTMLWithSSR(w, r)
 		return
 	}
 
@@ -146,7 +148,7 @@ func (f *Frontend) ServeAppStatic(w http.ResponseWriter, r *http.Request, appPat
 			http.NotFound(w, r)
 			return
 		}
-		f.servePortalHTMLWithSSR(w)
+		f.servePortalHTMLWithSSR(w, r)
 		return
 	}
 
@@ -174,7 +176,7 @@ func cleanFrontendPath(raw string) (string, bool) {
 	return cleaned, true
 }
 
-func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
+func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter, r *http.Request) {
 	f.cachedPortalHTMLOnce.Do(func() {
 		f.cachedPortalHTML, _ = f.distFS.ReadFile("dist/app/portal.html")
 	})
@@ -186,7 +188,7 @@ func (f *Frontend) servePortalHTMLWithSSR(w http.ResponseWriter) {
 
 	htmlContent := string(f.cachedPortalHTML)
 	htmlContent = f.injectServerData(htmlContent)
-	htmlContent = f.injectOGMetadata(htmlContent, "", "")
+	htmlContent = f.injectOGMetadata(htmlContent, "", "", r.Host)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
@@ -229,7 +231,7 @@ func (f *Frontend) serveTunnelStatus(w http.ResponseWriter, r *http.Request) {
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }
 
-func (f *Frontend) injectOGMetadata(htmlContent, title, description string) string {
+func (f *Frontend) injectOGMetadata(htmlContent, title, description, reqHost string) string {
 	if title == "" {
 		title = "Portal Proxy Gateway"
 	}
@@ -237,9 +239,23 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description string) stri
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 
+	var base string
+	if reqHost != "" {
+		base = "https://" + reqHost
+	} else {
+		portalURL := f.server.PortalURL()
+		base = strings.TrimSuffix(portalURL, "/")
+		if !strings.HasPrefix(base, "http") {
+			base = "https://" + base
+		}
+	}
+	imageURL := base + "/og-banner.png?v=" + types.ReleaseVersion
+
 	replacer := strings.NewReplacer(
 		"[%OG_TITLE%]", html.EscapeString(title),
 		"[%OG_DESCRIPTION%]", html.EscapeString(description),
+		"[%OG_IMAGE_URL%]", html.EscapeString(imageURL),
+		"[%OG_URL%]", html.EscapeString(base),
 		"[%LANDING_PAGE_ENABLED%]", html.EscapeString(strconv.FormatBool(f.isLandingPageEnabled())),
 		"[%RELEASE_VERSION%]", html.EscapeString(types.ReleaseVersion),
 	)
@@ -258,6 +274,39 @@ func (f *Frontend) setLandingPageEnabled(enabled bool) {
 		return
 	}
 	f.landingPageEnabled.Store(enabled)
+}
+
+func (f *Frontend) serveOGBanner(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+	rootHost := f.server.PortalURL()
+	rootHost = strings.TrimPrefix(rootHost, "https://")
+	rootHost = strings.TrimPrefix(rootHost, "http://")
+	if idx := strings.Index(rootHost, ":"); idx != -1 {
+		rootHost = rootHost[:idx]
+	}
+
+	subdomain := "my-app"
+	if strings.HasSuffix(host, "."+rootHost) {
+		subdomain = strings.TrimSuffix(host, "."+rootHost)
+	}
+
+	displayHost := rootHost
+	if subdomain != "my-app" && subdomain != "" {
+		displayHost = subdomain + "." + rootHost
+	}
+
+	pngData, err := renderOGBannerPNG(displayHost)
+	if err != nil {
+		http.Error(w, "failed to generate image", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write(pngData)
 }
 
 func getContentType(ext string) string {
