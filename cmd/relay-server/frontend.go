@@ -40,7 +40,6 @@ type Frontend struct {
 	cachedPortalHTML     []byte
 	cachedPortalHTMLOnce sync.Once
 	landingPageEnabled   atomic.Bool
-
 }
 
 func NewFrontend(server *portal.Server, adminSecret string, adminSettingsPath string, defaultLandingPageEnabled bool) (*Frontend, error) {
@@ -240,7 +239,7 @@ func (f *Frontend) injectOGMetadata(htmlContent, title, description, reqHost str
 		description = "Transform your local services into web-accessible endpoints. Instant access from anywhere."
 	}
 
-	base := ""
+	var base string
 	if reqHost != "" {
 		base = "https://" + reqHost
 	} else {
@@ -347,7 +346,6 @@ func frontendRootAssetPaths() []string {
 		"/apple-touch-icon.png",
 		"/web-app-manifest-192x192.png",
 		"/web-app-manifest-512x512.png",
-		
 	}
 }
 

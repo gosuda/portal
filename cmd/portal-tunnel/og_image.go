@@ -18,14 +18,14 @@ import (
 )
 
 var (
-	ogBgColor    = color.RGBA{11, 17, 32, 255}
-	ogWhite      = color.RGBA{248, 250, 252, 255}
-	ogSlate      = color.RGBA{148, 163, 184, 255}
-	ogSky        = color.RGBA{56, 189, 248, 255}
-	ogPink       = color.RGBA{244, 114, 182, 255}
-	ogDarkSlate  = color.RGBA{30, 41, 59, 255}
-	ogCardBg     = color.RGBA{15, 23, 42, 255}
-	ogGridColor  = color.RGBA{30, 41, 59, 255}
+	ogBgColor   = color.RGBA{11, 17, 32, 255}
+	ogWhite     = color.RGBA{248, 250, 252, 255}
+	ogSlate     = color.RGBA{148, 163, 184, 255}
+	ogSky       = color.RGBA{56, 189, 248, 255}
+	ogPink      = color.RGBA{244, 114, 182, 255}
+	ogDarkSlate = color.RGBA{30, 41, 59, 255}
+	ogCardBg    = color.RGBA{15, 23, 42, 255}
+	ogGridColor = color.RGBA{30, 41, 59, 255}
 )
 
 func loadFontFace(ttf []byte, size float64) font.Face {
@@ -82,7 +82,7 @@ func drawGradientLine(img *image.RGBA, x1, x2, y, thickness int) {
 			tt := t * 2
 			r = uint8(56 + tt*(129-56))
 			g = uint8(189 + tt*(140-189))
-			b = uint8(248 + tt*(248-248))
+			b = 248
 		} else {
 			tt := (t - 0.5) * 2
 			r = uint8(129 + tt*(244-129))
