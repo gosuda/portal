@@ -8,7 +8,6 @@ The portal nodes (RelayServers) form an $n \times n$ grid where $n = \lfloor\sqr
 
 ### Core Features:
 - **Policy-Only OLS**: The `OLSManager` (in `portal/policy`) is strictly responsible for the load balancing algorithm. It does not handle networking or data transfer.
-- **WireGuard Data Plane**: Actual data transfer between nodes is handled by the WireGuard overlay network.
 - **Dynamic 90-degree Rotation**: If traffic becomes unbalanced (detected via load variance across rows vs. columns), the grid's routing logic rotates by 90 degrees to redistribute the load.
 
 ---
@@ -40,9 +39,9 @@ graph TD
 
     NodeA -- "policy.OLSManager.GetTargetNodeID(ClientID, LeaseID)" --> TargetID{Is local?}
     TargetID -- Yes --> LocalDial[Dial Local Tunnel]
-    TargetID -- No --> Proxy[Proxy via WireGuard Overlay]
+    TargetID -- No --> Proxy[Proxy via inter-relay transport]
     
-    Proxy -- "overlay.DialContext()" --> NodeB
+    Proxy -- "inter-relay transport" --> NodeB
     NodeB -- "BridgeConns" --> Tunnel[Target Tunnel Client]
 
     subgraph LoadBalancer [Dynamic Stabilization]
@@ -61,11 +60,9 @@ For a given `ClientID` (source) and `LeaseID` (destination):
 
 ---
 
-## 4. Master-to-Master Tunneling (WireGuard)
+## 4. Master-to-Master Tunneling
 
-Each node maintains a WireGuard overlay network. When a request needs to be proxied:
-- The source node looks up the target node's overlay address.
-- Establishes a TCP connection via the WireGuard overlay (`overlay.DialContext`).
-- Proxies the original connection to the target node.
-
-This ensures that regardless of which master a client initially hits, the request can be forwarded to the optimal node defined by the OLS topology using a secure and high-performance data plane.
+The inter-relay transport layer is pluggable. The previous WireGuard overlay
+has been removed, so relays will serve traffic locally until a new transport is
+introduced. When a transport is available, the same OLS routing logic forwards
+connections over that data plane to the optimal node.

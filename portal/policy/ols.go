@@ -170,6 +170,19 @@ func generateMOLS(n int) ([][]int, [][]int) {
 	if n < 2 {
 		return [][]int{{0}}, [][]int{{0}}
 	}
+	if n == 2 {
+		l1 := make([][]int, n)
+		l2 := make([][]int, n)
+		for i := 0; i < n; i++ {
+			l1[i] = make([]int, n)
+			l2[i] = make([]int, n)
+			for j := 0; j < n; j++ {
+				l1[i][j] = i
+				l2[i][j] = j
+			}
+		}
+		return l1, l2
+	}
 
 	if isPrime(n) {
 		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
@@ -265,7 +278,6 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 	if target == nil {
 		return "", fmt.Errorf("node not found at %d,%d", row, col)
 	}
-
 	// Failure Amplification Mitigation: skip unhealthy
 	if !target.Healthy || (time.Since(target.LastFailure) < 10*time.Second && target.FailureCount > 3) {
 		// Fallback to next deterministic candidate

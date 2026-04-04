@@ -26,16 +26,15 @@ const (
 	maxRouteContextBytes = 65536
 )
 
-// Dialer dials an outbound TCP connection.  It is a single-method subset of
-// net.Dialer and wireguard.Overlay, kept here so the engine does not import
-// either concrete type.
+// Dialer dials an outbound TCP connection. It mirrors net.Dialer's context-aware
+// dialing method so the engine avoids depending on specific transport types.
 type Dialer interface {
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 // PeerResolver maps a node identity key to the TCP dial address of its
-// inter-relay endpoint.  Implementations hide all transport-specific details
-// (WireGuard overlay IPs, peer key checks, etc.) from the engine.
+// inter-relay endpoint. Implementations hide all transport-specific details
+// (overlay IPs, peer key checks, etc.) from the engine.
 type PeerResolver interface {
 	// PeerAddr returns the host:port to dial for nodeID and true if the node
 	// is reachable as an overlay peer.  Returns "", false when the node
@@ -52,10 +51,9 @@ type PeerDialer interface {
 }
 
 // Engine encapsulates OLS routing: MOLS grid management, inter-relay protocol,
-// and connection forwarding decisions.  It is intentionally free of server
-// lifecycle concerns (listeners, WireGuard configuration, identity key
-// derivation) and transport-specific protocol details (overlay IP addresses,
-// WireGuard public keys, etc.).
+// and connection forwarding decisions. It intentionally avoids server
+// lifecycle concerns (listeners, identity key derivation) and transport-specific
+// protocol details (overlay addresses, peer keys, etc.).
 type Engine struct {
 	selfKey string
 	manager *policy.OLSManager

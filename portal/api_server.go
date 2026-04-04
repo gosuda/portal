@@ -163,25 +163,17 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		ingressAddr = fmt.Sprintf("%s:%d", ingressAddr, s.cfg.SNIPort)
 	}
 
-	supportsOverlayPeer := s.wgConfig.PublicKey != "" &&
-		s.wgConfig.Endpoint != "" &&
-		s.wgConfig.OverlayIPv4 != ""
-
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
-		Identity:       s.identity.Copy(),
-		Sequence:       uint64(now.UnixMilli()),
-		Version:        1,
-		IssuedAt:       now,
-		ExpiresAt:      now.Add(2 * types.DiscoveryPollInterval),
-		APIHTTPSAddr:   s.cfg.PortalURL,
-		IngressTLSAddr: ingressAddr,
-		SupportsUDP:    s.cfg.UDPEnabled && s.quicTunnel != nil,
-		SupportsTCP:    s.cfg.TCPEnabled,
-		SupportsOverlayPeer: supportsOverlayPeer,
-		WireGuardPublicKey:  s.wgConfig.PublicKey,
-		WireGuardEndpoint:   s.wgConfig.Endpoint,
-		OverlayIPv4:         s.wgConfig.OverlayIPv4,
-		OverlayCIDRs:        append([]string(nil), s.wgConfig.OverlayCIDRs...),
+		Identity:            s.identity.Copy(),
+		Sequence:            uint64(now.UnixMilli()),
+		Version:             1,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(2 * types.DiscoveryPollInterval),
+		APIHTTPSAddr:        s.cfg.PortalURL,
+		IngressTLSAddr:      ingressAddr,
+		SupportsUDP:         s.cfg.UDPEnabled && s.quicTunnel != nil,
+		SupportsTCP:         s.cfg.TCPEnabled,
+		SupportsOverlayPeer: false,
 		Load:                float64(s.loadMgr.ActiveConns()),
 	})
 	if err != nil {

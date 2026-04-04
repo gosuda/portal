@@ -31,38 +31,35 @@ func main() {
 }
 
 type relayServerConfig struct {
-	PortalURL           string
-	APIPort             int
-	SNIPort             int
-	MinPort             int
-	MaxPort             int
-	UDPEnabled          bool
-	TCPEnabled          bool
-	LandingPageEnabled  bool
-	Bootstraps          string
-	DiscoveryEnabled    bool
-	IdentityPath        string
-	WireGuardPrivateKey string
-	DiscoveryPort       int
-	WireGuardEndpoint   string
-	AdminSecretKey      string
-	TrustProxyHeaders   bool
-	TrustedProxyCIDRs   string
-	I2PProxyURL         string
-	I2PDiscoveryOnly    bool
-	AdminSettingsPath   string
-	KeylessDir          string
-	ACMEDNSProvider     string
-	ENSGaslessEnabled   bool
-	CloudflareToken     string
-	GCPProjectID        string
-	GCPManagedZone      string
-	AWSAccessKeyID      string
-	AWSSecretAccessKey  string
-	AWSSessionToken     string
-	AWSRegion           string
-	AWSHostedZoneID     string
-	AWSDNSSECKMSKeyARN  string
+	PortalURL          string
+	APIPort            int
+	SNIPort            int
+	MinPort            int
+	MaxPort            int
+	UDPEnabled         bool
+	TCPEnabled         bool
+	LandingPageEnabled bool
+	Bootstraps         string
+	DiscoveryEnabled   bool
+	IdentityPath       string
+	AdminSecretKey     string
+	TrustProxyHeaders  bool
+	TrustedProxyCIDRs  string
+	I2PProxyURL        string
+	I2PDiscoveryOnly   bool
+	AdminSettingsPath  string
+	KeylessDir         string
+	ACMEDNSProvider    string
+	ENSGaslessEnabled  bool
+	CloudflareToken    string
+	GCPProjectID       string
+	GCPManagedZone     string
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSSessionToken    string
+	AWSRegion          string
+	AWSHostedZoneID    string
+	AWSDNSSECKMSKeyARN string
 }
 
 func runServeCommand(args []string) error {
@@ -122,7 +119,6 @@ func runServeCommand(args []string) error {
 		Bool("discovery_enabled", cfg.DiscoveryEnabled).
 		Str("acme_dns_provider", cfg.ACMEDNSProvider).
 		Bool("ens_gasless_enabled", cfg.ENSGaslessEnabled).
-		Bool("wireguard_enabled", strings.TrimSpace(cfg.WireGuardPrivateKey) != "").
 		Bool("udp_enabled", cfg.UDPEnabled).
 		Bool("tcp_enabled", cfg.TCPEnabled).
 		Bool("i2p_discovery_only", cfg.I2PDiscoveryOnly).

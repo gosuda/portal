@@ -137,30 +137,16 @@ type PeerDialer interface {
 }
 ```
 
-`Server` implements this with `snapshotPeerDialer`, which reads the
-WireGuard-specific fields from the relay snapshot:
-
-```go
-type snapshotPeerDialer struct {
-    snapshot map[string]types.RelayState
-    overlay  *wireguard.Overlay
-}
-
-func (d *snapshotPeerDialer) PeerAddr(nodeID string) (string, bool) {
-    state := d.snapshot[nodeID]
-    // Only WireGuard-capable peers have an OverlayIPv4 address.
-    if state.Descriptor.OverlayIPv4 == "" { return "", false }
-    return net.JoinHostPort(state.Descriptor.OverlayIPv4, "7778"), true
-}
-```
-
-This means:
+The server owned the WireGuard-specific transport knowledge previously.
+With the overlay removed there is no built-in `PeerDialer` implementation,
+so transports are free to satisfy the interface however they choose.  This
+means:
 - The OLS engine (`portal/ols/engine.go`) imports neither `wireguard` nor reads
   `SupportsOverlayPeer` / `OverlayIPv4`.
-- The entire transport decision lives in `portal/server.go`, where all
-  WireGuard knowledge is already present.
-- A future alternative transport (QUIC overlay, raw TCP mesh, etc.) only needs
-  to implement `PeerDialer` — the engine code does not change.
+- Transport-specific code supplies a `PeerDialer` implementation; the engine
+  remains protocol-agnostic.
+- Future transports (QUIC overlay, raw TCP mesh, etc.) can be added without
+  touching the OLS engine.
 
 ---
 
