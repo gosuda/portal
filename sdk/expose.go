@@ -69,6 +69,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 
 	identity, createdIdentity, err := utils.ResolveListenerIdentity(
 		types.Identity{Name: cfg.Name},
+		cfg.TargetAddr,
 		cfg.IdentityPath,
 		cfg.IdentityJSON,
 	)
