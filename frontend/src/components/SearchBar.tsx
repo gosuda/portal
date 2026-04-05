@@ -36,7 +36,7 @@ export function SearchBar({
   setShowFilterModal,
 }: SearchBarProps) {
   return (
-    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-4 sm:px-6">
+    <div className="flex flex-wrap mt-4 sm:mt-6 items-center gap-3 px-0">
       <div className="flex gap-2 items-center w-full">
         <label className="flex min-w-55 flex-1 items-stretch h-10 relative">
           <div className="left-0 h-full absolute text-text-muted flex items-center justify-center pl-3 pr-2 rounded-l-md bg-border border border-border">
