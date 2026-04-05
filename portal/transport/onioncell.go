@@ -20,12 +20,12 @@ type Cell struct {
 	Buffer [OnionCellSize]byte
 }
 
-// ForwardingMeta keeps TTL-style hop information.
+// ForwardingMeta keeps TTL-style hop information without exposing the full path.
 type ForwardingMeta struct {
-	Hop     uint8
-	MaxHops uint8
-	_       uint16 // reserved for future flags
-	Nonce   [12]byte
+	TTL   uint8
+	Flags uint8
+	_     uint16 // reserved for future flags
+	Nonce [12]byte
 }
 
 // OnionLayer contains one hop's metadata and verification hint.
@@ -52,8 +52,8 @@ func (noopCipher) Open(b []byte) ([]byte, error) { return append([]byte(nil), b.
 func EncodeOnionLayer(layer OnionLayer, cipher HopCipher) (Cell, error) {
 	var cell Cell
 	plain := make([]byte, onionMetaSize+nextHopHintSize)
-	plain[0] = layer.Meta.Hop
-	plain[1] = layer.Meta.MaxHops
+	plain[0] = layer.Meta.TTL
+	plain[1] = layer.Meta.Flags
 	binary.BigEndian.PutUint16(plain[2:], 0)
 	copy(plain[4:16], layer.Meta.Nonce[:])
 	copy(plain[16:], layer.NextHopHint[:])
@@ -84,40 +84,46 @@ func DecodeOnionLayer(cell Cell, cipher HopCipher) (OnionLayer, error) {
 	if len(plain) < onionMetaSize+nextHopHintSize {
 		return layer, errors.New("onion header truncated")
 	}
-	layer.Meta.Hop = plain[0]
-	layer.Meta.MaxHops = plain[1]
+	layer.Meta.TTL = plain[0]
+	layer.Meta.Flags = plain[1]
 	copy(layer.Meta.Nonce[:], plain[4:16])
 	copy(layer.NextHopHint[:], plain[16:16+nextHopHintSize])
 	return layer, nil
 }
 
-// HashNodeID derives a stable hint for a relay ID.
-func HashNodeID(id string) [nextHopHintSize]byte {
-	return sha256.Sum256([]byte(id))
+// HashNodeID derives a hint for a relay ID bound to the hop nonce.
+func HashNodeID(id string, nonce [12]byte) [nextHopHintSize]byte {
+	payload := make([]byte, len(nonce)+len(id))
+	copy(payload, nonce[:])
+	copy(payload[len(nonce):], []byte(id))
+	return sha256.Sum256(payload)
 }
 
-// HintMatches verifies that the hint corresponds to id.
-func HintMatches(id string, hint [nextHopHintSize]byte) bool {
-	sum := HashNodeID(id)
+// HintMatches verifies that the hint corresponds to id with the given nonce.
+func HintMatches(id string, nonce [12]byte, hint [nextHopHintSize]byte) bool {
+	sum := HashNodeID(id, nonce)
 	return sum == hint
 }
 
-// Advance increments the hop counter, enforcing MaxHops.
+// Advance decrements the TTL. When TTL hits zero the circuit is exhausted.
 func (m ForwardingMeta) Advance() ForwardingMeta {
-	if m.MaxHops == 0 {
-		m.MaxHops = defaultMaxHops
+	if m.TTL == 0 {
+		return m
 	}
-	if m.Hop < m.MaxHops {
-		m.Hop++
-	}
+	m.TTL--
 	return m
 }
 
 // NewMeta creates forwarding metadata with a random nonce.
 func NewMeta(maxHops int) ForwardingMeta {
-	meta := ForwardingMeta{MaxHops: uint8(maxHops)}
-	if meta.MaxHops == 0 {
-		meta.MaxHops = defaultMaxHops
+	meta := ForwardingMeta{}
+	switch {
+	case maxHops <= 0:
+		meta.TTL = defaultMaxHops
+	case maxHops > 255:
+		meta.TTL = 255
+	default:
+		meta.TTL = uint8(maxHops)
 	}
 	_, _ = rand.Read(meta.Nonce[:])
 	return meta

@@ -36,23 +36,23 @@ const (
 )
 
 type ServerConfig struct {
-	PortalURL         string
-	IdentityPath      string
-	Bootstraps        []string
-	ACME              acme.Config
-	APIPort           int
-	SNIPort           int
-	APIListenAddr     string
-	SNIListenAddr     string
-	TrustedProxyCIDRs string
-	TrustProxyHeaders bool
-	DiscoveryEnabled  bool
-	MinPort           int
-	MaxPort           int
-	UDPEnabled        bool
-	TCPEnabled        bool
-	I2PDiscoveryOnly  bool
-	I2PProxyURL       string
+	PortalURL          string
+	IdentityPath       string
+	Bootstraps         []string
+	ACME               acme.Config
+	APIPort            int
+	SNIPort            int
+	APIListenAddr      string
+	SNIListenAddr      string
+	TrustedProxyCIDRs  string
+	TrustProxyHeaders  bool
+	DiscoveryEnabled   bool
+	MinPort            int
+	MaxPort            int
+	UDPEnabled         bool
+	TCPEnabled         bool
+	OnionDiscoveryOnly bool
+	OnionProxyURL      string
 }
 
 type Server struct {
@@ -174,8 +174,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			Identity:            identity,
 			PortalURL:           cfg.PortalURL,
 			Bootstraps:          cfg.Bootstraps,
-			I2PProxyURL:         cfg.I2PProxyURL,
-			I2PDiscoveryOnly:    cfg.I2PDiscoveryOnly,
+			OnionProxyURL:       cfg.OnionProxyURL,
+			OnionProxyOnly:      cfg.OnionDiscoveryOnly,
 			RequestTimeout:      15 * time.Second,
 			HopLimit:            1,
 			AllowDirectFallback: true,

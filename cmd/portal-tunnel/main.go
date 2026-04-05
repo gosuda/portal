@@ -33,24 +33,24 @@ func main() {
 }
 
 type exposeFlags struct {
-	relayCSV     string
-	discovery    bool
-	banMITM      bool
-	identityPath string
-	identityJSON string
-	name         string
-	desc         string
-	tags         string
-	owner        string
-	thumbnail    string
-	hide         bool
-	targetAddr   string
-	httpRoutes   []string
-	udp          bool
-	udpAddr      string
-	tcp          bool
-	i2pProxyURL  string
-	hops         int
+	relayCSV      string
+	discovery     bool
+	banMITM       bool
+	identityPath  string
+	identityJSON  string
+	name          string
+	desc          string
+	tags          string
+	owner         string
+	thumbnail     string
+	hide          bool
+	targetAddr    string
+	httpRoutes    []string
+	udp           bool
+	udpAddr       string
+	tcp           bool
+	onionProxyURL string
+	hops          int
 }
 
 func runExposeCommand(args []string) error {
@@ -72,8 +72,8 @@ func runExposeCommand(args []string) error {
 	utils.BoolFlagEnv(fs, &flags.udp, "udp", false, "Enable public UDP relay in addition to the default TCP relay", "UDP_ENABLED")
 	utils.StringFlagEnv(fs, &flags.udpAddr, "udp-addr", "", "Local UDP target address for relayed datagrams (host:port or port only); defaults to the target when --udp is enabled", "UDP_ADDR")
 	utils.BoolFlagEnv(fs, &flags.tcp, "tcp", false, "Request a dedicated TCP port on the relay for raw TCP services (no TLS; e.g., Minecraft, game servers)", "TCP_ENABLED")
-	utils.StringFlagEnv(fs, &flags.i2pProxyURL, "i2p-proxy-url", "", "I2P HTTP proxy URL for discovery control-plane traffic", "I2P_PROXY_URL")
-	utils.IntFlagEnv(fs, &flags.hops, "hops", 0, nil, "Number of relay hops for I2P-style multi-hop routing (0 = disabled)", "PORTAL_HOPS")
+	utils.StringFlagEnv(fs, &flags.onionProxyURL, "onion-proxy-url", "", "Onion HTTP proxy URL for discovery control-plane traffic", "ONION_PROXY_URL")
+	utils.IntFlagEnv(fs, &flags.hops, "hops", 0, nil, "Number of relay hops for onion-style multi-hop routing (0 = disabled)", "PORTAL_HOPS")
 
 	if err := utils.ParseFlagSet(fs, args, printExposeUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -120,7 +120,7 @@ func runExposeCommand(args []string) error {
 			Thumbnail:   flags.thumbnail,
 			Hide:        flags.hide,
 		},
-		I2PProxyURL: flags.i2pProxyURL,
+		OnionProxyURL: flags.onionProxyURL,
 		DiscoveryHops: func() int {
 			if flags.hops < 0 {
 				return 0

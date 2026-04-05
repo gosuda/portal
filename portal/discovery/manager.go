@@ -19,8 +19,8 @@ type ManagerConfig struct {
 	Identity            types.Identity
 	PortalURL           string
 	Bootstraps          []string
-	I2PProxyURL         string
-	I2PDiscoveryOnly    bool
+	OnionProxyURL       string
+	OnionProxyOnly      bool
 	RootCAPEM           []byte
 	RequestTimeout      time.Duration
 	MultiHop            bool
@@ -29,7 +29,7 @@ type ManagerConfig struct {
 }
 
 // Manager centralizes bootstrap relay discovery, direct confirmation polling,
-// and optional I2P-aware HTTP routing. It owns the RelaySet and keeps the
+// and optional onion-aware HTTP routing. It owns the RelaySet and keeps the
 // ordering logic (OLS-based permutation) out of server.go to preserve
 // separation of concerns.
 type Manager struct {
@@ -77,8 +77,8 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 }
 
 func (m *Manager) buildHTTPClient(cfg ManagerConfig) (*http.Client, error) {
-	if cfg.I2PDiscoveryOnly {
-		proxyURL := strings.TrimSpace(cfg.I2PProxyURL)
+	if cfg.OnionProxyOnly {
+		proxyURL := strings.TrimSpace(cfg.OnionProxyURL)
 		if proxyURL == "" {
 			return nil, nil
 		}

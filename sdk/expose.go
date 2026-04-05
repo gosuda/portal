@@ -58,7 +58,7 @@ type ExposeConfig struct {
 	Discovery              bool
 	Metadata               types.LeaseMetadata
 	RootCAPEM              []byte
-	I2PProxyURL            string
+	OnionProxyURL          string
 	DiscoveryHops          int
 	DiscoveryAllowFallback *bool
 }
@@ -74,7 +74,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if hopLimit < 0 {
 		hopLimit = 0
 	}
-	useManager := cfg.Discovery || hopLimit > 0 || strings.TrimSpace(cfg.I2PProxyURL) != ""
+	useManager := cfg.Discovery || hopLimit > 0 || strings.TrimSpace(cfg.OnionProxyURL) != ""
 	var discoveryMgr *discovery.Manager
 	if useManager {
 		allowFallback := true
@@ -83,8 +83,8 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		}
 		managerCfg := discovery.ManagerConfig{
 			Bootstraps:          relayURLs,
-			I2PProxyURL:         cfg.I2PProxyURL,
-			I2PDiscoveryOnly:    hopLimit > 0 || strings.TrimSpace(cfg.I2PProxyURL) != "",
+			OnionProxyURL:       cfg.OnionProxyURL,
+			OnionProxyOnly:      hopLimit > 0 || strings.TrimSpace(cfg.OnionProxyURL) != "",
 			RootCAPEM:           append([]byte(nil), cfg.RootCAPEM...),
 			RequestTimeout:      15 * time.Second,
 			MultiHop:            hopLimit > 0,
