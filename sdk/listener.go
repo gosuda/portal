@@ -26,6 +26,7 @@ type ListenerConfig struct {
 	UDPEnabled       bool
 	TCPEnabled       bool
 	BanMITM          bool
+	ProxyURL         string
 	Metadata         types.LeaseMetadata
 	RootCAPEM        []byte
 	DialTimeout      time.Duration
@@ -453,7 +454,7 @@ func (l *Listener) registerAndConfigure(ctx context.Context) error {
 			Message: "relay did not enable required udp support",
 		}
 	}
-	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname})
+	tlsConf, tlsCloser, err := keyless.BuildClientTLSConfig(l.api.baseURL.String(), []string{resp.Hostname}, l.api.proxyDialer())
 	if err != nil {
 		_ = l.api.unregisterLease(context.Background())
 		return err

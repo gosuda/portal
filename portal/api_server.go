@@ -164,15 +164,17 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	self, err := discovery.NormalizeDescriptor(types.RelayDescriptor{
-		Identity:       s.identity.Copy(),
-		Sequence:       uint64(now.UnixMilli()),
-		Version:        1,
-		IssuedAt:       now,
-		ExpiresAt:      now.Add(2 * types.DiscoveryPollInterval),
-		APIHTTPSAddr:   s.cfg.PortalURL,
-		IngressTLSAddr: ingressAddr,
-		SupportsUDP:    s.cfg.UDPEnabled && s.quicTunnel != nil,
-		SupportsTCP:    s.cfg.TCPEnabled,
+		Identity:            s.identity.Copy(),
+		Sequence:            uint64(now.UnixMilli()),
+		Version:             1,
+		IssuedAt:            now,
+		ExpiresAt:           now.Add(2 * types.DiscoveryPollInterval),
+		APIHTTPSAddr:        s.cfg.PortalURL,
+		IngressTLSAddr:      ingressAddr,
+		SupportsUDP:         s.cfg.UDPEnabled && s.quicTunnel != nil,
+		SupportsTCP:         s.cfg.TCPEnabled,
+		SupportsOverlayPeer: false,
+		Load:                float64(s.loadMgr.ActiveConns()),
 	})
 	if err != nil {
 		utils.WriteAPIError(w, http.StatusInternalServerError, types.APIErrorCodeInternal, err.Error())
@@ -185,8 +187,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		Self:            self,
 		Relays:          nil,
 	}
-	if s.relaySet != nil {
-		resp.Relays = s.relaySet.ActiveRelayDescriptors()
+	if s.discoveryMgr != nil {
+		resp.Relays = s.discoveryMgr.ActiveRelayDescriptors()
 	}
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }
