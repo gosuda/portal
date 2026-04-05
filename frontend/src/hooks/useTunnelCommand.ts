@@ -76,7 +76,7 @@ interface TunnelCommandExtras {
 
 export function useTunnelCommand(extras: TunnelCommandExtras = {}) {
   const currentOrigin = useMemo(() => readCurrentOrigin(), []);
-  const nameSeed = useMemo(() => readTunnelNameSeed(), []);
+  const [nameSeed] = useState(readTunnelNameSeed);
 
   const [target, setTarget] = useState(DEFAULT_HOST);
   const [name, setName] = useState("");
