@@ -668,7 +668,7 @@ export function ServerListView({
   };
 
   const gridClasses =
-    "grid grid-cols-1 gap-6 p-4 min-[500px]:grid-cols-2 min-[500px]:p-6 md:grid-cols-3";
+    `grid grid-cols-1 gap-6 ${isAdmin ? "p-4 min-[500px]:p-6" : "py-4 min-[500px]:py-6"} min-[500px]:grid-cols-2 md:grid-cols-3`;
   const serverCards = serverRows.map(renderServerCard);
   const serverGrid =
     serverCards.length > 0 ? (
@@ -740,11 +740,11 @@ export function ServerListView({
                 <div className="flex items-center gap-2">
                   <div className="flex-1">{searchBar}</div>
                 </div>
-                <div className="mt-4 hidden flex-wrap items-center gap-6 px-4 sm:flex sm:px-6">
+                <div className="mt-4 hidden flex-wrap items-center gap-6 sm:flex">
                   {adminFilterControls}
                 </div>
                 {onApprovalModeChange && (
-                  <div className="mt-4 flex items-center gap-3 px-4 sm:hidden">
+                  <div className="mt-4 flex items-center gap-3 sm:hidden">
                     <span className="text-sm font-medium text-text-muted">
                       Approval
                     </span>
@@ -785,7 +785,7 @@ export function ServerListView({
                 </div>
               )}
             </div>
-            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0 md:px-8">
+            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-0">
               <main className="z-0 flex-1">
                 {serverGrid ?? (
                   <div className="py-12 text-center">
