@@ -3,7 +3,7 @@
 ## Overview
 
 `WeightManager` is the component that collects per-protocol load contributions
-and fuses them into a single `NodeLoad` for OLS (Orthogonal Latin Squares)
+and fuses them into a single `NodeLoad` for the Reverse Siamese OLS grid
 scoring.  It exists to decouple the load-balancing algorithm from the
 specifics of any underlying transport protocol (WireGuard, plain TCP, HTTPS,
 etc.).

@@ -125,13 +125,16 @@ That distinction matters because `/sdk/connect` stops being ordinary HTTP once h
 - `keyless`: admin/API TLS attach helpers and tenant-side signer integration
 - `auth`: SIWE register challenge creation/verification plus lease access token issue/verify
 - `discovery`: relay descriptor publication over relay HTTPS plus relay-set synchronization
+- `discovery.Manager`: single owner that wraps `RelaySet`, applies OLS bootstrap ordering, supports multi-hop discovery with hop limits, and routes discovery traffic through the optional I2P proxy (with configurable fallback)
 - `discovery.OLSManager`: non-linear load-aware relay ordering manager that applies inverse-load pre-distortion and OLS-style affine permutation (non-rotation)
+- `policy.OLSManager`: Reverse Siamese paired-square grid router that maps `(clientID, leaseID)` deterministically and applies rotation-based burst relief
 - `wireguard`: optional relay overlay network used to reach peer relay APIs over internal overlay IPs and keep relay peer state synchronized
 - `Server` additionally owns `quicTunnel` (QUIC listener, ALPN `portal-tunnel`) when UDP transport is enabled
 
 ### SDK (`sdk/`)
 
 - `ExposeConfig.Discovery`: when true, `Expose` fetches the default Portal relay registry, merges it with explicit relay inputs, normalizes the result, and runs the relay discovery loop
+- `ExposeConfig.DiscoveryHops`: optional I2P-style hop count (`0` = disabled) that lets callers request multi-hop relay circuits on demand
 - Entry points can opt out of registry defaults and call `utils.NormalizeRelayURLs` directly when they need explicit relay inputs only
 - `Listener`: validates one relay URL locally, then starts relay compatibility checks, SIWE-based lease registration, reverse session maintenance, and lease renewal in the background until ready
 - `Listener` owns a `transport.ClientStream` and, when UDP is enabled, a `transport.ClientDatagram`

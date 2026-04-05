@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -74,10 +73,8 @@ type Server struct {
 	identity          types.Identity
 	cfg               ServerConfig
 	trustedProxyCIDRs []*net.IPNet
-	relaySet          *discovery.RelaySet
+	discoveryMgr      *discovery.Manager
 	ols               *ols.Engine
-	olsManager        *discovery.OLSManager
-	discoveryClient   *http.Client
 	shutdownOnce      sync.Once
 }
 
@@ -173,30 +170,22 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		weightMgr:         policy.NewWeightManager(),
 		identity:          identity,
 		trustedProxyCIDRs: trustedProxyCIDRs,
-		olsManager:        discovery.NewOLSManager(),
 	}
-	if cfg.I2PDiscoveryOnly {
-		proxyURL := strings.TrimSpace(cfg.I2PProxyURL)
-		if proxyURL != "" {
-			parsedProxy, err := url.Parse(proxyURL)
-			if err != nil {
-				return nil, fmt.Errorf("parse i2p proxy url: %w", err)
-			}
-			s.discoveryClient = &http.Client{
-				Transport: &http.Transport{
-					Proxy: http.ProxyURL(parsedProxy),
-				},
-				Timeout: 15 * time.Second,
-			}
-		}
-	}
-
 	if cfg.DiscoveryEnabled {
-		s.relaySet = discovery.NewRelaySet()
-		if err := s.relaySet.SetSelfRelay(identity, cfg.PortalURL); err != nil {
+		manager, err := discovery.NewManager(discovery.ManagerConfig{
+			Identity:            identity,
+			PortalURL:           cfg.PortalURL,
+			Bootstraps:          cfg.Bootstraps,
+			I2PProxyURL:         cfg.I2PProxyURL,
+			I2PDiscoveryOnly:    cfg.I2PDiscoveryOnly,
+			RequestTimeout:      15 * time.Second,
+			HopLimit:            1,
+			AllowDirectFallback: true,
+		})
+		if err != nil {
 			return nil, err
 		}
-		s.relaySet.SetBootstrapRelayURLs(cfg.Bootstraps)
+		s.discoveryMgr = manager
 		s.ols = ols.New(identity.Key())
 	}
 
@@ -601,52 +590,15 @@ func (s *Server) runQUICTunnelListener(listener *quic.Listener) error {
 }
 
 func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
-	ticker := time.NewTicker(types.DiscoveryPollInterval)
-	defer ticker.Stop()
-	var round uint64
-
-	for {
-		bootstraps := s.relaySet.BootstrapDescriptors()
-		if s.olsManager != nil && len(bootstraps) > 1 {
-			bootstraps = s.olsManager.OrderDescriptors(bootstraps, nil, round)
-		}
-
-		for _, bootstrap := range bootstraps {
-			resp, err := discovery.DiscoverRelayDiscovery(ctx, bootstrap.APIHTTPSAddr, nil, s.discoveryClient)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				log.Warn().
-					Err(err).
-					Str("relay", bootstrap.APIHTTPSAddr).
-					Msg("bootstrap relay discovery failed")
-				continue
-			}
-
-			now := time.Now().UTC()
-			if err := s.relaySet.ApplyRelayDiscoveryResponse(bootstrap.Identity, bootstrap.APIHTTPSAddr, resp, now); err != nil {
-				log.Warn().
-					Err(err).
-					Str("relay", bootstrap.APIHTTPSAddr).
-					Msg("bootstrap relay discovery failed")
-				continue
-			}
-			if s.ols != nil {
-				s.ols.OnRelaySetChanged(s.localLoad(), s.relaySet.Snapshot())
-			}
-		}
-		if ctx.Err() != nil {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			round++
-		}
+	if s.discoveryMgr == nil {
+		<-ctx.Done()
+		return nil
 	}
+	return s.discoveryMgr.Run(ctx, func(snapshot map[string]types.RelayState) {
+		if s.ols != nil {
+			s.ols.OnRelaySetChanged(s.localLoad(), snapshot)
+		}
+	})
 }
 
 func (s *Server) localLoad() policy.NodeLoad {

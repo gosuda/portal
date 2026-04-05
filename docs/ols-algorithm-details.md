@@ -13,7 +13,7 @@ This document isolates the OLS-specific algorithm details while keeping existing
 - `OLSManager` keeps:
   - `nodes`: node metadata and load state
   - `grid`: current `n x n` mapping (`n = floor(sqrt(node count))`)
-  - `l1`, `l2`: orthogonal latin squares for deterministic coordinate mapping
+  - `l1`, `l2`: Reverse Siamese row/column tables for deterministic coordinate mapping
   - `rotation`: current rotation angle (now conservative, not fixed 90° only)
 
 - `OLSNode` tracks:
@@ -26,9 +26,10 @@ This document isolates the OLS-specific algorithm details while keeping existing
 1. Sort node IDs for deterministic placement.
 2. Compute `n = floor(sqrt(N))`; only reconfigure when `n` changes and `n >= 2`.
 3. Fill grid with healthy nodes first, then unhealthy nodes if needed.
-4. Generate MOLS recursively:
-   - prime order: base latin squares
-   - composite order: recursive factor decomposition + composition
+4. Generate paired Siamese tables:
+   - build the forward Siamese square (top-middle start, up-right rule, down-step collision handling)
+   - mirror + complement it to obtain the reverse square
+   - project reverse -> row indices, forward -> column indices
 
 ## Deterministic Target Mapping
 
@@ -39,7 +40,7 @@ For `(clientID, leaseID)`:
 3. Apply current rotation transform.
 4. Select node at rotated coordinate.
 5. If unhealthy/recently failing, fall back to next deterministic candidate.
-6. Reject loops if `RouteContext.Visited` already contains target.
+6. Reject loops when the hop counter reaches the per-connection limit (`RouteContext.MaxHops`).
 
 ## Load Score and Update Path
 
@@ -71,7 +72,7 @@ Current behavior:
 - interpolate angle from `15°` up to `90°`
 - reach full `90°` when ratio is at/above aggressive threshold (`1.5`)
 
-This prevents overreaction when “good” and “burst-heavy” directions are similar.
+This prevents overreaction when "good" and "burst-heavy" directions are similar.
 
 ## Relay Integration Notes
 

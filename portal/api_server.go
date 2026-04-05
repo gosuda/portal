@@ -187,8 +187,8 @@ func (s *Server) handleRelayDiscovery(w http.ResponseWriter, r *http.Request) {
 		Self:            self,
 		Relays:          nil,
 	}
-	if s.relaySet != nil {
-		resp.Relays = s.relaySet.ActiveRelayDescriptors()
+	if s.discoveryMgr != nil {
+		resp.Relays = s.discoveryMgr.ActiveRelayDescriptors()
 	}
 	utils.WriteAPIData(w, http.StatusOK, resp)
 }

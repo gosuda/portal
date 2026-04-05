@@ -37,6 +37,7 @@ type Exposure struct {
 	datagrams chan types.DatagramFrame
 
 	relaySet       *discovery.RelaySet
+	discoveryMgr   *discovery.Manager
 	listenerMu     sync.RWMutex
 	relayListeners map[string]*Listener
 
@@ -45,18 +46,21 @@ type Exposure struct {
 }
 
 type ExposeConfig struct {
-	RelayURLs    []string
-	IdentityPath string
-	IdentityJSON string
-	Name         string
-	TargetAddr   string
-	UDPAddr      string
-	UDPEnabled   bool
-	TCPEnabled   bool
-	BanMITM      bool
-	Discovery    bool
-	Metadata     types.LeaseMetadata
-	RootCAPEM    []byte
+	RelayURLs              []string
+	IdentityPath           string
+	IdentityJSON           string
+	Name                   string
+	TargetAddr             string
+	UDPAddr                string
+	UDPEnabled             bool
+	TCPEnabled             bool
+	BanMITM                bool
+	Discovery              bool
+	Metadata               types.LeaseMetadata
+	RootCAPEM              []byte
+	I2PProxyURL            string
+	DiscoveryHops          int
+	DiscoveryAllowFallback *bool
 }
 
 // Expose creates relay listeners for each normalized relay URL and exposes a
@@ -65,6 +69,32 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, cfg.Discovery)
 	if err != nil {
 		return nil, err
+	}
+	hopLimit := cfg.DiscoveryHops
+	if hopLimit < 0 {
+		hopLimit = 0
+	}
+	useManager := cfg.Discovery || hopLimit > 0 || strings.TrimSpace(cfg.I2PProxyURL) != ""
+	var discoveryMgr *discovery.Manager
+	if useManager {
+		allowFallback := true
+		if cfg.DiscoveryAllowFallback != nil {
+			allowFallback = *cfg.DiscoveryAllowFallback
+		}
+		managerCfg := discovery.ManagerConfig{
+			Bootstraps:          relayURLs,
+			I2PProxyURL:         cfg.I2PProxyURL,
+			I2PDiscoveryOnly:    hopLimit > 0 || strings.TrimSpace(cfg.I2PProxyURL) != "",
+			RootCAPEM:           append([]byte(nil), cfg.RootCAPEM...),
+			RequestTimeout:      15 * time.Second,
+			MultiHop:            hopLimit > 0,
+			HopLimit:            hopLimit,
+			AllowDirectFallback: allowFallback,
+		}
+		discoveryMgr, err = discovery.NewManager(managerCfg)
+		if err != nil {
+			return nil, fmt.Errorf("discovery manager: %w", err)
+		}
 	}
 
 	identity, createdIdentity, err := utils.ResolveListenerIdentity(
@@ -108,12 +138,21 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
 		accepted:       make(chan net.Conn, max(len(relayURLs)*defaultReadyTarget*2, 1)),
 		datagrams:      make(chan types.DatagramFrame, max(len(relayURLs)*32, 1)),
-		relaySet:       discovery.NewRelaySet(),
+		discoveryMgr:   discoveryMgr,
 		relayListeners: make(map[string]*Listener, len(relayURLs)),
+	}
+	if exposure.discoveryMgr != nil {
+		exposure.relaySet = exposure.discoveryMgr.RelaySet()
+	} else {
+		exposure.relaySet = discovery.NewRelaySet()
 	}
 
 	if len(relayURLs) > 0 {
-		exposure.relaySet.SetBootstrapRelayURLs(relayURLs)
+		if exposure.discoveryMgr != nil {
+			exposure.discoveryMgr.SetBootstrapRelayURLs(relayURLs)
+		} else {
+			exposure.relaySet.SetBootstrapRelayURLs(relayURLs)
+		}
 		if err := exposure.reconcileRelayListeners(true); err != nil {
 			_ = exposure.Close()
 			return nil, err
@@ -121,11 +160,21 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	}
 
 	if cfg.Discovery {
-		go func() {
-			_ = exposure.relaySet.RunLoop(exposureCtx, exposure.rootCAPEM, func() error {
-				return exposure.reconcileRelayListeners(false)
-			})
-		}()
+		if exposure.discoveryMgr != nil {
+			go func() {
+				_ = exposure.discoveryMgr.Run(exposureCtx, func(map[string]types.RelayState) {
+					if err := exposure.reconcileRelayListeners(false); err != nil {
+						log.Warn().Err(err).Msg("exposure: reconcile after discovery update failed")
+					}
+				})
+			}()
+		} else {
+			go func() {
+				_ = exposure.relaySet.RunLoop(exposureCtx, exposure.rootCAPEM, func() error {
+					return exposure.reconcileRelayListeners(false)
+				})
+			}()
+		}
 	}
 	go func() {
 		<-exposure.done

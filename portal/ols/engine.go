@@ -1,12 +1,9 @@
-// Package ols provides the OLS routing engine, isolating all Orthogonal Latin
-// Square routing logic and the inter-relay wire protocol from the portal server core.
+// Package ols provides the OLS routing engine, isolating all paired Reverse
+// Siamese routing logic and the inter-relay wire protocol from the portal server core.
 package ols
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"time"
@@ -15,15 +12,16 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/gosuda/portal/v2/portal/policy"
+	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
 	"github.com/gosuda/portal/v2/utils"
 )
 
 const (
 	interRelayPort       = 7778
-	routeContextMagic    = "PORT"
 	clientHelloWait      = 2 * time.Second
-	maxRouteContextBytes = 65536
+	maxRouteContextBytes = transport.OnionCellSize
+	defaultMaxHops       = 3
 )
 
 // Dialer dials an outbound TCP connection. It mirrors net.Dialer's context-aware
@@ -50,7 +48,7 @@ type PeerDialer interface {
 	Dialer
 }
 
-// Engine encapsulates OLS routing: MOLS grid management, inter-relay protocol,
+// Engine encapsulates OLS routing: Reverse Siamese grid management, inter-relay protocol,
 // and connection forwarding decisions. It intentionally avoids server
 // lifecycle concerns (listeners, identity key derivation) and transport-specific
 // protocol details (overlay addresses, peer keys, etc.).
@@ -99,7 +97,8 @@ func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string
 	}
 	routeCtx := &policy.RouteContext{
 		OriginNodeID: e.selfKey,
-		Visited:      []string{e.selfKey},
+		HopCount:     0,
+		MaxHops:      defaultMaxHops,
 	}
 	targetID, err := e.manager.GetTargetNodeID(conn.RemoteAddr().String(), serverName, routeCtx)
 	if err != nil || targetID == e.selfKey {
@@ -115,7 +114,17 @@ func (e *Engine) RouteConn(ctx context.Context, conn net.Conn, serverName string
 		log.Warn().Err(err).Str("target", proxyAddr).Msg("ols: failed to dial inter-relay target")
 		return false
 	}
-	if err = writeRouteContext(targetConn, routeCtx); err != nil {
+	meta := transport.NewMeta(routeCtx.MaxHops)
+	layer := transport.OnionLayer{
+		Meta:        meta,
+		NextHopHint: transport.HashNodeID(targetID),
+	}
+	cell, err := transport.EncodeOnionLayer(layer, transport.NewNoopCipher())
+	if err != nil {
+		_ = targetConn.Close()
+		return false
+	}
+	if err = writeOnionCell(targetConn, cell); err != nil {
 		_ = targetConn.Close()
 		e.manager.MarkFailure(targetID)
 		return false
@@ -140,13 +149,27 @@ func (e *Engine) ServeInterRelayConn(
 ) {
 	defer conn.Close()
 
-	routeCtx, err := readRouteContext(conn)
+	cell, err := readOnionCell(conn)
 	if err != nil {
-		log.Warn().Err(err).Msg("ols: failed to read inter-relay route context")
+		log.Warn().Err(err).Msg("ols: failed to read onion cell")
 		return
 	}
-	routeCtx.Visited = append(routeCtx.Visited, e.selfKey)
-	routeCtx.HopCount++
+	layer, err := transport.DecodeOnionLayer(cell, transport.NewNoopCipher())
+	if err != nil {
+		log.Warn().Err(err).Msg("ols: failed to decode onion cell")
+		return
+	}
+	if !transport.HintMatches(e.selfKey, layer.NextHopHint) {
+		log.Warn().Msg("ols: onion hint mismatch; dropping connection")
+		return
+	}
+	meta := layer.Meta
+	meta = meta.Advance()
+	routeCtx := &policy.RouteContext{
+		OriginNodeID: e.selfKey,
+		HopCount:     int(meta.Hop),
+		MaxHops:      int(meta.MaxHops),
+	}
 
 	clientHello, wrappedConn, err := l4.InspectClientHello(conn, clientHelloWait)
 	if err != nil {
@@ -165,10 +188,17 @@ func (e *Engine) ServeInterRelayConn(
 			if proxyAddr, ok := peers.PeerAddr(targetID); ok {
 				targetConn, dialErr := peers.DialContext(ctx, "tcp", proxyAddr)
 				if dialErr == nil {
-					if writeErr := writeRouteContext(targetConn, routeCtx); writeErr == nil {
-						bridge(wrappedConn, targetConn)
-						e.manager.MarkSuccess(targetID)
-						return
+					nextLayer := transport.OnionLayer{
+						Meta:        meta,
+						NextHopHint: transport.HashNodeID(targetID),
+					}
+					nextCell, encErr := transport.EncodeOnionLayer(nextLayer, transport.NewNoopCipher())
+					if encErr == nil {
+						if writeErr := writeOnionCell(targetConn, nextCell); writeErr == nil {
+							bridge(wrappedConn, targetConn)
+							e.manager.MarkSuccess(targetID)
+							return
+						}
 					}
 					_ = targetConn.Close()
 				}
@@ -183,42 +213,17 @@ func (e *Engine) ServeInterRelayConn(
 
 // --- inter-relay wire protocol ---
 
-func writeRouteContext(conn net.Conn, ctx *policy.RouteContext) error {
-	data, err := json.Marshal(ctx)
-	if err != nil {
-		return err
-	}
-	header := make([]byte, 8)
-	copy(header[:4], routeContextMagic)
-	binary.BigEndian.PutUint32(header[4:], uint32(len(data)))
-	if _, err = conn.Write(header); err != nil {
-		return err
-	}
-	_, err = conn.Write(data)
+func writeOnionCell(conn net.Conn, cell transport.Cell) error {
+	_, err := conn.Write(cell.Buffer[:])
 	return err
 }
 
-func readRouteContext(conn net.Conn) (*policy.RouteContext, error) {
-	header := make([]byte, 8)
-	if _, err := io.ReadFull(conn, header); err != nil {
-		return nil, err
+func readOnionCell(conn net.Conn) (transport.Cell, error) {
+	var cell transport.Cell
+	if _, err := io.ReadFull(conn, cell.Buffer[:]); err != nil {
+		return cell, err
 	}
-	if string(header[:4]) != routeContextMagic {
-		return nil, errors.New("ols: invalid inter-relay magic")
-	}
-	length := binary.BigEndian.Uint32(header[4:])
-	if length > maxRouteContextBytes {
-		return nil, errors.New("ols: inter-relay context too large")
-	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(conn, data); err != nil {
-		return nil, err
-	}
-	var ctx policy.RouteContext
-	if err := json.Unmarshal(data, &ctx); err != nil {
-		return nil, err
-	}
-	return &ctx, nil
+	return cell, nil
 }
 
 // bridge copies bidirectionally between left and right, then closes both.

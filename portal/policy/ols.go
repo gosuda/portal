@@ -54,11 +54,11 @@ type NodeTable struct {
 // RouteContext tracks routing metadata to prevent loops.
 type RouteContext struct {
 	OriginNodeID string
-	Visited      []string
 	HopCount     int
+	MaxHops      int
 }
 
-// OLSManager manages the grid topology using recursive composition.
+// OLSManager manages the grid topology using paired Reverse Siamese squares.
 type OLSManager struct {
 	mu sync.RWMutex
 
@@ -66,7 +66,7 @@ type OLSManager struct {
 	n     int
 	grid  [][]*OLSNode
 
-	// Orthogonal Latin Squares
+	// Reverse Siamese tables
 	l1 [][]int
 	l2 [][]int
 
@@ -161,95 +161,89 @@ func (m *OLSManager) reconfigure(n int) {
 		}
 	}
 
-	// Generate MOLS using recursive composition
-	m.l1, m.l2 = generateMOLS(n)
+	// Generate Reverse Siamese tables (forward + reverse pairing)
+	m.l1, m.l2 = generateReverseSiameseTables(n)
 }
 
-// generateMOLS constructs a pair of orthogonal latin squares of order n.
-func generateMOLS(n int) ([][]int, [][]int) {
+// generateReverseSiameseTables builds a forward Siamese square and its
+// reverse (mirror + complement) representation, then projects them into
+// row/column index tables.
+func generateReverseSiameseTables(n int) ([][]int, [][]int) {
 	if n < 2 {
 		return [][]int{{0}}, [][]int{{0}}
 	}
-	if n == 2 {
-		l1 := make([][]int, n)
-		l2 := make([][]int, n)
-		for i := 0; i < n; i++ {
-			l1[i] = make([]int, n)
-			l2[i] = make([]int, n)
-			for j := 0; j < n; j++ {
-				l1[i][j] = i
-				l2[i][j] = j
-			}
-		}
-		return l1, l2
-	}
 
-	if isPrime(n) {
-		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
-	}
+	// The forward square uses the standard Siamese (De la Loubere) walk:
+	// start at the top-middle cell, move diagonally up-right, and when the
+	// cell is occupied move one step down instead.
+	forward := buildSiameseSquare(n)
+	reverse := buildReverseSiamese(forward)
 
-	m, k := findFactors(n)
-	if m == 1 {
-		return generateBaseMOLS(n, 1), generateBaseMOLS(n, n-1)
-	}
-
-	a1, a2 := generateMOLS(m)
-	b1, b2 := generateMOLS(k)
-
-	return composeMOLS(a1, b1), composeMOLS(a2, b2)
+	return buildRowIndexTable(reverse, n), buildColIndexTable(forward, n)
 }
 
-// generateBaseMOLS fills an n×n grid where each cell (i,j) gets value
-// (step*i + j) % n. Intermediate products are kept bounded by reducing
-// modulo n at each multiplication step.
-func generateBaseMOLS(n, step int) [][]int {
-	ls := make([][]int, n)
+func buildSiameseSquare(n int) [][]int {
+	square := make([][]int, n)
 	for i := 0; i < n; i++ {
-		ls[i] = make([]int, n)
-		// Compute step*i mod n once per row, then add j mod n per column.
-		base := (step % n) * (i % n) % n
+		square[i] = make([]int, n)
 		for j := 0; j < n; j++ {
-			ls[i][j] = (base + j) % n
+			square[i][j] = -1
 		}
 	}
-	return ls
+
+	row := 0
+	col := n / 2
+	maxVal := n * n
+	for value := 0; value < maxVal; value++ {
+		square[row][col] = value
+
+		nextRow := (row - 1 + n) % n
+		nextCol := (col + 1) % n
+		if square[nextRow][nextCol] != -1 {
+			row = (row + 1) % n
+		} else {
+			row = nextRow
+			col = nextCol
+		}
+	}
+	return square
 }
 
-func composeMOLS(a, b [][]int) [][]int {
-	m := len(a)
-	k := len(b)
-	n := m * k
-	res := make([][]int, n)
+// buildReverseSiamese mirrors the forward square horizontally and applies
+// a complement transform (N^2-1 - x) to match the Reverse Siamese pairing.
+func buildReverseSiamese(forward [][]int) [][]int {
+	n := len(forward)
+	maxVal := n*n - 1
+	reverse := make([][]int, n)
 	for i := 0; i < n; i++ {
-		res[i] = make([]int, n)
+		reverse[i] = make([]int, n)
 		for j := 0; j < n; j++ {
-			valA := a[i/k][j/k]
-			valB := b[i%k][j%k]
-			res[i][j] = valA*k + valB
+			reverse[i][j] = maxVal - forward[i][n-1-j]
 		}
 	}
-	return res
+	return reverse
 }
 
-func isPrime(n int) bool {
-	if n < 2 {
-		return false
-	}
-	for i := 2; i*i <= n; i++ {
-		if n%i == 0 {
-			return false
+func buildRowIndexTable(square [][]int, n int) [][]int {
+	rows := make([][]int, n)
+	for i := 0; i < n; i++ {
+		rows[i] = make([]int, n)
+		for j := 0; j < n; j++ {
+			rows[i][j] = square[i][j] / n
 		}
 	}
-	return true
+	return rows
 }
 
-func findFactors(n int) (int, int) {
-	for i := 2; i*i <= n; i++ {
-		if n%i == 0 {
-			return i, n / i
+func buildColIndexTable(square [][]int, n int) [][]int {
+	cols := make([][]int, n)
+	for i := 0; i < n; i++ {
+		cols[i] = make([]int, n)
+		for j := 0; j < n; j++ {
+			cols[i][j] = square[i][j] % n
 		}
 	}
-	return 1, n
+	return cols
 }
 
 func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext) (string, error) {
@@ -260,10 +254,8 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 		return "", fmt.Errorf("grid not initialized")
 	}
 
-	if ctx != nil {
-		if ctx.HopCount > 2 {
-			return "", fmt.Errorf("max hops exceeded")
-		}
+	if ctx != nil && ctx.MaxHops > 0 && ctx.HopCount >= ctx.MaxHops {
+		return "", fmt.Errorf("max hops exceeded")
 	}
 
 	i := hashStringMod(clientID, m.n)
@@ -287,15 +279,6 @@ func (m *OLSManager) GetTargetNodeID(clientID, leaseID string, ctx *RouteContext
 
 	if target == nil {
 		return "", fmt.Errorf("no healthy node found")
-	}
-
-	// Loop Prevention
-	if ctx != nil {
-		for _, visited := range ctx.Visited {
-			if visited == target.ID {
-				return "", fmt.Errorf("loop detected")
-			}
-		}
 	}
 
 	return target.ID, nil
