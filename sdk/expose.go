@@ -25,6 +25,7 @@ type Exposure struct {
 	done   <-chan struct{}
 
 	identity   types.Identity
+	proxyURL   string
 	TargetAddr string
 	UDPAddr    string
 	udpEnabled bool
@@ -66,7 +67,9 @@ type ExposeConfig struct {
 // Expose creates relay listeners for each normalized relay URL and exposes a
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
-	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, cfg.Discovery)
+	onionProxyURL := strings.TrimSpace(cfg.OnionProxyURL)
+	includeDefaults := cfg.Discovery && onionProxyURL == ""
+	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, includeDefaults)
 	if err != nil {
 		return nil, err
 	}
@@ -74,17 +77,20 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	if hopLimit < 0 {
 		hopLimit = 0
 	}
-	useManager := cfg.Discovery || hopLimit > 0 || strings.TrimSpace(cfg.OnionProxyURL) != ""
+	if cfg.UDPEnabled && onionProxyURL != "" {
+		return nil, errors.New("--udp cannot be combined with onion proxy routing")
+	}
+	useManager := cfg.Discovery || hopLimit > 0 || onionProxyURL != ""
 	var discoveryMgr *discovery.Manager
 	if useManager {
-		allowFallback := true
+		allowFallback := onionProxyURL == ""
 		if cfg.DiscoveryAllowFallback != nil {
 			allowFallback = *cfg.DiscoveryAllowFallback
 		}
 		managerCfg := discovery.ManagerConfig{
 			Bootstraps:          relayURLs,
-			OnionProxyURL:       cfg.OnionProxyURL,
-			OnionProxyOnly:      hopLimit > 0 || strings.TrimSpace(cfg.OnionProxyURL) != "",
+			OnionProxyURL:       onionProxyURL,
+			OnionProxyOnly:      hopLimit > 0 || onionProxyURL != "",
 			RootCAPEM:           append([]byte(nil), cfg.RootCAPEM...),
 			RequestTimeout:      15 * time.Second,
 			MultiHop:            hopLimit > 0,
@@ -129,6 +135,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
 		identity:       identity,
+		proxyURL:       onionProxyURL,
 		TargetAddr:     targetAddr,
 		UDPAddr:        udpAddr,
 		udpEnabled:     cfg.UDPEnabled,
@@ -327,6 +334,7 @@ func (e *Exposure) reconcileRelayListeners(failOnError bool) error {
 			UDPEnabled: e.udpEnabled,
 			TCPEnabled: e.tcpEnabled,
 			BanMITM:    e.banMITM,
+			ProxyURL:   e.proxyURL,
 			Metadata:   e.metadata.Copy(),
 			RootCAPEM:  append([]byte(nil), e.rootCAPEM...),
 			relaySet:   e.relaySet,

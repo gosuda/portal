@@ -178,7 +178,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			OnionProxyOnly:      cfg.OnionDiscoveryOnly,
 			RequestTimeout:      15 * time.Second,
 			HopLimit:            1,
-			AllowDirectFallback: true,
+			AllowDirectFallback: !cfg.OnionDiscoveryOnly,
 		})
 		if err != nil {
 			return nil, err

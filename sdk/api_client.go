@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,12 +50,41 @@ type apiClient struct {
 	metadata         types.LeaseMetadata
 	resolvedPublicIP string
 	sniPort          int
+	proxyURL         *url.URL
+	proxyAuthHeader  string
 }
 
 func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	normalizedRelayURL, err := utils.NormalizeRelayURL(relayURL)
 	if err != nil {
 		return nil, err
+	}
+	trimmedProxy := strings.TrimSpace(cfg.ProxyURL)
+	var proxyURL *url.URL
+	var proxyAuthHeader string
+	if trimmedProxy != "" {
+		parsedProxy, err := url.Parse(trimmedProxy)
+		if err != nil {
+			return nil, fmt.Errorf("parse proxy url: %w", err)
+		}
+		if !strings.EqualFold(parsedProxy.Scheme, "http") {
+			return nil, fmt.Errorf("unsupported proxy scheme %q", parsedProxy.Scheme)
+		}
+		if strings.TrimSpace(parsedProxy.Host) == "" {
+			return nil, errors.New("proxy url requires host")
+		}
+		proxyCopy := *parsedProxy
+		if parsedProxy.User != nil {
+			username := parsedProxy.User.Username()
+			password, _ := parsedProxy.User.Password()
+			credentials := username
+			if password != "" {
+				credentials += ":" + password
+			}
+			proxyAuthHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
+			proxyCopy.User = nil
+		}
+		proxyURL = &proxyCopy
 	}
 
 	baseURL, err := url.Parse(normalizedRelayURL)
@@ -66,12 +96,14 @@ func newApiClient(relayURL string, cfg ListenerConfig) (*apiClient, error) {
 	requestTimeout := utils.DurationOrDefault(cfg.RequestTimeout, defaultRequestTimeout)
 
 	return &apiClient{
-		baseURL:        baseURL,
-		dialTimeout:    dialTimeout,
-		requestTimeout: requestTimeout,
-		rootCAPEM:      append([]byte(nil), cfg.RootCAPEM...),
-		identity:       cfg.Identity.Copy(),
-		metadata:       cfg.Metadata.Copy(),
+		baseURL:         baseURL,
+		dialTimeout:     dialTimeout,
+		requestTimeout:  requestTimeout,
+		rootCAPEM:       append([]byte(nil), cfg.RootCAPEM...),
+		identity:        cfg.Identity.Copy(),
+		metadata:        cfg.Metadata.Copy(),
+		proxyURL:        proxyURL,
+		proxyAuthHeader: proxyAuthHeader,
 	}, nil
 }
 
@@ -155,6 +187,7 @@ func (a *apiClient) ensureHTTPClient(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.applyHTTPProxy(httpClient)
 	if err := a.ensureCompatible(ctx, httpClient); err != nil {
 		if transport, ok := httpClient.Transport.(*http.Transport); ok {
 			transport.CloseIdleConnections()
@@ -171,6 +204,9 @@ func (a *apiClient) ensureHTTPClient(ctx context.Context) error {
 }
 
 func (a *apiClient) reportedIP(ctx context.Context) string {
+	if a.proxyURL != nil {
+		return ""
+	}
 	if a.resolvedPublicIP == "" {
 		a.resolvedPublicIP = utils.ResolvePublicIP(ctx)
 	}
@@ -244,16 +280,11 @@ func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 	if err := a.ensureHTTPClient(ctx); err != nil {
 		return nil, err
 	}
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: a.dialTimeout},
-		Config:    a.rawTLSConfig.Clone(),
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", utils.EnsurePort(a.baseURL.Host))
+	tlsConn, err := a.dialTLS(ctx)
 	if err != nil {
 		return nil, err
 	}
+	conn := tlsConn
 
 	req := &http.Request{
 		Method: http.MethodGet,
@@ -287,6 +318,73 @@ func (a *apiClient) openReverseSession(ctx context.Context) (net.Conn, error) {
 	}
 
 	return wrapBufferedConn(conn, reader), nil
+}
+
+func (a *apiClient) applyHTTPProxy(client *http.Client) {
+	if client == nil || a.proxyURL == nil {
+		return
+	}
+	transport, _ := client.Transport.(*http.Transport)
+	if transport == nil {
+		transport = &http.Transport{}
+	}
+	transport.Proxy = http.ProxyURL(a.proxyURL)
+	if a.proxyAuthHeader != "" {
+		if transport.ProxyConnectHeader == nil {
+			transport.ProxyConnectHeader = make(http.Header)
+		}
+		transport.ProxyConnectHeader.Set("Proxy-Authorization", a.proxyAuthHeader)
+	}
+	client.Transport = transport
+}
+
+func (a *apiClient) dialTLS(ctx context.Context) (net.Conn, error) {
+	rawConn, err := a.dialRelayConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tlsConf := a.rawTLSConfig.Clone()
+	conn := tls.Client(rawConn, tlsConf)
+	if err := conn.HandshakeContext(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (a *apiClient) dialRelayConn(ctx context.Context) (net.Conn, error) {
+	targetAddr := utils.EnsurePort(a.baseURL.Host)
+	if a.proxyURL == nil {
+		dialer := &net.Dialer{Timeout: a.dialTimeout}
+		return dialer.DialContext(ctx, "tcp", targetAddr)
+	}
+	timeout := a.dialTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 && (timeout == 0 || remaining < timeout) {
+			timeout = remaining
+		}
+	}
+	return utils.DialTargetViaHTTPProxy(ctx, a.proxyURL, targetAddr, a.proxyAuthHeader, timeout)
+}
+
+func (a *apiClient) proxyDialer() keyless.DialContextFunc {
+	if a.proxyURL == nil {
+		return nil
+	}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" {
+			return nil, fmt.Errorf("unsupported network %s", network)
+		}
+		timeout := a.dialTimeout
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining > 0 && (timeout == 0 || remaining < timeout) {
+				timeout = remaining
+			}
+		}
+		return utils.DialTargetViaHTTPProxy(ctx, a.proxyURL, address, a.proxyAuthHeader, timeout)
+	}
 }
 
 type bufferedConn struct {
