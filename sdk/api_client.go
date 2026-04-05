@@ -346,8 +346,11 @@ func (a *apiClient) dialTLS(ctx context.Context) (net.Conn, error) {
 	tlsConf := a.rawTLSConfig.Clone()
 	conn := tls.Client(rawConn, tlsConf)
 	if err := conn.HandshakeContext(ctx); err != nil {
-		conn.Close()
-		return nil, err
+		closeErr := conn.Close()
+		if closeErr != nil {
+			return nil, errors.Join(fmt.Errorf("tls handshake failed: %w", err), fmt.Errorf("close tls conn: %w", closeErr))
+		}
+		return nil, fmt.Errorf("tls handshake failed: %w", err)
 	}
 	return conn, nil
 }
