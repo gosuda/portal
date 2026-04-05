@@ -20,7 +20,6 @@ import (
 	"github.com/gosuda/portal/v2/portal/acme"
 	"github.com/gosuda/portal/v2/portal/discovery"
 	"github.com/gosuda/portal/v2/portal/keyless"
-	"github.com/gosuda/portal/v2/portal/ols"
 	"github.com/gosuda/portal/v2/portal/policy"
 	"github.com/gosuda/portal/v2/portal/transport"
 	"github.com/gosuda/portal/v2/types"
@@ -74,7 +73,6 @@ type Server struct {
 	cfg               ServerConfig
 	trustedProxyCIDRs []*net.IPNet
 	discoveryMgr      *discovery.Manager
-	ols               *ols.Engine
 	shutdownOnce      sync.Once
 }
 
@@ -186,7 +184,6 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 			return nil, err
 		}
 		s.discoveryMgr = manager
-		s.ols = ols.New(identity.Key())
 	}
 
 	return s, nil
@@ -501,10 +498,10 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 				s.BridgeConns(wrappedConn, session)
 			}(conn)
 		case errors.Is(err, net.ErrClosed):
-			return err
+			return nil
 		default:
 			if ctx.Err() != nil {
-				return err
+				return nil
 			}
 			return err
 		}
@@ -594,23 +591,7 @@ func (s *Server) runRelayDiscoveryLoop(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
-	return s.discoveryMgr.Run(ctx, func(snapshot map[string]types.RelayState) {
-		if s.ols != nil {
-			s.ols.OnRelaySetChanged(s.localLoad(), snapshot)
-		}
-	})
-}
-
-func (s *Server) localLoad() policy.NodeLoad {
-	if s == nil || s.loadMgr == nil {
-		return policy.NodeLoad{}
-	}
-	load := s.loadMgr.Snapshot()
-	if s.weightMgr != nil {
-		w := s.weightMgr.Collect()
-		load.AvgLatencyMs = w.AvgLatencyMs
-	}
-	return load
+	return s.discoveryMgr.Run(ctx, nil)
 }
 
 func (s *Server) BridgeConns(left, right net.Conn) {

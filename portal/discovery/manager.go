@@ -2,8 +2,10 @@ package discovery
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,7 +34,6 @@ type ManagerConfig struct {
 // separation of concerns.
 type Manager struct {
 	relaySet      *RelaySet
-	orderer       *OLSManager
 	httpClient    *http.Client
 	rootCAPEM     []byte
 	timeout       time.Duration
@@ -55,7 +56,6 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 
 	mgr := &Manager{
 		relaySet:      set,
-		orderer:       NewOLSManager(),
 		rootCAPEM:     cfg.RootCAPEM,
 		timeout:       cfg.RequestTimeout,
 		multiHop:      cfg.MultiHop,
@@ -159,8 +159,8 @@ func (m *Manager) runBootstrapPass(ctx context.Context, round uint64) {
 	if len(bootstraps) == 0 {
 		return
 	}
-	if len(bootstraps) > 1 && m.orderer != nil {
-		bootstraps = m.orderer.OrderDescriptors(bootstraps, nil, round)
+	if len(bootstraps) > 1 {
+		bootstraps = orderDescriptors(bootstraps, nil, round)
 	}
 
 	queue := append([]types.RelayDescriptor(nil), bootstraps...)
@@ -206,8 +206,8 @@ func (m *Manager) runBootstrapPass(ctx context.Context, round uint64) {
 		}
 
 		next := resp.Relays
-		if len(next) > 1 && m.orderer != nil {
-			next = m.orderer.OrderDescriptors(next, nil, round+uint64(hops))
+		if len(next) > 1 {
+			next = orderDescriptors(next, nil, round+uint64(hops))
 		}
 		for _, hint := range next {
 			hintURL := strings.TrimSpace(hint.APIHTTPSAddr)
@@ -284,4 +284,96 @@ func (m *Manager) RelaySet() *RelaySet {
 		return nil
 	}
 	return m.relaySet
+}
+
+// orderDescriptors applies the OLS-style permutation that previously lived in
+// the standalone OLSManager. Keeping the logic here avoids an extra struct
+// whose only job was to shuffle descriptors for each round.
+func orderDescriptors(relays []types.RelayDescriptor, loadByURL map[string]float64, round uint64) []types.RelayDescriptor {
+	if len(relays) <= 1 {
+		return relays
+	}
+
+	ordered := make([]types.RelayDescriptor, len(relays))
+	copy(ordered, relays)
+	slices.SortStableFunc(ordered, func(a, b types.RelayDescriptor) int {
+		switch {
+		case a.APIHTTPSAddr < b.APIHTTPSAddr:
+			return -1
+		case a.APIHTTPSAddr > b.APIHTTPSAddr:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	type weighted struct {
+		desc        types.RelayDescriptor
+		compensated float64
+	}
+	weights := make([]weighted, 0, len(ordered))
+	for _, relay := range ordered {
+		load := clampNonNegative(loadByURL[relay.APIHTTPSAddr])
+		distorted := load * load
+		compensated := math.Sqrt(distorted + 1.0)
+		weights = append(weights, weighted{
+			desc:        relay,
+			compensated: compensated,
+		})
+	}
+	slices.SortStableFunc(weights, func(a, b weighted) int {
+		switch {
+		case a.compensated < b.compensated:
+			return -1
+		case a.compensated > b.compensated:
+			return 1
+		case a.desc.APIHTTPSAddr < b.desc.APIHTTPSAddr:
+			return -1
+		case a.desc.APIHTTPSAddr > b.desc.APIHTTPSAddr:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	n := len(weights)
+	a := pickCoprimeStep(n, int(round))
+	b := int(round % uint64(n))
+	out := make([]types.RelayDescriptor, 0, n)
+	for i := 0; i < n; i++ {
+		slot := (a*i + b) % n
+		out = append(out, weights[slot].desc)
+	}
+	return out
+}
+
+func clampNonNegative(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0
+	}
+	return v
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+func pickCoprimeStep(n int, round int) int {
+	if n <= 1 {
+		return 1
+	}
+	candidate := (round % (n - 1)) + 1
+	for candidate < n {
+		if gcd(candidate, n) == 1 {
+			return candidate
+		}
+		candidate++
+	}
+	return 1
 }
