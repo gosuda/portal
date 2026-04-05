@@ -68,29 +68,34 @@ type ExposeConfig struct {
 // dynamic listener hub for accepting traffic from all of them.
 func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 	onionProxyURL := strings.TrimSpace(cfg.OnionProxyURL)
-	includeDefaults := cfg.Discovery && onionProxyURL == ""
-	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, includeDefaults)
-	if err != nil {
-		return nil, err
-	}
 	hopLimit := cfg.DiscoveryHops
 	if hopLimit < 0 {
 		hopLimit = 0
 	}
-	if cfg.UDPEnabled && onionProxyURL != "" {
+	useOnionProxy := hopLimit > 0 && onionProxyURL != ""
+	includeDefaults := cfg.Discovery && !useOnionProxy
+	proxyURL := ""
+	if useOnionProxy {
+		proxyURL = onionProxyURL
+	}
+	relayURLs, err := utils.ResolvePortalRelayURLs(ctx, cfg.RelayURLs, includeDefaults)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.UDPEnabled && useOnionProxy {
 		return nil, errors.New("--udp cannot be combined with onion proxy routing")
 	}
-	useManager := cfg.Discovery || hopLimit > 0 || onionProxyURL != ""
+	useManager := cfg.Discovery || hopLimit > 0 || useOnionProxy
 	var discoveryMgr *discovery.Manager
 	if useManager {
-		allowFallback := onionProxyURL == ""
+		allowFallback := !useOnionProxy
 		if cfg.DiscoveryAllowFallback != nil {
 			allowFallback = *cfg.DiscoveryAllowFallback
 		}
 		managerCfg := discovery.ManagerConfig{
 			Bootstraps:          relayURLs,
-			OnionProxyURL:       onionProxyURL,
-			OnionProxyOnly:      hopLimit > 0 || onionProxyURL != "",
+			OnionProxyURL:       proxyURL,
+			OnionProxyOnly:      useOnionProxy,
 			RootCAPEM:           append([]byte(nil), cfg.RootCAPEM...),
 			RequestTimeout:      15 * time.Second,
 			MultiHop:            hopLimit > 0,
@@ -135,7 +140,7 @@ func Expose(ctx context.Context, cfg ExposeConfig) (*Exposure, error) {
 		cancel:         cancel,
 		done:           exposureCtx.Done(),
 		identity:       identity,
-		proxyURL:       onionProxyURL,
+		proxyURL:       proxyURL,
 		TargetAddr:     targetAddr,
 		UDPAddr:        udpAddr,
 		udpEnabled:     cfg.UDPEnabled,

@@ -249,7 +249,7 @@ Result: raw public UDP exposure with an internal QUIC datagram backhaul. UDP and
 
 - Discovery starts from bootstrap relay URLs over normal public HTTPS.
 - Optional onion control plane: when enabled (`ONION_DISCOVERY_ONLY=true` with `ONION_PROXY_URL`), relay discovery HTTP requests are sent through the configured onion HTTP proxy.
-- Onion-first tunnels: `portal expose --onion-proxy-url` routes every SDK control-plane request (discovery, lease registration, reverse session TLS) through the proxy, disables default registry downloads and UDP/QUIC transports, and never falls back to direct dialing so entry/exit correlation stays hidden.
+- Onion-first tunnels: when `portal expose --hops N --onion-proxy-url ...` sets `N>0`, every SDK control-plane request (discovery, lease registration, reverse session TLS) rides that proxy, default registry downloads and UDP/QUIC transports are disabled, and direct dialing is never attempted so entry/exit correlation stays hidden.
 - Discovery descriptors are currently transport-authenticated by the queried relay endpoint, not by embedded descriptor signatures.
 - Current discovery validation covers protocol version, descriptor normalization, required fields, expiry, target URL/identity matching, and overlay field sanity only.
 - Descriptor `identity.address` is a relay claim inside discovery. Independent `domain -> address` verification comes from optional ENS/DNSSEC evidence, not from the discovery payload itself.
