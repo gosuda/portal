@@ -274,7 +274,11 @@ func (s *Server) Wait() error {
 	if s.group == nil {
 		return nil
 	}
-	return s.group.Wait()
+	err := s.group.Wait()
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) Identity() types.Identity {
@@ -500,10 +504,10 @@ func (s *Server) runSNIListener(ctx context.Context) error {
 		case errors.Is(err, net.ErrClosed):
 			return nil
 		default:
-			if ctx.Err() != nil {
-				return nil
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
 			}
-			return err
+			return fmt.Errorf("accept sni connection: %w", err)
 		}
 	}
 }
