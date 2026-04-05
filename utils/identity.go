@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -198,10 +200,10 @@ func LoadOrCreateIdentity(path string, identity types.Identity) (types.Identity,
 	return loaded, true, nil
 }
 
-func ResolveListenerIdentity(identity types.Identity, identityPath, identityJSON string) (types.Identity, bool, error) {
+func ResolveListenerIdentity(identity types.Identity, target, identityPath, identityJSON string) (types.Identity, bool, error) {
 	identityPath = strings.TrimSpace(identityPath)
 	identityJSON = strings.TrimSpace(identityJSON)
-	resolvedName, err := resolveExposeName(identity.Name, identityPath, identityJSON)
+	resolvedName, err := resolveExposeName(identity.Name, target, identityPath, identityJSON)
 	if err != nil {
 		return types.Identity{}, false, err
 	}
@@ -336,7 +338,15 @@ var exposeNameClosers = []string{
 	"whirl", "wink", "zap", "zenith", "zip", "zoom", "zest", "zone",
 }
 
-func DefaultExposeName(rawSeed string) (string, error) {
+const (
+	defaultExposeTargetPort = "3000"
+	defaultExposeTargetHost = "127.0.0.1"
+)
+
+// DefaultExposeName generates a deterministic 3-word DNS label from a target
+// address and seed using FNV-1a hashing. The algorithm matches the frontend
+// implementation in frontend/src/lib/exposeName.ts:buildDefaultExposeName.
+func DefaultExposeName(target, rawSeed string) (string, error) {
 	seed := strings.TrimSpace(rawSeed)
 	if cut, ok := strings.CutPrefix(seed, "cli_"); ok {
 		seed = cut
@@ -345,7 +355,7 @@ func DefaultExposeName(rawSeed string) (string, error) {
 		seed = "portal"
 	}
 
-	input := []byte(seed)
+	input := []byte(seed + "|" + normalizeExposeTarget(target))
 	first := fnv1a32(input, 0x811c9dc5)
 	second := fnv1a32(input, 0x9e3779b9)
 	third := fnv1a32(input, 0x85ebca6b)
@@ -359,7 +369,58 @@ func DefaultExposeName(rawSeed string) (string, error) {
 	return NormalizeDNSLabel(label)
 }
 
-func resolveExposeName(name, identityPath, identityJSON string) (string, error) {
+// normalizeExposeTarget normalizes a target address for deterministic name
+// generation. Must match frontend/src/lib/exposeName.ts:normalizeExposeTarget.
+func normalizeExposeTarget(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	candidate := trimmed
+	if candidate == "" {
+		candidate = defaultExposeTargetPort
+	}
+
+	if isAllDigits(candidate) {
+		return defaultExposeTargetHost + ":" + candidate
+	}
+
+	if strings.Contains(candidate, "://") {
+		u, err := url.Parse(candidate)
+		if err != nil {
+			return candidate
+		}
+		if (u.Scheme == "http" || u.Scheme == "https") &&
+			u.Host != "" &&
+			(u.Path == "" || u.Path == "/") &&
+			u.RawQuery == "" &&
+			u.Fragment == "" {
+			return u.Host
+		}
+		return candidate
+	}
+
+	u, err := url.Parse("tcp://" + candidate)
+	if err != nil || u.Hostname() == "" {
+		return candidate
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+	}
+	return net.JoinHostPort(u.Hostname(), port)
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func resolveExposeName(name, target, identityPath, identityJSON string) (string, error) {
 	if name = strings.TrimSpace(name); name != "" {
 		return name, nil
 	}
@@ -384,7 +445,7 @@ func resolveExposeName(name, identityPath, identityJSON string) (string, error) 
 		}
 	}
 
-	return DefaultExposeName(RandomID("cli_"))
+	return DefaultExposeName(target, RandomID("cli_"))
 }
 
 func fnv1a32(data []byte, seed uint32) uint32 {

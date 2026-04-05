@@ -127,12 +127,18 @@ export function useList<T extends BaseServer>({
 
   useEffect(() => {
     const validIDs = new Set(servers.map((server) => server.id));
-    setFavorites((prev) => prev.filter((id) => validIDs.has(id)));
+    setFavorites((prev) => {
+      const next = prev.filter((id) => validIDs.has(id));
+      return next.length === prev.length ? prev : next;
+    });
   }, [servers]);
 
   useEffect(() => {
     const availableTagSet = new Set(availableTags);
-    setSelectedTags((prev) => prev.filter((tag) => availableTagSet.has(tag)));
+    setSelectedTags((prev) => {
+      const next = prev.filter((tag) => availableTagSet.has(tag));
+      return next.length === prev.length ? prev : next;
+    });
   }, [availableTags]);
 
   const filteredServers = useMemo(() => {
